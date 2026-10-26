@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { parseBSP, parseVec3 } from '../shared/bsp.js';
 import { TICK_DT, IN_FORWARD, IN_JUMP, IN_DUCK, IN_SPEED, IN_MOVERIGHT } from '../shared/constants.js';
-import { CollisionWorld, Trace, traceHull, hullFits, HULL_POINT, HULL_STAND, ENT_LADDER } from '../shared/trace.js';
+import { CollisionWorld, Trace, traceHull, hullFits, HULL_POINT, HULL_STAND, ENT_LADDER, ENT_SOLID } from '../shared/trace.js';
 import {
   createPlayerState, playerMove, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_EVENTS, PS_WATERLEVEL,
   FL_ONGROUND, FL_DUCKING, EV_JUMP, EV_LAND, MOVE,
@@ -194,6 +194,42 @@ Deno.test('water: submerged player sinks idle and swims up with jump', () => {
   const z = ps.f[PS_ORIGIN + 2];
   run(w, ps, 32, IN_JUMP);
   assert.ok(ps.f[PS_ORIGIN + 2] > z + 20, 'should swim up');
+});
+
+Deno.test('conveyor carries a standing player and its momentum survives leaving it', () => {
+  // 16-unit platform pushing +x at 400 u/s on top of the floor.
+  const belt = { kind: ENT_SOLID, boxes: [{ min: [-200, -200, 0], max: [200, 200, 16] }], push: [400, 0, 0] };
+  const w = boxWorld([FLOOR], [belt]);
+  const ps = run(w, spawn(-150, 0, 16 + 36), 16);
+  const x0 = ps.f[PS_ORIGIN];
+  run(w, ps, 16);
+  near(ps.f[PS_ORIGIN] - x0, 400 * 0.25, 2, 'distance carried in 0.25 s');
+  near(ps.f[PS_VEL], 0, 0.01, 'own velocity stays zero while riding');
+
+  let maxOwn = 0;
+  run(w, ps, 64, 0, 0, 0, (p) => {
+    if (p.f[PS_ORIGIN] > 200 + 16) maxOwn = Math.max(maxOwn, p.f[PS_VEL]);
+  });
+  // The belt is lower than stepsize, so we step down onto the floor: momentum
+  // (speed * (1 + dt/2)) transfers, then one tick of floor friction applies.
+  near(maxOwn, 400 * (1 + TICK_DT / 2) * (1 - MOVE.friction * TICK_DT), 0.5, 'momentum after leaving the belt');
+  assert.ok(ps.f[PS_ORIGIN] > 216 + 50, `slid on past the belt end (x=${ps.f[PS_ORIGIN]})`); // ~v/friction = 71 units
+});
+
+Deno.test('fy_buzzkill: conveyor ramp launches the player onto the central tower', async (t) => {
+  let buf;
+  try {
+    buf = await Deno.readFile(new URL('../maps/fy_buzzkill.bsp', import.meta.url));
+  } catch {
+    return t.step({ name: 'skipped: maps/fy_buzzkill.bsp missing', fn: () => {}, ignore: true });
+  }
+  const w = CollisionWorld.fromBSP(parseBSP(buf.buffer));
+  const ps = run(w, spawn(-512, -1000, -200), 64); // in front of the +y ramp
+  near(ps.f[PS_ORIGIN + 2], -284, 1, 'standing on the arena floor');
+  run(w, ps, 40, IN_FORWARD, 90); // walk onto the ramp
+  run(w, ps, 160, 0, 90); // fly
+  assert.ok(ps.i[PS_FLAGS] & FL_ONGROUND, 'landed');
+  near(ps.f[PS_ORIGIN + 2], 36, 1, 'standing on the tower top (z=0)');
 });
 
 Deno.test('movement is bit-for-bit deterministic', () => {

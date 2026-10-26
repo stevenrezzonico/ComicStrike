@@ -67,7 +67,9 @@ export const PS_FLAGS = 12; // int
 export const PS_WATERLEVEL = 13; // int
 export const PS_OLDBUTTONS = 14; // int
 export const PS_EVENTS = 15; // int, output: EV_* bits for this tick
-export const PS_SIZE = 16;
+export const PS_BASEVEL = 16; // 16..18, velocity imparted by the ground entity (conveyors)
+export const PS_GROUNDENT = 19; // int, collision entity we stand on, -1 if airborne
+export const PS_SIZE = 20;
 
 export const FL_ONGROUND = 1;
 export const FL_DUCKING = 2; // using the duck hull
@@ -80,6 +82,7 @@ export function createPlayerState() {
   const buf = new ArrayBuffer(PS_SIZE * 4);
   const ps = { buf, f: new Float32Array(buf), i: new Int32Array(buf) };
   ps.f[PS_DUCK_SPEED] = MOVE.duckSpeedIdeal;
+  ps.i[PS_GROUNDENT] = -1;
   return ps;
 }
 
@@ -115,6 +118,8 @@ let hull = HULL_STAND;
 let onGround = false;
 let duckAmount = 0, duckSpeed = 0, stamina = 0, fallVel = 0, landSpeed = 0;
 let flags = 0, waterLevel = 0, oldButtons = 0, events = 0, ladderCooldown = 0;
+let groundEnt = -1;
+let bvx = 0, bvy = 0, bvz = 0; // base velocity
 let fx = 0, fy = 0, fz = 0, rx = 0, ry = 0; // forward (with pitch), right (flat)
 let fmove = 0, smove = 0, maxspeed = 0;
 
@@ -339,8 +344,10 @@ function walkMove() {
   accelerate(wdx, wdy, 0, wspeed, MOVE.accelerate);
   vz = 0;
 
-  if (vx * vx + vy * vy < 1) {
-    vx = vy = 0;
+  // Ride whatever we stand on; removed again after categorizePosition.
+  vx += bvx; vy += bvy; vz += bvz;
+  if (vx * vx + vy * vy + vz * vz < 1) {
+    vx = bvx; vy = bvy; vz = bvz; // net zero once base velocity is pulled back out
     return;
   }
   trace(ox, oy, oz, ox + vx * dt, oy + vy * dt, oz);
@@ -356,6 +363,7 @@ function walkMove() {
 function airMove() {
   flatWish();
   airAccelerate(wdx, wdy, wspeed, MOVE.airaccelerate);
+  vx += bvx; vy += bvy; vz += bvz;
   tryPlayerMove();
 }
 
@@ -473,7 +481,8 @@ function ladderMove(ladder, buttons) {
   tryPlayerMove();
 }
 
-function setGround(on) {
+function setGround(on, ent = -1) {
+  groundEnt = on ? ent : -1;
   if (on && !onGround) {
     if (fallVel > 0) {
       landSpeed = fallVel;
@@ -493,7 +502,13 @@ function categorizePosition() {
     return;
   }
   trace(ox, oy, oz, ox, oy, oz - 2);
-  setGround(tr.fraction < 1 && !tr.startsolid && tr.nz >= MOVE.standableNormal);
+  const grounded = tr.fraction < 1 && !tr.startsolid && tr.nz >= MOVE.standableNormal;
+  setGround(grounded, tr.ent);
+  // Snap onto the ground we found (GoldSrc PM_CatagorizePosition), so idle players
+  // don't hover up to 2 units above the floor.
+  if (grounded) {
+    ox = tr.endx; oy = tr.endy; oz = tr.endz;
+  }
 }
 
 function checkJump() {
@@ -505,6 +520,7 @@ function checkJump() {
   if (stamina > MOVE.staminaMax) stamina = MOVE.staminaMax;
   vz -= MOVE.gravity * 0.5 * dt; // FinishGravity inside CheckJumpButton (Source)
   onGround = false;
+  groundEnt = -1;
   events |= EV_JUMP;
 }
 
@@ -563,6 +579,19 @@ function unstick() {
   }
 }
 
+// GoldSrc SV_CheckMovingGround: standing on a conveyor sets the base velocity; once
+// off it, the base velocity becomes real momentum (plus half a frame of it).
+function checkMovingGround() {
+  const e = onGround && groundEnt >= 0 ? W.ents[groundEnt] : null;
+  if (e && (e.pushX !== 0 || e.pushY !== 0 || e.pushZ !== 0)) {
+    bvx = e.pushX; bvy = e.pushY; bvz = e.pushZ;
+    return;
+  }
+  const k = 1 + dt * 0.5;
+  vx += bvx * k; vy += bvy * k; vz += bvz * k;
+  bvx = bvy = bvz = 0;
+}
+
 // Runs one movement tick. pitch/yaw in degrees, maxSpeed = current weapon speed.
 export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) {
   W = world;
@@ -578,6 +607,8 @@ export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) 
   flags = i[PS_FLAGS];
   waterLevel = i[PS_WATERLEVEL];
   oldButtons = i[PS_OLDBUTTONS];
+  groundEnt = i[PS_GROUNDENT];
+  bvx = f[PS_BASEVEL]; bvy = f[PS_BASEVEL + 1]; bvz = f[PS_BASEVEL + 2];
   onGround = (flags & FL_ONGROUND) !== 0;
   hull = (flags & FL_DUCKING) ? HULL_DUCK : HULL_STAND;
   events = 0;
@@ -593,6 +624,7 @@ export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) 
   smove = ((buttons & IN_MOVERIGHT) ? MOVE.forwardSpeed : 0) - ((buttons & IN_MOVELEFT) ? MOVE.forwardSpeed : 0);
 
   unstick();
+  checkMovingGround();
   if (!onGround) fallVel = -vz;
 
   stamina -= MOVE.staminaRecoveryRate * dt;
@@ -637,6 +669,8 @@ export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) 
       if (onGround) walkMove();
       else airMove();
       categorizePosition();
+      // Pull the base velocity back out: it moved us but is not our own velocity.
+      vx -= bvx; vy -= bvy; vz -= bvz;
       checkVelocity();
       if (waterLevel < 2) vz -= MOVE.gravity * 0.5 * dt; // FinishGravity
       if (onGround) vz = 0;
@@ -656,4 +690,6 @@ export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) 
   i[PS_WATERLEVEL] = waterLevel;
   i[PS_OLDBUTTONS] = buttons;
   i[PS_EVENTS] = events;
+  f[PS_BASEVEL] = bvx; f[PS_BASEVEL + 1] = bvy; f[PS_BASEVEL + 2] = bvz;
+  i[PS_GROUNDENT] = groundEnt;
 }

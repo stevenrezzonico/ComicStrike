@@ -72,13 +72,17 @@ export class CollisionWorld {
   }
 
   // heads: hull 0..3 root nodes (or contents when negative); bounds in model space.
-  addEntity(kind, heads, ox, oy, oz, mins, maxs) {
+  // push: base velocity given to players standing on it (func_conveyor).
+  addEntity(kind, heads, ox, oy, oz, mins, maxs, push = null) {
     this.ents.push({
       kind,
       heads: Int32Array.from(heads),
       ox, oy, oz,
       mins: Float32Array.from(mins),
       maxs: Float32Array.from(maxs),
+      pushX: push ? push[0] : 0,
+      pushY: push ? push[1] : 0,
+      pushZ: push ? push[2] : 0,
     });
     return this.ents.length - 1;
   }
@@ -118,7 +122,7 @@ export class CollisionWorld {
     const mins = new Float32Array(3);
     const maxs = new Float32Array(3);
     const origin = new Float32Array(3);
-    const add = (kind, m, o) => {
+    const add = (kind, m, o, push = null) => {
       for (let h = 0; h < 4; h++) {
         const head = modelHeadnode(bsp, m, h);
         heads[h] = h === 0 && head >= 0 ? nc + head : head;
@@ -127,7 +131,7 @@ export class CollisionWorld {
         mins[k] = bsp.modelsF[m * 16 + k];
         maxs[k] = bsp.modelsF[m * 16 + 3 + k];
       }
-      world.addEntity(kind, heads, o[0], o[1], o[2], mins, maxs);
+      world.addEntity(kind, heads, o[0], o[1], o[2], mins, maxs, push);
     };
 
     add(ENT_SOLID, 0, [0, 0, 0]);
@@ -138,13 +142,35 @@ export class CollisionWorld {
       let kind;
       if (cls === 'func_ladder') kind = ENT_LADDER;
       else if (cls === 'func_water') kind = ENT_WATER;
+      else if (cls === 'func_conveyor' && (+(e.spawnflags || 0) & SF_CONVEYOR_NOTSOLID)) continue;
       else if (cls.startsWith('func_') && !NONSOLID.has(cls)) kind = ENT_SOLID;
       else continue;
       parseVec3(e.origin, origin);
-      add(kind, m, origin);
+      add(kind, m, origin, cls === 'func_conveyor' ? conveyorPush(e) : null);
     }
     return world;
   }
+}
+
+const SF_CONVEYOR_VISUAL = 1; // scrolls but does not push
+const SF_CONVEYOR_NOTSOLID = 2;
+
+// Base velocity of a func_conveyor: SetMovedir(angles) * speed (HL SDK CFuncConveyor).
+function conveyorPush(e) {
+  const flags = +(e.spawnflags || 0);
+  if (flags & SF_CONVEYOR_VISUAL) return null;
+  const speed = +(e.speed || 0) || 100;
+  const a = new Float32Array(3);
+  if (e.angles) parseVec3(e.angles, a);
+  else if (e.angle) a[1] = +e.angle;
+  let dir;
+  if (a[0] === 0 && a[1] === -1 && a[2] === 0) dir = [0, 0, 1];
+  else if (a[0] === 0 && a[1] === -2 && a[2] === 0) dir = [0, 0, -1];
+  else {
+    const p = a[0] * Math.PI / 180, y = a[1] * Math.PI / 180;
+    dir = [Math.cos(p) * Math.cos(y), Math.cos(p) * Math.sin(y), -Math.sin(p)];
+  }
+  return [dir[0] * speed, dir[1] * speed, dir[2] * speed];
 }
 
 // --- Recursive hull check -------------------------------------------------

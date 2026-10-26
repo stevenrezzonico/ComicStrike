@@ -62,7 +62,7 @@ class TreeBuilder {
   }
 }
 
-// boxes: [{ min, max, contents? }], extra: [{ kind, boxes }]
+// boxes: [{ min, max, contents? }], extra: [{ kind, boxes, push? }]
 export function boxWorld(boxes, extra = []) {
   const tb = new TreeBuilder();
   const worldHeads = tb.heads(boxes);
@@ -72,7 +72,7 @@ export function boxWorld(boxes, extra = []) {
   extra.forEach((e, k) => {
     const mins = [0, 1, 2].map((a) => Math.min(...e.boxes.map((b) => b.min[a])));
     const maxs = [0, 1, 2].map((a) => Math.max(...e.boxes.map((b) => b.max[a])));
-    w.addEntity(e.kind, extraHeads[k], 0, 0, 0, mins, maxs);
+    w.addEntity(e.kind, extraHeads[k], 0, 0, 0, mins, maxs, e.push ?? null);
   });
   return w;
 }
