@@ -1,0 +1,6 @@
+maps/*.bsp
+maps/*.txt
+maps/*.res
+certs/
+node_modules/
+.claude/

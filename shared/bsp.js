@@ -1,0 +1,233 @@
+// GoldSrc BSP (version 30) parser.
+// Lumps are exposed as typed-array views over the file buffer (copied only when
+// misaligned). Fixed-size records are read by index arithmetic, never as objects.
+
+export const LUMP_ENTITIES = 0;
+export const LUMP_PLANES = 1;
+export const LUMP_TEXTURES = 2;
+export const LUMP_VERTICES = 3;
+export const LUMP_VISIBILITY = 4;
+export const LUMP_NODES = 5;
+export const LUMP_TEXINFO = 6;
+export const LUMP_FACES = 7;
+export const LUMP_LIGHTING = 8;
+export const LUMP_CLIPNODES = 9;
+export const LUMP_LEAVES = 10;
+export const LUMP_MARKSURFACES = 11;
+export const LUMP_EDGES = 12;
+export const LUMP_SURFEDGES = 13;
+export const LUMP_MODELS = 14;
+
+// Leaf / hull contents.
+export const CONTENTS_EMPTY = -1;
+export const CONTENTS_SOLID = -2;
+export const CONTENTS_WATER = -3;
+export const CONTENTS_SLIME = -4;
+export const CONTENTS_LAVA = -5;
+export const CONTENTS_SKY = -6;
+
+// Record sizes in bytes.
+const PLANE_SIZE = 20;
+const NODE_SIZE = 24;
+const TEXINFO_SIZE = 40;
+const FACE_SIZE = 20;
+const CLIPNODE_SIZE = 8;
+const LEAF_SIZE = 28;
+const MODEL_SIZE = 64;
+
+if (new Uint8Array(new Uint16Array([1]).buffer)[0] !== 1) {
+  throw new Error('bsp: big-endian hosts are not supported');
+}
+
+function lumpView(buffer, offset, length, Ctor) {
+  const count = Math.floor(length / Ctor.BYTES_PER_ELEMENT);
+  if (offset % Ctor.BYTES_PER_ELEMENT === 0) return new Ctor(buffer, offset, count);
+  return new Ctor(buffer.slice(offset, offset + count * Ctor.BYTES_PER_ELEMENT));
+}
+
+// Aligned copy of a lump so several typed views can alias the same records.
+function lumpBuffer(buffer, offset, length) {
+  if (offset % 4 === 0) return { buf: buffer, off: offset };
+  return { buf: buffer.slice(offset, offset + length), off: 0 };
+}
+
+function readCString(bytes, start, max) {
+  let s = '';
+  for (let i = 0; i < max; i++) {
+    const c = bytes[start + i];
+    if (c === 0) break;
+    s += String.fromCharCode(c);
+  }
+  return s;
+}
+
+export function parseEntities(text) {
+  const out = [];
+  const re = /"([^"]*)"|([{}])/g;
+  let ent = null;
+  let key = null;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m[2] === '{') {
+      ent = {};
+      key = null;
+    } else if (m[2] === '}') {
+      if (ent) out.push(ent);
+      ent = null;
+    } else if (ent) {
+      if (key === null) key = m[1];
+      else {
+        ent[key] = m[1];
+        key = null;
+      }
+    }
+  }
+  return out;
+}
+
+export function parseBSP(buffer) {
+  const dv = new DataView(buffer);
+  const version = dv.getInt32(0, true);
+  if (version !== 30) throw new Error(`bsp: unsupported version ${version} (expected 30)`);
+
+  const lumpOfs = new Int32Array(15);
+  const lumpLen = new Int32Array(15);
+  for (let i = 0; i < 15; i++) {
+    lumpOfs[i] = dv.getInt32(4 + i * 8, true);
+    lumpLen[i] = dv.getInt32(8 + i * 8, true);
+    if (lumpOfs[i] < 0 || lumpLen[i] < 0 || lumpOfs[i] + lumpLen[i] > buffer.byteLength) {
+      throw new Error(`bsp: lump ${i} out of bounds`);
+    }
+  }
+  const raw = (lump, Ctor) => lumpView(buffer, lumpOfs[lump], lumpLen[lump], Ctor);
+  const records = (lump, size) => {
+    if (lumpLen[lump] % size !== 0) throw new Error(`bsp: lump ${lump} size not a multiple of ${size}`);
+    return lumpBuffer(buffer, lumpOfs[lump], lumpLen[lump]);
+  };
+
+  // Planes: float normal[3], float dist, int32 type
+  const pl = records(LUMP_PLANES, PLANE_SIZE);
+  const numPlanes = lumpLen[LUMP_PLANES] / PLANE_SIZE;
+  const planesF = new Float32Array(pl.buf, pl.off, numPlanes * 5);
+  const planesI = new Int32Array(pl.buf, pl.off, numPlanes * 5);
+
+  // Vertices: float[3]
+  const vertices = raw(LUMP_VERTICES, Float32Array);
+
+  // Nodes: int32 plane, int16 children[2], int16 mins[3], maxs[3], uint16 firstface, numfaces
+  const nd = records(LUMP_NODES, NODE_SIZE);
+  const numNodes = lumpLen[LUMP_NODES] / NODE_SIZE;
+  const nodesI32 = new Int32Array(nd.buf, nd.off, numNodes * 6);
+  const nodesI16 = new Int16Array(nd.buf, nd.off, numNodes * 12);
+
+  // Texinfo: float vecs[2][4], int32 miptex, int32 flags
+  const ti = records(LUMP_TEXINFO, TEXINFO_SIZE);
+  const numTexinfo = lumpLen[LUMP_TEXINFO] / TEXINFO_SIZE;
+  const texinfoF = new Float32Array(ti.buf, ti.off, numTexinfo * 10);
+  const texinfoI = new Int32Array(ti.buf, ti.off, numTexinfo * 10);
+
+  // Faces: uint16 plane, int16 side, int32 firstedge, int16 numedges, int16 texinfo,
+  //        uint8 styles[4], int32 lightofs
+  const fc = records(LUMP_FACES, FACE_SIZE);
+  const numFaces = lumpLen[LUMP_FACES] / FACE_SIZE;
+  const facesU16 = new Uint16Array(fc.buf, fc.off, numFaces * 10);
+  const facesI16 = new Int16Array(fc.buf, fc.off, numFaces * 10);
+  const facesI32 = new Int32Array(fc.buf, fc.off, numFaces * 5);
+  const facesU8 = new Uint8Array(fc.buf, fc.off, numFaces * 20);
+
+  // Clipnodes: int32 plane, int16 children[2]
+  const cn = records(LUMP_CLIPNODES, CLIPNODE_SIZE);
+  const numClipnodes = lumpLen[LUMP_CLIPNODES] / CLIPNODE_SIZE;
+  const clipnodesI32 = new Int32Array(cn.buf, cn.off, numClipnodes * 2);
+  const clipnodesI16 = new Int16Array(cn.buf, cn.off, numClipnodes * 4);
+
+  // Leaves: int32 contents, int32 visofs, int16 mins[3], maxs[3], uint16 firstmark, nummark, uint8 ambient[4]
+  const lf = records(LUMP_LEAVES, LEAF_SIZE);
+  const numLeaves = lumpLen[LUMP_LEAVES] / LEAF_SIZE;
+  const leavesI32 = new Int32Array(lf.buf, lf.off, numLeaves * 7);
+  const leavesI16 = new Int16Array(lf.buf, lf.off, numLeaves * 14);
+
+  // Models: float mins[3], maxs[3], origin[3], int32 headnode[4], visleafs, firstface, numfaces
+  const md = records(LUMP_MODELS, MODEL_SIZE);
+  const numModels = lumpLen[LUMP_MODELS] / MODEL_SIZE;
+  const modelsF = new Float32Array(md.buf, md.off, numModels * 16);
+  const modelsI = new Int32Array(md.buf, md.off, numModels * 16);
+
+  const edges = raw(LUMP_EDGES, Uint16Array);
+  const surfedges = raw(LUMP_SURFEDGES, Int32Array);
+  const marksurfaces = raw(LUMP_MARKSURFACES, Uint16Array);
+  const lighting = new Uint8Array(buffer, lumpOfs[LUMP_LIGHTING], lumpLen[LUMP_LIGHTING]);
+  const visibility = new Uint8Array(buffer, lumpOfs[LUMP_VISIBILITY], lumpLen[LUMP_VISIBILITY]);
+
+  // Textures: int32 count, int32 offsets[count]; miptex = char name[16], uint32 w, h, offsets[4]
+  const texBase = lumpOfs[LUMP_TEXTURES];
+  const numTextures = lumpLen[LUMP_TEXTURES] > 0 ? dv.getInt32(texBase, true) : 0;
+  const textureNames = new Array(numTextures);
+  const textureSize = new Uint16Array(numTextures * 2);
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < numTextures; i++) {
+    const ofs = dv.getInt32(texBase + 4 + i * 4, true);
+    if (ofs < 0) {
+      textureNames[i] = '';
+      textureSize[i * 2] = textureSize[i * 2 + 1] = 64;
+      continue;
+    }
+    const p = texBase + ofs;
+    textureNames[i] = readCString(bytes, p, 16).toLowerCase();
+    textureSize[i * 2] = dv.getUint32(p + 16, true) || 64;
+    textureSize[i * 2 + 1] = dv.getUint32(p + 20, true) || 64;
+  }
+
+  const entText = new TextDecoder('latin1').decode(
+    new Uint8Array(buffer, lumpOfs[LUMP_ENTITIES], lumpLen[LUMP_ENTITIES]),
+  );
+
+  return {
+    version,
+    numPlanes, planesF, planesI,
+    vertices,
+    numNodes, nodesI32, nodesI16,
+    numTexinfo, texinfoF, texinfoI,
+    numFaces, facesU16, facesI16, facesI32, facesU8,
+    numClipnodes, clipnodesI32, clipnodesI16,
+    numLeaves, leavesI32, leavesI16,
+    numModels, modelsF, modelsI,
+    edges, surfedges, marksurfaces, lighting, visibility,
+    numTextures, textureNames, textureSize,
+    entities: parseEntities(entText),
+  };
+}
+
+// --- Record accessors (no allocation) -------------------------------------
+
+export const faceTexinfo = (b, f) => b.facesI16[f * 10 + 5];
+export const faceFirstEdge = (b, f) => b.facesI32[f * 5 + 1];
+export const faceNumEdges = (b, f) => b.facesI16[f * 10 + 4];
+export const facePlane = (b, f) => b.facesU16[f * 10];
+export const faceSide = (b, f) => b.facesI16[f * 10 + 1];
+export const faceLightOfs = (b, f) => b.facesI32[f * 5 + 4];
+export const faceStyle = (b, f, i) => b.facesU8[f * 20 + 12 + i];
+
+// Vertex index of the i-th corner of a face (respecting surfedge sign).
+export function faceVertex(b, f, i) {
+  const se = b.surfedges[faceFirstEdge(b, f) + i];
+  return se >= 0 ? b.edges[se * 2] : b.edges[-se * 2 + 1];
+}
+
+export const modelHeadnode = (b, m, hull) => b.modelsI[m * 16 + 9 + hull];
+export const modelFirstFace = (b, m) => b.modelsI[m * 16 + 14];
+export const modelNumFaces = (b, m) => b.modelsI[m * 16 + 15];
+
+// Brush-model index referenced by an entity's "model" key ("*3" -> 3), or -1.
+export function entityModelIndex(ent) {
+  const m = ent.model;
+  return m && m[0] === '*' ? parseInt(m.slice(1), 10) : -1;
+}
+
+export function parseVec3(str, out, o = 0) {
+  const p = (str || '0 0 0').trim().split(/\s+/);
+  out[o] = +p[0] || 0;
+  out[o + 1] = +p[1] || 0;
+  out[o + 2] = +p[2] || 0;
+  return out;
+}
