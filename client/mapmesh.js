@@ -1,5 +1,5 @@
 // Load-time conversion of BSP faces into one interleaved vertex buffer, one index
-// buffer (opaque range followed by translucent range) and a lightmap atlas built
+// buffer (opaque, sky and translucent ranges, in that order) and a lightmap atlas built
 // from the BSP lighting lump. Runs once per map; nothing here touches the frame loop.
 
 import {
@@ -78,6 +78,7 @@ function collectModels(bsp) {
 
 export function buildMapMesh(bsp) {
   const materials = bsp.textureNames.map((n) => (isSkipped(n) ? null : classify(n)));
+  const skyTex = bsp.textureNames.map((n) => n === 'sky');
   const models = collectModels(bsp);
 
   // Pass 1: count vertices / indices so buffers are allocated exactly once.
@@ -88,7 +89,7 @@ export function buildMapMesh(bsp) {
     const n = modelNumFaces(bsp, m.model);
     for (let f = first; f < first + n; f++) {
       const tex = bsp.texinfoI[faceTexinfo(bsp, f) * 10 + 8];
-      if (!materials[tex]) continue;
+      if (!materials[tex] && !skyTex[tex]) continue;
       const ne = faceNumEdges(bsp, f);
       numVerts += ne;
       numIdx += (ne - 2) * 3;
@@ -101,8 +102,10 @@ export function buildMapMesh(bsp) {
   const vu8 = new Uint8Array(vbuf);
   const opaque = new Uint32Array(numIdx);
   const trans = new Uint32Array(numIdx);
+  const sky = new Uint32Array(numIdx);
   let nOpaque = 0;
   let nTrans = 0;
+  let nSky = 0;
 
   const atlas = new Atlas(ATLAS_W);
   // Reserve a 2x2 mid-grey block for faces without lightmaps.
@@ -124,10 +127,31 @@ export function buildMapMesh(bsp) {
     for (let f = first; f < first + nfaces; f++) {
       const ti = faceTexinfo(bsp, f);
       const tex = bsp.texinfoI[ti * 10 + 8];
+      const ne = faceNumEdges(bsp, f);
+
+      // Sky brushes: position only. Drawn with the sky shader so they hide whatever
+      // lies behind them, as GoldSrc does.
+      if (skyTex[tex]) {
+        const base = v;
+        for (let i = 0; i < ne; i++, v++) {
+          const vi = faceVertex(bsp, f, i) * 3;
+          vf[v * 10] = bsp.vertices[vi] + m.ox;
+          vf[v * 10 + 1] = bsp.vertices[vi + 1] + m.oy;
+          vf[v * 10 + 2] = bsp.vertices[vi + 2] + m.oz;
+          vf[v * 10 + 5] = gx + 1;
+          vf[v * 10 + 6] = gy + 1;
+        }
+        for (let i = 1; i < ne - 1; i++) {
+          sky[nSky++] = base;
+          sky[nSky++] = base + i;
+          sky[nSky++] = base + i + 1;
+        }
+        continue;
+      }
+
       const mat = materials[tex];
       if (!mat) continue;
 
-      const ne = faceNumEdges(bsp, f);
       const tf = bsp.texinfoF;
       const tw = bsp.textureSize[tex * 2];
       const th = bsp.textureSize[tex * 2 + 1];
@@ -229,15 +253,17 @@ export function buildMapMesh(bsp) {
     vf[i * 10 + 6] *= invH;
   }
 
-  const indices = new Uint32Array(nOpaque + nTrans);
+  const indices = new Uint32Array(nOpaque + nSky + nTrans);
   indices.set(opaque.subarray(0, nOpaque), 0);
-  indices.set(trans.subarray(0, nTrans), nOpaque);
+  indices.set(sky.subarray(0, nSky), nOpaque);
+  indices.set(trans.subarray(0, nTrans), nOpaque + nSky);
 
   return {
     vertices: vbuf,
     numVerts,
     indices,
     opaqueCount: nOpaque,
+    skyCount: nSky,
     transCount: nTrans,
     lightmap: { width: atlas.width, height: atlas.height, data: atlas.data },
   };

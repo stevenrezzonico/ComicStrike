@@ -180,19 +180,36 @@ void main() {
   o_color = vec4(col, v_col.a);
 }`;
 
-// Fullscreen triangle sky. Reconstructs the view ray from the inverse view-projection.
-export const SKY_VS = `#version 300 es
-out vec2 v_ndc;
+// Sky. Two vertex shaders feed one fragment shader with a world-space view ray:
+// SKY_MESH_VS draws the map's sky brushes (writing depth, so they hide what lies
+// behind them, as in GoldSrc); SKY_FILL_VS is a fullscreen triangle on the far plane
+// that fills any pixel nothing else covered.
+export const SKY_MESH_VS = `#version 300 es
+layout(location=0) in vec3 a_pos;
+uniform mat4 u_viewProj;
+uniform vec3 u_eye;
+out vec3 v_dir;
+void main() {
+  v_dir = a_pos - u_eye;
+  gl_Position = u_viewProj * vec4(a_pos, 1.0);
+}`;
+
+export const SKY_FILL_VS = `#version 300 es
+uniform mat4 u_invViewProj;
+uniform vec3 u_eye;
+out vec3 v_dir;
 void main() {
   vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2) * 2.0 - 1.0;
-  v_ndc = p;
+  // Far-plane points share one w, so this ray is affine in screen space and
+  // interpolates exactly across the triangle.
+  vec4 far = u_invViewProj * vec4(p, 1.0, 1.0);
+  v_dir = far.xyz / far.w - u_eye;
   gl_Position = vec4(p, 0.99999, 1.0); // just inside the far plane: fills only empty pixels
 }`;
 
 export const SKY_FS = `#version 300 es
 precision highp float;
-in vec2 v_ndc;
-uniform mat4 u_invViewProj;
+in vec3 v_dir;
 uniform vec3 u_horizon;
 uniform vec3 u_zenith;
 uniform float u_time;
@@ -210,15 +227,16 @@ float vnoise(vec2 p) {
 }
 
 void main() {
-  vec4 far = u_invViewProj * vec4(v_ndc, 1.0, 1.0);
-  vec4 near = u_invViewProj * vec4(v_ndc, -1.0, 1.0);
-  vec3 dir = normalize(far.xyz / far.w - near.xyz / near.w);
-  float up = clamp(dir.z, 0.0, 1.0);
-  vec3 col = mix(u_horizon, u_zenith, pow(up, 0.6));
-  if (dir.z > 0.02) {
-    vec2 p = dir.xy / dir.z * 1.5 + u_time * 0.01;
-    float c = smoothstep(0.45, 0.8, vnoise(p) * 0.65 + vnoise(p * 2.7) * 0.35);
-    col = mix(col, vec3(0.95), c * 0.7 * smoothstep(0.02, 0.25, dir.z));
-  }
+  vec3 dir = normalize(v_dir);
+  vec3 col = mix(u_horizon, u_zenith, pow(clamp(dir.z, 0.0, 1.0), 0.6));
+
+  // Clouds on a dome rather than a plane: the lookup stays bounded at the horizon.
+  vec2 p = dir.xy / max(dir.z + 0.3, 0.05) * 1.6 + u_time * 0.01;
+  float c = smoothstep(0.45, 0.8, vnoise(p) * 0.65 + vnoise(p * 2.7) * 0.35);
+  // Where one pixel spans a whole noise cell the pattern would alias and shimmer
+  // with camera motion; blend toward average coverage instead.
+  float footprint = length(fwidth(p)) * 2.7;
+  c = mix(c, 0.18, smoothstep(0.3, 0.8, footprint));
+  col = mix(col, vec3(0.95), c * 0.7 * smoothstep(-0.02, 0.2, dir.z));
   o_color = vec4(col, 1.0);
 }`;

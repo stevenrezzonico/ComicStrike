@@ -51,7 +51,7 @@ async function loadMap(name) {
   renderer.loadMap(mesh);
   world = CollisionWorld.fromBSP(bsp);
   const ms = (performance.now() - t0).toFixed(0);
-  console.log(`${name}: ${mesh.numVerts} verts, ${(mesh.opaqueCount + mesh.transCount) / 3} tris, ` +
+  console.log(`${name}: ${mesh.numVerts} verts, ${(mesh.opaqueCount + mesh.skyCount + mesh.transCount) / 3} tris, ` +
     `lightmap ${mesh.lightmap.width}x${mesh.lightmap.height}, ${world.ents.length} collision ents, built in ${ms} ms`);
 
   const spawn = bsp.entities.find((e) => e.classname === 'info_player_start') ||
@@ -160,6 +160,7 @@ loadMap(mapName)
 // Dev hook for inspecting the scene from the console.
 globalThis.webcs = {
   ps,
+  renderer,
   angles,
   input,
   tick,

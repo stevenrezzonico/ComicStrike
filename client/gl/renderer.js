@@ -1,7 +1,7 @@
 // WebGL2 renderer: one VBO + one index buffer for the whole map.
-// Opaque world = 1 draw call, translucent range = 1 draw call, sky = 1 draw call.
+// Draw order: opaque world, sky brushes, sky fill, translucent world (4 draw calls).
 
-import { WORLD_VS, WORLD_FS, SKY_VS, SKY_FS } from './shaders.js';
+import { WORLD_VS, WORLD_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS } from './shaders.js';
 import { VERTEX_STRIDE } from '../mapmesh.js';
 
 function compile(gl, type, src) {
@@ -42,10 +42,13 @@ export class Renderer {
     this.gl = gl;
     this.canvas = canvas;
     this.world = program(gl, WORLD_VS, WORLD_FS, ['u_viewProj', 'u_lightmap', 'u_eye', 'u_time', 'u_fogColor']);
-    this.sky = program(gl, SKY_VS, SKY_FS, ['u_invViewProj', 'u_horizon', 'u_zenith', 'u_time']);
-    this.skyVao = gl.createVertexArray();
+    const skyUniforms = ['u_eye', 'u_horizon', 'u_zenith', 'u_time'];
+    this.skyMesh = program(gl, SKY_MESH_VS, SKY_FS, ['u_viewProj', ...skyUniforms]);
+    this.skyFill = program(gl, SKY_FILL_VS, SKY_FS, ['u_invViewProj', ...skyUniforms]);
+    this.emptyVao = gl.createVertexArray();
     this.vao = null;
     this.opaqueCount = 0;
+    this.skyCount = 0;
     this.transCount = 0;
     this.horizon = new Float32Array([0.78, 0.74, 0.66]);
     this.zenith = new Float32Array([0.36, 0.52, 0.74]);
@@ -98,6 +101,7 @@ export class Renderer {
     this.vao = vao;
     this.lightmapTex = tex;
     this.opaqueCount = mesh.opaqueCount;
+    this.skyCount = mesh.skyCount;
     this.transCount = mesh.transCount;
   }
 
@@ -113,12 +117,21 @@ export class Renderer {
     return w / h;
   }
 
+  setSkyUniforms(s, eye, time) {
+    const gl = this.gl;
+    gl.useProgram(s.p);
+    gl.uniform3fv(s.loc.u_eye, eye);
+    gl.uniform3fv(s.loc.u_horizon, this.horizon);
+    gl.uniform3fv(s.loc.u_zenith, this.zenith);
+    gl.uniform1f(s.loc.u_time, time);
+  }
+
   render(viewProj, invViewProj, eye, time) {
     const gl = this.gl;
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
+    const w = this.world;
     if (this.vao) {
-      const w = this.world;
       gl.useProgram(w.p);
       gl.uniformMatrix4fv(w.loc.u_viewProj, false, viewProj);
       gl.uniform3fv(w.loc.u_eye, eye);
@@ -130,26 +143,18 @@ export class Renderer {
       gl.bindVertexArray(this.vao);
       gl.drawElements(gl.TRIANGLES, this.opaqueCount, gl.UNSIGNED_INT, 0);
 
-      if (this.transCount > 0) {
-        gl.enable(gl.BLEND);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-        gl.depthMask(false);
-        gl.disable(gl.CULL_FACE);
-        gl.drawElements(gl.TRIANGLES, this.transCount, gl.UNSIGNED_INT, this.opaqueCount * 4);
-        gl.enable(gl.CULL_FACE);
-        gl.depthMask(true);
-        gl.disable(gl.BLEND);
+      // Sky brushes write depth like walls, so nothing behind them shows through.
+      if (this.skyCount > 0) {
+        this.setSkyUniforms(this.skyMesh, eye, time);
+        gl.uniformMatrix4fv(this.skyMesh.loc.u_viewProj, false, viewProj);
+        gl.drawElements(gl.TRIANGLES, this.skyCount, gl.UNSIGNED_INT, this.opaqueCount * 4);
       }
     }
 
-    // Sky last: depth LEQUAL against the cleared far plane fills only empty pixels.
-    const s = this.sky;
-    gl.useProgram(s.p);
-    gl.uniformMatrix4fv(s.loc.u_invViewProj, false, invViewProj);
-    gl.uniform3fv(s.loc.u_horizon, this.horizon);
-    gl.uniform3fv(s.loc.u_zenith, this.zenith);
-    gl.uniform1f(s.loc.u_time, time);
-    gl.bindVertexArray(this.skyVao);
+    // Fill whatever nothing covered (cracks, outside the map): depth LEQUAL on the far plane.
+    this.setSkyUniforms(this.skyFill, eye, time);
+    gl.uniformMatrix4fv(this.skyFill.loc.u_invViewProj, false, invViewProj);
+    gl.bindVertexArray(this.emptyVao);
     gl.depthFunc(gl.LEQUAL);
     gl.depthMask(false);
     gl.disable(gl.CULL_FACE); // fullscreen triangle winds CCW
@@ -157,6 +162,20 @@ export class Renderer {
     gl.enable(gl.CULL_FACE);
     gl.depthMask(true);
     gl.depthFunc(gl.LESS);
+
+    // Translucent last so glass and water blend over the sky behind them.
+    if (this.vao && this.transCount > 0) {
+      gl.useProgram(w.p);
+      gl.bindVertexArray(this.vao);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+      gl.disable(gl.CULL_FACE);
+      gl.drawElements(gl.TRIANGLES, this.transCount, gl.UNSIGNED_INT, (this.opaqueCount + this.skyCount) * 4);
+      gl.enable(gl.CULL_FACE);
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
+    }
     gl.bindVertexArray(null);
   }
 }
