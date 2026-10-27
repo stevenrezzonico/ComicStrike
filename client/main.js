@@ -13,11 +13,12 @@ import {
   TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED, IN_SCORE,
   IN_ATTACK, IN_ATTACK2, IN_USE, IN_RELOAD, IN_DROP,
 } from '../shared/constants.js';
-import { CollisionWorld } from '../shared/trace.js';
+import { CollisionWorld, Trace, traceHull, HULL_POINT } from '../shared/trace.js';
 import { eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_SIZE, FL_ONGROUND, FL_DUCKING } from '../shared/pmove.js';
 import {
   WEAPONS, WEAPON_ID, ShotList, giveWeapon, weaponTick, viewPunchPitch, viewPunchYaw, hash32, WS_LAST_SLOT,
   WS_EVENTS, WS_SIZE, WS_SLOTS, WS_ACTIVE, WS_ACTION, WS_ACTION_END, SLOT_C4, NUM_SLOTS, ACTION_PLANT, ACTION_DEFUSE,
+  WS_ZOOM, WS_THROWN, WEV_THROW, activeWeapon, silenced,
 } from '../shared/weapons.js';
 import {
   BombSites, PLANT_TIME, DEFUSE_TIME, DEFUSE_TIME_KIT, C4_TIMER, BOMB_DROPPED, BOMB_PLANTED, BOMB_DEFUSED,
@@ -26,9 +27,14 @@ import {
 import { Breakables } from '../shared/breakables.js';
 import { HitTargets, feetOffset } from '../shared/hitgroups.js';
 import { SurfaceMap } from '../shared/surfaces.js';
-import { Player, spawnPlayer, runCommand, resolveShots, ImpactList, TEAM_T, TEAM_CT } from '../shared/player.js';
 import {
-  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, E_ACTIVE, E_X, E_Y, E_Z, E_PITCH, E_YAW,
+  Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT,
+} from '../shared/player.js';
+import { Grenades, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE } from '../shared/grenades.js';
+import { HITGROUP_CHEST, HITGROUP_LEGS } from '../shared/hitgroups.js';
+import {
+  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, E_ACTIVE, E_X,
+  E_Y, E_Z, E_PITCH, E_YAW,
   E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw,
 } from '../shared/protocol.js';
 import { buildMapMesh } from './mapmesh.js';
@@ -38,6 +44,7 @@ import { Debris } from './gl/debris.js';
 import { Players } from './gl/players.js';
 import { PlayerModels } from './gl/playermodels.js';
 import { GunMeshes } from './gl/gunmeshes.js';
+import { GrenadeFx } from './gl/grenadefx.js';
 import { modelLight } from './gl/skinned.js';
 import { perspective, viewFromAngles, multiply, invert } from './gl/mat4.js';
 import { Input, SELECT_LAST } from './input.js';
@@ -45,6 +52,8 @@ import { WeaponView } from './weaponview.js';
 import { NetClient } from './net.js';
 import { Hud } from './hud.js';
 import { Sounds } from './audio.js';
+import { SoundScape } from './soundscape.js';
+import { Spectator, SPEC_EYES } from './spectate.js';
 import { ConsoleWindow } from './console.js';
 import { NetGraph } from './netgraph.js';
 import { createConsole, watch } from './settings.js';
@@ -55,6 +64,10 @@ import {
 
 const DEG = Math.PI / 180;
 const FOV_Y = 73.74 * DEG; // CS:GO fov 90 at 4:3, kept vertical (Hor+)
+const ZOOM_RATE = 30; // per second: how fast the view zooms in or out (approximation)
+let fov = 90; // current CS:GO-style fov (horizontal at 4:3), eased toward the scope's
+const scopeEl = document.getElementById('scope');
+let scopeShown = '';
 const NOCLIP_SPEED = 800;
 const MAX_TICKS_PER_FRAME = 8;
 const HISTORY = 64; // commands / predicted states kept (power of two)
@@ -67,6 +80,10 @@ const status = document.getElementById('status');
 const debug = document.getElementById('debug');
 const killfeed = document.getElementById('killfeed');
 const deathNotice = document.getElementById('death');
+const spectator = new Spectator();
+const specAngles = new Float32Array(2);
+const specTrace = new Trace();
+let deadAt = 0, wasDead = false, specShown = '';
 
 // The console first: settings are read by everything below.
 let conWin = null;
@@ -80,11 +97,25 @@ const debris = new Debris(renderer.gl);
 const players = new Players(renderer.gl);
 const guns = new GunMeshes(renderer.gl); // every gun model, shared by first and third person
 const models = new PlayerModels(renderer.gl, guns);
-const overlays = [decals, debris, players, models];
+const fx = new GrenadeFx(renderer.gl, guns);
+const overlays = [decals, debris, players, models, fx];
 const weaponView = new WeaponView(renderer.gl, FOV_Y, cv, guns);
 const input = new Input(canvas);
 const hud = new Hud((item) => buy(item));
 const sounds = new Sounds();
+const soundTrace = new Trace();
+// A wall between the listener and a sound muffles it.
+sounds.occluded = (x, y, z) => world !== null &&
+  traceHull(world, HULL_POINT, sounds.lx, sounds.ly, sounds.lz, x, y, z, soundTrace).fraction < 0.97;
+// Footstep surfaces from the texture under the feet (CS:GO material letters).
+const scape = new SoundScape(sounds, (x, y, z) => {
+  if (!world || !world.surfaces) return 'hard';
+  const gm = world.surfaces.surfaceAt(world, 0, x, y, z, 0, 0, -1)[1];
+  if (gm === 77 || gm === 71) return 'metal'; // M, G (grates)
+  if (gm === 87) return 'wood';
+  if (gm === 68 || gm === 75 || gm === 79) return 'soft'; // dirt, snow, foliage
+  return 'hard';
+});
 const OFFLINE_MONEY = 16000;
 
 const player = new Player();
@@ -97,6 +128,68 @@ let lastButtons = 0;
 let world = null;
 const lightSample = new Float32Array(3), lightTarget = new Float32Array(3);
 let itemsVersion = -1; // last weapons-on-the-ground list handed to the models
+let grenadesVersion = -1; // last grenade list handed to the effects
+
+// Offline, grenades are simulated here, acting on us alone.
+const localGrenades = new Grenades();
+const flash = { left: 0, total: 0 }; // offline flashbang blindness (online: the snapshot's)
+const selfTargets = {
+  count: 1,
+  alive: () => player.health > 0,
+  center: (_i, out) => selfPoint(out, 0),
+  eye: (_i, out) => selfPoint(out, eyeOffset(ps)),
+  feet: (_i, out) => selfPoint(out, -feetOffset(ps.i[PS_FLAGS])),
+  pitch: () => angles[0],
+  yaw: () => angles[1],
+  hurt: (_i, damage, weapon) => {
+    const w = WEAPONS[weapon];
+    applyDamage(player, damage, w, w.grenade === 'fire' ? HITGROUP_LEGS : HITGROUP_CHEST);
+    if (player.health <= 0) offlineRespawn();
+  },
+  flash: (_i, seconds) => {
+    if (seconds > flash.left) flash.left = flash.total = seconds;
+  },
+};
+function selfPoint(out, dz) {
+  out[0] = ps.f[PS_ORIGIN];
+  out[1] = ps.f[PS_ORIGIN + 1];
+  out[2] = ps.f[PS_ORIGIN + 2] + dz;
+}
+
+// Flashbangs: white, then the frozen afterimage of the moment fading with it.
+const flashEl = document.getElementById('flash');
+const afterimage = document.getElementById('afterimage');
+let flashShown = -1, lastFlashLeft = 0;
+function showFlash(left, total) {
+  if (left > lastFlashLeft + 0.05) { // a new flash: keep this frame; ears ring
+    sounds.earRing(left);
+    afterimage.width = canvas.width >> 1;
+    afterimage.height = canvas.height >> 1;
+    afterimage.getContext('2d').drawImage(canvas, 0, 0, afterimage.width, afterimage.height);
+  }
+  lastFlashLeft = left;
+  // Fully white for the first part (approx. of CS:GO's hold), then fading.
+  const hold = total * 0.35, a = left <= 0 ? 0 : left > total - hold ? 1 : left / (total - hold);
+  const shown = Math.round(a * 100) / 100;
+  if (shown === flashShown) return;
+  flashShown = shown;
+  flashEl.style.opacity = Math.min(1, shown * 1.15);
+  afterimage.style.opacity = shown * 0.6;
+}
+
+fx.onEffect = (kind, _weapon, x, y, z) => {
+  if (kind === FX_HE) explosion(x, y, z, 0.45);
+  else if (kind === FX_FIZZLE) {
+    debris.puff(x, y, z, 0.3, 0.3, 0.3, 20);
+    sounds.hiss(x, y, z);
+  } else if (kind === FX_FLASH || kind === FX_SMOKE || kind === FX_FIRE) {
+    debris.puff(x, y, z + 4, 0.8, 0.8, 0.8, 12);
+    if (kind === FX_FLASH) sounds.bang(x, y, z);
+    else if (kind === FX_SMOKE) sounds.hiss(x, y, z);
+    else for (let i = 0; i < 4; i++) sounds.crackle(x, y, z + 8);
+  }
+};
+fx.onBounce = (x, y, z) => sounds.bounce(x, y, z);
 let breakables = null;
 let breakableColors = null; // rgb per breakable slot, for debris
 const spawns = { [TEAM_T]: [], [TEAM_CT]: [] }; // offline spawn points [x, y, z, yaw]
@@ -181,6 +274,9 @@ function offlineRespawn() {
   breakables.reset(world);
   renderer.clearBroken();
   debris.clear();
+  localGrenades.clear();
+  fx.clear();
+  flash.left = 0;
   const s = spawns[player.team][0] || spawns[TEAM_T][0] || spawns[TEAM_CT][0] || [0, 0, 0, 0];
   spawnPlayer(player, s[0], s[1], s[2]);
   resetView(s[3]);
@@ -269,6 +365,7 @@ function applySnapshot() {
   const own = net.own;
   netStats.rtt = (tickCount - own.lastCmd) * TICK_DT * 1000;
   player.defuser = (own.flags & OWN_DEFUSER) !== 0; // before any replay: it sets the defuse time
+  player.carrying = (own.flags & OWN_CARRYING) !== 0; // and this the speed
 
   if (own.spawnCount !== player.spawnCount || !synced) {
     // (Re)spawned by the server: take its state and replay what it has not run yet.
@@ -359,7 +456,9 @@ function applyEvents() {
     const x = ev.pos[k * 3], y = ev.pos[k * 3 + 1], z = ev.pos[k * 3 + 2];
     if (ev.kind[k] === SHOT_BLOOD) {
       debris.puff(x, y, z, 0.55, 0.05, 0.04, 6);
+      if (ev.shooter[k] === selfId) sounds.hit(false); // we hit someone
     } else if (!breakables.broken[ev.breakable[k]] || !ev.breakable[k]) {
+      sounds.impact(x, y, z);
       decals.add(x, y, z, ev.normal[k * 3], ev.normal[k * 3 + 1], ev.normal[k * 3 + 2], 1.6,
         (hash32(k * 31 + net.latestSeq) & 0xffff) / 65536, ev.breakable[k]);
     }
@@ -370,13 +469,14 @@ function applyEvents() {
     seenKills[seenKillNext] = id;
     seenKillNext = (seenKillNext + 1) % seenKills.length;
     addKill(ev.killer[k], ev.victim[k], ev.weapon[k], (ev.killFlags[k] & KILL_HEADSHOT) !== 0);
+    if (ev.killer[k] === selfId && (ev.killFlags[k] & KILL_HEADSHOT)) sounds.hit(true);
   }
 }
 
-function explosion(x, y, z) {
-  debris.puff(x, y, z + 24, 1.0, 0.55, 0.12, 70);
-  debris.puff(x, y, z + 40, 0.25, 0.23, 0.2, 60);
-  sounds.explosion(Math.min(1, Sounds.falloff(Math.hypot(x - eye[0], y - eye[1], z - eye[2]), 1500)));
+function explosion(x, y, z, size = 1) {
+  debris.puff(x, y, z + 24 * size, 1.0, 0.55, 0.12, Math.round(70 * size));
+  debris.puff(x, y, z + 40 * size, 0.25, 0.23, 0.2, Math.round(60 * size));
+  sounds.explosion(Math.min(1, size * Sounds.falloff(Math.hypot(x - eye[0], y - eye[1], z - eye[2]), 1500)));
 }
 
 // While planted: beep, faster and faster (approximation of CS:GO's 1.4 s down to
@@ -521,6 +621,20 @@ function tick() {
     resolveShots(world, breakables, ws, shots, impacts, net ? targets : null, selfId, player.team);
     showImpacts();
   }
+  if (!net) { // offline grenades
+    if (ws.f[WS_EVENTS] & WEV_THROW) {
+      const thrown = ws.f[WS_THROWN];
+      localGrenades.throw(world, Math.floor(thrown / 4), 0, player.team, ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1],
+        ps.f[PS_ORIGIN + 2] + eyeOffset(ps), angles[0], angles[1], ps.f[PS_VEL], ps.f[PS_VEL + 1], ps.f[PS_VEL + 2],
+        thrown & 3);
+    }
+    localGrenades.update(world, selfTargets);
+    fx.push(localGrenades, t);
+    flash.left = Math.max(0, flash.left - TICK_DT);
+  } else if (net.grenadesVersion !== grenadesVersion) {
+    grenadesVersion = net.grenadesVersion;
+    fx.push(net.grenades, net.grenadeTick);
+  }
 
   if (net) {
     // Dead players keep sending commands: the server uses them up, and they carry acks.
@@ -529,6 +643,11 @@ function tick() {
     net.sendCmds(cmds, t);
   }
   weaponView.onTick(ws.f[WS_EVENTS], t * TICK_DT);
+  if (alive) {
+    scape.ownEvents(ws.f[WS_EVENTS], activeWeapon(ws), silenced(ws, ws.f[WS_ACTIVE]));
+    scape.ownMove(ps, buttons & IN_SPEED, ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1],
+      ps.f[PS_ORIGIN + 2] - feetOffset(ps.i[PS_FLAGS]));
+  }
   tickCount++;
 }
 
@@ -544,7 +663,18 @@ function frame(now) {
   frameMsMax = Math.max(frameMsMax, now - last);
   last = now;
 
-  input.sensitivity = cv.sensitivity.number;
+  // Scopes: CS:GO fovs per zoom level; sensitivity scales with zoom_sensitivity_ratio_mouse.
+  const held = activeWeapon(ws);
+  const zoom = held && held.altKind === 'scope' && player.health > 0 ? ws.f[WS_ZOOM] : 0;
+  const fovTarget = zoom ? held.zoomFov[zoom] : 90;
+  fov += (fovTarget - fov) * (1 - Math.exp(-Math.min(elapsed, 0.1) * ZOOM_RATE));
+  input.sensitivity = cv.sensitivity.number * (zoom ? cv.zoom_sensitivity_ratio_mouse.number * fovTarget / 90 : 1);
+  const scope = zoom ? (held.name === 'aug' || held.name === 'sg556' ? 'dot' : 'cross') : '';
+  if (scope !== scopeShown) {
+    scopeShown = scope;
+    scopeEl.className = scope;
+    weaponView.scoped = scope !== '';
+  }
   input.mYaw = cv.m_yaw.number;
   input.mPitch = cv.m_pitch.number;
   input.rawInput = cv.m_rawinput.bool;
@@ -602,17 +732,34 @@ function draw(now, alpha, dt) {
   eye[2] = prevOrigin[2] + (f[PS_ORIGIN + 2] - prevOrigin[2]) * alpha + smooth[2];
   eye[2] += prevEye + (eyeOffset(ps) - prevEye) * alpha;
   // The camera shows a fraction of the aim punch (view_recoil_tracking).
-  const pitch = angles[0] + prevPunchP + (viewPunchPitch(ws) - prevPunchP) * alpha;
-  const yaw = angles[1] + prevPunchY + (viewPunchYaw(ws) - prevPunchY) * alpha;
+  let pitch = angles[0] + prevPunchP + (viewPunchPitch(ws) - prevPunchP) * alpha;
+  let yaw = angles[1] + prevPunchY + (viewPunchYaw(ws) - prevPunchY) * alpha;
 
-  if (net && synced && interpolatePlayers(serverClock - cv.cl_interp_ratio.number, interp)) {
+  // Dead: after a moment, follow a living player (client/spectate.js).
+  const dead = player.health <= 0;
+  if (dead && !wasDead) deadAt = now;
+  wasDead = dead;
+  const interpolated = net && synced && interpolatePlayers(serverClock - cv.cl_interp_ratio.number, interp);
+  const spectating = interpolated && dead &&
+    spectator.update(interp, selfId, player.team, (now - deadAt) / 1000, input.locked ? input.buttons : 0);
+  const inEyes = spectating && spectator.mode === SPEC_EYES;
+  if (spectating) {
+    spectator.camera(interp, eye, specAngles, (x0, y0, z0, x1, y1, z1) =>
+      traceHull(world, HULL_POINT, x0, y0, z0, x1, y1, z1, specTrace).fraction);
+    pitch = specAngles[0];
+    yaw = specAngles[1];
+  }
+
+  if (interpolated) {
     const boxes = cv.cl_showhitboxes.bool;
-    players.update(interp, 0, selfId, boxes);
-    models.update(interp, 0, selfId, dt, world && world.surfaces, !boxes);
+    const hidden = inEyes ? spectator.target : selfId; // not our own model, nor the one we see through
+    players.update(interp, 0, hidden, boxes);
+    models.update(interp, 0, hidden, dt, world && world.surfaces, !boxes);
     if (net.itemsVersion !== itemsVersion) {
       itemsVersion = net.itemsVersion;
       models.setItems(net.items, world && world.surfaces);
     }
+    models.updateHostages(net.hostages, dt, world && world.surfaces);
     const b = net.own.bomb;
     models.setBomb(b.state === BOMB_DROPPED || b.state === BOMB_PLANTED || b.state === BOMB_DEFUSED, b.x, b.y, b.z, 0,
       b.state === BOMB_PLANTED && now - lastBeep < 120, world && world.surfaces);
@@ -620,37 +767,64 @@ function draw(now, alpha, dt) {
   if (net && synced) bombBeeps(now);
 
   const aspect = renderer.resize(1);
-  perspective(proj, FOV_Y, aspect, 4, 16384);
+  const fovY = 2 * Math.atan(Math.tan(fov / 2 * DEG) * 0.75);
+  weaponView.fovY = fovY; // the crosshair's spread circle
+  perspective(proj, fovY, aspect, 4, 16384);
   viewFromAngles(view, eye[0], eye[1], eye[2], pitch, yaw);
   multiply(viewProj, proj, view);
   invert(invViewProj, viewProj);
   debris.update(dt, world);
+  fx.update(net ? serverClock - cv.cl_interp_ratio.number : tickCount - 1 + alpha, world && world.surfaces);
+  sounds.listen(eye[0], eye[1], eye[2], yaw);
+  scape.effects(fx.cur, now / 1000, dt);
+  if (net && synced) {
+    scape.others(interp, selfId, dt, (rows, r) => rows[r + E_Z] - feetOffset(rows[r + E_FLAGS]));
+  }
   renderer.render(viewProj, invViewProj, eye, now / 1000, overlays);
+  if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
+  else showFlash(flash.left, flash.total);
 
   hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now);
   const action = ws.f[WS_ACTION];
   const simTime = (tickCount - 1 + alpha) * TICK_DT;
   const actionTime = action === ACTION_PLANT ? PLANT_TIME : player.defuser ? DEFUSE_TIME_KIT : DEFUSE_TIME;
+  const picking = net && !action && player.health > 0 ? net.own.useProgress : 0;
   hud.bombStatus(ws.f[WS_SLOTS + SLOT_C4 * 3] > 0 && player.health > 0,
     world.bombSites.touches(f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2], 16, 16, 36),
-    action === ACTION_PLANT ? 'Planting the bomb' : action === ACTION_DEFUSE ? 'Defusing the bomb' : '',
-    1 - (ws.f[WS_ACTION_END] - simTime) / actionTime);
+    action === ACTION_PLANT ? 'Planting the bomb' : action === ACTION_DEFUSE ? 'Defusing the bomb'
+    : picking > 0 ? 'Picking up the hostage' : '',
+    picking > 0 ? picking : 1 - (ws.f[WS_ACTION_END] - simTime) / actionTime);
   hud.refreshMenu(player, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true);
   hud.scoreboard((input.buttons & IN_SCORE) !== 0 && input.locked, net, selfId,
     (id) => id === selfId ? player.health > 0 : interp[id * E_FIELDS + E_HEALTH] > 0);
 
-  const dead = player.health <= 0;
-  weaponView.hidden = dead;
-  weaponView.team = player.team;
+  weaponView.hidden = dead && !inEyes;
+  const target = spectator.target * E_FIELDS;
+  weaponView.team = inEyes ? interp[target + E_TEAM] : player.team;
   // The held weapon is lit by the map under the player, eased like other models.
-  if (world && world.surfaces.lightAt(lightSample, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2])) {
+  const lx = inEyes ? interp[target + E_X] : f[PS_ORIGIN], ly = inEyes ? interp[target + E_Y] : f[PS_ORIGIN + 1];
+  const lz = inEyes ? interp[target + E_Z] : f[PS_ORIGIN + 2];
+  if (world && world.surfaces.lightAt(lightSample, lx, ly, lz)) {
     modelLight(lightTarget, lightSample);
     const k = 1 - Math.exp(-dt * 8);
     for (let c = 0; c < 3; c++) weaponView.light[c] += (lightTarget[c] - weaponView.light[c]) * k;
   }
   deathNotice.style.display = dead && net ? 'block' : 'none';
-  weaponView.draw(canvas.width, canvas.height, aspect, ws, ps, lastButtons, simTime, dt, Math.max(player.health, 0),
-    player.armor);
+  const spec = spectating ? `Spectating ${net.names[spectator.target] || 'player'} · ${interp[target + E_HEALTH]} HP\n` +
+    'Mouse1 / Mouse2: next / previous · Jump: eyes / chase' : '';
+  if (spec !== specShown) {
+    specShown = spec;
+    deathNotice.style.whiteSpace = 'pre';
+    if (spec) deathNotice.textContent = spec;
+  }
+  if (inEyes) {
+    spectator.syncWeapon(interp, now / 1000, dt, weaponView);
+    weaponView.draw(canvas.width, canvas.height, aspect, spectator.ws, spectator.ps, 0, now / 1000, dt,
+      interp[target + E_HEALTH], player.armor);
+  } else {
+    weaponView.draw(canvas.width, canvas.height, aspect, ws, ps, lastButtons, simTime, dt, Math.max(player.health, 0),
+      player.armor);
+  }
 }
 
 // Hidden tabs get no animation frames (and timers at most once a second): keep

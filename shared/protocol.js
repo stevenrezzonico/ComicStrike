@@ -26,18 +26,26 @@
 //            bomb: u8 state, [f32 x, y, z, u16 ticksLeft if state >= BOMB_DROPPED],
 //            own player: u8 health, u8 armor (bit 7: helmet), u8 spawnCount, u8 team, f32 spawnYaw,
 //                        u16 money, u8 ownFlags (OWN_CAN_BUY, OWN_DEFUSER),
-//                        PlayerState bytes, WeaponState bytes (full every time, for prediction),
+//                        u8 flash left, u8 flash length (1/32 s: flashbang blindness),
+//                        u8 use progress (0..255: picking up a hostage),
+//                        PlayerState bytes, WeaponState (full every time, for prediction:
+//                        a bitmask of the fields that are not +0, then those f64 values),
 //            u8 n, n x { u8 id, u8 fieldMask, changed fields } (other players, delta vs base),
 //            events of this tick (not delta-compressed, lost with their datagram):
 //            u8 n, n x { u8 shooter, u8 kind, f32 x, y, z, i8 nx, ny, nz, u8 breakable }
 //            u8 n, n x { u16 killId, u8 killer, u8 victim, u8 weapon, u8 flags } (kills of the
 //            last KILL_REPEAT_TICKS, repeated every snapshot so one loss loses nothing)
+//   GRENADES u8 type, u32 tick, u8 n, n x { u16 id, u8 weapon, f32 x, y, z } (in flight),
+//            u8 n, n x { u16 id, u8 kind, u8 weapon, f32 x, y, z, u16 age ticks } (effects:
+//            blasts, smokes, fires, decoys); every tick, nothing delta-compressed
+//   HOSTAGES u8 type, u8 n, n x { u8 state, i8 carrier, u8 health, f32 x, y, z, u8 yaw }
+//            (on changes and every second)
 
 import { PS_SIZE } from './pmove.js';
 import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -55,6 +63,8 @@ export const S2C_INFO = 13;
 export const S2C_PRINT = 14;
 export const S2C_CHANGELEVEL = 15;
 export const S2C_ITEMS = 16; // weapons on the ground
+export const S2C_GRENADES = 17;
+export const S2C_HOSTAGES = 18;
 export const MAX_TEXT = 900; // bytes of console text per datagram
 
 export const SHOT_IMPACT = 0; // bullet hit the world
@@ -66,6 +76,7 @@ const CMD_BYTES = 21;
 export const SNAP_BROKEN = 1;
 export const OWN_CAN_BUY = 1;
 export const OWN_DEFUSER = 2;
+export const OWN_CARRYING = 4; // carrying a hostage (slower: the client predicts it)
 const BROKEN_WORDS = 8; // 256-bit mask, one bit per breakable slot
 
 // --- Byte buffers ------------------------------------------------------------
@@ -90,6 +101,7 @@ export class Writer {
   u16v(v) { this.dv.setUint16(this.pos, v, true); this.pos += 2; }
   u32v(v) { this.dv.setUint32(this.pos, v >>> 0, true); this.pos += 4; }
   f32v(v) { this.dv.setFloat32(this.pos, v, true); this.pos += 4; }
+  f64v(v) { this.dv.setFloat64(this.pos, v, true); this.pos += 8; }
 
   bytes(src) {
     this.u8.set(src, this.pos);
@@ -137,6 +149,7 @@ export class Reader {
   u16v() { const v = this.dv.getUint16(this.pos, true); this.pos += 2; return v; }
   u32v() { const v = this.dv.getUint32(this.pos, true); this.pos += 4; return v; }
   f32v() { const v = this.dv.getFloat32(this.pos, true); this.pos += 4; return v; }
+  f64v() { const v = this.dv.getFloat64(this.pos, true); this.pos += 8; return v; }
 
   bytesInto(dst) {
     dst.set(this.u8.subarray(this.pos, this.pos + dst.length));
@@ -262,6 +275,86 @@ export function readItems(r, items) {
     const k = items.add(weapon, 0, 0, x, y, z, yaw);
     items.id[k] = id;
   }
+}
+
+// Hostages (shared/hostages.js).
+export function writeHostages(w, h) {
+  w.reset();
+  w.u8v(S2C_HOSTAGES);
+  w.u8v(h.count);
+  for (let k = 0; k < h.count; k++) {
+    w.u8v(h.state[k]);
+    w.i8v(h.carrier[k]);
+    w.u8v(Math.min(Math.max(Math.ceil(h.health[k]), 0), 255));
+    w.f32v(h.x[k]);
+    w.f32v(h.y[k]);
+    w.f32v(h.z[k]);
+    w.u8v(Math.round(h.yaw[k] / 360 * 256) & 255);
+  }
+  return w.view();
+}
+
+export function readHostages(r, h) {
+  h.count = Math.min(r.u8v(), h.state.length);
+  for (let k = 0; k < h.count; k++) {
+    h.state[k] = r.u8v();
+    h.carrier[k] = r.i8v();
+    h.health[k] = r.u8v();
+    h.x[k] = r.f32v();
+    h.y[k] = r.f32v();
+    h.z[k] = r.f32v();
+    h.yaw[k] = r.u8v() / 256 * 360;
+  }
+}
+
+// Grenades in flight and their effects (shared/grenades.js) at server tick `tick`.
+export function writeGrenades(w, tick, g) {
+  w.reset();
+  w.u8v(S2C_GRENADES);
+  w.u32v(tick);
+  w.u8v(g.count);
+  for (let k = 0; k < g.count; k++) {
+    w.u16v(g.id[k]);
+    w.u8v(g.weapon[k]);
+    w.f32v(g.pos[k * 3]);
+    w.f32v(g.pos[k * 3 + 1]);
+    w.f32v(g.pos[k * 3 + 2]);
+  }
+  w.u8v(g.fxCount);
+  for (let k = 0; k < g.fxCount; k++) {
+    w.u16v(g.fxId[k]);
+    w.u8v(g.fxKind[k]);
+    w.u8v(g.fxWeapon[k]);
+    w.f32v(g.fxPos[k * 3]);
+    w.f32v(g.fxPos[k * 3 + 1]);
+    w.f32v(g.fxPos[k * 3 + 2]);
+    w.u16v(Math.min(Math.round(g.fxAge[k] * 64), 65535));
+  }
+  return w.view();
+}
+
+// Decodes into a Grenades (lists replaced; ages in seconds at `tick`). Returns the tick.
+export function readGrenades(r, g) {
+  const tick = r.u32v();
+  g.count = Math.min(r.u8v(), g.id.length);
+  for (let k = 0; k < g.count; k++) {
+    g.id[k] = r.u16v();
+    g.weapon[k] = r.u8v();
+    g.pos[k * 3] = r.f32v();
+    g.pos[k * 3 + 1] = r.f32v();
+    g.pos[k * 3 + 2] = r.f32v();
+  }
+  g.fxCount = Math.min(r.u8v(), g.fxId.length);
+  for (let k = 0; k < g.fxCount; k++) {
+    g.fxId[k] = r.u16v();
+    g.fxKind[k] = r.u8v();
+    g.fxWeapon[k] = r.u8v();
+    g.fxPos[k * 3] = r.f32v();
+    g.fxPos[k * 3 + 1] = r.f32v();
+    g.fxPos[k * 3 + 2] = r.f32v();
+    g.fxAge[k] = r.u16v() / 64;
+  }
+  return tick;
 }
 
 export function writeBuy(w, buyId, item) {
@@ -508,6 +601,7 @@ export const ANIM_RELOAD = 1;
 export const ANIM_PLANT = 2;
 export const ANIM_DEFUSE = 4;
 export const ANIM_HELMET = 8;
+export const ANIM_SILENCED = 16; // the gun in hand wears its silencer (M4A1-S, USP-S)
 
 const F_ORIGIN = 1;
 const F_ANGLES = 2;
@@ -602,9 +696,12 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
   w.u8v(p.team);
   w.f32v(own.spawnYaw);
   w.u16v(Math.min(Math.max(p.money, 0), 65535));
-  w.u8v((own.canBuy ? OWN_CAN_BUY : 0) | (p.defuser ? OWN_DEFUSER : 0));
+  w.u8v((own.canBuy ? OWN_CAN_BUY : 0) | (p.defuser ? OWN_DEFUSER : 0) | (p.carrying ? OWN_CARRYING : 0));
+  w.u8v(Math.min(Math.max(Math.round((own.flashLeft || 0) * 32), 0), 255));
+  w.u8v(Math.min(Math.max(Math.round((own.flashTotal || 0) * 32), 0), 255));
+  w.u8v(Math.min(Math.max(Math.round((own.useProgress || 0) * 255), 0), 255));
   w.bytes(p.psBytes);
-  w.bytes(p.wsBytes);
+  writeWeaponState(w, p.ws.f);
 
   const countAt = w.pos;
   w.u8v(0);
@@ -665,6 +762,27 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
   return w.view();
 }
 
+// The weapon state is mostly zeros (timers, modes, grenades, empty slots): only the
+// fields that are not +0 go out, after a bitmask. Bit-exact both ways.
+const WS_MASK_BYTES = Math.ceil(WS_SIZE / 8);
+
+function writeWeaponState(w, f) {
+  const at = w.pos;
+  w.u8.fill(0, at, at + WS_MASK_BYTES);
+  w.pos += WS_MASK_BYTES;
+  for (let i = 0; i < WS_SIZE; i++) {
+    if (Object.is(f[i], 0)) continue;
+    w.u8[at + (i >> 3)] |= 1 << (i & 7);
+    w.f64v(f[i]);
+  }
+}
+
+function readWeaponState(r, f) {
+  const at = r.pos;
+  r.pos += WS_MASK_BYTES;
+  for (let i = 0; i < WS_SIZE; i++) f[i] = r.u8[at + (i >> 3)] & (1 << (i & 7)) ? r.f64v() : 0;
+}
+
 // Own-player block of a decoded snapshot (filled in place).
 export class OwnState {
   constructor() {
@@ -677,11 +795,15 @@ export class OwnState {
     this.spawnYaw = 0;
     this.money = 0;
     this.flags = 0; // OWN_*
+    this.flashLeft = 0; // seconds of flashbang blindness left
+    this.flashTotal = 0; // and how long it lasts in all
+    this.useProgress = 0; // 0..1: picking up a hostage
     this.round = new RoundState();
     this.bomb = new BombState();
     this.ps = new Uint8Array(PS_SIZE * 4); // raw PlayerState bytes
     this.psF = new Float32Array(this.ps.buffer); // the same bytes as floats
     this.ws = new Uint8Array(WS_SIZE * 8); // raw WeaponState bytes
+    this.wsF = new Float64Array(this.ws.buffer); // the same bytes as numbers
   }
 }
 
@@ -732,8 +854,11 @@ export function readSnapshot(r, ring, own, ev = null) {
   own.spawnYaw = r.f32v();
   own.money = r.u16v();
   own.flags = r.u8v();
+  own.flashLeft = r.u8v() / 32;
+  own.flashTotal = r.u8v() / 32;
+  own.useProgress = r.u8v() / 255;
   r.bytesInto(own.ps);
-  r.bytesInto(own.ws);
+  readWeaponState(r, own.wsF);
 
   const rows = MAX_PLAYERS * E_FIELDS;
   if (base >= 0) E.copyWithin(k * rows, base * rows, (base + 1) * rows);

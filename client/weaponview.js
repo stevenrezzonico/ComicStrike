@@ -3,7 +3,9 @@
 // shared/weapons.js; this only reads its state and events.
 
 import { PS_VEL, PS_FLAGS, FL_ONGROUND } from '../shared/pmove.js';
-import { activeWeapon, getInaccuracy, WS_ACTIVE, WS_SLOTS, WEV_FIRE } from '../shared/weapons.js';
+import {
+  activeWeapon, getInaccuracy, weaponStats, modeOf, silenced, grenadeCount, WS_ACTIVE, WS_SLOTS, WS_MODE_END, WEV_FIRE,
+} from '../shared/weapons.js';
 import { Viewmodel } from './gl/viewmodel.js';
 import { Crosshair } from './gl/crosshair.js';
 import { ViewAnimator } from './anim/viewanim.js';
@@ -26,12 +28,13 @@ export class WeaponView {
     this.bobPhase = 0;
     this.anim = { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0, flash: false };
     this.hidden = false; // dead: no viewmodel or crosshair, HUD only
+    this.scoped = false; // looking through a scope: its overlay replaces both
 
     this.elHealth = document.getElementById('hud-health');
     this.elArmor = document.getElementById('hud-armor');
     this.elAmmo = document.getElementById('hud-ammo');
     this.elWeapon = document.getElementById('hud-weapon');
-    this.shown = { health: -1, armor: -1, clip: -1, reserve: -1, weapon: -1 };
+    this.shown = { health: -1, armor: -1, clip: -1, reserve: -1, weapon: -1, label: null };
   }
 
   // Called once per simulation tick with that tick's weapon events.
@@ -52,7 +55,7 @@ export class WeaponView {
     const a = this.anim;
     a.x = a.y = a.z = a.pitch = a.yaw = a.roll = 0;
 
-    if (w && !this.hidden) {
+    if (w && !this.hidden && !this.scoped) {
       // Walk bob.
       const speed = Math.hypot(ps.f[PS_VEL], ps.f[PS_VEL + 1]) / 250;
       if (ps.i[PS_FLAGS] & FL_ONGROUND) this.bobPhase += dt * speed * Math.PI * 3;
@@ -67,18 +70,20 @@ export class WeaponView {
       // viewmodel_fov is horizontal at 4:3; 60 (the default) keeps the models' tuned 54 deg vertical.
       this.viewmodel.fovY = 2 * Math.atan(VM_TAN * Math.tan(cv.viewmodel_fov.number * Math.PI / 360));
 
-      a.flash = time < this.flashUntil;
+      a.flash = time < this.flashUntil && !silenced(ws, ws.f[WS_ACTIVE]);
       const va = this.animator.update(id, ws, time, this.guns.points[id]);
-      this.viewmodel.draw(id, aspect, va, a, this.light, this.team);
+      this.viewmodel.draw(id, aspect, va, a, this.light, this.team, silenced(ws, ws.f[WS_ACTIVE]));
     }
 
     // Dynamic crosshairs open up with the real bullet cone (inaccuracy + spread).
     let spread = 0;
     if (w && w.gun) {
-      const cone = getInaccuracy(ws, ps, buttons) + w.spread;
+      const cone = getInaccuracy(ws, ps, buttons) + weaponStats(ws).spread;
       spread = Math.tan(cone) / Math.tan(this.fovY / 2) * height * 0.5;
     }
-    if (!this.hidden) this.crosshair.draw(width, height, spread);
+    // Sniper rifles show no crosshair unscoped, like CS:GO.
+    const sniper = w && w.altKind === 'scope' && w.name !== 'aug' && w.name !== 'sg556';
+    if (!this.hidden && !this.scoped && !sniper) this.crosshair.draw(width, height, spread);
 
     this.updateHud(w, ws, id, health, armor);
   }
@@ -87,9 +92,16 @@ export class WeaponView {
     const s = this.shown;
     if (health !== s.health) this.elHealth.textContent = s.health = health;
     if (armor !== s.armor) this.elArmor.textContent = s.armor = armor;
+    // The label says the mode: burst fire, a silencer coming on / off, grenades held.
+    let label = w ? w.label : '';
+    if (w && w.altKind === 'burst' && modeOf(ws, w)) label += ' · Burst';
+    if (w && w.altKind === 'silencer' && ws.f[WS_MODE_END] > 0) {
+      label += silenced(ws, w.slot) ? ' · removing silencer' : ' · attaching silencer';
+    }
+    if (w && w.grenade && grenadeCount(ws, id) > 1) label += ` ×${grenadeCount(ws, id)}`;
+    if (label !== s.label) this.elWeapon.textContent = s.label = label;
     if (id !== s.weapon) {
       s.weapon = id;
-      this.elWeapon.textContent = w ? w.label : '';
       s.clip = s.reserve = -1;
     }
     const o = WS_SLOTS + ws.f[WS_ACTIVE] * 3;

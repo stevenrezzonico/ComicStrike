@@ -49,7 +49,8 @@ Deno.test('first-person: at rest both hands are on the gun, for every weapon', (
     va.update(WEAPON_ID[w.name], state(w.name), 10, pts);
     // The right hand holds the grip (inside the hand: about an inch and a half from its
     // palm axis), the left hand the support point.
-    const grip = apply(va.gun, w.name === 'knife' ? [0.4, 0, 0] : w.c4 ? [3, -2.3, 0] : [-0.75, 0, -1.6]);
+    const grip = apply(va.gun, w.name === 'knife' ? [0.4, 0, 0] : w.c4 ? [3, -2.3, 0] : w.grenade ? [0, 0, -0.3]
+      : [-0.75, 0, -1.6]);
     assert.ok(dist(held(va, 1), grip) < 1.6, `${w.name}: right hand ${dist(held(va, 1), grip).toFixed(2)} from the grip`);
     if (pts.support && w.name !== 'elite') {
       const sp = apply(va.gun, pts.support);

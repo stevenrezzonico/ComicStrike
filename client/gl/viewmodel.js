@@ -29,9 +29,9 @@ export class Viewmodel {
 
   // va: the ViewAnimator, updated for this frame; anim: { x, y, z (eye-space offset),
   // pitch, yaw, roll (degrees, about the hands), flash }; light: rgb from the map at the
-  // player; team: the player's team.
-  draw(weaponId, aspect, va, anim, light, team) {
-    const gun = this.guns.mesh[weaponId];
+  // player; team: the player's team; silencerOn: the M4A1-S / USP-S wear theirs.
+  draw(weaponId, aspect, va, anim, light, team, silencerOn = true) {
+    const gun = this.guns.meshOf(weaponId, silencerOn);
     if (!gun) return;
     const gl = this.gl, r = this.renderer;
     perspective(this.proj, this.fovY, aspect, 1, 128);
@@ -46,7 +46,7 @@ export class Viewmodel {
       r.draw(gun, multiply(this.tmp2, this.rig, va.gun2), va.gunSkin, light);
       if (va.flash2) this.tmp.set(this.tmp2);
     }
-    const flash = this.guns.flash[weaponId];
+    const flash = this.guns.flashOf(weaponId, silencerOn);
     if (anim.flash && flash) {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE);

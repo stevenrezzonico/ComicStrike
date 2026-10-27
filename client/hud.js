@@ -4,7 +4,7 @@
 
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import {
-  PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, BUY_MENU, itemLabel, itemPrice,
+  PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, BUY_MENU, itemLabel, itemPrice,
 } from '../shared/economy.js';
 import { BOMB_PLANTED } from '../shared/bomb.js';
 import { TICK_RATE } from '../shared/constants.js';
@@ -65,6 +65,7 @@ export class Hud {
       if (reason === END_TIME) banner += ' (time)';
       else if (reason === END_BOMB) banner = 'Target Bombed: ' + banner;
       else if (reason === END_DEFUSE) banner = 'Bomb Defused: ' + banner;
+      else if (reason === END_RESCUE) banner = 'Hostage Rescued: ' + banner;
     } else if (rs.phase === PHASE_WARMUP) {
       banner = 'Warmup: waiting for both teams';
     } else if (now < this.noticeUntil) {

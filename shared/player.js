@@ -10,11 +10,12 @@ import {
   PS_VELMOD, EV_LAND, FL_ONGROUND, FL_DUCKING,
 } from './pmove.js';
 import {
-  createWeaponState, copyWeaponState, giveWeapon, weaponTick, activeWeapon, removeWeapon, WEAPON_ID, SLOT_PRIMARY,
+  createWeaponState, copyWeaponState, giveWeapon, weaponTick, activeWeapon, weaponStats, removeWeapon, WEAPON_ID, SLOT_PRIMARY,
   SLOT_SECONDARY, SLOT_C4, NUM_SLOTS, WS_ACTIVE, WS_SLOTS, WS_EVENTS, WS_ACTION, WS_ACTION_END, WEV_PLANTED, WEV_DEFUSED,
-  ACTION_PLANT, ACTION_DEFUSE,
+  ACTION_PLANT, ACTION_DEFUSE, WS_ALT, WS_GRENADES, GRENADE_IDS,
 } from './weapons.js';
 import { PLANT_TIME, DEFUSE_TIME, DEFUSE_TIME_KIT, USE_RANGE, USE_CONE, BOMB_PLANTED } from './bomb.js';
+import { CARRY_SPEED } from './hostages.js';
 import { Trace, traceHull, hullFits, HULL_POINT } from './trace.js';
 import { hitgroupScale, HITGROUP_HEAD, HITGROUP_LEGS } from './hitgroups.js';
 import {
@@ -34,6 +35,7 @@ export class Player {
     this.armor = 0;
     this.helmet = false;
     this.defuser = false; // defuse kit
+    this.carrying = false; // a hostage on the shoulder (shared/hostages.js)
     this.team = TEAM_T;
     this.spawnCount = 0; // bumps on every respawn, so clients notice a teleport
     this.primary = 0; // warmup loadout weapon ids (0 = team default)
@@ -48,13 +50,19 @@ export class Player {
 export const FREEZE_BUTTONS = IN_DUCK | IN_RELOAD | IN_SCORE;
 
 const savedSlots = new Float64Array(NUM_SLOTS * 3);
+const savedGrenades = new Float64Array(GRENADE_IDS.length);
+let savedAlt = 0;
 
 // Puts a player at a spawn point with full health.
 //  keepGear: a round survivor keeps weapons, ammo and armor (CS:GO).
 //  otherwise a new life: knife + team pistol, no armor; `withLoadout` (warmup and
 //  offline) also hands out the requested primary/secondary.
 export function spawnPlayer(p, x, y, z, keepGear = false, withLoadout = true) {
-  if (keepGear) savedSlots.set(p.ws.f.subarray(WS_SLOTS, WS_SLOTS + NUM_SLOTS * 3));
+  if (keepGear) { // weapons, ammo, silencers / burst modes and grenades
+    savedSlots.set(p.ws.f.subarray(WS_SLOTS, WS_SLOTS + NUM_SLOTS * 3));
+    savedGrenades.set(p.ws.f.subarray(WS_GRENADES, WS_GRENADES + GRENADE_IDS.length));
+    savedAlt = p.ws.f[WS_ALT];
+  }
   copyPlayerState(p.ps, createPlayerState());
   p.ps.f[PS_ORIGIN] = x;
   p.ps.f[PS_ORIGIN + 1] = y;
@@ -63,6 +71,8 @@ export function spawnPlayer(p, x, y, z, keepGear = false, withLoadout = true) {
   const ct = p.team === TEAM_CT;
   if (keepGear) {
     p.ws.f.set(savedSlots, WS_SLOTS);
+    p.ws.f.set(savedGrenades, WS_GRENADES);
+    p.ws.f[WS_ALT] = savedAlt;
   } else {
     giveWeapon(p.ws, WEAPON_ID.knife);
     giveWeapon(p.ws, (withLoadout && p.secondary) || (ct ? WEAPON_ID.usp_silencer : WEAPON_ID.glock));
@@ -70,6 +80,7 @@ export function spawnPlayer(p, x, y, z, keepGear = false, withLoadout = true) {
     p.armor = 0;
     p.helmet = false;
     p.defuser = false;
+    p.carrying = false;
   }
   p.ws.f[WS_ACTIVE] = p.ws.f[WS_SLOTS + SLOT_PRIMARY * 3] ? SLOT_PRIMARY : SLOT_SECONDARY;
   p.health = 100;
@@ -87,8 +98,9 @@ export function runCommand(world, p, buttons, select, pitch, yaw, tick, shots, f
   let moveButtons = buttons;
   if (action) moveButtons &= ~MOVE_BUTTONS;
   if (action === ACTION_DEFUSE) buttons &= ~IN_ATTACK; // no shooting while defusing
-  const w = activeWeapon(p.ws);
-  playerMove(world, p.ps, moveButtons, pitch, yaw, TICK_DT, w ? w.maxSpeed : 250);
+  const w = weaponStats(p.ws); // scoped rifles walk slower
+  const maxSpeed = w ? w.maxSpeed : 250;
+  playerMove(world, p.ps, moveButtons, pitch, yaw, TICK_DT, p.carrying ? Math.min(maxSpeed, CARRY_SPEED) : maxSpeed);
   if (p.ps.i[PS_EVENTS] & EV_LAND) p.health -= Math.round(fallDamage(p.ps.f[PS_LAND_SPEED]));
   weaponTick(p.ws, p.ps, buttons, select, pitch, yaw, tick, shots);
   bombAction(world, p, buttons, pitch, yaw, tick, bomb);

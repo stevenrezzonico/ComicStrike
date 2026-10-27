@@ -11,6 +11,7 @@ export const HOLD_RIFLE = 0;
 export const HOLD_PISTOL = 1;
 export const HOLD_KNIFE = 2;
 export const HOLD_C4 = 3;
+export const HOLD_TIED = 4; // hostages: hands tied behind the back
 
 const SKIN = [0.78, 0.6, 0.47];
 const BLACK = [0.1, 0.1, 0.11];
@@ -27,7 +28,12 @@ const CT_LOOK = {
   helmet: [0.2, 0.23, 0.22], cap: [0.15, 0.15, 0.17],
 };
 
-export const LOOKS = { T: T_LOOK, CT: CT_LOOK };
+// Hostage: a civilian in a light blue shirt and grey trousers, bare-headed.
+const H_LOOK = {
+  head: SKIN, jacket: [0.56, 0.64, 0.74], shirt: [0.56, 0.64, 0.74], pants: [0.3, 0.3, 0.33], gloves: SKIN,
+  boots: [0.22, 0.16, 0.11], belt: [0.18, 0.13, 0.09], cap: [0.22, 0.16, 0.1],
+};
+export const LOOKS = { T: T_LOOK, CT: CT_LOOK, H: H_LOOK };
 export { SKIN };
 
 const bind = (name) => {
@@ -35,9 +41,9 @@ const bind = (name) => {
   return [S.bind[i * 3], S.bind[i * 3 + 1], S.bind[i * 3 + 2]];
 };
 
-// team: 'T' or 'CT'; helmet: CTs show a helmet only when they own one.
+// team: 'T', 'CT' or 'H' (hostage); helmet: CTs show a helmet only when they own one.
 export function buildPlayer(team, helmet = false) {
-  const L = team === 'CT' ? CT_LOOK : T_LOOK;
+  const L = LOOKS[team] || T_LOOK;
   const b = new MeshBuilder();
   const at = (name) => b.bone(S.bone(name));
 

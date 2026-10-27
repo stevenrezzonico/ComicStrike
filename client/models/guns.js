@@ -246,6 +246,34 @@ function buildKnife(b) {
   return { muzzle: [11.4, 0, 0], support: null }; // one-handed
 }
 
+// Grenades, upright in the hand (origin at the palm, body around it): HE (olive egg),
+// flashbang and smoke (grey and green cans), molotov (bottle with a rag), incendiary
+// (grey can, red band), decoy (small green can). Every one has the spoon and pin ring
+// on top. The muzzle point is the top (the throw's release point).
+const GRENADES = {
+  hegrenade: { body: [[0.9, -1.6], [1.25, -0.9], [1.3, 0.3], [1.0, 1.0], [0.6, 1.3]], color: [0.3, 0.33, 0.2] },
+  flashbang: { body: [[0.75, -1.9], [0.75, 1.3]], color: [0.62, 0.64, 0.66], band: [0.15, 0.15, 0.16] },
+  smokegrenade: { body: [[0.85, -2.0], [0.85, 1.3]], color: [0.36, 0.42, 0.33], band: [0.75, 0.75, 0.72] },
+  incgrenade: { body: [[0.8, -1.9], [0.8, 1.3]], color: [0.5, 0.5, 0.5], band: [0.75, 0.16, 0.1] },
+  decoy: { body: [[0.7, -1.5], [0.7, 1.1]], color: [0.38, 0.46, 0.3], band: [0.2, 0.2, 0.2] },
+};
+
+function buildGrenade(b, name) {
+  if (name === 'molotov') {
+    b.color([0.36, 0.42, 0.22]).lathe([[1.05, -2.6], [1.05, 0.6], [0.45, 1.6], [0.4, 2.6]], 8); // bottle
+    b.color([0.75, 0.68, 0.55]).box(0.7, 0.9, 1.4, 0, 0, 3.1); // rag in the neck
+    b.color([0.75, 0.68, 0.55]).box(1.6, 0.4, 0.4, 0.6, 0, 3.6); // its loose end
+    return { muzzle: [0, 0, 3.8], support: null };
+  }
+  const g = GRENADES[name], top = g.body[g.body.length - 1][1];
+  b.color(g.color).lathe(g.body, 8);
+  if (g.band) b.color(g.band).lathe([[g.body[0][0] + 0.06, -0.5], [g.body[0][0] + 0.06, 0.1]], 8);
+  b.color(STEEL).box(0.9, 0.7, 0.7, 0, 0, top + 0.3); // fuse head
+  b.box(0.35, 0.5, 2.4, -0.55, 0, top - 0.6).box(0.7, 0.5, 0.3, -0.25, 0, top + 0.6); // spoon
+  b.box(0.15, 0.9, 0.9, 0.55, 0, top + 0.5); // pin ring
+  return { muzzle: [0, 0, top + 0.8], support: null };
+}
+
 function buildC4(b, ledColor = LED) {
   b.color(C4_TAN).box(7, 4.6, 3, 3, 0, 0);
   b.color(BLACK).box(3.8, 3.2, 0.5, 3.5, 0, 1.75);
@@ -262,7 +290,8 @@ export function buildDefuser() {
   return b.build();
 }
 
-// Builds the model of weapon `name` (shared/weapons.js names): { mesh, muzzle, support,
+// Builds the model of weapon `name` (shared/weapons.js names; opts.noSilencer: the
+// M4A1-S / USP-S with their silencer off): { mesh, muzzle, support,
 // mag, magDir, bolt, pump, port, cylinder }, points in the gun frame: the muzzle; the off
 // hand's place (null: one-handed); where a hand takes the magazine and the way it comes
 // out (null: no magazine); the bolt handle, slide rear or pump (pump: the bolt bone is a
@@ -272,17 +301,18 @@ export function buildGun(name, opts = {}) {
   let pts;
   const g = GUNS[name];
   if (name === 'knife') pts = buildKnife(b);
+  else if (name === 'molotov' || GRENADES[name]) pts = buildGrenade(b, name);
   else if (name === 'c4') pts = buildC4(b, opts.ledOff ? [0.3, 0.06, 0.05] : LED);
   else if (!g) throw new Error(`no gun model for ${name}`);
   else if (g.revolver) pts = buildRevolver(b);
   else if (g.pistol) {
     pts = pistol(b, g.pistol);
-    if (g.silencer) {
+    if (g.silencer && !opts.noSilencer) {
       tube(b, pts.muzzle[0], pts.muzzle[0] + g.silencer, 0.55, pts.muzzle[2], BLACK, 8);
       pts.muzzle[0] += g.silencer;
     }
   } else {
-    pts = longGun(b, g.long);
+    pts = longGun(b, opts.noSilencer && g.long.silencer ? { ...g.long, silencer: 0, brake: 1 } : g.long);
     if (g.long.top) { // P90: the magazine lies on top
       b.bone(GUN_MAG).color([0.35, 0.33, 0.28]).box(12, 1.8, 0.9, 0, 0, 2.4).bone(GUN_ROOT);
       b.color(BLACK).box(5, 1, 1, 7, 0, 3.2); // optic

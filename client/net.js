@@ -4,10 +4,12 @@
 
 import {
   MAX_PLAYERS, Writer, Reader, SnapshotRing, OwnState, EventList, writeHello, writeCmds, readWelcome, readSnapshot,
-  readInfo, readItems, writeBuy, writeCommand, S2C_WELCOME, S2C_SNAPSHOT, S2C_REJECT, S2C_INFO, S2C_PRINT,
-  S2C_CHANGELEVEL, S2C_ITEMS, C2S_CMDS, C2S_BYE,
+  readInfo, readItems, readGrenades, readHostages, writeBuy, writeCommand, S2C_WELCOME, S2C_SNAPSHOT, S2C_REJECT,
+  S2C_INFO, S2C_PRINT, S2C_CHANGELEVEL, S2C_ITEMS, S2C_GRENADES, S2C_HOSTAGES, C2S_CMDS, C2S_BYE,
 } from '../shared/protocol.js';
+import { Hostages } from '../shared/hostages.js';
 import { Items } from '../shared/items.js';
+import { Grenades } from '../shared/grenades.js';
 
 const HELLO_RETRY_MS = 250;
 const KEEPALIVE_MS = 1000; // hidden tabs stop ticking; keep the server from timing us out
@@ -47,6 +49,11 @@ export class NetClient {
     this.prints = []; // console text from the server, taken by the game loop
     this.items = new Items(); // weapons on the ground (S2C_ITEMS)
     this.itemsVersion = 0; // bumps on every items message
+    this.grenades = new Grenades(); // newest grenade lists (S2C_GRENADES)
+    this.grenadeScratch = new Grenades();
+    this.grenadeTick = 0;
+    this.grenadesVersion = 0;
+    this.hostages = new Hostages(); // S2C_HOSTAGES
     this.changelevel = ''; // the server is switching to this map: reconnect
     // Traffic totals (net_graph).
     this.bytesIn = 0;
@@ -225,6 +232,15 @@ export class NetClient {
         this.prints.push(r.lstr());
       } else if (type === S2C_CHANGELEVEL) {
         this.changelevel = r.str();
+      } else if (type === S2C_HOSTAGES) {
+        readHostages(r, this.hostages);
+      } else if (type === S2C_GRENADES) {
+        const tick = readGrenades(r, this.grenadeScratch);
+        if (tick > this.grenadeTick) { // datagrams may arrive out of order
+          [this.grenades, this.grenadeScratch] = [this.grenadeScratch, this.grenades];
+          this.grenadeTick = tick;
+          this.grenadesVersion++;
+        }
       } else if (type === S2C_ITEMS) {
         readItems(r, this.items);
         this.itemsVersion++;

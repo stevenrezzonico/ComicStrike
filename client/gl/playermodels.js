@@ -4,7 +4,8 @@
 // fell until they respawn or leave. Also draws the dropped bomb.
 
 import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN, modelLight } from './skinned.js';
-import { buildPlayer } from '../models/players.js';
+import { buildPlayer, HOLD_TIED } from '../models/players.js';
+import { MAX_HOSTAGES, HS_IDLE, HS_CARRIED, HS_DEAD } from '../../shared/hostages.js';
 import { PlayerAnimator, holdOf, handTurn, PALM } from '../anim/playeranim.js';
 import { PLAYER_SKELETON as S } from '../anim/skeleton.js';
 import * as Q from '../anim/quat.js';
@@ -16,10 +17,11 @@ import { FL_ONGROUND } from '../../shared/pmove.js';
 import { feetOffset } from '../../shared/hitgroups.js';
 import {
   MAX_PLAYERS, E_ACTIVE, E_X, E_Y, E_Z, E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS,
-  E_FIELDS, ANIM_HELMET, dequantizeYaw, dequantizePitch,
+  E_FIELDS, ANIM_HELMET, ANIM_SILENCED, dequantizeYaw, dequantizePitch,
 } from '../../shared/protocol.js';
 
 const HAND_R = S.bone('hand_R');
+const SPINE3 = S.bone('spine_3');
 const C4_ID = WEAPON_ID.c4;
 
 export class PlayerModels {
@@ -32,6 +34,7 @@ export class PlayerModels {
     this.bodyCT = new SkinnedMesh(gl, buildPlayer('CT'));
     this.bodyCTHelmet = new SkinnedMesh(gl, buildPlayer('CT', true));
     this.weapon = new Int16Array(MAX_PLAYERS); // weapon id in hand (0: none drawn)
+    this.silenced = new Uint8Array(MAX_PLAYERS);
     this.gunModel = new Float32Array(MAX_PLAYERS * 16);
     this.handM = new Float32Array(16);
     this.qGun = new Float32Array(8);
@@ -51,6 +54,49 @@ export class PlayerModels {
     this.lightOf = Array.from({ length: MAX_PLAYERS }, (_, i) => this.light.subarray(i * 3, i * 3 + 3));
     this.lm = new Float32Array(3);
     this.tmpLight = new Float32Array(3);
+    // Hostages.
+    this.bodyH = new SkinnedMesh(gl, buildPlayer('H'));
+    this.hostageAnim = Array.from({ length: MAX_HOSTAGES }, () => new PlayerAnimator());
+    this.hostageModel = Array.from({ length: MAX_HOSTAGES }, () => new Float32Array(16));
+    this.hostageLight = Array.from({ length: MAX_HOSTAGES }, () => new Float32Array([1, 1, 1]));
+    this.hostageShown = new Uint8Array(MAX_HOSTAGES);
+    this.carryM = new Float32Array(16);
+  }
+
+  // Hostages (shared/hostages.js list): standing with their hands tied, falling when
+  // killed, over the carrier's shoulder when carried (not drawn when we are the carrier
+  // or see through his eyes). Call after update().
+  updateHostages(h, dt, surfaces) {
+    this.hostageShown.fill(0);
+    for (let k = 0; k < h.count; k++) {
+      const a = this.hostageAnim[k], m = this.hostageModel[k], state = h.state[k];
+      if (state === HS_IDLE || state === HS_DEAD) {
+        a.update(dt, h.x[k], h.y[k], h.z[k], h.yaw[k], 0, 0, true, HOLD_TIED, 0, 0, state === HS_IDLE);
+        const yr = h.yaw[k] * Math.PI / 180, c = Math.cos(yr), s = Math.sin(yr);
+        m.fill(0);
+        m[0] = c; m[1] = s; m[4] = -s; m[5] = c; m[10] = 1;
+        m[12] = h.x[k]; m[13] = h.y[k]; m[14] = h.z[k]; m[15] = 1;
+        if (surfaces && surfaces.lightAt(this.lm, h.x[k], h.y[k], h.z[k] + 36)) modelLight(this.hostageLight[k], this.lm);
+        this.hostageShown[k] = 1;
+      } else if (state === HS_CARRIED && h.carrier[k] >= 0 && this.visible[h.carrier[k]]) {
+        // Lying across his shoulders, face down, head to his left.
+        const id = h.carrier[k];
+        a.update(dt, 0, 0, 0, 0, 0, 0, true, HOLD_TIED, 0, 0, true);
+        const w = this.anim[id].pose.wpos, L = this.carryM;
+        L.fill(0);
+        L[2] = -1; // hostage x (face) -> down
+        L[4] = -1; // hostage y -> back
+        L[9] = 1; // hostage z (up) -> his left
+        L[12] = w[SPINE3 * 3] - 4;
+        L[13] = w[SPINE3 * 3 + 1] - 36;
+        L[14] = w[SPINE3 * 3 + 2] + 5;
+        L[15] = 1;
+        multiply(m, this.modelOf[id], L);
+        this.hostageLight[k].set(this.lightOf[id]);
+        this.hostageShown[k] = 1;
+      }
+    }
+    for (let k = h.count; k < MAX_HOSTAGES; k++) this.hostageAnim[k].reset();
   }
 
   // Animates every player in rows `ents` (base `row0`) except `self`, by dt seconds.
@@ -73,6 +119,7 @@ export class PlayerModels {
       a.update(dt, x, y, z, yaw, dequantizePitch(ents[r + E_PITCH]), ents[r + E_DUCK] / 255, (flags & FL_ONGROUND) !== 0,
         holdOf(weapon), ents[r + E_ANIM], ents[r + E_SHOTS], alive, this.guns.support[weapon] || null);
       this.weapon[id] = alive && this.guns.mesh[weapon] ? weapon : 0;
+      this.silenced[id] = (ents[r + E_ANIM] & ANIM_SILENCED) !== 0;
       this.body[id] = ents[r + E_TEAM] === TEAM_CT
         ? (ents[r + E_ANIM] & ANIM_HELMET ? this.bodyCTHelmet : this.bodyCT)
         : this.bodyT;
@@ -156,7 +203,15 @@ export class PlayerModels {
       const model = this.modelOf[id], light = this.lightOf[id];
       const skin = this.anim[id].pose.skin;
       r.draw(this.body[id], model, skin, light);
-      if (this.weapon[id]) r.draw(this.guns.mesh[this.weapon[id]], this.gunOf[id], IDENTITY_SKIN, light);
+      if (this.weapon[id]) {
+        r.draw(this.guns.meshOf(this.weapon[id], this.silenced[id]), this.gunOf[id], IDENTITY_SKIN, light);
+      }
+    }
+    for (let k = 0; k < MAX_HOSTAGES; k++) {
+      if (!this.hostageShown[k]) continue;
+      if (!begun) r.begin(viewProj);
+      begun = true;
+      r.draw(this.bodyH, this.hostageModel[k], this.hostageAnim[k].pose.skin, this.hostageLight[k]);
     }
     for (let i = 0; i < this.itemCount; i++) {
       const mesh = this.guns.mesh[this.itemWeapon[i]];

@@ -8,12 +8,17 @@ import { parseVec3 } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
 import { CollisionWorld, Trace, traceHull, hullFits, HULL_STAND, HULL_POINT } from '../shared/trace.js';
 import { Breakables } from '../shared/breakables.js';
-import { PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, eyeOffset } from '../shared/pmove.js';
+import { PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, FL_ONGROUND, eyeOffset } from '../shared/pmove.js';
 import {
-  ShotList, WEAPONS, WEAPON_ID, giveWeapon, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4, WEV_PLANTED, WEV_DEFUSED, WEV_DROP,
-  WEV_FIRE, WEV_MELEE, WS_RELOAD_END, WS_ACTION, ACTION_PLANT, ACTION_DEFUSE, SLOT_PRIMARY, SLOT_SECONDARY,
+  ShotList, WEAPONS, WEAPON_ID, giveWeapon, silenced, canCarryGrenade, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4,
+  WEV_PLANTED, WEV_DEFUSED, WEV_DROP, WEV_FIRE, WEV_MELEE, WEV_THROW, WS_RELOAD_END, WS_ACTION, WS_THROWN, ACTION_PLANT,
+  ACTION_DEFUSE, SLOT_PRIMARY, SLOT_SECONDARY,
 } from '../shared/weapons.js';
-import { HitTargets, HITGROUP_HEAD, HITGROUP_CHEST, feetOffset } from '../shared/hitgroups.js';
+import { HitTargets, HITGROUP_HEAD, HITGROUP_CHEST, HITGROUP_LEGS, feetOffset } from '../shared/hitgroups.js';
+import { Grenades } from '../shared/grenades.js';
+import {
+  Hostages, RescueZones, MAX_HOSTAGES, HOSTAGES_PER_ROUND, PICKUP_TIME, HS_IDLE, HS_CARRIED, HS_RESCUED, HS_DEAD,
+} from '../shared/hostages.js';
 import {
   BombSites, BombState, bombDamage, C4_TIMER, PICKUP_RANGE, BOMB_NONE, BOMB_CARRIED, BOMB_DROPPED, BOMB_PLANTED,
   BOMB_DEFUSED, BOMB_EXPLODED,
@@ -29,15 +34,18 @@ import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, FREEZE_TIME, ROUND_TIME, BUY_TIME, ROUND_END_DELAY,
   MAX_ROUNDS, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD,
   PLANT_LOSS_BONUS, LOSS_STREAK_MAX, TEAMKILL_PENALTY, END_ELIMINATION, END_TIME, END_DRAW, END_BOMB, END_DEFUSE,
+  END_RESCUE, RESCUE_WIN_REWARD, RESCUE_REWARD, HOSTAGE_TOUCH_REWARD, HOSTAGE_HIT_PENALTY, HOSTAGE_KILL_PENALTY,
   lossBonus, buyError, applyBuy, BuyZones,
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
   SHOT_BLOOD, writePrint, printChunks,
   KILL_HEADSHOT, KILL_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
-  writeWelcome, writeReject, writeInfo, writeItems, readCmds, writeSnapshot, quantizePitch, quantizeYaw, E_ACTIVE, E_X, E_Y, E_Z,
+  writeWelcome, writeReject, writeInfo, writeItems, writeGrenades, writeHostages, readCmds, writeSnapshot, quantizePitch,
+  quantizeYaw,
+  E_ACTIVE, E_X, E_Y, E_Z,
   E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS, E_FIELDS, ANIM_RELOAD, ANIM_PLANT,
-  ANIM_DEFUSE, ANIM_HELMET,
+  ANIM_DEFUSE, ANIM_HELMET, ANIM_SILENCED,
 } from '../shared/protocol.js';
 
 const CMD_BANK = 8; // commands a client may run ahead of server time (absorbs jitter, stops speedhacks)
@@ -78,6 +86,11 @@ class Client {
     this.lastCommand = -1; // newest COMMAND id handled
     this.shots = 0; // shots fired mod 256 (E_SHOTS: third-person fire kicks)
     this.useHeld = false; // +use was down last command (E picks up on the press)
+    this.flashLeft = 0; // seconds of flashbang blindness left (sent in the own block)
+    this.flashTotal = 0;
+    this.picking = -1; // hostage being picked up (use held), or -1
+    this.pickEnd = 0; // server tick it is done
+    this.useProgress = 0; // 0..1, sent in the own block
     this.rconFails = 0;
     this.rconBlockedUntil = 0; // server tick
     // Last command run, repeated when one is lost.
@@ -162,7 +175,7 @@ export class Game {
     this.rosterDirty = false;
     this.history = new Float32Array(MAX_PLAYERS * HISTORY * H_FIELDS);
     this.historyTick = new Int32Array(MAX_PLAYERS * HISTORY).fill(-1);
-    this.targets = new HitTargets(MAX_PLAYERS);
+    this.targets = new HitTargets(MAX_PLAYERS + MAX_HOSTAGES); // players, then hostages
     this.shots = new ShotList();
     this.impacts = new ImpactList();
     this.reader = new Reader();
@@ -194,6 +207,50 @@ export class Game {
     this.items = new Items();
     this.itemsDirty = false;
     this.itemsWriter = new Writer();
+
+    // Hostages (hostage maps).
+    this.hostages = new Hostages(bsp);
+    this.rescue = this.hostages.spots.length ? new RescueZones(bsp, this.spawns[TEAM_CT]) : null;
+    this.hostagesDirty = false;
+    this.hostageWriter = new Writer();
+
+    // Grenades, and what they act on: the clients (index = player id).
+    this.grenades = new Grenades();
+    this.grenadeWriter = new Writer();
+    const live = (i) => this.clients[i] && this.clients[i].joined && this.clients[i].alive;
+    const origin = (i, out, dz) => {
+      const p = this.clients[i].player, f = p.ps.f;
+      out[0] = f[PS_ORIGIN];
+      out[1] = f[PS_ORIGIN + 1];
+      out[2] = f[PS_ORIGIN + 2] + dz(p);
+    };
+    this.grenadeTargets = {
+      count: MAX_PLAYERS,
+      alive: live,
+      center: (i, out) => origin(i, out, () => 0),
+      eye: (i, out) => origin(i, out, (p) => eyeOffset(p.ps)),
+      feet: (i, out) => origin(i, out, (p) => -feetOffset(p.ps.i[PS_FLAGS])),
+      pitch: (i) => this.clients[i].pitch,
+      yaw: (i) => this.clients[i].yaw,
+      hurt: (i, damage, weapon, owner, team) => this.grenadeHurt(this.clients[i], damage, weapon, owner, team),
+      flash: (i, seconds) => {
+        const c = this.clients[i];
+        if (seconds > c.flashLeft) {
+          c.flashLeft = seconds;
+          c.flashTotal = seconds;
+        }
+      },
+    };
+  }
+
+  // HE blasts and fires: friendly fire off (the thrower still hurts himself); HE as a
+  // chest hit (armor helps), fire ignores armor.
+  grenadeHurt(victim, damage, weapon, ownerId, ownerTeam) {
+    const owner = this.clients[ownerId];
+    if (victim.team === ownerTeam && victim.id !== ownerId) return;
+    const w = WEAPONS[weapon];
+    applyDamage(victim.player, damage, w, w.grenade === 'fire' ? HITGROUP_LEGS : HITGROUP_CHEST);
+    if (victim.player.health <= 0) this.kill(owner && owner.joined ? owner : victim, victim, weapon, false);
   }
 
   get playerCount() {
@@ -221,6 +278,7 @@ export class Game {
   disconnect(c) {
     if (this.clients[c.id] !== c) return;
     if (this.bombCarrier === c) this.dropBomb(c, false);
+    this.dropHostage(c);
     this.clients[c.id] = null;
     this.historyTick.fill(-1, c.id * HISTORY, (c.id + 1) * HISTORY);
     this.rosterDirty = true;
@@ -344,6 +402,9 @@ export class Game {
       this.runCommands(c);
     }
     this.updateBomb();
+    this.updateHostages();
+    this.grenades.update(this.world, this.grenadeTargets);
+    for (const c of this.clients) if (c) c.flashLeft = Math.max(0, c.flashLeft - 1 / TICK_RATE);
     this.updateItems();
     this.updateRound();
     for (const c of this.clients) if (c && c.joined) c.canBuy = this.canBuy(c);
@@ -351,6 +412,8 @@ export class Game {
     if (this.rosterDirty || this.tick % INFO_INTERVAL === 0) this.sendInfo();
     if (this.itemsDirty || this.tick % INFO_INTERVAL === 0) this.sendItems();
     this.sendSnapshots();
+    this.sendGrenades();
+    if (this.hostages.count && (this.hostagesDirty || this.tick % INFO_INTERVAL === 0)) this.sendHostages();
   }
 
   runCommands(c) {
@@ -382,7 +445,12 @@ export class Game {
     const heldId = wf[held], heldClip = wf[held + 1], heldReserve = wf[held + 2]; // what G may drop
     const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots, frozen, this.bomb);
     const events = p.ws.f[WS_EVENTS];
-    if (events & (WEV_FIRE | WEV_MELEE)) c.shots = (c.shots + 1) & 255;
+    if (events & (WEV_FIRE | WEV_MELEE | WEV_THROW)) c.shots = (c.shots + 1) & 255;
+    if (events & WEV_THROW) {
+      const f = p.ps.f, thrown = p.ws.f[WS_THROWN];
+      this.grenades.throw(this.world, Math.floor(thrown / 4), c.id, c.team, f[PS_ORIGIN], f[PS_ORIGIN + 1],
+        f[PS_ORIGIN + 2] + eyeOffset(p.ps), c.pitch, c.yaw, f[PS_VEL], f[PS_VEL + 1], f[PS_VEL + 2], thrown & 3);
+    }
     if (events & WEV_DROP) {
       if (WEAPONS[heldId]?.c4) this.dropBomb(c, true);
       else this.spawnItem(c, heldId, heldClip, heldReserve, true);
@@ -390,6 +458,7 @@ export class Game {
     // E on a weapon on the ground: swap it for the one in its slot (not while defusing).
     if ((c.buttons & IN_USE) && !c.useHeld && !p.ws.f[WS_ACTION]) this.useItem(c);
     c.useHeld = (c.buttons & IN_USE) !== 0;
+    this.useHostage(c);
     if (events & WEV_PLANTED) this.plantBomb(c);
     if (events & WEV_DEFUSED) this.defuseBomb(c);
     if (this.shots.count) {
@@ -408,6 +477,11 @@ export class Game {
     for (let i = 0; i < im.count; i++) {
       const x = im.pos[i * 3], y = im.pos[i * 3 + 1], z = im.pos[i * 3 + 2];
       const nx = im.normal[i * 3], ny = im.normal[i * 3 + 1], nz = im.normal[i * 3 + 2];
+      if (im.player[i] >= MAX_PLAYERS) { // a hostage
+        ev.addShot(shooter.id, SHOT_BLOOD, x, y, z, nx, ny, nz, 0);
+        this.hurtHostage(shooter, im.player[i] - MAX_PLAYERS, im.damage[i]);
+        continue;
+      }
       const victim = im.player[i] >= 0 ? this.clients[im.player[i]] : null;
       if (!victim) {
         ev.addShot(shooter.id, SHOT_IMPACT, x, y, z, nx, ny, nz, im.owner[i]);
@@ -425,6 +499,7 @@ export class Game {
     v.health = 0;
     v.deaths++;
     if (this.bombCarrier === victim) this.dropBomb(victim, false);
+    this.dropHostage(victim);
     // CS:GO: the dead drop their primary, else their pistol.
     const vf = v.ws.f;
     const slot = vf[WS_SLOTS + SLOT_PRIMARY * 3] ? SLOT_PRIMARY : vf[WS_SLOTS + SLOT_SECONDARY * 3] ? SLOT_SECONDARY : -1;
@@ -530,6 +605,17 @@ export class Game {
     this.resetBomb();
     this.items.clear(); // CS:GO cleans up the ground between rounds
     this.itemsDirty = true;
+    this.grenades.clear();
+    for (const c of this.clients) if (c) c.flashLeft = 0;
+    // CS:GO puts two hostages at random spots.
+    this.hostages.reset(HOSTAGES_PER_ROUND, Math.random, (x, y, z) => this.floorBelow(x, y, z));
+    for (const c of this.clients) {
+      if (!c) continue;
+      c.player.carrying = false;
+      c.picking = -1;
+      c.useProgress = 0;
+    }
+    this.hostagesDirty = true;
     // One random T carries the bomb.
     const ts = this.clients.filter((c) => c && c.joined && c.alive && c.team === TEAM_T);
     if (this.bombSites.count && ts.length) {
@@ -553,7 +639,8 @@ export class Game {
       if (won) this.lossStreak[team] = Math.max(0, this.lossStreak[team] - 1);
       else if (winner) this.lossStreak[team] = Math.min(this.lossStreak[team] + 1, LOSS_STREAK_MAX + 1);
       let reward = won
-        ? (reason === END_BOMB || reason === END_DEFUSE ? BOMB_WIN_REWARD : WIN_REWARD)
+        ? (reason === END_BOMB || reason === END_DEFUSE ? BOMB_WIN_REWARD : reason === END_RESCUE ? RESCUE_WIN_REWARD
+          : WIN_REWARD)
         : lossBonus(Math.max(this.lossStreak[team], 1));
       if (!won && team === TEAM_T && this.planted) reward += PLANT_LOSS_BONUS;
       for (const c of this.clients) {
@@ -760,10 +847,17 @@ export class Game {
     this.spawnItem(c, weapon, clip, reserve, thrown);
   }
 
-  // Gives item i to c (into its slot, which must be free) and takes it off the ground.
+  // Gives item i to c (into its slot, which must be free; a grenade joins the others)
+  // and takes it off the ground.
   takeItem(c, i) {
     const it = this.items, w = WEAPONS[it.weapon[i]];
     const f = c.player.ws.f, o = WS_SLOTS + w.slot * 3;
+    if (w.grenade) {
+      giveWeapon(c.player.ws, it.weapon[i]);
+      it.remove(i);
+      this.itemsDirty = true;
+      return;
+    }
     f[o] = it.weapon[i];
     f[o + 1] = it.clip[i];
     f[o + 2] = it.reserve[i];
@@ -779,7 +873,9 @@ export class Game {
       const f = c.player.ps.f, ws = c.player.ws.f;
       const feet = f[PS_ORIGIN + 2] - feetOffset(c.player.ps.i[PS_FLAGS]);
       for (let i = 0; i < it.count; i++) {
-        if (this.tick < it.pickupTick[i] || ws[WS_SLOTS + WEAPONS[it.weapon[i]].slot * 3]) continue;
+        const w = WEAPONS[it.weapon[i]];
+        if (this.tick < it.pickupTick[i]) continue;
+        if (w.grenade ? !canCarryGrenade(c.player.ws, it.weapon[i]) : ws[WS_SLOTS + w.slot * 3]) continue;
         if (Math.hypot(f[PS_ORIGIN] - it.x[i], f[PS_ORIGIN + 1] - it.y[i]) > PICKUP_RANGE) continue;
         if (Math.abs(feet - it.z[i]) > 40) continue;
         this.takeItem(c, i);
@@ -798,6 +894,7 @@ export class Game {
     const dz = -Math.sin(c.pitch * Math.PI / 180);
     let best = -1, bestD = USE_RANGE;
     for (let i = 0; i < it.count; i++) {
+      if (WEAPONS[it.weapon[i]].grenade) continue; // grenades are walked over
       const vx = it.x[i] - ex, vy = it.y[i] - ey, vz = it.z[i] + 2 - ez, d = Math.hypot(vx, vy, vz);
       if (d >= bestD || (vx * dx + vy * dy + vz * dz) / d < USE_CONE) continue;
       best = i;
@@ -809,6 +906,97 @@ export class Game {
     ws[o] = ws[o + 1] = ws[o + 2] = 0;
     this.takeItem(c, best);
     if (old) this.spawnItem(c, old, oldClip, oldReserve, false);
+  }
+
+  // --- Hostages ------------------------------------------------------------------------
+
+  // A CT holding use on an idle hostage picks it up after PICKUP_TIME (letting go or
+  // looking away starts over); one at a time.
+  useHostage(c) {
+    const h = this.hostages, p = c.player;
+    c.useProgress = 0;
+    if (!h.count || c.team !== TEAM_CT || !c.alive || !(c.buttons & IN_USE) || p.carrying || p.ws.f[WS_ACTION]) {
+      c.picking = -1;
+      return;
+    }
+    const f = p.ps.f;
+    const k = h.inReach(f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2] + eyeOffset(p.ps), c.pitch, c.yaw);
+    if (k < 0) {
+      c.picking = -1;
+      return;
+    }
+    if (k !== c.picking) {
+      c.picking = k;
+      c.pickEnd = this.tick + Math.round(PICKUP_TIME * TICK_RATE);
+    }
+    c.useProgress = 1 - (c.pickEnd - this.tick) / (PICKUP_TIME * TICK_RATE);
+    if (this.tick < c.pickEnd) return;
+    h.state[k] = HS_CARRIED;
+    h.carrier[k] = c.id;
+    p.carrying = true;
+    c.picking = -1;
+    c.useProgress = 0;
+    if (!h.touched[k] && this.phase !== PHASE_WARMUP) p.money = Math.min(this.rules.maxMoney, p.money + HOSTAGE_TOUCH_REWARD);
+    h.touched[k] = 1;
+    this.hostagesDirty = true;
+  }
+
+  // The carrier lets go (death, leaving): the hostage stands where he was.
+  dropHostage(c) {
+    const h = this.hostages, k = h.carriedBy(c.id);
+    c.player.carrying = false;
+    if (k < 0) return;
+    const f = c.player.ps.f;
+    h.place(k, f[PS_ORIGIN], f[PS_ORIGIN + 1], this.floorBelow(f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2]), c.yaw);
+    this.hostagesDirty = true;
+  }
+
+  // Carried into a rescue zone: rescued, and (CS:GO) the CTs win the round.
+  updateHostages() {
+    const h = this.hostages;
+    for (let k = 0; k < h.count; k++) {
+      if (h.state[k] !== HS_CARRIED) continue;
+      const c = this.clients[h.carrier[k]];
+      if (!c || !c.alive) continue;
+      const f = c.player.ps.f;
+      if (!this.rescue.contains(f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2])) continue;
+      h.state[k] = HS_RESCUED;
+      c.player.carrying = false;
+      this.hostagesDirty = true;
+      if (this.phase === PHASE_LIVE) {
+        c.player.money = Math.min(this.rules.maxMoney, c.player.money + RESCUE_REWARD);
+        console.log(`hostage rescued by ${c.name}`);
+        this.endRound(TEAM_CT, END_RESCUE);
+      }
+    }
+  }
+
+  // A bullet hit hostage k: the shooter pays for it, more for killing it.
+  hurtHostage(shooter, k, damage) {
+    const h = this.hostages;
+    if (h.state[k] !== HS_IDLE) return;
+    h.health[k] -= Math.trunc(damage);
+    const p = shooter.player, penalty = h.health[k] <= 0 ? HOSTAGE_KILL_PENALTY : HOSTAGE_HIT_PENALTY;
+    if (this.phase !== PHASE_WARMUP) p.money = Math.max(0, p.money - penalty);
+    if (h.health[k] <= 0) {
+      h.health[k] = 0;
+      h.state[k] = HS_DEAD;
+      this.print(shooter, 'You killed a hostage.');
+    }
+    this.hostagesDirty = true;
+  }
+
+  sendHostages() {
+    this.hostagesDirty = false;
+    const bytes = writeHostages(this.hostageWriter, this.hostages).slice();
+    for (const c of this.clients) if (c && c.joined) c.session.send(bytes);
+  }
+
+  // Every tick (a few bytes when there are none): grenades lost with a datagram come
+  // back on the next one.
+  sendGrenades() {
+    const bytes = writeGrenades(this.grenadeWriter, this.tick, this.grenades).slice();
+    for (const c of this.clients) if (c && c.joined) c.session.send(bytes);
   }
 
   sendItems() {
@@ -944,6 +1132,11 @@ export class Game {
         H[a + H_Z] + (H[b + H_Z] - H[a + H_Z]) * f, H[a + H_YAW] + dyaw * f,
         f < 0.5 ? H[a + H_FLAGS] : H[b + H_FLAGS], H[a + H_DUCK] + (H[b + H_DUCK] - H[a + H_DUCK]) * f, c.team);
     }
+    // Standing hostages (they do not move: no history needed).
+    const h = this.hostages;
+    for (let k = 0; k < h.count; k++) {
+      if (h.state[k] === HS_IDLE) T.set(MAX_PLAYERS + k, h.x[k], h.y[k], h.z[k] + 36, h.yaw[k], FL_ONGROUND, 0, 0);
+    }
   }
 
   // --- Output -------------------------------------------------------------------
@@ -981,7 +1174,8 @@ export class Game {
       E[row + E_TEAM] = p.team;
       const action = p.ws.f[WS_ACTION];
       E[row + E_ANIM] = (p.ws.f[WS_RELOAD_END] > 0 ? ANIM_RELOAD : 0) | (action === ACTION_PLANT ? ANIM_PLANT : 0) |
-        (action === ACTION_DEFUSE ? ANIM_DEFUSE : 0) | (p.helmet && p.armor > 0 ? ANIM_HELMET : 0);
+        (action === ACTION_DEFUSE ? ANIM_DEFUSE : 0) | (p.helmet && p.armor > 0 ? ANIM_HELMET : 0) |
+        (silenced(p.ws, p.ws.f[WS_ACTIVE]) ? ANIM_SILENCED : 0);
       E[row + E_SHOTS] = c.shots;
     }
     const words = ring.broken;

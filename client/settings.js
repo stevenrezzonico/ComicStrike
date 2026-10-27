@@ -34,6 +34,7 @@ export function createConsole(print) {
   add('m_yaw', 0.022, 'Degrees per mouse count, horizontal', 0.001, 1);
   add('m_pitch', 0.022, 'Degrees per mouse count, vertical', -1, 1);
   add('m_rawinput', 1, 'Raw mouse input (no OS acceleration)', 0, 1);
+  add('zoom_sensitivity_ratio_mouse', 1, 'Scoped sensitivity, relative to the zoom', 0.001, 20);
   // Crosshair (CS:GO defaults).
   add('crosshair', 1, 'Draw the crosshair', 0, 1);
   add('cl_crosshairstyle', 2, '0 default, 1 default static, 2 classic, 3 classic dynamic, 4 classic static, 5 legacy',

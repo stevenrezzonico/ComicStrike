@@ -14,8 +14,9 @@ import * as Q from './quat.js';
 import { HAND_GRIP, HAND_GRIP_IN } from '../models/arms.js';
 import { GUN_MAG, GUN_BOLT } from '../models/guns.js';
 import {
-  WEAPONS, SLOT_SECONDARY, SLOT_KNIFE, SLOT_C4, WS_ACTIVE, WS_SLOTS, WS_RELOAD_END, WS_DEPLOY_END, WS_LAST_SHOT,
-  WS_ACTION, ACTION_PLANT, ACTION_DEFUSE, WEV_MELEE, WEV_MELEE2,
+  WEAPONS, SLOT_SECONDARY, SLOT_KNIFE, SLOT_C4, SLOT_GRENADE, WS_ACTIVE, WS_SLOTS, WS_RELOAD_END, WS_DEPLOY_END,
+  WS_LAST_SHOT, WS_ACTION, WS_MODE_END, WS_THROW, WS_THROW_TIME, ACTION_PLANT, ACTION_DEFUSE, WEV_MELEE, WEV_MELEE2,
+  SILENCER_TIME, THROW_DELAY, THROW_SHORT,
 } from '../../shared/weapons.js';
 
 const UPPER = [A.bone('arm_upper_L'), A.bone('arm_upper_R')];
@@ -50,6 +51,7 @@ const HOLDS = {
   knife: { grip: [13.4, -6.5, -6.5], angles: [-35, 6, 0], shoulders: [[-6, 6, -13], [-7, -9.5, -13]] },
   c4: { grip: [12, -3.5, -6], angles: [0, 0, 0], shoulders: [[-7, 5, -13], [-7, -7, -13]] },
   elite: { grip: [14.9, -6, -5.6], angles: [0, 2, 0], shoulders: [[-6, 7, -13], [-6, -7, -13]] },
+  grenade: { grip: [13, -6.5, -6.8], angles: [0, 0, 0], shoulders: [[-6, 6, -13], [-7, -9.5, -13]] },
 };
 const ELITE_LEFT = 11; // the second pistol, left of the first
 const REST_L = [6, 6, -30]; // the left hand out of sight (knife)
@@ -62,6 +64,7 @@ const SHELL_END_TIME = 0.5; // tilting back (and pumping) after the last shell
 function holdOf(w) {
   if (w.slot === SLOT_KNIFE) return 'knife';
   if (w.slot === SLOT_C4) return 'c4';
+  if (w.slot === SLOT_GRENADE) return 'grenade';
   if (w.name === 'elite') return 'elite';
   return w.slot === SLOT_SECONDARY ? 'pistol' : 'rifle';
 }
@@ -170,6 +173,7 @@ export class ViewAnimator {
     // Default hands.
     if (holdName === 'knife') this.setHand(R, [0.4, 0, 0], ROT.knife, HAND_GRIP_IN);
     else if (holdName === 'c4') this.setHand(R, [3, -2.3, 0], ROT.side, 0.55);
+    else if (holdName === 'grenade') this.setHand(R, [0, 0, -0.3], ROT.side, HAND_GRIP_IN);
     else this.setHand(R, [-0.75, 0, -1.6], ROT.grip, HAND_GRIP_IN);
     if (holdName === 'c4') this.setHand(L, [3, 2.3, 0], ROT.side, 0.55);
     else if (holdName === 'elite') this.setHand(L, [-0.75, 0, -1.6], ROT.grip, HAND_GRIP_IN);
@@ -238,6 +242,36 @@ export class ViewAnimator {
         this.mixHand(R, bx - boltOff, by, bz, ROT.boltR, 0.5, hand);
       } else if (pts.bolt) {
         boltOff += (holdName === 'pistol' || this.dual ? 1.1 : 1.0) * bump(since, 0, 0.012, 0.03, Math.min(0.08, cycle * 0.8));
+      }
+    }
+
+    // Silencer: the off hand screws it on or off at the muzzle, the gun turned to it.
+    if (f[WS_MODE_END] > 0 && pts.muzzle) {
+      const r = 1 - (f[WS_MODE_END] - time) / SILENCER_TIME;
+      const turn = bump(r, 0, 0.12, 0.88, 1), hand = bump(r, 0.08, 0.2, 0.8, 0.92);
+      roll += 18 * turn;
+      yaw += 14 * turn;
+      pitch -= 6 * turn;
+      gy += 2 * turn;
+      const [mx, my, mz] = pts.muzzle;
+      this.mixHand(L, mx - 2.5, my, mz, ROT.support, 0.8, hand);
+      this.ho[L * 3 + 2] += 0.4 * Math.sin(time * 20) * hand; // twisting
+    }
+
+    // Grenades: the pin comes out, the arm draws back (overhand, or low for a lob), then
+    // swings through on the release.
+    if (holdName === 'grenade' && f[WS_THROW]) {
+      const lob = f[WS_THROW] === THROW_SHORT;
+      const swing = f[WS_THROW_TIME] > 0 ? 1 - Math.max(0, f[WS_THROW_TIME] - time) / THROW_DELAY : 0;
+      const back = 1 - swing;
+      if (lob) {
+        gz -= 5 * back - 2 * swing;
+        pitch += 25 * back - 20 * swing;
+      } else {
+        gx -= 5 * back - 6 * swing;
+        gz += 4 * back - 1 * swing;
+        gy -= 1.5 * back;
+        pitch -= 30 * back - 25 * swing;
       }
     }
 

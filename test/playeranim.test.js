@@ -20,7 +20,7 @@ function run(a, n, pos, opts = {}) {
 }
 
 Deno.test('player models: closed, under budget, team looks differ', () => {
-  for (const [team, helmet] of [['T', false], ['CT', false], ['CT', true]]) {
+  for (const [team, helmet] of [['T', false], ['CT', false], ['CT', true], ['H', false]]) {
     const m = buildPlayer(team, helmet);
     assert.ok(m.tris <= 2500, `${team} ${m.tris} triangles`);
     assert.ok(m.tris > 300);

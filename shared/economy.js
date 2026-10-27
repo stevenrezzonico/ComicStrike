@@ -2,7 +2,7 @@
 // zones. Shared so the server enforces exactly what the client's buy menu shows.
 
 import { entityModelIndex, parseVec3 } from './bsp.js';
-import { WEAPONS, WEAPON_ID, giveWeapon, WS_SLOTS } from './weapons.js';
+import { WEAPONS, WEAPON_ID, giveWeapon, canCarryGrenade, WS_SLOTS } from './weapons.js';
 import { TEAM_T, TEAM_CT } from './player.js';
 
 // Round phases.
@@ -30,6 +30,12 @@ export const LOSS_BONUS = 1400; // first loss, +500 per further consecutive loss
 export const LOSS_BONUS_STEP = 500;
 export const LOSS_STREAK_MAX = 4; // 1400 .. 3400
 export const TEAMKILL_PENALTY = 300;
+// Hostage maps.
+export const RESCUE_WIN_REWARD = 3500; // to every CT when a hostage is rescued (approx.)
+export const RESCUE_REWARD = 1000; // cash_player_rescued_hostage
+export const HOSTAGE_TOUCH_REWARD = 300; // first pick-up of a hostage in a round (approx.)
+export const HOSTAGE_HIT_PENALTY = 30; // shooting a hostage (approx.)
+export const HOSTAGE_KILL_PENALTY = 1000; // cash_player_killed_hostage
 
 // Why a round ended (snapshot `roundInfo` >> 2).
 export const END_ELIMINATION = 1;
@@ -37,6 +43,7 @@ export const END_TIME = 2;
 export const END_DRAW = 3;
 export const END_BOMB = 4; // target bombed
 export const END_DEFUSE = 5;
+export const END_RESCUE = 6; // a hostage reached a rescue zone
 
 export const lossBonus = (streak) => LOSS_BONUS + LOSS_BONUS_STEP * Math.min(Math.max(streak - 1, 0), LOSS_STREAK_MAX);
 
@@ -61,6 +68,7 @@ export const BUY_MENU = [
   ['Rifles', ids('galilar', 'famas', 'ak47', 'm4a1', 'm4a1_silencer', 'ssg08', 'sg556', 'aug', 'awp', 'g3sg1',
     'scar20')],
   ['Gear', [ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER]],
+  ['Grenades', ids('molotov', 'incgrenade', 'decoy', 'flashbang', 'hegrenade', 'smokegrenade')],
 ];
 
 export function itemLabel(item) {
@@ -73,7 +81,8 @@ export function itemPrice(p, item) {
   if (item === ITEM_KEVLAR) return p.armor >= 100 ? -1 : GEAR[item].price;
   if (item === ITEM_DEFUSER) return p.team !== TEAM_CT || p.defuser ? -1 : GEAR[item].price;
   const w = WEAPONS[item];
-  if (!w || !w.gun || !(w.teams & (p.team === TEAM_CT ? 2 : 1))) return -1;
+  if (!w || !(w.gun || w.grenade) || !(w.teams & (p.team === TEAM_CT ? 2 : 1))) return -1;
+  if (w.grenade) return canCarryGrenade(p.ws, item) ? w.price : -1;
   if (p.ws.f[WS_SLOTS + w.slot * 3] === item) return -1; // already have it
   return w.price;
 }

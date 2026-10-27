@@ -7,7 +7,7 @@
 
 import { Pose, PLAYER_SKELETON as S } from './skeleton.js';
 import * as Q from './quat.js';
-import { HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4 } from '../models/players.js';
+import { HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4, HOLD_TIED } from '../models/players.js';
 import { WEAPONS, SLOT_SECONDARY, SLOT_KNIFE, SLOT_C4 } from '../../shared/weapons.js';
 import { ANIM_RELOAD, ANIM_PLANT, ANIM_DEFUSE } from '../../shared/protocol.js';
 
@@ -31,6 +31,7 @@ const GRIPS = {
   [HOLD_PISTOL]: { aimed: true, hands: [[16, -0.6, -6], [17, -1.4, -4.6]] },
   [HOLD_KNIFE]: { aimed: false, hands: [[1, 9.5, -21], [12, -6.5, -10]] },
   [HOLD_C4]: { aimed: false, hands: [[11, 3, -13], [11, -2.5, -12.5]] },
+  [HOLD_TIED]: { aimed: false, hands: [[-7, 2.5, -24], [-7, -2.5, -24]] },
 };
 const RELOAD_HAND = { [HOLD_RIFLE]: [7, -2, -11], [HOLD_PISTOL]: [5, 2, -14] }; // left hand fetching a magazine
 
@@ -43,7 +44,7 @@ export const handTurn = [Q.fromAxisAngle(new Float32Array(4), 0, 0, 0, 1, -Math.
 
 export function holdOf(weaponId) {
   const w = WEAPONS[weaponId];
-  if (!w || w.slot === SLOT_KNIFE) return HOLD_KNIFE;
+  if (!w || w.slot === SLOT_KNIFE || w.grenade) return HOLD_KNIFE; // one hand
   if (w.slot === SLOT_C4) return HOLD_C4;
   return w.slot === SLOT_SECONDARY ? HOLD_PISTOL : HOLD_RIFLE;
 }

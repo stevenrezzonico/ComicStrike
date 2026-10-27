@@ -54,28 +54,43 @@ const SHELL_RELOAD = { nova: [0.5, 0.5], xm1014: [0.5, 0.4], sawedoff: [0.5, 0.5
 const PISTOLS = new Set(['glock', 'hkp2000', 'usp_silencer', 'p250', 'elite', 'fiveseven', 'tec9', 'cz75a',
   'deagle', 'revolver']);
 
-// Builds a weapon from CS:GO's game data in its spawn mode. Inaccuracies become radians.
+// Stats that depend on the weapon's mode: CS:GO's "Alt" values (scoped, burst fire,
+// silencer attached, the revolver's fanning). Inaccuracies become radians.
+function modeStats(d, alt) {
+  const m = (k) => (alt && d[k + 'Alt'] !== null ? d[k + 'Alt'] : d[k]);
+  return {
+    maxSpeed: m('maxPlayerSpeed'), spread: mr(m('spread')), inaccuracyStand: mr(m('inaccuracyStand')),
+    inaccuracyCrouch: mr(m('inaccuracyCrouch')), inaccuracyMove: mr(m('inaccuracyMove')),
+    inaccuracyJump: mr(m('inaccuracyJump')), inaccuracyLand: m('inaccuracyLand'),
+    inaccuracyLadder: mr(m('inaccuracyLadder')), inaccuracyFire: mr(m('inaccuracyFire')),
+    recoilAngle: m('recoilAngle'), recoilAngleVariance: m('recoilAngleVariance'),
+    recoilMagnitude: m('recoilMagnitude'), recoilMagnitudeVariance: m('recoilMagnitudeVariance'),
+  };
+}
+
+// Builds a weapon from CS:GO's game data; its top-level stats are the spawn mode's
+// (`modes` holds both, see weaponStats).
 function fromGameData(name) {
   const d = CSGO_WEAPONS[name];
   const [label, reloadTime, alt = false] = EXTRA[name];
-  const m = (k) => (alt && d[k + 'Alt'] !== null ? d[k + 'Alt'] : d[k]);
   const [reloadStart, shellTime] = SHELL_RELOAD[name] || [0, 0];
+  const modes = [modeStats(d, false), modeStats(d, true)];
+  const altKind = d.zoomLevels > 0 ? 'scope' : d.hasSilencer ? 'silencer' : d.hasBurstMode ? 'burst'
+    : d.isRevolver ? 'revolver' : null;
   return {
     name, label, slot: PISTOLS.has(name) ? SLOT_SECONDARY : SLOT_PRIMARY, auto: d.isFullAuto === 1,
     bullets: d.bullets, cycle: d.cycletime, damage: d.damage, armorRatio: d.armorRatio,
     penetration: d.penetration, range: d.range, rangeModifier: d.rangeModifier, headshotMult: d.headshotMultiplier,
-    maxSpeed: m('maxPlayerSpeed'), clip: d.primaryClipSize, reserve: d.primaryReserveAmmoMax,
+    clip: d.primaryClipSize, reserve: d.primaryReserveAmmoMax,
     reloadTime: shellTime ? reloadStart + d.primaryClipSize * shellTime : reloadTime, reloadStart, shellTime,
     deployTime: 1.0, price: d.inGamePrice, killAward: d.killAward,
-    spread: mr(m('spread')), inaccuracyStand: mr(m('inaccuracyStand')), inaccuracyCrouch: mr(m('inaccuracyCrouch')),
-    inaccuracyMove: mr(m('inaccuracyMove')), inaccuracyJump: mr(m('inaccuracyJump')),
-    inaccuracyJumpInitial: mr(d.inaccuracyJumpInitial), inaccuracyLand: m('inaccuracyLand'),
-    inaccuracyLadder: mr(m('inaccuracyLadder')), inaccuracyFire: mr(m('inaccuracyFire')),
+    ...modes[alt ? 1 : 0], modes, defaultAlt: alt, altKind, cycleAlt: d.cycletimeAlt,
+    zoomLevels: d.zoomLevels, zoomFov: [90, d.zoomFov1, d.zoomFov2], boltAction: name === 'awp' || name === 'ssg08',
+    burstCycle: d.cycletimeWhenInBurstMode, burstGap: d.timeBetweenBurstShots,
+    inaccuracyJumpInitial: mr(d.inaccuracyJumpInitial),
     recoveryStand: d.recoveryTimeStand, recoveryStandFinal: d.recoveryTimeStandFinal,
     recoveryCrouch: d.recoveryTimeCrouch, recoveryCrouchFinal: d.recoveryTimeCrouchFinal,
     recoveryStartBullet: d.recoveryTransitionStartBullet, recoveryEndBullet: d.recoveryTransitionEndBullet,
-    recoilAngle: m('recoilAngle'), recoilAngleVariance: m('recoilAngleVariance'),
-    recoilMagnitude: m('recoilMagnitude'), recoilMagnitudeVariance: m('recoilMagnitudeVariance'),
     recoilSeed: d.recoilSeed,
     flinchLarge: d.flinchVelocityModifierLarge, flinchSmall: d.flinchVelocityModifierSmall,
     teams: d.teams, // who can buy it: 1 T, 2 CT, 3 both
@@ -94,6 +109,19 @@ export const WEAPONS = [
     name: 'c4', label: 'C4 Explosive', slot: SLOT_C4, c4: true, clip: 0, reserve: 0,
     maxSpeed: 250, deployTime: 1.0, price: 0, killAward: 0, teams: 0, armorRatio: 1, flinchLarge: 0, flinchSmall: 0,
   },
+  // Grenades (slot 4, several kinds at once, see WS_GRENADES): CS:GO prices, speeds and
+  // carry limits; `grenade` is the kind (shared/grenades.js).
+  ...[
+    ['hegrenade', 'HE Grenade', 'he', 300, 3, 1],
+    ['flashbang', 'Flashbang', 'flash', 200, 3, 2],
+    ['smokegrenade', 'Smoke Grenade', 'smoke', 300, 3, 1],
+    ['molotov', 'Molotov', 'fire', 400, 1, 1],
+    ['incgrenade', 'Incendiary Grenade', 'fire', 600, 2, 1],
+    ['decoy', 'Decoy Grenade', 'decoy', 50, 3, 1],
+  ].map(([name, label, grenade, price, teams, limit]) => ({
+    name, label, slot: SLOT_GRENADE, grenade, price, teams, limit, maxSpeed: 245, clip: 0, reserve: 0,
+    deployTime: 0.6, killAward: 300, armorRatio: 1, flinchLarge: 0, flinchSmall: 0,
+  })),
 ];
 
 export const WEAPON_ID = Object.fromEntries(WEAPONS.map((w, i) => [w ? w.name : 'none', i]));
@@ -193,8 +221,16 @@ export function buildRecoilPattern(w) {
   }
   return out;
 }
-for (const w of WEAPONS) if (w) w.gun = !w.melee && !w.c4;
-for (const w of WEAPONS) if (w && w.gun) w.recoilPattern = buildRecoilPattern(w);
+for (const w of WEAPONS) if (w) w.gun = !w.melee && !w.c4 && !w.grenade;
+for (const w of WEAPONS) {
+  if (!w || !w.gun) continue;
+  for (const m of w.modes) m.recoilPattern = buildRecoilPattern({ ...w, ...m });
+  w.recoilPattern = w.modes[w.defaultAlt ? 1 : 0].recoilPattern;
+}
+
+// Grenade kinds in WS_GRENADES order; CS:GO competitive carries at most 4 in all.
+export const GRENADE_IDS = WEAPONS.flatMap((w, id) => (w && w.grenade ? [id] : []));
+export const GRENADE_LIMIT = 4; // ammo_grenade_limit_total
 
 // --- Weapon state ---------------------------------------------------------
 
@@ -214,7 +250,18 @@ export const WS_EVENTS = 14; // output: WEV_* bits this tick
 export const WS_ACTION = 15; // ACTION_*: planting or defusing the bomb
 export const WS_ACTION_END = 16; // seconds: when that action completes
 export const WS_SLOTS = 17; // per slot: weapon id, clip, reserve
-export const WS_SIZE = WS_SLOTS + NUM_SLOTS * 3;
+export const WS_ALT = WS_SLOTS + NUM_SLOTS * 3; // bit per slot: silencer on / burst mode
+export const WS_ZOOM = WS_ALT + 1; // scope level, 0 = unscoped
+export const WS_RESUME_ZOOM = WS_ALT + 2; // bolt-action rifles zoom back in after the bolt
+export const WS_MODE_END = WS_ALT + 3; // seconds: a silencer goes on / comes off then
+export const WS_BURST_LEFT = WS_ALT + 4; // shots left in the current burst
+export const WS_BURST_NEXT = WS_ALT + 5; // seconds: the next one
+export const WS_COCK = WS_ALT + 6; // seconds: the revolver fires then (hammer cocking)
+export const WS_THROW = WS_ALT + 7; // grenade pin pulled: THROW_* strength
+export const WS_THROW_TIME = WS_ALT + 8; // seconds: the grenade leaves the hand then (released)
+export const WS_THROWN = WS_ALT + 9; // output: weapon id * 4 + THROW_* of the grenade thrown (WEV_THROW)
+export const WS_GRENADES = WS_ALT + 10; // count per GRENADE_IDS kind
+export const WS_SIZE = WS_GRENADES + 6;
 
 export const WEV_FIRE = 1;
 export const WEV_RELOAD = 2;
@@ -227,6 +274,18 @@ export const WEV_PLANTED = 128;
 export const WEV_DEFUSED = 256;
 export const WEV_DROP = 512; // dropped the weapon in hand (G)
 export const WEV_SHELL = 1024; // a shotgun shell went in
+export const WEV_ZOOM = 2048; // scope level changed
+export const WEV_MODE = 4096; // burst mode toggled / silencer on or off
+export const WEV_PIN = 8192; // grenade pin pulled
+export const WEV_THROW = 16384; // grenade thrown (WS_THROWN says which and how)
+export const WEV_COCK = 32768; // revolver hammer
+export const SILENCER_TIME = 3.0; // attaching / removing a silencer (approximation of the animations)
+export const REVOLVER_COCK = 0.23; // trigger to shot for the R8's primary fire (approximation)
+export const THROW_DELAY = 0.1; // release to throw (approximation of the animation)
+export const THROW_SHORT = 1; // right click: strength 0
+export const THROW_MEDIUM = 2; // both buttons: strength 0.5
+export const THROW_LONG = 3; // left click: strength 1
+export const throwStrength = (code) => (code - 1) / 2;
 
 export const ACTION_PLANT = 1;
 export const ACTION_DEFUSE = 2;
@@ -239,16 +298,96 @@ export function copyWeaponState(dst, src) {
   dst.f.set(src.f);
 }
 
+// Puts weapon `id` in its slot with full ammo (grenades: one more, if there is room).
+// Returns false when a grenade does not fit.
 export function giveWeapon(ws, id) {
   const w = WEAPONS[id];
+  if (w.grenade) return giveGrenade(ws, id);
   const o = WS_SLOTS + w.slot * 3;
   ws.f[o] = id;
   ws.f[o + 1] = w.melee ? 0 : w.clip;
   ws.f[o + 2] = w.melee ? 0 : w.reserve;
+  const bit = 1 << w.slot;
+  ws.f[WS_ALT] = w.defaultAlt ? ws.f[WS_ALT] | bit : ws.f[WS_ALT] & ~bit;
+  if (ws.f[WS_ACTIVE] === w.slot) { // replaced in hand: the old gun's reload, scope... end
+    ws.f[WS_RELOAD_END] = ws.f[WS_ZOOM] = ws.f[WS_RESUME_ZOOM] = ws.f[WS_MODE_END] = 0;
+    ws.f[WS_BURST_LEFT] = ws.f[WS_COCK] = 0;
+  }
+  return true;
 }
 
 export function activeWeapon(ws) {
   return WEAPONS[ws.f[WS_SLOTS + ws.f[WS_ACTIVE] * 3]] || null;
+}
+
+// --- Modes -------------------------------------------------------------------------
+
+// 1 when weapon w (in hand) is in its alt mode: scoped, burst fire, silencer on.
+export function modeOf(ws, w) {
+  if (!w || !w.modes) return 0;
+  if (w.altKind === 'scope') return ws.f[WS_ZOOM] > 0 ? 1 : 0;
+  if (w.altKind === 'silencer' || w.altKind === 'burst') return (ws.f[WS_ALT] >> w.slot) & 1;
+  return 0;
+}
+
+// The active weapon's stats in its current mode (maxSpeed, spread, inaccuracies,
+// recoil), or null.
+export function weaponStats(ws) {
+  const w = activeWeapon(ws);
+  return w && w.modes ? w.modes[modeOf(ws, w)] : w;
+}
+
+// Is the weapon in `slot` a silenced one with its silencer on.
+export function silenced(ws, slot) {
+  const w = WEAPONS[ws.f[WS_SLOTS + slot * 3]];
+  return !!w && w.altKind === 'silencer' && ((ws.f[WS_ALT] >> slot) & 1) === 1;
+}
+
+// --- Grenades ------------------------------------------------------------------------
+
+const kindOf = (id) => GRENADE_IDS.indexOf(id);
+
+export function grenadeCount(ws, id) {
+  const k = kindOf(id);
+  return k < 0 ? 0 : ws.f[WS_GRENADES + k];
+}
+
+export function grenadeTotal(ws) {
+  let n = 0;
+  for (let k = 0; k < GRENADE_IDS.length; k++) n += ws.f[WS_GRENADES + k];
+  return n;
+}
+
+// Room for one more grenade `id` (its own limit and the total).
+export function canCarryGrenade(ws, id) {
+  return grenadeCount(ws, id) < WEAPONS[id].limit && grenadeTotal(ws) < GRENADE_LIMIT;
+}
+
+// Adds a grenade; the grenade slot shows it if it held none. False when full.
+export function giveGrenade(ws, id) {
+  if (!canCarryGrenade(ws, id)) return false;
+  ws.f[WS_GRENADES + kindOf(id)]++;
+  if (!ws.f[WS_SLOTS + SLOT_GRENADE * 3]) ws.f[WS_SLOTS + SLOT_GRENADE * 3] = id;
+  return true;
+}
+
+// The next grenade kind held after `id` (cycling, `id` itself last), or 0.
+export function nextGrenade(ws, id) {
+  const k0 = Math.max(kindOf(id), 0), n = GRENADE_IDS.length;
+  for (let i = 1; i <= n; i++) {
+    const k = (k0 + i) % n;
+    if (ws.f[WS_GRENADES + k] > 0) return GRENADE_IDS[k];
+  }
+  return 0;
+}
+
+// Takes one grenade `id` away; the slot moves on to another kind, or empties.
+export function takeGrenade(ws, id) {
+  const k = kindOf(id);
+  if (k < 0 || ws.f[WS_GRENADES + k] <= 0) return;
+  ws.f[WS_GRENADES + k]--;
+  const o = WS_SLOTS + SLOT_GRENADE * 3;
+  if (ws.f[o] === id && ws.f[WS_GRENADES + k] === 0) ws.f[o] = nextGrenade(ws, id);
 }
 
 // Bullets / swings produced by one tick (preallocated, reused).
@@ -279,9 +418,10 @@ export function damageAtRange(w, damage, dist) {
 
 // Current inaccuracy (radians, cone radius) as CS:GO's GetInaccuracy: accuracy
 // penalty plus movement and airborne terms.
-export function getInaccuracy(ws, ps, buttons) {
-  const w = activeWeapon(ws);
-  if (!w || !w.gun) return 0;
+export function getInaccuracy(ws, ps, buttons, mode = -1) {
+  const aw = activeWeapon(ws);
+  if (!aw || !aw.gun) return 0;
+  const w = aw.modes[mode >= 0 ? mode : modeOf(ws, aw)];
   let inacc = ws.f[WS_PENALTY];
 
   const speed = Math.hypot(ps.f[PS_VEL], ps.f[PS_VEL + 1]);
@@ -316,13 +456,13 @@ export function recoveryTime(w, ducked, recoilIndex) {
 }
 
 function updateAccuracyPenalty(ws, ps, w, time) {
-  const f = ws.f;
+  const f = ws.f, s = w.modes[modeOf(ws, w)];
   const flags = ps.i[PS_FLAGS];
   const ducked = (flags & FL_DUCKING) !== 0;
   let target;
-  if (flags & FL_ONLADDER) target = w.inaccuracyLadder;
-  else if (ducked) target = w.inaccuracyCrouch;
-  else target = w.inaccuracyStand;
+  if (flags & FL_ONLADDER) target = s.inaccuracyLadder;
+  else if (ducked) target = s.inaccuracyCrouch;
+  else target = s.inaccuracyStand;
 
   // Penalty and recoil index decay by the same factor: to 10% over the recovery time.
   const decay = Math.exp(-TICK_DT * Math.log(10) / recoveryTime(w, ducked, f[WS_RECOIL_INDEX]));
@@ -333,7 +473,7 @@ function updateAccuracyPenalty(ws, ps, w, time) {
 
   const events = ps.i[PS_EVENTS];
   if (events & EV_JUMP) f[WS_PENALTY] += w.inaccuracyJumpInitial;
-  if (events & EV_LAND) f[WS_PENALTY] += w.inaccuracyLand * Math.min(ps.f[PS_LAND_SPEED] / 600, 1);
+  if (events & EV_LAND) f[WS_PENALTY] += s.inaccuracyLand * Math.min(ps.f[PS_LAND_SPEED] / 600, 1);
 }
 
 // CS:GO DecayAimPunchAngle: exponential + linear decay, then half-step velocity integration.
@@ -366,8 +506,10 @@ function decayPunch(f) {
 // next shell goes in (the first after reloadStart).
 function startReload(f, w, time, o) {
   if (f[WS_RELOAD_END] > 0 || f[o + 1] >= w.clip || f[o + 2] <= 0) return false;
+  if (f[WS_MODE_END] > 0) return false; // busy with the silencer
   f[WS_RELOAD_END] = time + (w.shellTime ? w.reloadStart + w.shellTime : w.reloadTime);
   f[WS_EVENTS] |= WEV_RELOAD;
+  f[WS_ZOOM] = f[WS_RESUME_ZOOM] = f[WS_BURST_LEFT] = f[WS_COCK] = 0;
   return true;
 }
 
@@ -382,7 +524,9 @@ function deploy(ws, slot, time) {
   f[WS_NEXT_ATTACK] = f[WS_NEXT_ATTACK2] = f[WS_DEPLOY_END];
   f[WS_RELOAD_END] = 0;
   f[WS_RECOIL_INDEX] = 0;
-  f[WS_PENALTY] = nw.gun ? nw.inaccuracyStand : 0;
+  f[WS_PENALTY] = nw.gun ? nw.modes[modeOf(ws, nw)].inaccuracyStand : 0;
+  f[WS_ZOOM] = f[WS_RESUME_ZOOM] = f[WS_MODE_END] = f[WS_BURST_LEFT] = f[WS_COCK] = 0;
+  f[WS_THROW] = f[WS_THROW_TIME] = 0;
   f[WS_EVENTS] |= WEV_DEPLOY;
 }
 
@@ -391,6 +535,8 @@ function deploy(ws, slot, time) {
 export function removeWeapon(ws, slot, time) {
   const f = ws.f;
   f[WS_SLOTS + slot * 3] = f[WS_SLOTS + slot * 3 + 1] = f[WS_SLOTS + slot * 3 + 2] = 0;
+  if (slot === SLOT_GRENADE) f.fill(0, WS_GRENADES, WS_GRENADES + GRENADE_IDS.length);
+  else f[WS_ALT] = f[WS_ALT] & ~(1 << slot);
   if (f[WS_LAST_SLOT] === slot) f[WS_LAST_SLOT] = SLOT_KNIFE;
   if (f[WS_ACTIVE] !== slot) return;
   for (const s of [SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE]) {
@@ -410,20 +556,45 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
   f[WS_EVENTS] = 0;
   shots.count = 0;
 
-  if (select >= 0 && select < NUM_SLOTS && select !== f[WS_ACTIVE] && f[WS_SLOTS + select * 3] > 0) {
+  if (select === SLOT_GRENADE && f[WS_ACTIVE] === SLOT_GRENADE && !f[WS_THROW]) {
+    // 4 again: the next kind of grenade.
+    const next = nextGrenade(ws, f[WS_SLOTS + SLOT_GRENADE * 3]);
+    if (next && next !== f[WS_SLOTS + SLOT_GRENADE * 3]) {
+      const last = f[WS_LAST_SLOT];
+      f[WS_SLOTS + SLOT_GRENADE * 3] = next;
+      deploy(ws, SLOT_GRENADE, time);
+      f[WS_LAST_SLOT] = last;
+    }
+  } else if (select >= 0 && select < NUM_SLOTS && select !== f[WS_ACTIVE] && f[WS_SLOTS + select * 3] > 0) {
     deploy(ws, select, time);
   }
-  // Drop (G): the weapon in hand, except the knife. The server puts it on the ground
-  // (or, for the C4, drops the bomb) from WEV_DROP.
+  // Drop (G): the weapon in hand (one grenade of its kind), except the knife. The server
+  // puts it on the ground (or, for the C4, drops the bomb) from WEV_DROP.
   const held = activeWeapon(ws);
-  if ((buttons & IN_DROP) && !(f[WS_OLD_BUTTONS] & IN_DROP) && held && !held.melee) {
-    removeWeapon(ws, f[WS_ACTIVE], time);
+  if ((buttons & IN_DROP) && !(f[WS_OLD_BUTTONS] & IN_DROP) && held && !held.melee && !f[WS_THROW]) {
+    if (held.grenade) {
+      takeGrenade(ws, f[WS_SLOTS + SLOT_GRENADE * 3]);
+      if (f[WS_SLOTS + SLOT_GRENADE * 3]) {
+        const last = f[WS_LAST_SLOT];
+        deploy(ws, SLOT_GRENADE, time);
+        f[WS_LAST_SLOT] = last;
+      } else {
+        removeWeapon(ws, SLOT_GRENADE, time);
+      }
+    } else {
+      removeWeapon(ws, f[WS_ACTIVE], time);
+    }
     f[WS_EVENTS] |= WEV_DROP;
   }
 
   const w = activeWeapon(ws);
   decayPunch(f);
   if (!w || w.c4) { // the C4 is planted by the player simulation (player.js)
+    f[WS_OLD_BUTTONS] = buttons;
+    return;
+  }
+  if (w.grenade) {
+    grenadeTick(ws, buttons, time);
     f[WS_OLD_BUTTONS] = buttons;
     return;
   }
@@ -441,11 +612,23 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
       f[WS_EVENTS] |= WEV_RELOADED;
     }
   }
+  // A silencer finishes going on or coming off.
+  if (f[WS_MODE_END] > 0 && time >= f[WS_MODE_END]) {
+    f[WS_ALT] = f[WS_ALT] ^ (1 << w.slot);
+    f[WS_MODE_END] = 0;
+    f[WS_EVENTS] |= WEV_MODE;
+  }
+  // Bolt-action rifles zoom back in once the bolt is closed (CS:GO's resume zoom).
+  if (f[WS_RESUME_ZOOM] > 0 && time >= f[WS_NEXT_ATTACK]) {
+    f[WS_ZOOM] = f[WS_RESUME_ZOOM];
+    f[WS_RESUME_ZOOM] = 0;
+  }
 
   if (w.gun) updateAccuracyPenalty(ws, ps, w, time);
 
   const oldButtons = f[WS_OLD_BUTTONS];
   const pressed = (buttons & IN_ATTACK) && !(oldButtons & IN_ATTACK);
+  const pressed2 = (buttons & IN_ATTACK2) && !(oldButtons & IN_ATTACK2);
   const ready = time >= f[WS_DEPLOY_END];
 
   if (!w.melee && ready && (buttons & IN_RELOAD)) startReload(f, w, time, o);
@@ -454,6 +637,7 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
 
   // Eye position and view axes (with aim punch for guns).
   const eyeX = ps.f[PS_ORIGIN], eyeY = ps.f[PS_ORIGIN + 1], eyeZ = ps.f[PS_ORIGIN + 2] + eyeOffset(ps);
+  const idle = ready && f[WS_RELOAD_END] === 0 && f[WS_MODE_END] === 0;
 
   if (w.melee) {
     const primary = (buttons & IN_ATTACK) && time >= f[WS_NEXT_ATTACK];
@@ -467,25 +651,121 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
       f[WS_NEXT_ATTACK] = f[WS_NEXT_ATTACK2] = time + cycle;
       f[WS_EVENTS] |= primary ? WEV_MELEE : WEV_MELEE2;
     }
-  } else if ((buttons & IN_ATTACK) && ready && f[WS_RELOAD_END] === 0 && time >= f[WS_NEXT_ATTACK] &&
-    (w.auto || pressed)) {
+    f[WS_OLD_BUTTONS] = buttons;
+    return;
+  }
+
+  // Secondary attack: scope, burst / silencer toggles, the revolver's fanning.
+  if (pressed2 && idle && time >= f[WS_NEXT_ATTACK2] && !f[WS_BURST_LEFT]) {
+    if (w.altKind === 'scope') {
+      f[WS_ZOOM] = (f[WS_ZOOM] + 1) % (w.zoomLevels + 1);
+      f[WS_RESUME_ZOOM] = 0;
+      f[WS_NEXT_ATTACK2] = time + w.cycleAlt;
+      f[WS_EVENTS] |= WEV_ZOOM;
+    } else if (w.altKind === 'burst') {
+      f[WS_ALT] = f[WS_ALT] ^ (1 << w.slot);
+      f[WS_NEXT_ATTACK2] = time + w.cycleAlt;
+      f[WS_EVENTS] |= WEV_MODE;
+    } else if (w.altKind === 'silencer') {
+      f[WS_MODE_END] = time + SILENCER_TIME;
+      f[WS_NEXT_ATTACK] = f[WS_NEXT_ATTACK2] = f[WS_MODE_END];
+    }
+  }
+  if (w.altKind === 'revolver' && (buttons & IN_ATTACK2) && !(buttons & IN_ATTACK) && idle &&
+    time >= f[WS_NEXT_ATTACK2] && f[o + 1] > 0) {
+    fire(ws, ps, w, o, buttons, pitch, yaw, tick, time, eyeX, eyeY, eyeZ, shots, 1);
+    f[WS_NEXT_ATTACK] = f[WS_NEXT_ATTACK2] = time + w.cycleAlt;
+    f[WS_COCK] = 0;
+  }
+
+  // The rest of a burst fires on its own.
+  if (f[WS_BURST_LEFT] > 0 && time >= f[WS_BURST_NEXT]) {
+    if (f[o + 1] > 0 && f[WS_RELOAD_END] === 0) {
+      const next = f[WS_NEXT_ATTACK]; // the burst's cycle, not the gun's
+      fire(ws, ps, w, o, buttons, pitch, yaw, tick, time, eyeX, eyeY, eyeZ, shots);
+      f[WS_NEXT_ATTACK] = next;
+      f[WS_BURST_LEFT] -= 1;
+      f[WS_BURST_NEXT] = time + w.burstGap;
+    } else {
+      f[WS_BURST_LEFT] = 0;
+    }
+  }
+
+  // The revolver fires a moment after the trigger: the hammer cocks while it is held.
+  if (w.altKind === 'revolver' && !(buttons & IN_ATTACK)) f[WS_COCK] = 0;
+
+  if ((buttons & IN_ATTACK) && idle && time >= f[WS_NEXT_ATTACK] && !f[WS_BURST_LEFT] && (w.auto || pressed)) {
     if (f[o + 1] <= 0) {
       if (!startReload(f, w, time, o)) {
         f[WS_EVENTS] |= WEV_DRYFIRE;
         f[WS_NEXT_ATTACK] = time + 0.2;
       }
+    } else if (w.altKind === 'revolver' && (f[WS_COCK] === 0 || time < f[WS_COCK])) {
+      if (f[WS_COCK] === 0) {
+        f[WS_COCK] = time + REVOLVER_COCK;
+        f[WS_EVENTS] |= WEV_COCK;
+      }
     } else {
+      f[WS_COCK] = 0;
+      const zoom = f[WS_ZOOM];
       fire(ws, ps, w, o, buttons, pitch, yaw, tick, time, eyeX, eyeY, eyeZ, shots);
+      if (w.altKind === 'burst' && modeOf(ws, w)) {
+        f[WS_BURST_LEFT] = 2;
+        f[WS_BURST_NEXT] = time + w.burstGap;
+        f[WS_NEXT_ATTACK] = time + w.burstCycle;
+      }
+      if (w.boltAction && zoom > 0) { // the bolt: out of the scope until it closes
+        f[WS_RESUME_ZOOM] = zoom;
+        f[WS_ZOOM] = 0;
+      }
     }
   }
 
   f[WS_OLD_BUTTONS] = buttons;
 }
 
-function fire(ws, ps, w, o, buttons, pitch, yaw, tick, time, ex, ey, ez, shots) {
+// CS:GO grenade handling: attack (long throw) or attack2 (lob) pulls the pin; while it
+// is held the strength follows the buttons (both: medium); letting go throws after
+// THROW_DELAY. The thrown grenade leaves the inventory (WS_THROWN, WEV_THROW: the server
+// launches it); the next one of the kind comes up, else another kind, else the last
+// weapon.
+function grenadeTick(ws, buttons, time) {
+  const f = ws.f, slot = WS_SLOTS + SLOT_GRENADE * 3;
+  const a1 = (buttons & IN_ATTACK) !== 0, a2 = (buttons & IN_ATTACK2) !== 0;
+  if (f[WS_THROW_TIME] > 0) {
+    if (time < f[WS_THROW_TIME]) return;
+    const id = f[slot];
+    f[WS_THROWN] = id * 4 + f[WS_THROW];
+    f[WS_EVENTS] |= WEV_THROW;
+    f[WS_THROW] = f[WS_THROW_TIME] = 0;
+    takeGrenade(ws, id);
+    const back = f[WS_LAST_SLOT];
+    if (f[slot]) { // another grenade comes up
+      deploy(ws, SLOT_GRENADE, time);
+      f[WS_LAST_SLOT] = back;
+      return;
+    }
+    removeWeapon(ws, SLOT_GRENADE, time);
+    if (back !== SLOT_GRENADE && f[WS_SLOTS + back * 3] > 0 && f[WS_ACTIVE] !== back) deploy(ws, back, time);
+    return;
+  }
+  if (f[WS_THROW]) {
+    if (a1 || a2) f[WS_THROW] = a1 && a2 ? THROW_MEDIUM : a1 ? THROW_LONG : THROW_SHORT;
+    else f[WS_THROW_TIME] = time + THROW_DELAY;
+    return;
+  }
+  if ((a1 || a2) && time >= f[WS_DEPLOY_END] && time >= f[WS_NEXT_ATTACK]) {
+    f[WS_THROW] = a1 && a2 ? THROW_MEDIUM : a1 ? THROW_LONG : THROW_SHORT;
+    f[WS_EVENTS] |= WEV_PIN;
+  }
+}
+
+// mode: the weapon's stats to shoot with (-1: its current mode; 1: the revolver's fan).
+function fire(ws, ps, aw, o, buttons, pitch, yaw, tick, time, ex, ey, ez, shots, mode = -1) {
   const f = ws.f;
+  const w = aw.modes[mode >= 0 ? mode : modeOf(ws, aw)];
   f[o + 1] -= 1;
-  const inacc = getInaccuracy(ws, ps, buttons); // before this shot's penalty: first shot is accurate
+  const inacc = getInaccuracy(ws, ps, buttons, mode); // before this shot's penalty: first shot is accurate
 
   const p = (pitch + f[WS_PUNCH] * RECOIL.scale) * DEG;
   const yw = (yaw + f[WS_PUNCH + 1] * RECOIL.scale) * DEG;
@@ -497,7 +777,7 @@ function fire(ws, ps, w, o, buttons, pitch, yaw, tick, time, ex, ey, ez, shots) 
   // CS:GO FX_FireBullets: inaccuracy and spread each add a random polar offset,
   // drawn per pellet for shotguns.
   seedRandom(hash32(tick + 1));
-  for (let b = 0; b < w.bullets; b++) {
+  for (let b = 0; b < aw.bullets; b++) {
     const t0 = random() * 2 * Math.PI, r0 = random() * inacc;
     const t1 = random() * 2 * Math.PI, r1 = random() * w.spread;
     const x = r0 * Math.cos(t0) + r1 * Math.cos(t1);
@@ -505,7 +785,7 @@ function fire(ws, ps, w, o, buttons, pitch, yaw, tick, time, ex, ey, ez, shots) 
     let dx = fx + x * rx + y * ux, dy = fy + x * ry + y * uy, dz = fz + y * uz;
     const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
     dx /= len; dy /= len; dz /= len;
-    shots.push(ex, ey, ez, dx, dy, dz, w.range, f[o], w.damage);
+    shots.push(ex, ey, ez, dx, dy, dz, aw.range, f[o], aw.damage);
   }
 
   f[WS_PENALTY] += w.inaccuracyFire;
@@ -514,7 +794,7 @@ function fire(ws, ps, w, o, buttons, pitch, yaw, tick, time, ex, ey, ez, shots) 
   f[WS_PUNCH_VEL + 1] += w.recoilPattern[idx * 2 + 1];
   f[WS_RECOIL_INDEX] += 1;
   f[WS_LAST_SHOT] = time;
-  f[WS_NEXT_ATTACK] = time + w.cycle;
+  f[WS_NEXT_ATTACK] = time + aw.cycle;
   f[WS_EVENTS] |= WEV_FIRE;
 }
 
