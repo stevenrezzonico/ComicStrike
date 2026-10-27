@@ -4,7 +4,8 @@
 
 import {
   MAX_PLAYERS, Writer, Reader, SnapshotRing, OwnState, EventList, writeHello, writeCmds, readWelcome, readSnapshot,
-  readInfo, writeBuy, S2C_WELCOME, S2C_SNAPSHOT, S2C_REJECT, S2C_INFO, C2S_CMDS, C2S_BYE,
+  readInfo, writeBuy, writeCommand, S2C_WELCOME, S2C_SNAPSHOT, S2C_REJECT, S2C_INFO, S2C_PRINT, S2C_CHANGELEVEL,
+  C2S_CMDS, C2S_BYE,
 } from '../shared/protocol.js';
 
 const HELLO_RETRY_MS = 250;
@@ -41,6 +42,17 @@ export class NetClient {
     this.kills = new Int32Array(MAX_PLAYERS);
     this.deaths = new Int32Array(MAX_PLAYERS);
     this.buyId = 0;
+    this.cmdId = 0;
+    this.prints = []; // console text from the server, taken by the game loop
+    this.changelevel = ''; // the server is switching to this map: reconnect
+    // Traffic totals (net_graph).
+    this.bytesIn = 0;
+    this.packetsIn = 0;
+    this.bytesOut = 0;
+    this.packetsOut = 0;
+    this.gaps = new Float32Array(128); // ms between arriving datagrams (net_graph), a ring
+    this.gapCount = 0;
+    this.lastPacketAt = 0;
     this.arrival = 0; // performance.now() when the newest snapshot arrived
   }
 
@@ -92,6 +104,11 @@ export class NetClient {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
+        this.bytesIn += value.byteLength + 28; // + UDP/IP headers, like net_graph counts
+        this.packetsIn++;
+        const t = performance.now();
+        if (this.lastPacketAt) this.gaps[this.gapCount++ & 127] = t - this.lastPacketAt;
+        this.lastPacketAt = t;
         if (this.qLen === QUEUE) { // tick loop stalled: drop the oldest
           this.qHead = (this.qHead + 1) % QUEUE;
           this.qLen--;
@@ -118,6 +135,8 @@ export class NetClient {
   send(bytes) {
     if (this.closed) return;
     this.lastSend = performance.now();
+    this.bytesOut += bytes.byteLength + 28;
+    this.packetsOut++;
     this.writer.write(bytes).catch(() => {});
   }
 
@@ -144,7 +163,18 @@ export class NetClient {
   // A purchase. Datagrams can be lost: send it three times; the server acts once per id.
   buy(item) {
     this.buyId = (this.buyId + 1) & 0xffff;
-    for (let i = 0; i < 3; i++) this.send(writeBuy(this.nextWriter(), this.buyId, item));
+    const bytes = writeBuy(this.nextWriter(), this.buyId, item).slice(); // see command()
+    for (let i = 0; i < 3; i++) this.send(bytes);
+  }
+
+  // A console command for the server (name, jointeam, kill, rcon ...); sent three times,
+  // run once.
+  command(text) {
+    this.cmdId = (this.cmdId + 1) & 0xffff;
+    // Its own copy: a burst of commands would outrun the rotating send buffers while
+    // the datagram writes are still queued.
+    const bytes = writeCommand(this.nextWriter(), this.cmdId, text).slice();
+    for (let i = 0; i < 3; i++) this.send(bytes);
   }
 
   // Our newest commands (with redundancy) plus the newest snapshot we decoded.
@@ -188,6 +218,10 @@ export class NetClient {
         this.rejected = r.str();
       } else if (type === S2C_INFO) {
         readInfo(r, this.names, this.teams, this.kills, this.deaths);
+      } else if (type === S2C_PRINT) {
+        this.prints.push(r.lstr());
+      } else if (type === S2C_CHANGELEVEL) {
+        this.changelevel = r.str();
       }
     }
     return fresh;

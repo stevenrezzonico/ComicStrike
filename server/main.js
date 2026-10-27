@@ -6,12 +6,14 @@
 //
 // Env: HTTP_PORT (tcp 27015), GAME_PORT (udp 27015), BIND (0.0.0.0),
 //      HOSTNAMES ("localhost,127.0.0.1,::1") - names/IPs the certificate covers,
-//      MAP (de_dust2) - maps/<MAP>.bsp
+//      MAP (de_dust2) - maps/<MAP>.bsp, RCON_PASSWORD - enables rcon
+// cfg/server.cfg runs at startup; the terminal is a server console (status, map,
+// mp_restartgame, ...).
 
 import { fileURLToPath } from 'node:url';
 import { ensureCert } from './cert.js';
 import { listen } from './transport.js';
-import { Game } from './game.js';
+import { Host } from './host.js';
 import { parseBSP } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
 
@@ -34,10 +36,27 @@ const MIME = {
 const certInfo = await ensureCert(fileURLToPath(new URL('certs', ROOT)), HOSTNAMES);
 
 if (!/^[\w-]+$/.test(MAP)) throw new Error(`bad MAP: ${MAP}`);
-const bsp = parseBSP((await Deno.readFile(new URL(`maps/${MAP}.bsp`, ROOT))).buffer);
-const game = new Game(MAP, bsp);
+const readText = (url) => {
+  try {
+    return Deno.readTextFileSync(url);
+  } catch {
+    return null;
+  }
+};
+const host = new Host({
+  loadMap: (name) => parseBSP(Deno.readFileSync(new URL(`maps/${name}.bsp`, ROOT)).buffer),
+  listMaps: () => [...Deno.readDirSync(new URL('maps/', ROOT))].map((e) => e.name).filter((n) => n.endsWith('.bsp'))
+    .map((n) => n.slice(0, -4)).sort(),
+  readCfg: (name) => readText(new URL(`cfg/${name}`, ROOT)),
+  quit: () => Deno.exit(0),
+});
+if (readText(new URL('cfg/server.cfg', ROOT)) !== null) host.execCfg('server.cfg');
+const envPassword = Deno.env.get('RCON_PASSWORD');
+if (envPassword) host.password.set(envPassword);
+host.start(MAP);
 
 listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key }, (session) => {
+  const game = host.game; // a map change replaces the game; this session stays with its own
   const client = game.connect(session);
   if (!client) return { onDatagram() {}, onClose() {} };
   return {
@@ -56,6 +75,7 @@ listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key
 const TICK_MS = 1000 / TICK_RATE;
 let epoch = performance.now();
 function loop() {
+  const game = host.game;
   const due = Math.floor((performance.now() - epoch) / TICK_MS);
   let ran = 0;
   while (game.tick < due && ran < 8) {
@@ -94,3 +114,21 @@ Deno.serve({ port: HTTP_PORT, onListen: () => {} }, async (req) => {
 });
 
 console.log(`http: http://127.0.0.1:${HTTP_PORT}/   webtransport: udp/${GAME_PORT}   map: ${MAP}   ${TICK_RATE} tick`);
+
+// The terminal is a server console.
+(async () => {
+  try {
+    let buf = '';
+    for await (const chunk of Deno.stdin.readable.pipeThrough(new TextDecoderStream())) {
+      buf += chunk;
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (line) host.con.exec(line);
+      }
+    }
+  } catch {
+    // no terminal (detached): rcon and cfg/server.cfg still work
+  }
+})();

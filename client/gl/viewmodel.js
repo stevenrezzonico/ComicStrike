@@ -111,6 +111,7 @@ export class Viewmodel {
     this.gl = gl;
     this.prog = program(gl, VIEWMODEL_VS, VIEWMODEL_FS, ['u_proj', 'u_model', 'u_light', 'u_emissive']);
     this.proj = new Float32Array(16);
+    this.fovY = 54 * Math.PI / 180;
     this.model = new Float32Array(16);
     this.ranges = new Int32Array(WEAPONS.length * 4); // first, count, flashFirst, flashCount
 
@@ -148,7 +149,7 @@ export class Viewmodel {
     const count = this.ranges[weaponId * 4 + 1];
     if (!count) return;
     const gl = this.gl;
-    perspective(this.proj, 54 * Math.PI / 180, aspect, 1, 128);
+    perspective(this.proj, this.fovY, aspect, 1, 128);
     this.buildModel(anim);
 
     gl.clear(gl.DEPTH_BUFFER_BIT); // never clip into walls

@@ -332,22 +332,26 @@ void main() {
   o_color = vec4(mix(lit, v_col * 1.6, u_emissive), 1.0);
 }`;
 
-// Crosshair: four arms generated from gl_VertexID (6 vertices per arm), in pixels.
+// Crosshair: four arms and a dot generated from gl_VertexID (6 vertices each), in
+// pixels. u_parts bits: 0 right, 1 left, 2 bottom, 3 top arm, 4 dot.
 export const CROSSHAIR_VS = `#version 300 es
 uniform vec2 u_screen;
 uniform float u_gap;
 uniform float u_len;
 uniform float u_thick;
+uniform int u_parts;
 void main() {
-  int arm = gl_VertexID / 6;
+  int part = gl_VertexID / 6;
   int k = gl_VertexID % 6;
+  if ((u_parts & (1 << part)) == 0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   vec2 c = vec2(k == 1 || k == 4 || k == 5 ? 1.0 : 0.0, k == 2 || k == 3 || k == 5 ? 1.0 : 0.0);
   vec2 lo, hi;
-  float h = u_thick * 0.5;
-  if (arm == 0) { lo = vec2(u_gap, -h); hi = vec2(u_gap + u_len, h); }
-  else if (arm == 1) { lo = vec2(-u_gap - u_len, -h); hi = vec2(-u_gap, h); }
-  else if (arm == 2) { lo = vec2(-h, u_gap); hi = vec2(h, u_gap + u_len); }
-  else { lo = vec2(-h, -u_gap - u_len); hi = vec2(h, -u_gap); }
+  float h0 = -floor(u_thick * 0.5), h1 = h0 + u_thick; // whole pixels around the center
+  if (part == 0) { lo = vec2(u_gap, h0); hi = vec2(u_gap + u_len, h1); }
+  else if (part == 1) { lo = vec2(-u_gap - u_len, h0); hi = vec2(-u_gap, h1); }
+  else if (part == 2) { lo = vec2(h0, -u_gap - u_len); hi = vec2(h1, -u_gap); }
+  else if (part == 3) { lo = vec2(h0, u_gap); hi = vec2(h1, u_gap + u_len); }
+  else { lo = vec2(h0); hi = vec2(h1); }
   vec2 px = floor(u_screen * 0.5) + mix(lo, hi, c);
   gl_Position = vec4(px / u_screen * 2.0 - 1.0, 0.0, 1.0);
 }`;

@@ -21,6 +21,7 @@ import {
   Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT,
 } from '../shared/player.js';
 import { SurfaceMap } from '../shared/surfaces.js';
+import { parse } from '../shared/cvars.js';
 import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, FREEZE_TIME, ROUND_TIME, BUY_TIME, ROUND_END_DELAY,
   MAX_ROUNDS, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD,
@@ -28,7 +29,8 @@ import {
   lossBonus, buyError, applyBuy, BuyZones,
 } from '../shared/economy.js';
 import {
-  PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, SHOT_IMPACT, SHOT_BLOOD,
+  PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
+  SHOT_BLOOD, writePrint, printChunks,
   KILL_HEADSHOT, KILL_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
   writeWelcome, writeReject, writeInfo, readCmds, writeSnapshot, quantizePitch, quantizeYaw, E_ACTIVE, E_X, E_Y, E_Z,
   E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_FIELDS,
@@ -67,6 +69,9 @@ class Client {
     this.placed = false; // round start: already put on a spawn point
     this.canBuy = false;
     this.lastBuy = -1; // newest BUY id handled
+    this.lastCommand = -1; // newest COMMAND id handled
+    this.rconFails = 0;
+    this.rconBlockedUntil = 0; // server tick
     // Last command run, repeated when one is lost.
     this.buttons = 0;
     this.pitch = 0;
@@ -99,7 +104,8 @@ class Client {
   }
 }
 
-// Round rules; tests override them (shorter timings, or no rounds at all).
+// Round rules (the server console's mp_* cvars); tests override them (shorter timings,
+// or no rounds at all).
 export const DEFAULT_RULES = {
   rounds: true, // false: stay in warmup (free respawns) forever
   freezeTime: FREEZE_TIME,
@@ -107,7 +113,14 @@ export const DEFAULT_RULES = {
   buyTime: BUY_TIME,
   roundEndDelay: ROUND_END_DELAY,
   c4Timer: C4_TIMER,
+  maxRounds: MAX_ROUNDS,
+  startMoney: START_MONEY,
+  maxMoney: MAX_MONEY,
+  warmupTime: 0, // seconds of warmup once both teams have players (0: start at once)
 };
+
+const RCON_MAX_FAILS = 5; // bad passwords before a client is ignored for a while
+const RCON_BLOCK_TICKS = 60 * TICK_RATE;
 
 export class Game {
   constructor(mapName, bsp, rules = {}) {
@@ -153,6 +166,11 @@ export class Game {
     this.roundsPlayed = 0;
     this.lossStreak = { [TEAM_T]: 0, [TEAM_CT]: 0 };
     this.placing = false;
+    this.warmupReady = -1; // warmup: server tick both teams first had players (-1: not yet)
+    this.warmupManual = false; // mp_warmup_start without mp_warmuptime: until mp_warmup_end
+    this.restartAt = 0; // mp_restartgame: server tick to restart the match at
+    // rcon(client, password, command) -> output text; set by the Host. null: no rcon.
+    this.rcon = null;
 
     // The bomb.
     this.bomb = new BombState();
@@ -219,6 +237,12 @@ export class Game {
       if (c.lastBuy >= 0 && (ahead === 0 || ahead >= 0x8000)) return;
       c.lastBuy = id;
       if (!buyError(c.player, item, this.canBuy(c))) applyBuy(c.player, item);
+    } else if (type === C2S_COMMAND && c.joined && r.remaining >= 4) {
+      const id = r.u16v(), text = r.lstr();
+      const ahead = (id - c.lastCommand) & 0xffff; // sent 3 times, like BUY
+      if (c.lastCommand >= 0 && (ahead === 0 || ahead >= 0x8000)) return;
+      c.lastCommand = id;
+      this.clientCommand(c, text);
     } else if (type === C2S_CMDS && c.joined) {
       const ack = readCmds(r, c.inbox, c.nextCmd < 0 ? 0 : c.nextCmd);
       if (ack > c.ackSeq && ack <= this.tick) c.ackSeq = ack;
@@ -239,7 +263,7 @@ export class Game {
       for (const o of this.clients) if (o && o !== c && o.joined) o.team === TEAM_CT ? ct++ : t++;
       p.team = ct < t ? TEAM_CT : TEAM_T;
     }
-    p.money = this.phase === PHASE_WARMUP ? WARMUP_MONEY : START_MONEY;
+    p.money = this.phase === PHASE_WARMUP ? WARMUP_MONEY : this.rules.startMoney;
     if (this.phase === PHASE_WARMUP || this.phase === PHASE_FREEZE) {
       this.respawn(c, false, this.phase === PHASE_WARMUP);
     } else {
@@ -376,7 +400,7 @@ export class Game {
         k.money = Math.max(0, k.money - TEAMKILL_PENALTY);
       } else {
         k.kills++;
-        if (this.phase !== PHASE_WARMUP) k.money = Math.min(MAX_MONEY, k.money + (WEAPONS[weapon]?.killAward || 0));
+        if (this.phase !== PHASE_WARMUP) k.money = Math.min(this.rules.maxMoney, k.money + (WEAPONS[weapon]?.killAward || 0));
       }
     }
     if (this.phase === PHASE_WARMUP) victim.respawnTick = this.tick + WARMUP_RESPAWN * TICK_RATE;
@@ -400,10 +424,20 @@ export class Game {
       }
     }
     const rs = this.round;
-    if (rs.phase === PHASE_WARMUP) {
+    if (this.restartAt && this.tick >= this.restartAt) { // mp_restartgame
+      this.restartAt = 0;
       if (t && ct && this.rules.rounds) this.startMatch();
+      else this.startWarmup(false);
+    }
+    if (rs.phase === PHASE_WARMUP) {
+      if (!t || !ct) this.warmupReady = -1;
+      else if (this.warmupReady < 0) this.warmupReady = this.tick;
+      // mp_warmuptime counts from the moment both teams have players.
+      if (t && ct && this.rules.rounds && !this.warmupManual &&
+        this.tick >= this.warmupReady + this.rules.warmupTime * TICK_RATE) this.startMatch();
     } else if (!t || !ct) { // a team emptied out
       this.setPhase(PHASE_WARMUP, 0);
+      this.warmupReady = -1;
       this.resetBomb();
       console.log('waiting for players');
     } else if (rs.phase === PHASE_FREEZE && this.tick >= this.phaseEnd) {
@@ -418,8 +452,8 @@ export class Game {
         this.endRound(this.timeWinner, this.timeWinner ? END_TIME : END_DRAW);
       }
     } else if (rs.phase === PHASE_OVER && this.tick >= this.phaseEnd) {
-      const half = MAX_ROUNDS / 2;
-      if (rs.scoreT > half || rs.scoreCT > half || this.roundsPlayed >= MAX_ROUNDS) this.startMatch();
+      const max = this.rules.maxRounds, half = Math.floor(max / 2);
+      if (rs.scoreT > half || rs.scoreCT > half || this.roundsPlayed >= max) this.startMatch();
       else {
         if (this.roundsPlayed === half) this.halftime();
         this.startRound(this.roundsPlayed === half);
@@ -440,7 +474,7 @@ export class Game {
     this.lossStreak[TEAM_T] = this.lossStreak[TEAM_CT] = 0;
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
-      c.player.money = START_MONEY;
+      c.player.money = this.rules.startMoney;
       c.player.kills = c.player.deaths = 0;
     }
     this.rosterDirty = true;
@@ -489,12 +523,120 @@ export class Game {
         if (!c || !c.joined || c.team !== team) continue;
         // Ts still alive when the clock runs out get nothing (CS:GO: no free saving).
         if (!won && team === TEAM_T && reason === END_TIME && c.alive) continue;
-        c.player.money = Math.min(MAX_MONEY, c.player.money + reward);
+        c.player.money = Math.min(this.rules.maxMoney, c.player.money + reward);
       }
     }
     this.setPhase(PHASE_OVER, this.rules.roundEndDelay);
     const who = winner === TEAM_T ? 'Terrorists' : winner === TEAM_CT ? 'Counter-Terrorists' : 'nobody';
     console.log(`round ${rs.round}: ${who} win (${rs.scoreT}-${rs.scoreCT})`);
+  }
+
+  // Back to warmup (`manual`: until mp_warmup_end, else for mp_warmuptime): everyone
+  // respawns with warmup money; the match starts when it ends.
+  startWarmup(manual) {
+    this.setPhase(PHASE_WARMUP, 0);
+    this.warmupReady = -1;
+    this.warmupManual = manual;
+    this.resetBomb();
+    const rs = this.round;
+    rs.scoreT = rs.scoreCT = rs.info = rs.round = 0;
+    for (const c of this.clients) {
+      if (!c || !c.joined) continue;
+      c.player.money = WARMUP_MONEY;
+      this.respawn(c, false, true);
+    }
+    this.rosterDirty = true;
+  }
+
+  // mp_restartgame: a fresh match in `seconds`.
+  restartGame(seconds) {
+    this.restartAt = this.tick + Math.max(1, seconds) * TICK_RATE;
+  }
+
+  // mp_warmup_end: start the match now if both teams have players.
+  endWarmup() {
+    if (this.phase !== PHASE_WARMUP) return 'not in warmup';
+    let t = 0, ct = 0;
+    for (const c of this.clients) if (c && c.joined) c.team === TEAM_CT ? ct++ : t++;
+    if (!t || !ct) return 'the match needs players on both teams';
+    this.warmupManual = false;
+    this.startMatch();
+    return '';
+  }
+
+  // --- Client commands ---------------------------------------------------------------
+
+  // Console text for one client (split into datagram-sized PRINTs).
+  print(c, text) {
+    for (const chunk of printChunks(text)) c.session.send(writePrint(c.writer(), chunk));
+  }
+
+  // Everyone's console.
+  printAll(text) {
+    for (const c of this.clients) if (c && c.joined) this.print(c, text);
+  }
+
+  // Commands a client's console sends to the server (Source "client commands").
+  clientCommand(c, text) {
+    const args = parse(text)[0];
+    if (!args) return;
+    const name = args[0].toLowerCase();
+    if (name === 'name') {
+      const n = args.slice(1).join(' ').trim().slice(0, 31);
+      if (!n || n === c.name) return;
+      console.log(`player ${c.id} "${c.name}" is now "${n}"`);
+      c.name = n;
+      this.rosterDirty = true;
+    } else if (name === 'jointeam') {
+      this.joinTeam(c, +args[1]);
+    } else if (name === 'kill') {
+      if (c.alive) this.kill(c, c, 0, false);
+    } else if (name === 'rcon') { // the rest of the line, quotes and `;` included, is the command
+      const m = /^\s*rcon\s+("[^"]*"|\S+)\s*([^]*)$/i.exec(text);
+      this.print(c, this.rconCommand(c, m ? m[1].replace(/^"|"$/g, '') : '', m ? m[2] : ''));
+    } else {
+      this.print(c, `Unknown command "${args[0]}"`);
+    }
+  }
+
+  rconCommand(c, password, command) {
+    if (!this.rcon) return 'rcon is disabled on this server (no rcon_password)';
+    if (this.tick < c.rconBlockedUntil) return 'rcon: too many bad passwords, try later';
+    const out = this.rcon(c, password, command);
+    if (out === null) { // wrong password
+      if (++c.rconFails >= RCON_MAX_FAILS) {
+        c.rconFails = 0;
+        c.rconBlockedUntil = this.tick + RCON_BLOCK_TICKS;
+      }
+      console.log(`rcon: bad password from player ${c.id} "${c.name}"`);
+      return 'Bad rcon_password.';
+    }
+    c.rconFails = 0;
+    return out;
+  }
+
+  // CS:GO jointeam: 2 = T, 3 = CT. Switching sides while alive costs the life (no death
+  // counted); you play from the next round (at once in warmup or freeze time).
+  joinTeam(c, n) {
+    const team = n === 2 ? TEAM_T : n === 3 ? TEAM_CT : 0;
+    if (!team) return this.print(c, 'jointeam 2 (Terrorists) or 3 (Counter-Terrorists)');
+    if (team === c.team) return;
+    if (this.bombCarrier === c) this.dropBomb(c, false);
+    c.player.team = team;
+    c.player.health = 0;
+    c.life++;
+    this.rosterDirty = true;
+    if (this.phase === PHASE_WARMUP || this.phase === PHASE_FREEZE) this.respawn(c, false, this.phase === PHASE_WARMUP);
+    console.log(`player ${c.id} "${c.name}" joined the ${team === TEAM_CT ? 'CT' : 'T'}s`);
+  }
+
+  // Drops a client from the server with a reason.
+  kick(c, reason = 'kicked') {
+    c.session.send(writeReject(c.writer(), reason));
+    c.joined = false;
+    c.session.close(reason);
+    console.log(`player ${c.id} "${c.name}" kicked (${reason})`);
+    this.disconnect(c);
   }
 
   // --- The bomb -------------------------------------------------------------------
@@ -555,14 +697,14 @@ export class Game {
     b.ticksLeft = this.explodeTick - this.tick;
     this.bombCarrier = null;
     this.planted = true;
-    p.money = Math.min(MAX_MONEY, p.money + PLANT_REWARD);
+    p.money = Math.min(this.rules.maxMoney, p.money + PLANT_REWARD);
     console.log(`bomb planted by player ${c.id}`);
   }
 
   defuseBomb(c) {
     if (this.bomb.state !== BOMB_PLANTED || this.phase !== PHASE_LIVE || !c.alive) return;
     this.bomb.state = BOMB_DEFUSED;
-    c.player.money = Math.min(MAX_MONEY, c.player.money + DEFUSE_REWARD);
+    c.player.money = Math.min(this.rules.maxMoney, c.player.money + DEFUSE_REWARD);
     console.log(`bomb defused by player ${c.id}`);
     this.endRound(TEAM_CT, END_DEFUSE);
   }
@@ -615,7 +757,7 @@ export class Game {
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
       c.player.team = c.team === TEAM_CT ? TEAM_T : TEAM_CT;
-      c.player.money = START_MONEY;
+      c.player.money = this.rules.startMoney;
     }
     this.rosterDirty = true;
     console.log('halftime: teams swap');

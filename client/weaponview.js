@@ -10,12 +10,15 @@ import { Viewmodel } from './gl/viewmodel.js';
 import { Crosshair } from './gl/crosshair.js';
 
 const FLASH_TIME = 0.035;
+const VM_TAN = Math.tan(27 * Math.PI / 180) / Math.tan(30 * Math.PI / 180);
 const SWING_TIME = 0.3;
 
 export class WeaponView {
-  constructor(gl, fovY) {
+  // cv: the client cvars (crosshair, viewmodel_fov / viewmodel_offset_*).
+  constructor(gl, fovY, cv) {
     this.viewmodel = new Viewmodel(gl);
-    this.crosshair = new Crosshair(gl);
+    this.crosshair = new Crosshair(gl, cv);
+    this.cv = cv;
     this.fovY = fovY;
     this.kick = 0;
     this.flashUntil = 0;
@@ -87,17 +90,25 @@ export class WeaponView {
         a.y -= 14; // hands busy: weapon out of sight
       }
 
+      // viewmodel_offset_x/y/z (right, forward, up), relative to CS:GO's defaults 1, 1, -1.
+      const cv = this.cv;
+      a.x += cv.viewmodel_offset_x.number - 1;
+      a.z -= cv.viewmodel_offset_y.number - 1;
+      a.y += cv.viewmodel_offset_z.number + 1;
+      // viewmodel_fov is horizontal at 4:3; 60 (the default) keeps the models' tuned 54 deg vertical.
+      this.viewmodel.fovY = 2 * Math.atan(VM_TAN * Math.tan(cv.viewmodel_fov.number * Math.PI / 360));
+
       a.flash = time < this.flashUntil;
       this.viewmodel.draw(id, aspect, a, 1.0);
     }
 
-    // Crosshair gap follows the real bullet cone (inaccuracy + spread).
-    let gap = 3;
+    // Dynamic crosshairs open up with the real bullet cone (inaccuracy + spread).
+    let spread = 0;
     if (w && w.gun) {
       const cone = getInaccuracy(ws, ps, buttons) + w.spread;
-      gap = Math.max(3, Math.tan(cone) / Math.tan(this.fovY / 2) * height * 0.5);
+      spread = Math.tan(cone) / Math.tan(this.fovY / 2) * height * 0.5;
     }
-    if (!this.hidden) this.crosshair.draw(width, height, gap);
+    if (!this.hidden) this.crosshair.draw(width, height, spread);
 
     this.updateHud(w, ws, id, health, armor);
   }

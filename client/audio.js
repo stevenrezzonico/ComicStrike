@@ -6,6 +6,13 @@ export class Sounds {
   constructor() {
     this.ctx = null;
     this.noise = null; // 1 s of white noise, shared by every noisy sound
+    this.master = null; // every sound goes through it (the volume cvar)
+    this.volume = 1;
+  }
+
+  setVolume(v) {
+    this.volume = v;
+    if (this.master) this.master.gain.value = v;
   }
 
   resume() {
@@ -13,6 +20,9 @@ export class Sounds {
       const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
       if (!AC) return;
       this.ctx = new AC();
+      this.master = this.ctx.createGain();
+      this.master.gain.value = this.volume;
+      this.master.connect(this.ctx.destination);
       const n = this.ctx.sampleRate;
       this.noise = this.ctx.createBuffer(1, n, n);
       const d = this.noise.getChannelData(0);
@@ -40,7 +50,7 @@ export class Sounds {
     osc.frequency.value = 2100;
     gain.gain.setValueAtTime(0.12 * volume, t);
     gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
-    osc.connect(gain).connect(this.ctx.destination);
+    osc.connect(gain).connect(this.master);
     osc.start(t);
     osc.stop(t + 0.13);
   }
@@ -59,7 +69,7 @@ export class Sounds {
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0.9 * volume, t);
     gain.gain.exponentialRampToValueAtTime(0.001, t + 3);
-    src.connect(lp).connect(gain).connect(ctx.destination);
+    src.connect(lp).connect(gain).connect(this.master);
     src.start(t);
     src.stop(t + 3);
     const osc = ctx.createOscillator();
@@ -68,7 +78,7 @@ export class Sounds {
     osc.frequency.exponentialRampToValueAtTime(30, t + 0.8);
     og.gain.setValueAtTime(0.8 * volume, t);
     og.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
-    osc.connect(og).connect(ctx.destination);
+    osc.connect(og).connect(this.master);
     osc.start(t);
     osc.stop(t + 1);
   }

@@ -6,6 +6,8 @@
 //   HELLO    u8 type, u16 version, u8 team, u8 primary, u8 secondary, str name
 //   BYE      u8 type (leaving: free my player now; sent best-effort on page hide)
 //   BUY      u8 type, u16 buyId, u8 item (sent 3 times; the server acts once per buyId)
+//   COMMAND  u8 type, u16 cmdId, lstr text (a console command for the server: name, jointeam,
+//            kill, rcon ...; sent 3 times, run once per cmdId)
 //   CMDS     u8 type, u32 ackSeq, u8 n,
 //            n x { u32 tick, u32 buttons, f32 pitch, f32 yaw, i8 select, u32 viewTick * 256 }
 //            (oldest first; the newest command plus the previous CMD_REDUNDANCY - 1, so a
@@ -14,6 +16,8 @@
 // Server -> client
 //   WELCOME  u8 type, u16 version, u8 playerId, u32 serverTick, u8 tickRate, str map
 //   REJECT   u8 type, str reason
+//   PRINT    u8 type, lstr text (console output: rcon replies, server messages)
+//   CHANGELEVEL u8 type, str map (the server is switching maps: reconnect)
 //   INFO     u8 type, u8 n, n x { u8 id, u8 team, u16 kills, u16 deaths, str name }
 //            (every player, resent periodically and on changes)
 //   SNAPSHOT u8 type, u32 seq, u32 baseSeq (0 = full), u32 lastCmd, u8 flags,
@@ -33,7 +37,7 @@ import { PS_SIZE } from './pmove.js';
 import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -43,10 +47,14 @@ export const C2S_HELLO = 1;
 export const C2S_CMDS = 2;
 export const C2S_BYE = 3;
 export const C2S_BUY = 4;
+export const C2S_COMMAND = 5;
 export const S2C_WELCOME = 10;
 export const S2C_SNAPSHOT = 11;
 export const S2C_REJECT = 12;
 export const S2C_INFO = 13;
+export const S2C_PRINT = 14;
+export const S2C_CHANGELEVEL = 15;
+export const MAX_TEXT = 900; // bytes of console text per datagram
 
 export const SHOT_IMPACT = 0; // bullet hit the world
 export const SHOT_BLOOD = 1; // bullet hit a player
@@ -93,6 +101,12 @@ export class Writer {
     this.pos += 1 + n;
   }
 
+  lstr(s) { // long UTF-8 string (console text), at most MAX_TEXT bytes
+    const n = utf8Encoder.encodeInto(s, this.u8.subarray(this.pos + 2, this.pos + 2 + MAX_TEXT)).written;
+    this.dv.setUint16(this.pos, n, true);
+    this.pos += 2 + n;
+  }
+
   // The written bytes (a view; copy it if it must outlive the next reset).
   view() {
     return this.u8.subarray(0, this.pos);
@@ -126,6 +140,13 @@ export class Reader {
   bytesInto(dst) {
     dst.set(this.u8.subarray(this.pos, this.pos + dst.length));
     this.pos += dst.length;
+  }
+
+  lstr() {
+    const n = Math.min(this.u16v(), this.remaining);
+    const s = utf8Decoder.decode(this.u8.subarray(this.pos, this.pos + n));
+    this.pos += n;
+    return s;
   }
 
   str() {
@@ -219,6 +240,45 @@ export function writeBuy(w, buyId, item) {
   w.u8v(C2S_BUY);
   w.u16v(buyId);
   w.u8v(item);
+  return w.view();
+}
+
+export function writeCommand(w, cmdId, text) {
+  w.reset();
+  w.u8v(C2S_COMMAND);
+  w.u16v(cmdId);
+  w.lstr(text);
+  return w.view();
+}
+
+export function writePrint(w, text) {
+  w.reset();
+  w.u8v(S2C_PRINT);
+  w.lstr(text);
+  return w.view();
+}
+
+// Console output split into datagram-sized PRINT messages (at line breaks when it can).
+export function printChunks(text) {
+  const chunks = [];
+  const enc = new TextEncoder();
+  let rest = text;
+  while (rest.length) {
+    let n = rest.length;
+    while (enc.encode(rest.slice(0, n)).length > MAX_TEXT) {
+      const nl = rest.lastIndexOf('\n', Math.floor(n * 0.9));
+      n = nl > 0 ? nl + 1 : Math.floor(n * 0.9);
+    }
+    chunks.push(rest.slice(0, n));
+    rest = rest.slice(n);
+  }
+  return chunks;
+}
+
+export function writeChangelevel(w, map) {
+  w.reset();
+  w.u8v(S2C_CHANGELEVEL);
+  w.str(map);
   return w.view();
 }
 

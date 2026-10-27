@@ -1,22 +1,23 @@
 // Client entry point. Online (default): joins the game server over WebTransport and
 // sends 64 Hz user commands. Source-style netcode: the local player is predicted with
 // the same shared simulation the server runs and reconciled against every snapshot
-// (replaying unacknowledged commands); other players are interpolated INTERP_TICKS
-// behind the server clock, and each command tells the server which tick we were seeing
-// so it can rewind them (lag compensation). Offline (?offline, or when no server
+// (replaying unacknowledged commands); other players are interpolated cl_interp_ratio
+// ticks behind the server clock, and each command tells the server which tick we were
+// seeing so it can rewind them (lag compensation). Offline (?offline, or when no server
 // answers): everything runs locally.
 // URL: ?team=t|ct&primary=awp&secondary=deagle&name=me  offline only: &offline&map=de_dust2
-// V toggles noclip (offline only). 5 draws the C4, G drops it, E defuses.
+// Keys are CS:GO binds (client/binds.js); ` opens the console (client/settings.js).
 
 import { parseBSP, parseVec3 } from '../shared/bsp.js';
 import {
   TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED, IN_SCORE,
+  IN_ATTACK, IN_ATTACK2, IN_USE, IN_RELOAD, IN_DROP,
 } from '../shared/constants.js';
 import { CollisionWorld } from '../shared/trace.js';
 import { eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_SIZE, FL_ONGROUND, FL_DUCKING } from '../shared/pmove.js';
 import {
   WEAPONS, WEAPON_ID, ShotList, giveWeapon, weaponTick, viewPunchPitch, viewPunchYaw, hash32, WS_LAST_SLOT,
-  WS_EVENTS, WS_SIZE, WS_SLOTS, WS_ACTION, WS_ACTION_END, SLOT_C4, ACTION_PLANT, ACTION_DEFUSE,
+  WS_EVENTS, WS_SIZE, WS_SLOTS, WS_ACTIVE, WS_ACTION, WS_ACTION_END, SLOT_C4, NUM_SLOTS, ACTION_PLANT, ACTION_DEFUSE,
 } from '../shared/weapons.js';
 import {
   BombSites, PLANT_TIME, DEFUSE_TIME, DEFUSE_TIME_KIT, C4_TIMER, BOMB_DROPPED, BOMB_PLANTED, BOMB_DEFUSED,
@@ -41,14 +42,19 @@ import { WeaponView } from './weaponview.js';
 import { NetClient } from './net.js';
 import { Hud } from './hud.js';
 import { Sounds } from './audio.js';
-import { PHASE_FREEZE, buyError, applyBuy } from '../shared/economy.js';
+import { ConsoleWindow } from './console.js';
+import { NetGraph } from './netgraph.js';
+import { createConsole, watch } from './settings.js';
+import { releaseOf, quote } from '../shared/cvars.js';
+import {
+  PHASE_FREEZE, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
+} from '../shared/economy.js';
 
 const DEG = Math.PI / 180;
 const FOV_Y = 73.74 * DEG; // CS:GO fov 90 at 4:3, kept vertical (Hor+)
 const NOCLIP_SPEED = 800;
 const MAX_TICKS_PER_FRAME = 8;
 const HISTORY = 64; // commands / predicted states kept (power of two)
-const INTERP_TICKS = 2; // CS:GO cl_interp_ratio 2 at 64 updates/s: other players shown 31 ms behind
 const SMOOTH_RATE = 15; // 1/s: how fast a visible prediction correction is blended away
 const KILLFEED_MS = 5000;
 
@@ -59,12 +65,18 @@ const debug = document.getElementById('debug');
 const killfeed = document.getElementById('killfeed');
 const deathNotice = document.getElementById('death');
 
+// The console first: settings are read by everything below.
+let conWin = null;
+const { con, binds, cv } = createConsole((s) => (conWin ? conWin.print(s) : console.log(s)));
+conWin = new ConsoleWindow(con);
+const netGraph = new NetGraph();
+
 const renderer = new Renderer(canvas);
 const decals = new Decals(renderer.gl);
 const debris = new Debris(renderer.gl);
 const players = new Players(renderer.gl);
 const overlays = [decals, debris, players];
-const weaponView = new WeaponView(renderer.gl, FOV_Y);
+const weaponView = new WeaponView(renderer.gl, FOV_Y, cv);
 const input = new Input(canvas);
 const hud = new Hud((item) => buy(item));
 const sounds = new Sounds();
@@ -116,8 +128,10 @@ const view = new Float32Array(16);
 const viewProj = new Float32Array(16);
 const invViewProj = new Float32Array(16);
 
+let currentMap = '';
 async function loadMap(name) {
   if (!/^[\w-]+$/.test(name)) throw new Error(`bad map name: ${name}`);
+  currentMap = name;
   status.textContent = `loading ${name}...`;
   const res = await fetch(`/maps/${name}.bsp`);
   if (!res.ok) throw new Error(`map ${name}: HTTP ${res.status}`);
@@ -465,12 +479,18 @@ function tick() {
   prevPunchY = viewPunchYaw(ws);
 
   let viewTick = 0;
+  if (reconnecting) return;
   if (net) {
     if (net.poll()) applySnapshot();
+    while (net.prints.length) conWin.print(net.prints.shift());
+    if (net.changelevel || (net.closed && net.closeReason === 'changelevel')) {
+      reconnect();
+      return;
+    }
     if (synced) applyEvents();
     if (net.closed) status.textContent = `disconnected: ${net.closeReason}`;
     if (!synced || net.closed) return;
-    viewTick = serverClock - INTERP_TICKS;
+    viewTick = serverClock - cv.cl_interp_ratio.number;
     if (interpolatePlayers(viewTick, interp)) buildTargets();
   }
 
@@ -510,12 +530,18 @@ let accumulator = 0;
 let frames = 0;
 let fpsTime = last;
 let frameMsMax = 0;
+let fps = 0;
 
 function frame(now) {
   const elapsed = (now - last) / 1000;
   frameMsMax = Math.max(frameMsMax, now - last);
   last = now;
 
+  input.sensitivity = cv.sensitivity.number;
+  input.mYaw = cv.m_yaw.number;
+  input.mPitch = cv.m_pitch.number;
+  input.rawInput = cv.m_rawinput.bool;
+  if (sounds.volume !== cv.volume.number) sounds.setVolume(cv.volume.number);
   input.applyMouse(angles);
   accumulator += elapsed;
   if (serverClock >= 0) serverClock += Math.min(elapsed, 0.25) * TICK_RATE;
@@ -531,21 +557,30 @@ function frame(now) {
 
   frames++;
   if (now - fpsTime >= 250) {
+    fps = frames * 1000 / (now - fpsTime);
+    // cl_showfps / cl_showpos (top left).
     const f = ps.f;
     const fl = ps.i[PS_FLAGS];
-    debug.textContent = `${Math.round(frames * 1000 / (now - fpsTime))} fps  worst ${frameMsMax.toFixed(1)} ms\n` +
-      `pos ${f[0].toFixed(0)} ${f[1].toFixed(0)} ${f[2].toFixed(0)}  ang ${angles[0].toFixed(1)} ${angles[1].toFixed(1)}\n` +
-      `vel ${Math.hypot(f[PS_VEL], f[PS_VEL + 1]).toFixed(1)}  z ${f[PS_VEL + 2].toFixed(0)}` +
-      `${fl & FL_ONGROUND ? '  ground' : ''}${fl & FL_DUCKING ? '  duck' : ''}${noclip ? '  NOCLIP' : ''}\n` +
-      (net
-        ? `net: player ${selfId}  rtt ${netStats.rtt.toFixed(0)} ms  snapshots ${net.received} (${net.dropped} undecodable)\n` +
-          `prediction: ${netStats.compared - netStats.corrected}/${netStats.compared} exact` +
-          `${netStats.corrected ? `  last correction ${netStats.lastErr.toFixed(2)} u` : ''}`
-        : 'offline');
+    const lines = [];
+    if (cv.cl_showfps.number) {
+      lines.push(`fps: ${fps.toFixed(0)}${cv.cl_showfps.number > 1 ? `  worst frame: ${frameMsMax.toFixed(1)} ms` : ''}`);
+    }
+    if (cv.cl_showpos.number) {
+      lines.push(`pos: ${f[0].toFixed(0)} ${f[1].toFixed(0)} ${f[2].toFixed(0)}`,
+        `ang: ${angles[0].toFixed(1)} ${angles[1].toFixed(1)}`,
+        `vel: ${Math.hypot(f[PS_VEL], f[PS_VEL + 1]).toFixed(1)}  z ${f[PS_VEL + 2].toFixed(0)}` +
+        `${fl & FL_ONGROUND ? '  ground' : ''}${fl & FL_DUCKING ? '  duck' : ''}${noclip ? '  NOCLIP' : ''}`);
+    }
+    const text = lines.join('\n');
+    if (debug.textContent !== text) debug.textContent = text;
     frames = 0;
     fpsTime = now;
     frameMsMax = 0;
   }
+  netGraph.update(cv.net_graph.bool, now, net, {
+    fps, rtt: netStats.rtt, compared: netStats.compared, corrected: netStats.corrected,
+    interpTicks: cv.cl_interp_ratio.number,
+  });
   requestAnimationFrame(frame);
 }
 
@@ -563,7 +598,7 @@ function draw(now, alpha, dt) {
   const pitch = angles[0] + prevPunchP + (viewPunchPitch(ws) - prevPunchP) * alpha;
   const yaw = angles[1] + prevPunchY + (viewPunchYaw(ws) - prevPunchY) * alpha;
 
-  if (net && synced && interpolatePlayers(serverClock - INTERP_TICKS, interp)) {
+  if (net && synced && interpolatePlayers(serverClock - cv.cl_interp_ratio.number, interp)) {
     players.update(interp, 0, selfId);
     const b = net.own.bomb;
     if (b.state === BOMB_DROPPED || b.state === BOMB_PLANTED || b.state === BOMB_DEFUSED) {
@@ -607,13 +642,117 @@ setInterval(() => {
   applyEvents();
 }, 250);
 
-document.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyV' && input.locked && !e.repeat && !net) noclip = !noclip;
-  if (e.repeat) return;
-  if (e.code === 'KeyB' && (input.locked || hud.menuOpen)) hud.toggleMenu();
-  else if (e.code === 'Escape' && hud.menuOpen) hud.toggleMenu(false);
-  else if (hud.menuOpen && /^Digit[1-9]$/.test(e.code)) hud.menuKey(+e.code.slice(5));
+// --- Console commands and key binds ------------------------------------------------
+
+// Keys run their binds (the console window takes keys while it is open; the buy menu
+// takes Escape and its number keys). `+` binds only act while playing (mouse captured).
+input.onKey = (key, down) => {
+  if (conWin.isOpen) return false;
+  if (hud.menuOpen && down && (key === 'escape' || /^[1-9]$/.test(key))) {
+    if (key === 'escape') hud.toggleMenu(false);
+    else hud.menuKey(+key);
+    return true;
+  }
+  const b = binds.get(key);
+  if (b === undefined) return false;
+  if (down) {
+    if (b[0] === '+' && !input.locked) return false;
+    con.exec(b, { key });
+  } else {
+    const release = releaseOf(b);
+    if (release) con.exec(release, { key });
+  }
+  return true;
+};
+
+for (const [name, bit] of [['forward', IN_FORWARD], ['back', IN_BACK], ['moveleft', IN_MOVELEFT],
+  ['moveright', IN_MOVERIGHT], ['jump', IN_JUMP], ['duck', IN_DUCK], ['speed', IN_SPEED], ['attack', IN_ATTACK],
+  ['attack2', IN_ATTACK2], ['use', IN_USE], ['reload', IN_RELOAD], ['showscores', IN_SCORE]]) {
+  con.command(`+${name}`, (_a, ctx) => input.press(bit, ctx.key), `Hold: ${name}`);
+  con.command(`-${name}`, (_a, ctx) => input.release(bit, ctx.key), `Release: ${name}`);
+}
+con.command('+lookatweapon', () => {}, 'Inspect the weapon (arrives with the arm animations)');
+con.command('-lookatweapon', () => {});
+for (let n = 1; n <= NUM_SLOTS; n++) {
+  con.command(`slot${n}`, () => {
+    input.select = n - 1;
+  }, `Weapon slot ${n}`);
+}
+con.command('lastinv', () => {
+  input.select = SELECT_LAST;
+}, 'Previous weapon');
+const cycleSlot = (dir) => { // next/previous slot that holds a weapon
+  for (let i = 1; i <= NUM_SLOTS; i++) {
+    const s = (ws.f[WS_ACTIVE] + dir * i + NUM_SLOTS) % NUM_SLOTS;
+    if (ws.f[WS_SLOTS + s * 3] > 0) return (input.select = s);
+  }
+};
+con.command('invnext', () => cycleSlot(1), 'Next weapon');
+con.command('invprev', () => cycleSlot(-1), 'Previous weapon in the slot order');
+con.command('drop', () => input.pulse(IN_DROP), 'Drop the active weapon (the C4 for now)');
+con.command('buymenu', () => hud.toggleMenu(), 'Opens the buy menu');
+const BUY_NAMES = { vest: ITEM_KEVLAR, vesthelm: ITEM_ASSAULTSUIT, defuser: ITEM_DEFUSER };
+con.command('buy', (a, ctx) => {
+  const item = BUY_NAMES[a[1]] || WEAPON_ID[a[1]];
+  if (!item) return con.out(ctx, 'buy <ak47 | m4a1 | m4a1_silencer | awp | deagle | ... | vest | vesthelm | defuser>');
+  const err = buyError(player, item, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true);
+  if (err) return con.out(ctx, `${itemLabel(item)}: ${err}`);
+  buy(item);
+}, 'buy <item>: buys a weapon or gear');
+con.command('toggleconsole', () => conWin.toggle(), 'Opens or closes the console');
+con.command('clear', () => conWin.clear(), 'Clears the console');
+con.command('noclip', (_a, ctx) => {
+  if (net) return con.out(ctx, 'noclip: offline only');
+  noclip = !noclip;
+  con.out(ctx, `noclip ${noclip ? 'ON' : 'OFF'}`);
+}, 'Fly through walls (offline)');
+con.command('jointeam', (a, ctx) => {
+  const n = +a[1];
+  if (n !== 2 && n !== 3) return con.out(ctx, 'jointeam 2 (Terrorists) or 3 (Counter-Terrorists)');
+  if (net) return net.command(`jointeam ${n}`);
+  player.team = n === 3 ? TEAM_CT : TEAM_T;
+  offlineRespawn();
+}, 'jointeam <2|3>: switch to the Terrorists or Counter-Terrorists');
+con.command('kill', () => {
+  if (net) net.command('kill');
+  else offlineRespawn();
+}, 'Suicide');
+con.command('rcon', (a, ctx) => {
+  if (!net) return con.out(ctx, 'rcon: not connected');
+  if (!cv.rcon_password.value) return con.out(ctx, 'set rcon_password first');
+  if (a.length < 2) return con.out(ctx, 'rcon <command>');
+  // One argument goes as is (rcon "mp_freezetime 3; mp_restartgame 1"); several are re-quoted.
+  const command = a.length === 2 ? a[1] : a.slice(1).map((s) => (/[\s;"]/.test(s) || !s ? quote(s) : s)).join(' ');
+  net.command(`rcon ${quote(cv.rcon_password.value)} ${command}`);
+}, 'rcon <command>: runs a command on the server (needs rcon_password)');
+con.command('status', (_a, ctx) => {
+  if (!net) return con.out(ctx, `offline  map: ${currentMap}`);
+  const lines = [`map: ${currentMap}  you: #${selfId}  ping: ${netStats.rtt.toFixed(0)} ms`, '# id  name  team  kills deaths'];
+  for (let id = 0; id < MAX_PLAYERS; id++) {
+    if (!net.names[id]) continue;
+    lines.push(`# ${id}  ${net.names[id]}  ${net.teams[id] === TEAM_CT ? 'CT' : 'T'}  ${net.kills[id]} ${net.deaths[id]}`);
+  }
+  con.out(ctx, lines.join('\n'));
+}, 'Players on the server (rcon status shows the server side)');
+con.command('disconnect', () => {
+  if (net) net.close('disconnect');
+}, 'Leaves the server');
+con.command('retry', () => reconnect(), 'Reconnects to the server');
+con.command('map', (a, ctx) => {
+  if (!a[1]) return con.out(ctx, 'map <name>');
+  if (net) return con.out(ctx, 'online, the server picks the map: rcon map <name>');
+  loadMap(a[1]).then(() => offlineRespawn(), (err) => con.out(ctx, `map ${a[1]}: ${err.message}`));
+}, 'map <name>: loads a map (offline; online use rcon map)');
+watch(cv.name, () => {
+  if (net) net.command(`name ${quote(cv.name.value)}`);
 });
+const applyDrawHud = () => document.body.classList.toggle('nohud', !cv.cl_drawhud.bool);
+watch(cv.cl_drawhud, applyDrawHud);
+applyDrawHud();
+conWin.onToggle = (open) => {
+  status.style.display = open || document.pointerLockElement ? 'none' : '';
+};
+
 canvas.addEventListener('click', () => {
   sounds.resume(); // audio may only start after a user gesture
   if (hud.menuOpen) hud.toggleMenu(false);
@@ -622,18 +761,60 @@ document.addEventListener('pointerlockchange', () => {
   status.style.display = document.pointerLockElement ? 'none' : '';
 });
 
+const primary = WEAPON_ID[params.get('primary')] || 0;
+const secondary = WEAPON_ID[params.get('secondary')] || 0;
+
+async function joinServer(team) {
+  status.textContent = 'connecting...';
+  net = new NetClient();
+  await net.connect();
+  const welcome = await net.join(team, primary, secondary, cv.name.value);
+  selfId = welcome.playerId;
+  await loadMap(welcome.map);
+}
+
+// Map change (the server closed us with "changelevel"), or `retry`: join again on our
+// current team; the WELCOME names the map.
+let reconnecting = false;
+async function reconnect() {
+  if (reconnecting) return;
+  reconnecting = true;
+  const team = player.team;
+  if (net && !net.closed) net.close('reconnect');
+  synced = false;
+  serverClock = -1;
+  predictedTick.fill(-1);
+  serverBroken.fill(0);
+  smooth.fill(0);
+  seenKills.fill(-1);
+  lastBombState = 0;
+  netStats.compared = netStats.corrected = 0;
+  status.textContent = 'reconnecting...';
+  status.style.display = '';
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await joinServer(team);
+        break;
+      } catch (err) {
+        if (attempt >= 4) throw err;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+    status.textContent = 'click to play';
+    conWin.print(`connected: ${currentMap}`);
+  } catch (err) {
+    status.textContent = `disconnected: ${err.message}`;
+  }
+  reconnecting = false;
+}
+
 async function start() {
   const team = params.get('team') === 'ct' ? TEAM_CT : params.get('team') === 't' ? TEAM_T : 0;
-  const primary = WEAPON_ID[params.get('primary')] || 0;
-  const secondary = WEAPON_ID[params.get('secondary')] || 0;
+  if (params.get('name')) cv.name.set(params.get('name').slice(0, 31));
   if (!params.has('offline')) {
     try {
-      status.textContent = 'connecting...';
-      net = new NetClient();
-      await net.connect();
-      const welcome = await net.join(team, primary, secondary, params.get('name') || '');
-      selfId = welcome.playerId;
-      await loadMap(welcome.map);
+      await joinServer(team);
     } catch (err) {
       console.warn(`playing offline: ${err.message}`);
       net = null;
@@ -676,6 +857,9 @@ globalThis.webcs = {
   hud,
   buy,
   sounds,
+  con,
+  cv,
+  binds,
   setNoclip: (on) => {
     noclip = on && !net;
   },
