@@ -1,6 +1,5 @@
-// Other players drawn as their hitboxes (what you see is what you can hit), plus the
-// bomb when it lies on the ground: one instanced draw using the debris cube shader.
-// Placeholder until Phase 7's models.
+// Other players' hit boxes (cl_showhitboxes; models are client/gl/playermodels.js), plus
+// the bomb when it lies on the ground: one instanced draw using the debris cube shader.
 
 import { program } from './program.js';
 import { DEBRIS_VS, DEBRIS_FS } from './shaders.js';
@@ -62,11 +61,12 @@ export class Players {
     gl.bindVertexArray(null);
   }
 
-  // Builds instances from snapshot rows `ents` (slot base `row0`), skipping `self`.
-  update(ents, row0, self) {
+  // Builds instances from snapshot rows `ents` (slot base `row0`), skipping `self`; only
+  // the bomb remains without `boxes`.
+  update(ents, row0, self, boxes = true) {
     const d = this.inst;
     let n = 0;
-    for (let id = 0; id < MAX_PLAYERS; id++) {
+    for (let id = 0; boxes && id < MAX_PLAYERS; id++) {
       const r = row0 + id * E_FIELDS;
       if (id === self || !ents[r + E_ACTIVE] || !ents[r + E_HEALTH]) continue; // the dead vanish
       const yawDeg = dequantizeYaw(ents[r + E_YAW]);

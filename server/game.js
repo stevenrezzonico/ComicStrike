@@ -8,9 +8,10 @@ import { parseVec3 } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
 import { CollisionWorld, Trace, traceHull, hullFits, HULL_STAND, HULL_POINT } from '../shared/trace.js';
 import { Breakables } from '../shared/breakables.js';
-import { PS_ORIGIN, PS_FLAGS, PS_DUCK_AMOUNT } from '../shared/pmove.js';
+import { PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT } from '../shared/pmove.js';
 import {
   ShotList, WEAPONS, WEAPON_ID, giveWeapon, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4, WEV_PLANTED, WEV_DEFUSED, WEV_DROP,
+  WEV_FIRE, WEV_MELEE, WS_RELOAD_END, WS_ACTION, ACTION_PLANT, ACTION_DEFUSE,
 } from '../shared/weapons.js';
 import { HitTargets, HITGROUP_HEAD, HITGROUP_CHEST, feetOffset } from '../shared/hitgroups.js';
 import {
@@ -33,7 +34,8 @@ import {
   SHOT_BLOOD, writePrint, printChunks,
   KILL_HEADSHOT, KILL_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
   writeWelcome, writeReject, writeInfo, readCmds, writeSnapshot, quantizePitch, quantizeYaw, E_ACTIVE, E_X, E_Y, E_Z,
-  E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_FIELDS,
+  E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS, E_FIELDS, ANIM_RELOAD, ANIM_PLANT,
+  ANIM_DEFUSE, ANIM_HELMET,
 } from '../shared/protocol.js';
 
 const CMD_BANK = 8; // commands a client may run ahead of server time (absorbs jitter, stops speedhacks)
@@ -70,6 +72,7 @@ class Client {
     this.canBuy = false;
     this.lastBuy = -1; // newest BUY id handled
     this.lastCommand = -1; // newest COMMAND id handled
+    this.shots = 0; // shots fired mod 256 (E_SHOTS: third-person fire kicks)
     this.rconFails = 0;
     this.rconBlockedUntil = 0; // server tick
     // Last command run, repeated when one is lost.
@@ -117,6 +120,7 @@ export const DEFAULT_RULES = {
   startMoney: START_MONEY,
   maxMoney: MAX_MONEY,
   warmupTime: 0, // seconds of warmup once both teams have players (0: start at once)
+  cheats: false, // sv_cheats: setpos for testing
 };
 
 const RCON_MAX_FAILS = 5; // bad passwords before a client is ignored for a while
@@ -358,6 +362,7 @@ export class Game {
     const p = c.player;
     const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots, frozen, this.bomb);
     const events = p.ws.f[WS_EVENTS];
+    if (events & (WEV_FIRE | WEV_MELEE)) c.shots = (c.shots + 1) & 255;
     if (events & WEV_DROP) this.dropBomb(c, true);
     if (events & WEV_PLANTED) this.plantBomb(c);
     if (events & WEV_DEFUSED) this.defuseBomb(c);
@@ -591,6 +596,16 @@ export class Game {
       this.joinTeam(c, +args[1]);
     } else if (name === 'kill') {
       if (c.alive) this.kill(c, c, 0, false);
+    } else if (name === 'setpos') { // CS:GO: setpos x y z puts the feet there (sv_cheats)
+      if (!this.rules.cheats) {
+        this.print(c, `Can't use cheat command setpos in multiplayer, unless the server has sv_cheats set to 1.`);
+      } else if (c.alive && args.length >= 4 && args.slice(1, 4).every((v) => Number.isFinite(+v))) {
+        const f = c.player.ps.f;
+        f[PS_ORIGIN] = +args[1];
+        f[PS_ORIGIN + 1] = +args[2];
+        f[PS_ORIGIN + 2] = +args[3] + feetOffset(c.player.ps.i[PS_FLAGS]);
+        f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
+      }
     } else if (name === 'rcon') { // the rest of the line, quotes and `;` included, is the command
       const m = /^\s*rcon\s+("[^"]*"|\S+)\s*([^]*)$/i.exec(text);
       this.print(c, this.rconCommand(c, m ? m[1].replace(/^"|"$/g, '') : '', m ? m[2] : ''));
@@ -844,6 +859,10 @@ export class Game {
       E[row + E_WEAPON] = p.ws.f[WS_SLOTS + p.ws.f[WS_ACTIVE] * 3];
       E[row + E_HEALTH] = Math.min(Math.max(Math.ceil(p.health), 0), 255);
       E[row + E_TEAM] = p.team;
+      const action = p.ws.f[WS_ACTION];
+      E[row + E_ANIM] = (p.ws.f[WS_RELOAD_END] > 0 ? ANIM_RELOAD : 0) | (action === ACTION_PLANT ? ANIM_PLANT : 0) |
+        (action === ACTION_DEFUSE ? ANIM_DEFUSE : 0) | (p.helmet && p.armor > 0 ? ANIM_HELMET : 0);
+      E[row + E_SHOTS] = c.shots;
     }
     const words = ring.broken;
     words.fill(0, k * 8, k * 8 + 8);

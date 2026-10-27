@@ -56,6 +56,7 @@ export function createConsole(print) {
   add('cl_showpos', 0, 'Position, angles and speed', 0, 1);
   add('net_graph', 0, 'Network graph: ping, loss, rates, prediction', 0, 1);
   add('cl_drawhud', 1, 'Draw the HUD', 0, 1);
+  add('cl_showhitboxes', 0, 'Draw other players as their hit boxes instead of their models', 0, 1);
   // View.
   add('viewmodel_fov', 60, 'Weapon model field of view', 54, 68);
   add('viewmodel_offset_x', 1, 'Weapon model offset: right', -2.5, 2.5);

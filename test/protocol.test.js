@@ -5,7 +5,7 @@ import {
   PROTOCOL_VERSION, MAX_PLAYERS, MAX_DATAGRAM, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, S2C_WELCOME, S2C_SNAPSHOT, Writer, Reader,
   CmdRing, SnapshotRing, OwnState, writeHello, readHello, writeWelcome, readWelcome, writeCmds, readCmds,
   writeSnapshot, readSnapshot, quantizePitch, dequantizePitch, quantizeYaw, dequantizeYaw, E_ACTIVE, E_X, E_Y, E_Z,
-  E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_FIELDS,
+  E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS, E_FIELDS, ANIM_RELOAD, ANIM_HELMET,
 } from '../shared/protocol.js';
 
 Deno.test('hello and welcome round-trip', () => {
@@ -59,6 +59,8 @@ function fillRow(ring, k, id, x) {
   E[r + E_WEAPON] = 5;
   E[r + E_HEALTH] = 100;
   E[r + E_TEAM] = 1 + (id & 1);
+  E[r + E_ANIM] = ANIM_HELMET;
+  E[r + E_SHOTS] = id;
 }
 
 Deno.test('snapshots: full, then small deltas, removals and the breakable mask', () => {
@@ -110,9 +112,21 @@ Deno.test('snapshots: full, then small deltas, removals and the breakable mask',
   assert.equal(client.ents[client.row(c2, 7) + E_ACTIVE], 0);
   assert.equal(client.ents[client.row(c2, 8) + E_X], 800, 'unchanged rows carried over from the base');
   assert.equal(client.broken[c2 * 8 + 5], 0xffffffff, 'mask carried over from the base');
-  for (const f of [E_Y, E_Z, E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM]) {
+  for (const f of [E_Y, E_Z, E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS]) {
     assert.equal(client.ents[client.row(c2, 3) + f], server.ents[server.row(k, 3) + f]);
   }
+
+  // Reloading and one shot: only the 3-byte anim block goes out for that player.
+  const k4 = server.claim(4);
+  server.ents.copyWithin(server.row(k4, 0), server.row(k, 0), server.row(k, 0) + MAX_PLAYERS * E_FIELDS);
+  server.ents[server.row(k4, 3) + E_ANIM] |= ANIM_RELOAD;
+  server.ents[server.row(k4, 3) + E_SHOTS] = 4;
+  const anim = writeSnapshot(w, server, k4, k, 0, ownInfo);
+  r.set(anim);
+  r.u8v();
+  const c4 = readSnapshot(r, client, own);
+  assert.equal(client.ents[client.row(c4, 3) + E_ANIM], ANIM_HELMET | ANIM_RELOAD);
+  assert.equal(client.ents[client.row(c4, 3) + E_SHOTS], 4);
 
   // A delta against a base the client never got cannot be decoded.
   const k3 = server.claim(3);

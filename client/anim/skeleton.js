@@ -194,6 +194,18 @@ export class Pose {
     return this;
   }
 
+  // Sets bone i's world rotation to q (at qo) by rewriting its local rotation; world
+  // transforms must be current and are updated again.
+  setWorldRotation(i, q, qo) {
+    const p = this.skel.parent[i];
+    if (p < 0) this.rot.set(q.subarray(qo, qo + 4), i * 4);
+    else {
+      Q.conj(tmpQ, 0, this.wrot, p * 4);
+      Q.mul(this.rot, i * 4, tmpQ, 0, q, qo);
+    }
+    return this.solve();
+  }
+
   // Pre-multiplies bone i's world rotation by r (at ro), rewriting its local rotation.
   applyWorld(i, r, ro) {
     const p = this.skel.parent[i];

@@ -24,7 +24,7 @@ import {
   BOMB_EXPLODED,
 } from '../shared/bomb.js';
 import { Breakables } from '../shared/breakables.js';
-import { HitTargets } from '../shared/hitgroups.js';
+import { HitTargets, feetOffset } from '../shared/hitgroups.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import { Player, spawnPlayer, runCommand, resolveShots, ImpactList, TEAM_T, TEAM_CT } from '../shared/player.js';
 import {
@@ -36,6 +36,7 @@ import { Renderer } from './gl/renderer.js';
 import { Decals } from './gl/decals.js';
 import { Debris } from './gl/debris.js';
 import { Players } from './gl/players.js';
+import { PlayerModels } from './gl/playermodels.js';
 import { perspective, viewFromAngles, multiply, invert } from './gl/mat4.js';
 import { Input, SELECT_LAST } from './input.js';
 import { WeaponView } from './weaponview.js';
@@ -75,7 +76,8 @@ const renderer = new Renderer(canvas);
 const decals = new Decals(renderer.gl);
 const debris = new Debris(renderer.gl);
 const players = new Players(renderer.gl);
-const overlays = [decals, debris, players];
+const models = new PlayerModels(renderer.gl);
+const overlays = [decals, debris, players, models];
 const weaponView = new WeaponView(renderer.gl, FOV_Y, cv);
 const input = new Input(canvas);
 const hud = new Hud((item) => buy(item));
@@ -599,7 +601,9 @@ function draw(now, alpha, dt) {
   const yaw = angles[1] + prevPunchY + (viewPunchYaw(ws) - prevPunchY) * alpha;
 
   if (net && synced && interpolatePlayers(serverClock - cv.cl_interp_ratio.number, interp)) {
-    players.update(interp, 0, selfId);
+    const boxes = cv.cl_showhitboxes.bool;
+    players.update(interp, 0, selfId, boxes);
+    models.update(interp, 0, selfId, dt, world && world.surfaces, !boxes);
     const b = net.own.bomb;
     if (b.state === BOMB_DROPPED || b.state === BOMB_PLANTED || b.state === BOMB_DEFUSED) {
       players.addBomb(b.x, b.y, b.z, 0, b.state === BOMB_PLANTED && now - lastBeep < 120);
@@ -706,6 +710,19 @@ con.command('noclip', (_a, ctx) => {
   noclip = !noclip;
   con.out(ctx, `noclip ${noclip ? 'ON' : 'OFF'}`);
 }, 'Fly through walls (offline)');
+con.command('setpos', (a, ctx) => {
+  const v = a.slice(1, 4).map(Number);
+  if (v.length < 3 || !v.every(Number.isFinite)) return con.out(ctx, 'setpos <x> <y> <z>: moves your feet there (sv_cheats online)');
+  if (net) return net.command(`setpos ${v.join(' ')}`);
+  ps.f[PS_ORIGIN] = v[0];
+  ps.f[PS_ORIGIN + 1] = v[1];
+  ps.f[PS_ORIGIN + 2] = v[2] + feetOffset(ps.i[PS_FLAGS]);
+}, 'setpos <x> <y> <z>: moves your feet there (online: needs sv_cheats 1 on the server)');
+con.command('setang', (a, ctx) => {
+  if (a.length < 3) return con.out(ctx, 'setang <pitch> <yaw>');
+  angles[0] = Math.max(-89, Math.min(89, +a[1] || 0));
+  angles[1] = +a[2] || 0;
+}, 'setang <pitch> <yaw>: sets your view angles');
 con.command('jointeam', (a, ctx) => {
   const n = +a[1];
   if (n !== 2 && n !== 3) return con.out(ctx, 'jointeam 2 (Terrorists) or 3 (Counter-Terrorists)');
@@ -870,6 +887,7 @@ globalThis.webcs = {
     return world;
   },
   overlays, // objects drawn with draw(viewProj) after the opaque world
+  models, // other players' animated models
   // Offline only: equip any weapon by name, e.g. webcs.give('negev').
   give: (name) => {
     const id = WEAPON_ID[name];

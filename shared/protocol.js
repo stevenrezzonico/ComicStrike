@@ -37,7 +37,7 @@ import { PS_SIZE } from './pmove.js';
 import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -471,7 +471,14 @@ export const E_DUCK = 7; // duck amount, 0..255
 export const E_WEAPON = 8;
 export const E_HEALTH = 9;
 export const E_TEAM = 10;
-export const E_FIELDS = 11;
+export const E_ANIM = 11; // ANIM_* bits: what the body is doing (third-person animation)
+export const E_SHOTS = 12; // shots fired, counting up mod 256 (each step: a fire kick)
+export const E_FIELDS = 13;
+
+export const ANIM_RELOAD = 1;
+export const ANIM_PLANT = 2;
+export const ANIM_DEFUSE = 4;
+export const ANIM_HELMET = 8;
 
 const F_ORIGIN = 1;
 const F_ANGLES = 2;
@@ -479,6 +486,7 @@ const F_STANCE = 4; // flags + duck amount
 const F_WEAPON = 8;
 const F_HEALTH = 16;
 const F_TEAM = 32;
+const F_ANIM = 64; // anim bits + shot counter
 const F_REMOVE = 128;
 
 export const quantizePitch = (deg) => Math.round((Math.min(Math.max(deg, -90), 90) + 90) / 180 * 65535);
@@ -592,6 +600,7 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
     if (!inBase || E[c + E_WEAPON] !== E[b + E_WEAPON]) mask |= F_WEAPON;
     if (!inBase || E[c + E_HEALTH] !== E[b + E_HEALTH]) mask |= F_HEALTH;
     if (!inBase || E[c + E_TEAM] !== E[b + E_TEAM]) mask |= F_TEAM;
+    if (!inBase || E[c + E_ANIM] !== E[b + E_ANIM] || E[c + E_SHOTS] !== E[b + E_SHOTS]) mask |= F_ANIM;
     if (!mask) continue;
     w.u8v(id);
     w.u8v(mask);
@@ -611,6 +620,10 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
     if (mask & F_WEAPON) w.u8v(E[c + E_WEAPON]);
     if (mask & F_HEALTH) w.u8v(E[c + E_HEALTH]);
     if (mask & F_TEAM) w.u8v(E[c + E_TEAM]);
+    if (mask & F_ANIM) {
+      w.u8v(E[c + E_ANIM]);
+      w.u8v(E[c + E_SHOTS]);
+    }
     count++;
   }
   w.u8[countAt] = count;
@@ -726,6 +739,10 @@ export function readSnapshot(r, ring, own, ev = null) {
     if (mask & F_WEAPON) E[c + E_WEAPON] = r.u8v();
     if (mask & F_HEALTH) E[c + E_HEALTH] = r.u8v();
     if (mask & F_TEAM) E[c + E_TEAM] = r.u8v();
+    if (mask & F_ANIM) {
+      E[c + E_ANIM] = r.u8v();
+      E[c + E_SHOTS] = r.u8v();
+    }
   }
   if (ev) readEvents(r, ev);
   return k;

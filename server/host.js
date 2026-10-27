@@ -35,6 +35,7 @@ export class Host {
     num('mp_startmoney', DEFAULT_RULES.startMoney, 'Money at the start of a half', 0, 65535);
     num('mp_maxmoney', DEFAULT_RULES.maxMoney, 'Money cap', 0, 65535);
     num('mp_warmuptime', DEFAULT_RULES.warmupTime, 'Warmup length once both teams have players (s)', 0, 3600);
+    num('sv_cheats', 0, 'Allow cheat commands (setpos)', 0, 1);
 
     con.command('map', (a, ctx) => this.changeLevel(a[1], ctx), 'map <name>: switches to another map');
     con.command('changelevel', (a, ctx) => this.changeLevel(a[1], ctx), 'changelevel <name>: same as map');
@@ -83,6 +84,7 @@ export class Host {
       startMoney: v('mp_startmoney'),
       maxMoney: v('mp_maxmoney'),
       warmupTime: v('mp_warmuptime'),
+      cheats: v('sv_cheats') !== 0,
     };
   }
 
