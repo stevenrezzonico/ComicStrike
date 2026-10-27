@@ -19,11 +19,16 @@ const KEY_BINDS = {
   Tab: IN_SCORE,
 };
 
+// Weapon slot keys; SELECT_LAST switches to the previous weapon (Q).
+export const SELECT_LAST = -2;
+const SLOT_KEYS = { Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3, KeyQ: SELECT_LAST };
+
 export class Input {
   constructor(canvas) {
     this.canvas = canvas;
     this.buttons = 0;
     this.latched = 0; // presses since the last tick, so sub-tick taps are never lost
+    this.select = -1; // pending weapon slot request
     this.mouseDX = 0;
     this.mouseDY = 0;
     this.locked = false;
@@ -55,6 +60,7 @@ export class Input {
       else if (e.button === 2) this.buttons &= ~IN_ATTACK2;
     });
     document.addEventListener('keydown', (e) => {
+      if (this.locked && SLOT_KEYS[e.code] !== undefined && !e.repeat) this.select = SLOT_KEYS[e.code];
       const bit = KEY_BINDS[e.code];
       if (bit === undefined || !this.locked) return;
       if (!e.repeat) this.press(bit);
@@ -77,6 +83,13 @@ export class Input {
     const b = this.buttons | this.latched;
     this.latched = 0;
     return b;
+  }
+
+  // Weapon slot requested since the last tick (or -1).
+  sampleSelect() {
+    const s = this.select;
+    this.select = -1;
+    return s;
   }
 
   async lock() {

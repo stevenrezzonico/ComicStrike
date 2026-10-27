@@ -3,29 +3,7 @@
 
 import { WORLD_VS, WORLD_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS } from './shaders.js';
 import { VERTEX_STRIDE } from '../mapmesh.js';
-
-function compile(gl, type, src) {
-  const sh = gl.createShader(type);
-  gl.shaderSource(sh, src);
-  gl.compileShader(sh);
-  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-    throw new Error(`shader compile failed:\n${gl.getShaderInfoLog(sh)}`);
-  }
-  return sh;
-}
-
-function program(gl, vs, fs, uniforms) {
-  const p = gl.createProgram();
-  gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vs));
-  gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fs));
-  gl.linkProgram(p);
-  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
-    throw new Error(`program link failed:\n${gl.getProgramInfoLog(p)}`);
-  }
-  const loc = {};
-  for (const u of uniforms) loc[u] = gl.getUniformLocation(p, u);
-  return { p, loc };
-}
+import { program } from './program.js';
 
 export class Renderer {
   constructor(canvas) {
@@ -126,7 +104,8 @@ export class Renderer {
     gl.uniform1f(s.loc.u_time, time);
   }
 
-  render(viewProj, invViewProj, eye, time) {
+  // decals (optional) are drawn after the sky, before translucent surfaces.
+  render(viewProj, invViewProj, eye, time, decals = null) {
     const gl = this.gl;
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -162,6 +141,8 @@ export class Renderer {
     gl.enable(gl.CULL_FACE);
     gl.depthMask(true);
     gl.depthFunc(gl.LESS);
+
+    if (decals) decals.draw(viewProj);
 
     // Translucent last so glass and water blend over the sky behind them.
     if (this.vao && this.transCount > 0) {

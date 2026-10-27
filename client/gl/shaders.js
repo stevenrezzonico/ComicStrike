@@ -240,3 +240,83 @@ void main() {
   col = mix(col, vec3(0.95), c * 0.7 * smoothstep(-0.02, 0.2, dir.z));
   o_color = vec4(col, 1.0);
 }`;
+
+// Bullet holes: world-space quads, procedural scorch disc.
+export const DECAL_VS = `#version 300 es
+layout(location=0) in vec3 a_pos;
+layout(location=1) in vec3 a_uvs; // uv in [-1, 1], seed
+uniform mat4 u_viewProj;
+out vec3 v_uvs;
+void main() {
+  v_uvs = a_uvs;
+  gl_Position = u_viewProj * vec4(a_pos, 1.0);
+}`;
+
+export const DECAL_FS = `#version 300 es
+precision mediump float;
+in vec3 v_uvs;
+out vec4 o_color;
+void main() {
+  float r = length(v_uvs.xy);
+  float a = atan(v_uvs.y, v_uvs.x);
+  float edge = 0.75 + 0.25 * sin(a * 5.0 + v_uvs.z * 40.0);
+  if (r > edge) discard;
+  float core = 1.0 - smoothstep(0.25, 0.35, r);
+  o_color = vec4(vec3(0.05 + 0.08 * (1.0 - core)), mix(0.55, 0.95, core));
+}`;
+
+// Viewmodel: flat-shaded boxes in eye space with their own projection.
+export const VIEWMODEL_VS = `#version 300 es
+layout(location=0) in vec3 a_pos;
+layout(location=1) in vec3 a_nrm;
+layout(location=2) in vec3 a_col;
+uniform mat4 u_proj;
+uniform mat4 u_model;
+out vec3 v_col;
+out vec3 v_nrm;
+void main() {
+  v_col = a_col;
+  v_nrm = mat3(u_model) * a_nrm;
+  gl_Position = u_proj * u_model * vec4(a_pos, 1.0);
+}`;
+
+export const VIEWMODEL_FS = `#version 300 es
+precision mediump float;
+in vec3 v_col;
+in vec3 v_nrm;
+uniform float u_light; // ambient light at the player's position
+uniform float u_emissive;
+out vec4 o_color;
+void main() {
+  float diff = max(dot(normalize(v_nrm), normalize(vec3(-0.3, 0.8, 0.5))), 0.0);
+  vec3 lit = v_col * (0.45 + 0.65 * diff) * u_light;
+  o_color = vec4(mix(lit, v_col * 1.6, u_emissive), 1.0);
+}`;
+
+// Crosshair: four arms generated from gl_VertexID (6 vertices per arm), in pixels.
+export const CROSSHAIR_VS = `#version 300 es
+uniform vec2 u_screen;
+uniform float u_gap;
+uniform float u_len;
+uniform float u_thick;
+void main() {
+  int arm = gl_VertexID / 6;
+  int k = gl_VertexID % 6;
+  vec2 c = vec2(k == 1 || k == 4 || k == 5 ? 1.0 : 0.0, k == 2 || k == 3 || k == 5 ? 1.0 : 0.0);
+  vec2 lo, hi;
+  float h = u_thick * 0.5;
+  if (arm == 0) { lo = vec2(u_gap, -h); hi = vec2(u_gap + u_len, h); }
+  else if (arm == 1) { lo = vec2(-u_gap - u_len, -h); hi = vec2(-u_gap, h); }
+  else if (arm == 2) { lo = vec2(-h, u_gap); hi = vec2(h, u_gap + u_len); }
+  else { lo = vec2(-h, -u_gap - u_len); hi = vec2(h, -u_gap); }
+  vec2 px = floor(u_screen * 0.5) + mix(lo, hi, c);
+  gl_Position = vec4(px / u_screen * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+export const CROSSHAIR_FS = `#version 300 es
+precision mediump float;
+uniform vec4 u_color;
+out vec4 o_color;
+void main() {
+  o_color = u_color;
+}`;
