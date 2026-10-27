@@ -7,7 +7,7 @@ import { PS_ORIGIN, eyeOffset } from '../shared/pmove.js';
 import { ShotList } from '../shared/weapons.js';
 import { Player, runCommand, TEAM_T, TEAM_CT } from '../shared/player.js';
 import {
-  MAX_DATAGRAM, S2C_WELCOME, S2C_SNAPSHOT, SHOT_BLOOD, SHOT_IMPACT, KILL_HEADSHOT, Writer, Reader, CmdRing,
+  MAX_DATAGRAM, S2C_WELCOME, S2C_SNAPSHOT, SHOT_BLOOD, KILL_HEADSHOT, Writer, Reader, CmdRing,
   SnapshotRing, OwnState, EventList, writeHello, writeCmds, readWelcome, readSnapshot, E_ACTIVE, E_TEAM,
 } from '../shared/protocol.js';
 import { Game } from '../server/game.js';

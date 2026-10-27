@@ -69,7 +69,10 @@ export const PS_OLDBUTTONS = 14; // int
 export const PS_EVENTS = 15; // int, output: EV_* bits for this tick
 export const PS_BASEVEL = 16; // 16..18, velocity imparted by the ground entity (conveyors)
 export const PS_GROUNDENT = 19; // int, collision entity we stand on, -1 if airborne
-export const PS_SIZE = 20;
+export const PS_VELMOD = 20; // CS:GO m_flVelocityModifier: tagging slowdown from being shot, 1 = none
+export const PS_SIZE = 21;
+
+const VELMOD_RECOVERY = 0.4; // per second back toward 1 (approximation of CS:GO's rate)
 
 export const FL_ONGROUND = 1;
 export const FL_DUCKING = 2; // using the duck hull
@@ -83,6 +86,7 @@ export function createPlayerState() {
   const ps = { buf, f: new Float32Array(buf), i: new Int32Array(buf) };
   ps.f[PS_DUCK_SPEED] = MOVE.duckSpeedIdeal;
   ps.i[PS_GROUNDENT] = -1;
+  ps.f[PS_VELMOD] = 1;
   return ps;
 }
 
@@ -634,7 +638,11 @@ export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) 
 
   let scale = (buttons & IN_SPEED) ? MOVE.walkModifier : 1;
   if (onGround && duckAmount > 0) scale += (MOVE.duckModifier - scale) * duckAmount;
-  maxspeed = maxSpeed * scale;
+  // Tagging: being shot caps our speed, recovering over time.
+  let velmod = f[PS_VELMOD] + VELMOD_RECOVERY * dt;
+  if (velmod > 1) velmod = 1;
+  f[PS_VELMOD] = velmod;
+  maxspeed = maxSpeed * scale * velmod;
 
   ladderCooldown = ladderCooldown > dt ? ladderCooldown - dt : 0;
   const ladder = ladderCooldown > 0 ? -1 : findLadder();

@@ -20,6 +20,7 @@ import {
 } from '../shared/weapons.js';
 import { Breakables } from '../shared/breakables.js';
 import { HitTargets } from '../shared/hitgroups.js';
+import { SurfaceMap } from '../shared/surfaces.js';
 import { Player, spawnPlayer, runCommand, resolveShots, ImpactList, TEAM_T, TEAM_CT } from '../shared/player.js';
 import {
   MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, E_ACTIVE, E_X, E_Y, E_Z, E_PITCH, E_YAW,
@@ -114,6 +115,7 @@ async function loadMap(name) {
   decals.clear();
   debris.clear();
   world = CollisionWorld.fromBSP(bsp);
+  world.surfaces = new SurfaceMap(bsp);
   breakables = new Breakables(bsp, world);
   breakableColors = mesh.breakableColors;
   const ms = (performance.now() - t0).toFixed(0);
@@ -261,6 +263,7 @@ function applySnapshot() {
   }
   player.health = own.health;
   player.armor = own.armor;
+  player.helmet = own.helmet;
 
   // Breakables: apply what changed on the server since the last snapshot (our own
   // predicted breaks stay as they are).

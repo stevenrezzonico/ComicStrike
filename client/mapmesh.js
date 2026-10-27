@@ -7,7 +7,7 @@ import {
   faceVertex, modelFirstFace, modelNumFaces, entityModelIndex, parseVec3,
 } from '../shared/bsp.js';
 import { breakableEntities, MAX_BREAKABLES } from '../shared/breakables.js';
-import { classify, isSkipped, MAT } from './materials.js';
+import { classify, isSkipped, MAT } from '../shared/materials.js';
 
 // Vertex layout (40 bytes):
 //  0 pos   f32x3     12 uv f32x2 (texture tiles)   20 lm f32x2 (atlas 0..1)

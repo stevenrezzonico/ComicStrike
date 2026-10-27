@@ -10,7 +10,10 @@ import { Breakables } from '../shared/breakables.js';
 import { PS_ORIGIN, PS_FLAGS, PS_DUCK_AMOUNT } from '../shared/pmove.js';
 import { ShotList, WEAPONS, WS_SLOTS, WS_ACTIVE } from '../shared/weapons.js';
 import { HitTargets, HITGROUP_HEAD } from '../shared/hitgroups.js';
-import { Player, spawnPlayer, runCommand, resolveShots, ImpactList, TEAM_T, TEAM_CT } from '../shared/player.js';
+import {
+  Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT,
+} from '../shared/player.js';
+import { SurfaceMap } from '../shared/surfaces.js';
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, SHOT_IMPACT, SHOT_BLOOD, KILL_HEADSHOT,
   KILL_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, readHello, writeWelcome, writeReject,
@@ -74,6 +77,7 @@ export class Game {
   constructor(mapName, bsp) {
     this.mapName = mapName;
     this.world = CollisionWorld.fromBSP(bsp);
+    this.world.surfaces = new SurfaceMap(bsp);
     this.breakables = new Breakables(bsp, this.world);
     this.spawns = { [TEAM_T]: [], [TEAM_CT]: [] };
     const o = new Float32Array(3);
@@ -250,6 +254,7 @@ export class Game {
   applyImpacts(shooter) {
     const im = this.impacts, ev = this.events;
     const weapon = this.shots.weapon[0];
+    const w = WEAPONS[weapon];
     for (let i = 0; i < im.count; i++) {
       const x = im.pos[i * 3], y = im.pos[i * 3 + 1], z = im.pos[i * 3 + 2];
       const nx = im.normal[i * 3], ny = im.normal[i * 3 + 1], nz = im.normal[i * 3 + 2];
@@ -260,7 +265,7 @@ export class Game {
       }
       ev.addShot(shooter.id, SHOT_BLOOD, x, y, z, nx, ny, nz, 0);
       if (!victim.alive) continue; // already killed by an earlier pellet
-      victim.player.health -= Math.floor(im.damage[i]); // CS:GO truncates damage
+      applyDamage(victim.player, im.damage[i], w, im.group[i]);
       if (victim.player.health <= 0) this.kill(shooter, victim, weapon, im.group[i] === HITGROUP_HEAD);
     }
   }

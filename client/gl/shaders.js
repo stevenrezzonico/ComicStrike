@@ -1,4 +1,4 @@
-// GLSL sources. Material ids must match client/materials.js (MAT).
+// GLSL sources. Material ids must match shared/materials.js (MAT).
 
 export const WORLD_VS = `#version 300 es
 layout(location=0) in vec3 a_pos;

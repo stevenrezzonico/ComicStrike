@@ -70,6 +70,7 @@ export class CollisionWorld {
     this.cnPlane = cnPlane;
     this.cnChild = cnChild;
     this.ents = [];
+    this.surfaces = null; // SurfaceMap, attached by whoever loads the map (bullet penetration)
   }
 
   // heads: hull 0..3 root nodes (or contents when negative); bounds in model space.

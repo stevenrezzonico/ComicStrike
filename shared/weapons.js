@@ -70,6 +70,7 @@ function fromGameData(name) {
     recoilAngle: m('recoilAngle'), recoilAngleVariance: m('recoilAngleVariance'),
     recoilMagnitude: m('recoilMagnitude'), recoilMagnitudeVariance: m('recoilMagnitudeVariance'),
     recoilSeed: d.recoilSeed,
+    flinchLarge: d.flinchVelocityModifierLarge, flinchSmall: d.flinchVelocityModifierSmall,
   };
 }
 
@@ -78,7 +79,7 @@ export const WEAPONS = [
   {
     name: 'knife', label: 'Knife', slot: SLOT_KNIFE, melee: true,
     cycle: 0.4, cycle2: 1.0, damage: 40, damage2: 65, range: 48, range2: 32,
-    maxSpeed: 250, deployTime: 1.0, price: 0, killAward: 1500,
+    maxSpeed: 250, deployTime: 1.0, price: 0, killAward: 1500, armorRatio: 1.7, flinchLarge: 0, flinchSmall: 0,
   },
   ...Object.keys(EXTRA).map(fromGameData),
 ];

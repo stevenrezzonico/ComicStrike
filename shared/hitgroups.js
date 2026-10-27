@@ -89,12 +89,14 @@ export class HitTargets {
   }
 
   // Nearest player hit by the segment from o along unit d within maxDist, skipping
-  // `skipId` and members of `skipTeam` (0 = nobody). Returns the id or -1; the
-  // distance and hit group are left in this.dist / this.group.
-  trace(ox, oy, oz, dx, dy, dz, maxDist, skipId, skipTeam) {
+  // `skipId`, members of `skipTeam` (0 = nobody) and ids set in `exclude` (bitmask).
+  // Returns the id or -1; the distance and hit group are left in this.dist / this.group.
+  trace(ox, oy, oz, dx, dy, dz, maxDist, skipId, skipTeam, exclude = 0) {
     let best = -1, bestDist = maxDist;
     for (let id = 0; id < this.capacity; id++) {
-      if (!this.active[id] || id === skipId || (skipTeam && this.team[id] === skipTeam)) continue;
+      if (!this.active[id] || id === skipId || (skipTeam && this.team[id] === skipTeam) || (exclude & (1 << id))) {
+        continue;
+      }
       const feet = this.z[id] - feetOffset(this.flags[id]);
       const s = crouchScale(this.duck[id]); // crouching squashes the boxes toward the feet
       // Broadphase against the hull.

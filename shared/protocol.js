@@ -16,7 +16,7 @@
 //   INFO     u8 type, u8 n, n x { u8 id, u8 team, str name } (every player, resent periodically)
 //   SNAPSHOT u8 type, u32 seq, u32 baseSeq (0 = full), u32 lastCmd, u8 flags,
 //            [u32 x 8 broken-breakable mask if flags & SNAP_BROKEN],
-//            own player: u8 health, u8 armor, u8 spawnCount, u8 team, f32 spawnYaw,
+//            own player: u8 health, u8 armor (bit 7: helmet), u8 spawnCount, u8 team, f32 spawnYaw,
 //                        PlayerState bytes, WeaponState bytes (full every time, for prediction),
 //            u8 n, n x { u8 id, u8 fieldMask, changed fields } (other players, delta vs base),
 //            events of this tick (not delta-compressed, lost with their datagram):
@@ -450,7 +450,7 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null) {
 
   const p = own.player;
   w.u8v(Math.min(Math.max(Math.ceil(p.health), 0), 255));
-  w.u8v(p.armor);
+  w.u8v(Math.min(p.armor, 127) | (p.helmet ? 128 : 0));
   w.u8v(p.spawnCount);
   w.u8v(p.team);
   w.f32v(own.spawnYaw);
@@ -517,6 +517,7 @@ export class OwnState {
     this.lastCmd = 0;
     this.health = 0;
     this.armor = 0;
+    this.helmet = false;
     this.spawnCount = 0;
     this.team = 0;
     this.spawnYaw = 0;
@@ -550,7 +551,9 @@ export function readSnapshot(r, ring, own, ev = null) {
 
   own.lastCmd = lastCmd;
   own.health = r.u8v();
-  own.armor = r.u8v();
+  const armor = r.u8v();
+  own.armor = armor & 127;
+  own.helmet = (armor & 128) !== 0;
   own.spawnCount = r.u8v();
   own.team = r.u8v();
   own.spawnYaw = r.f32v();
