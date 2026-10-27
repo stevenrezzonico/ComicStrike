@@ -22,6 +22,10 @@ export const WARMUP_RESPAWN = 2;
 export const START_MONEY = 800; // mp_startmoney
 export const MAX_MONEY = 16000; // mp_maxmoney
 export const WIN_REWARD = 3250; // elimination / time
+export const BOMB_WIN_REWARD = 3500; // target bombed / bomb defused
+export const PLANT_REWARD = 300; // to the planter
+export const DEFUSE_REWARD = 300; // to the defuser
+export const PLANT_LOSS_BONUS = 800; // to every T when they plant and still lose
 export const LOSS_BONUS = 1400; // first loss, +500 per further consecutive loss
 export const LOSS_BONUS_STEP = 500;
 export const LOSS_STREAK_MAX = 4; // 1400 .. 3400
@@ -31,6 +35,8 @@ export const TEAMKILL_PENALTY = 300;
 export const END_ELIMINATION = 1;
 export const END_TIME = 2;
 export const END_DRAW = 3;
+export const END_BOMB = 4; // target bombed
+export const END_DEFUSE = 5;
 
 export const lossBonus = (streak) => LOSS_BONUS + LOSS_BONUS_STEP * Math.min(Math.max(streak - 1, 0), LOSS_STREAK_MAX);
 
@@ -38,9 +44,11 @@ export const lossBonus = (streak) => LOSS_BONUS + LOSS_BONUS_STEP * Math.min(Mat
 
 export const ITEM_KEVLAR = 100;
 export const ITEM_ASSAULTSUIT = 101;
+export const ITEM_DEFUSER = 102;
 export const GEAR = {
   [ITEM_KEVLAR]: { label: 'Kevlar Vest', price: 650 },
   [ITEM_ASSAULTSUIT]: { label: 'Kevlar + Helmet', price: 1000 },
+  [ITEM_DEFUSER]: { label: 'Defuse Kit', price: 400 },
 };
 const HELMET_ONLY = 350; // assault suit with a full vest already on
 
@@ -52,7 +60,7 @@ export const BUY_MENU = [
   ['SMGs', ids('mac10', 'mp9', 'mp7', 'mp5sd', 'ump45', 'p90', 'bizon')],
   ['Rifles', ids('galilar', 'famas', 'ak47', 'm4a1', 'm4a1_silencer', 'ssg08', 'sg556', 'aug', 'awp', 'g3sg1',
     'scar20')],
-  ['Gear', [ITEM_KEVLAR, ITEM_ASSAULTSUIT]],
+  ['Gear', [ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER]],
 ];
 
 export function itemLabel(item) {
@@ -63,8 +71,9 @@ export function itemLabel(item) {
 export function itemPrice(p, item) {
   if (item === ITEM_ASSAULTSUIT) return p.armor >= 100 ? (p.helmet ? -1 : HELMET_ONLY) : GEAR[item].price;
   if (item === ITEM_KEVLAR) return p.armor >= 100 ? -1 : GEAR[item].price;
+  if (item === ITEM_DEFUSER) return p.team !== TEAM_CT || p.defuser ? -1 : GEAR[item].price;
   const w = WEAPONS[item];
-  if (!w || w.melee || !(w.teams & (p.team === TEAM_CT ? 2 : 1))) return -1;
+  if (!w || !w.gun || !(w.teams & (p.team === TEAM_CT ? 2 : 1))) return -1;
   if (p.ws.f[WS_SLOTS + w.slot * 3] === item) return -1; // already have it
   return w.price;
 }
@@ -85,6 +94,8 @@ export function applyBuy(p, item) {
   if (item === ITEM_KEVLAR || item === ITEM_ASSAULTSUIT) {
     p.armor = 100;
     if (item === ITEM_ASSAULTSUIT) p.helmet = true;
+  } else if (item === ITEM_DEFUSER) {
+    p.defuser = true;
   } else {
     giveWeapon(p.ws, item);
   }

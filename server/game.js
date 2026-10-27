@@ -1,24 +1,31 @@
 // Authoritative game state: runs every client's user commands through the shared
-// player simulation, resolves shots with lag compensation, runs CS:GO rounds and the
-// economy, and sends each client a delta-compressed snapshot (plus the tick's shot and
+// player simulation, resolves shots with lag compensation, runs CS:GO rounds, the
+// bomb and the economy, and sends each client a delta-compressed snapshot (plus the tick's shot and
 // kill events) every tick. Transport-agnostic: sessions only need send(bytes) and
 // close(reason).
 
 import { parseVec3 } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
-import { CollisionWorld, hullFits, HULL_STAND } from '../shared/trace.js';
+import { CollisionWorld, Trace, traceHull, hullFits, HULL_STAND, HULL_POINT } from '../shared/trace.js';
 import { Breakables } from '../shared/breakables.js';
 import { PS_ORIGIN, PS_FLAGS, PS_DUCK_AMOUNT } from '../shared/pmove.js';
-import { ShotList, WEAPONS, WS_SLOTS, WS_ACTIVE } from '../shared/weapons.js';
-import { HitTargets, HITGROUP_HEAD } from '../shared/hitgroups.js';
+import {
+  ShotList, WEAPONS, WEAPON_ID, giveWeapon, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4, WEV_PLANTED, WEV_DEFUSED, WEV_DROP,
+} from '../shared/weapons.js';
+import { HitTargets, HITGROUP_HEAD, HITGROUP_CHEST, feetOffset } from '../shared/hitgroups.js';
+import {
+  BombSites, BombState, bombDamage, C4_TIMER, PICKUP_RANGE, BOMB_NONE, BOMB_CARRIED, BOMB_DROPPED, BOMB_PLANTED,
+  BOMB_DEFUSED, BOMB_EXPLODED,
+} from '../shared/bomb.js';
 import {
   Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT,
 } from '../shared/player.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, FREEZE_TIME, ROUND_TIME, BUY_TIME, ROUND_END_DELAY,
-  MAX_ROUNDS, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, LOSS_STREAK_MAX, TEAMKILL_PENALTY,
-  END_ELIMINATION, END_TIME, END_DRAW, lossBonus, buyError, applyBuy, BuyZones,
+  MAX_ROUNDS, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD,
+  PLANT_LOSS_BONUS, LOSS_STREAK_MAX, TEAMKILL_PENALTY, END_ELIMINATION, END_TIME, END_DRAW, END_BOMB, END_DEFUSE,
+  lossBonus, buyError, applyBuy, BuyZones,
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, SHOT_IMPACT, SHOT_BLOOD,
@@ -33,6 +40,8 @@ const TIMEOUT_TICKS = 30 * TICK_RATE; // clients in hidden tabs send a 1 Hz keep
 const INFO_INTERVAL = TICK_RATE; // roster resent every second (datagrams can be lost)
 const SEND_BUFFERS = 8; // rotating send buffers: a datagram may still be queued when the next is written
 const WARMUP_MONEY = 16000; // CS:GO warmup: buy anything
+const THROW_DISTANCE = 64; // a dropped (G) bomb lands this far ahead
+const PICKUP_DELAY = TICK_RATE; // ticks before a thrown bomb can be picked up
 
 // Lag compensation: how far back shots may rewind other players (CS:GO sv_maxunlag 1 s).
 const HISTORY = 64; // ticks, power of two
@@ -97,6 +106,7 @@ export const DEFAULT_RULES = {
   roundTime: ROUND_TIME,
   buyTime: BUY_TIME,
   roundEndDelay: ROUND_END_DELAY,
+  c4Timer: C4_TIMER,
 };
 
 export class Game {
@@ -117,8 +127,10 @@ export class Game {
       this.spawns[team].push([o[0], o[1], o[2], yaw]);
     }
     // Who wins when the round clock runs out: CTs defend bomb sites, Ts hold hostages.
-    const has = (re) => bsp.entities.some((e) => re.test(e.classname || ''));
-    this.timeWinner = has(/^(func|info)_bomb_target$/) ? TEAM_CT : has(/^hostage_entity$/) ? TEAM_T : 0;
+    this.bombSites = new BombSites(bsp);
+    this.world.bombSites = this.bombSites;
+    const hostages = bsp.entities.some((e) => e.classname === 'hostage_entity');
+    this.timeWinner = this.bombSites.count ? TEAM_CT : hostages ? TEAM_T : 0;
 
     this.clients = new Array(MAX_PLAYERS).fill(null);
     this.tick = 0;
@@ -141,6 +153,14 @@ export class Game {
     this.roundsPlayed = 0;
     this.lossStreak = { [TEAM_T]: 0, [TEAM_CT]: 0 };
     this.placing = false;
+
+    // The bomb.
+    this.bomb = new BombState();
+    this.bombCarrier = null; // Client
+    this.explodeTick = 0;
+    this.pickupTick = 0; // a dropped bomb can be picked up from this tick on
+    this.planted = false; // this round: the Ts' plant bonus
+    this.bombTrace = new Trace();
   }
 
   get playerCount() {
@@ -167,6 +187,7 @@ export class Game {
 
   disconnect(c) {
     if (this.clients[c.id] !== c) return;
+    if (this.bombCarrier === c) this.dropBomb(c, false);
     this.clients[c.id] = null;
     this.historyTick.fill(-1, c.id * HISTORY, (c.id + 1) * HISTORY);
     this.rosterDirty = true;
@@ -278,6 +299,7 @@ export class Game {
       if (!c.alive && this.tick >= c.respawnTick) this.respawn(c, false, true);
       this.runCommands(c);
     }
+    this.updateBomb();
     this.updateRound();
     for (const c of this.clients) if (c && c.joined) c.canBuy = this.canBuy(c);
     this.recordHistory();
@@ -310,7 +332,11 @@ export class Game {
 
   runCommand(c, t, select, frozen) {
     const p = c.player;
-    const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots, frozen);
+    const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots, frozen, this.bomb);
+    const events = p.ws.f[WS_EVENTS];
+    if (events & WEV_DROP) this.dropBomb(c, true);
+    if (events & WEV_PLANTED) this.plantBomb(c);
+    if (events & WEV_DEFUSED) this.defuseBomb(c);
     if (this.shots.count) {
       this.rewind(c.view);
       resolveShots(this.world, this.breakables, p.ws, this.shots, this.impacts, this.targets, c.id, c.team);
@@ -343,6 +369,7 @@ export class Game {
     const k = killer.player, v = victim.player;
     v.health = 0;
     v.deaths++;
+    if (this.bombCarrier === victim) this.dropBomb(victim, false);
     if (killer !== victim) {
       if (killer.team === victim.team) {
         k.kills--;
@@ -377,13 +404,19 @@ export class Game {
       if (t && ct && this.rules.rounds) this.startMatch();
     } else if (!t || !ct) { // a team emptied out
       this.setPhase(PHASE_WARMUP, 0);
+      this.resetBomb();
       console.log('waiting for players');
     } else if (rs.phase === PHASE_FREEZE && this.tick >= this.phaseEnd) {
       this.setPhase(PHASE_LIVE, this.rules.roundTime);
       this.buyEnd = this.tick + this.rules.buyTime * TICK_RATE;
     } else if (rs.phase === PHASE_LIVE) {
-      if (!aliveT || !aliveCT) this.endRound(aliveT ? TEAM_T : aliveCT ? TEAM_CT : 0, aliveT || aliveCT ? END_ELIMINATION : END_DRAW);
-      else if (this.tick >= this.phaseEnd) this.endRound(this.timeWinner, this.timeWinner ? END_TIME : END_DRAW);
+      if (this.bomb.state === BOMB_PLANTED) { // the clock stops; dead Ts no longer lose, the bomb decides
+        if (!aliveCT) this.endRound(TEAM_T, END_ELIMINATION);
+      } else if (!aliveT || !aliveCT) {
+        this.endRound(aliveT ? TEAM_T : aliveCT ? TEAM_CT : 0, aliveT || aliveCT ? END_ELIMINATION : END_DRAW);
+      } else if (this.tick >= this.phaseEnd) {
+        this.endRound(this.timeWinner, this.timeWinner ? END_TIME : END_DRAW);
+      }
     } else if (rs.phase === PHASE_OVER && this.tick >= this.phaseEnd) {
       const half = MAX_ROUNDS / 2;
       if (rs.scoreT > half || rs.scoreCT > half || this.roundsPlayed >= MAX_ROUNDS) this.startMatch();
@@ -425,6 +458,15 @@ export class Game {
       this.respawn(c, !fresh && c.alive, false);
     }
     this.placing = false;
+    this.resetBomb();
+    // One random T carries the bomb.
+    const ts = this.clients.filter((c) => c && c.joined && c.alive && c.team === TEAM_T);
+    if (this.bombSites.count && ts.length) {
+      const c = ts[Math.floor(Math.random() * ts.length)];
+      giveWeapon(c.player.ws, WEAPON_ID.c4);
+      this.bomb.state = BOMB_CARRIED;
+      this.bombCarrier = c;
+    }
     this.round.round++;
     this.setPhase(PHASE_FREEZE, this.rules.freezeTime);
   }
@@ -439,14 +481,130 @@ export class Game {
       const won = team === winner;
       if (won) this.lossStreak[team] = Math.max(0, this.lossStreak[team] - 1);
       else if (winner) this.lossStreak[team] = Math.min(this.lossStreak[team] + 1, LOSS_STREAK_MAX + 1);
-      const reward = won ? WIN_REWARD : lossBonus(Math.max(this.lossStreak[team], 1));
+      let reward = won
+        ? (reason === END_BOMB || reason === END_DEFUSE ? BOMB_WIN_REWARD : WIN_REWARD)
+        : lossBonus(Math.max(this.lossStreak[team], 1));
+      if (!won && team === TEAM_T && this.planted) reward += PLANT_LOSS_BONUS;
       for (const c of this.clients) {
-        if (c && c.joined && c.team === team) c.player.money = Math.min(MAX_MONEY, c.player.money + reward);
+        if (!c || !c.joined || c.team !== team) continue;
+        // Ts still alive when the clock runs out get nothing (CS:GO: no free saving).
+        if (!won && team === TEAM_T && reason === END_TIME && c.alive) continue;
+        c.player.money = Math.min(MAX_MONEY, c.player.money + reward);
       }
     }
     this.setPhase(PHASE_OVER, this.rules.roundEndDelay);
     const who = winner === TEAM_T ? 'Terrorists' : winner === TEAM_CT ? 'Counter-Terrorists' : 'nobody';
     console.log(`round ${rs.round}: ${who} win (${rs.scoreT}-${rs.scoreCT})`);
+  }
+
+  // --- The bomb -------------------------------------------------------------------
+
+  // No bomb anywhere (round start, back to warmup).
+  resetBomb() {
+    for (const c of this.clients) {
+      if (c) c.player.ws.f.fill(0, WS_SLOTS + SLOT_C4 * 3, WS_SLOTS + SLOT_C4 * 3 + 3);
+    }
+    this.bomb.state = BOMB_NONE;
+    this.bomb.ticksLeft = 0;
+    this.bombCarrier = null;
+    this.planted = false;
+  }
+
+  // Floor height under (x, y, z), at most 512 units down.
+  floorBelow(x, y, z) {
+    const t = traceHull(this.world, HULL_POINT, x, y, z, x, y, z - 512, this.bombTrace);
+    return t.startsolid ? z : t.endz;
+  }
+
+  // The carrier lets go of the bomb: thrown ahead (G) or where they died.
+  dropBomb(c, thrown) {
+    if (this.bombCarrier !== c) return;
+    c.player.ws.f.fill(0, WS_SLOTS + SLOT_C4 * 3, WS_SLOTS + SLOT_C4 * 3 + 3);
+    const f = c.player.ps.f;
+    let x = f[PS_ORIGIN], y = f[PS_ORIGIN + 1];
+    const z = f[PS_ORIGIN + 2];
+    if (thrown) {
+      const dx = Math.cos(c.yaw * Math.PI / 180), dy = Math.sin(c.yaw * Math.PI / 180);
+      const t = traceHull(this.world, HULL_POINT, x, y, z, x + dx * THROW_DISTANCE, y + dy * THROW_DISTANCE, z,
+        this.bombTrace);
+      const d = Math.max(0, THROW_DISTANCE * t.fraction - 8); // keep clear of a wall it hit
+      x += dx * d;
+      y += dy * d;
+    }
+    const b = this.bomb;
+    b.state = BOMB_DROPPED;
+    b.x = x;
+    b.y = y;
+    b.z = this.floorBelow(x, y, z);
+    this.bombCarrier = null;
+    this.pickupTick = this.tick + (thrown ? PICKUP_DELAY : 0);
+  }
+
+  plantBomb(c) {
+    const p = c.player;
+    if (this.phase !== PHASE_LIVE || this.bombCarrier !== c) { // round over: they keep it
+      if (this.bombCarrier === c) giveWeapon(p.ws, WEAPON_ID.c4);
+      return;
+    }
+    const f = p.ps.f, b = this.bomb;
+    b.state = BOMB_PLANTED;
+    b.x = f[PS_ORIGIN];
+    b.y = f[PS_ORIGIN + 1];
+    b.z = this.floorBelow(b.x, b.y, f[PS_ORIGIN + 2] - feetOffset(p.ps.i[PS_FLAGS]) + 1);
+    this.explodeTick = this.tick + this.rules.c4Timer * TICK_RATE;
+    b.ticksLeft = this.explodeTick - this.tick;
+    this.bombCarrier = null;
+    this.planted = true;
+    p.money = Math.min(MAX_MONEY, p.money + PLANT_REWARD);
+    console.log(`bomb planted by player ${c.id}`);
+  }
+
+  defuseBomb(c) {
+    if (this.bomb.state !== BOMB_PLANTED || this.phase !== PHASE_LIVE || !c.alive) return;
+    this.bomb.state = BOMB_DEFUSED;
+    c.player.money = Math.min(MAX_MONEY, c.player.money + DEFUSE_REWARD);
+    console.log(`bomb defused by player ${c.id}`);
+    this.endRound(TEAM_CT, END_DEFUSE);
+  }
+
+  // Each tick: Ts walking over a dropped bomb pick it up; a planted one counts down.
+  updateBomb() {
+    const b = this.bomb;
+    if (b.state === BOMB_DROPPED && this.tick >= this.pickupTick) {
+      for (const c of this.clients) {
+        if (!c || !c.joined || !c.alive || c.team !== TEAM_T) continue;
+        const f = c.player.ps.f;
+        const feet = f[PS_ORIGIN + 2] - feetOffset(c.player.ps.i[PS_FLAGS]);
+        if (Math.hypot(f[PS_ORIGIN] - b.x, f[PS_ORIGIN + 1] - b.y) > PICKUP_RANGE || Math.abs(feet - b.z) > 40) continue;
+        giveWeapon(c.player.ws, WEAPON_ID.c4);
+        b.state = BOMB_CARRIED;
+        this.bombCarrier = c;
+        break;
+      }
+    }
+    if (b.state === BOMB_PLANTED) {
+      b.ticksLeft = this.explodeTick - this.tick;
+      if (b.ticksLeft <= 0) this.explodeBomb();
+    }
+  }
+
+  // Everyone in range takes the blast (through walls) as a chest hit; armor helps.
+  explodeBomb() {
+    const b = this.bomb;
+    b.state = BOMB_EXPLODED;
+    b.ticksLeft = 0;
+    const c4 = WEAPONS[WEAPON_ID.c4];
+    for (const c of this.clients) {
+      if (!c || !c.joined || !c.alive) continue;
+      const f = c.player.ps.f;
+      const damage = bombDamage(this.bombSites.radius,
+        Math.hypot(f[PS_ORIGIN] - b.x, f[PS_ORIGIN + 1] - b.y, f[PS_ORIGIN + 2] - b.z));
+      if (damage <= 0) continue;
+      applyDamage(c.player, damage, c4, HITGROUP_CHEST);
+      if (c.player.health <= 0) this.kill(c, c, WEAPON_ID.c4, false);
+    }
+    console.log('bomb exploded');
+    if (this.phase === PHASE_LIVE) this.endRound(TEAM_T, END_BOMB);
   }
 
   // After round 15: teams swap sides, scores follow them, money restarts.
@@ -553,7 +711,7 @@ export class Game {
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
       const base = c.ackSeq ? ring.find(c.ackSeq) : -1;
-      c.session.send(writeSnapshot(c.writer(), ring, k, base, c.id, c, this.events, this.round));
+      c.session.send(writeSnapshot(c.writer(), ring, k, base, c.id, c, this.events, this.round, this.bomb));
     }
   }
 }

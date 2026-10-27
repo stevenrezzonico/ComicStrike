@@ -1,5 +1,6 @@
-// Other players drawn as their hitboxes (what you see is what you can hit), one
-// instanced draw using the debris cube shader. Placeholder until Phase 7's models.
+// Other players drawn as their hitboxes (what you see is what you can hit), plus the
+// bomb when it lies on the ground: one instanced draw using the debris cube shader.
+// Placeholder until Phase 7's models.
 
 import { program } from './program.js';
 import { DEBRIS_VS, DEBRIS_FS } from './shaders.js';
@@ -12,12 +13,21 @@ import {
 const I = 12; // instance floats: pos, scale, rot, color
 const T_COLOR = [0.72, 0.58, 0.36];
 const CT_COLOR = [0.34, 0.45, 0.66];
+const EXTRA_BOXES = 8; // the bomb
+// C4 boxes [forward, left, bottom, size x, y, z, color]: explosive brick, keypad, LED.
+const C4_BOXES = [
+  [0, 0, 0, 12, 7, 3.5, [0.52, 0.47, 0.3]],
+  [1, 0, 3.5, 5, 4, 0.8, [0.08, 0.08, 0.09]],
+  [-4, 2, 3.5, 1, 1, 1, null],
+];
+const LED_ON = [1.6, 0.1, 0.05];
+const LED_OFF = [0.35, 0.05, 0.03];
 
 export class Players {
   constructor(gl) {
     this.gl = gl;
     this.count = 0;
-    this.inst = new Float32Array(MAX_PLAYERS * (BOX_DATA.length / BOX_STRIDE) * I);
+    this.inst = new Float32Array((MAX_PLAYERS * (BOX_DATA.length / BOX_STRIDE) + EXTRA_BOXES) * I);
     this.prog = program(gl, DEBRIS_VS, DEBRIS_FS, ['u_viewProj']);
 
     const cube = [];
@@ -72,6 +82,15 @@ export class Players {
       }
     }
     this.count = n;
+  }
+
+  // Adds the bomb lying at (x, y, z = floor) after the players (call after update).
+  addBomb(x, y, z, yaw, led) {
+    const c = Math.cos(yaw), sn = Math.sin(yaw);
+    for (const [fx, fy, fz, sx, sy, sz, col] of C4_BOXES) {
+      this.count = this.box(this.inst, this.count, x + fx * c - fy * sn, y + fx * sn + fy * c, z + fz + sz / 2, sx, sy,
+        sz, yaw, col || (led ? LED_ON : LED_OFF), 1);
+    }
   }
 
   box(d, n, x, y, z, sx, sy, sz, yaw, col, bright) {

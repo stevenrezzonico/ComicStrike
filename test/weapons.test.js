@@ -174,7 +174,7 @@ Deno.test('recovery slows between the transition bullets', () => {
 });
 
 Deno.test('every CS:GO gun builds from game data; shotguns fire pellets', () => {
-  const guns = WEAPONS.filter((w) => w && !w.melee);
+  const guns = WEAPONS.filter((w) => w && w.gun);
   assert.equal(guns.length, 34);
   for (const w of guns) {
     assert.ok(w.cycle > 0 && w.clip > 0 && w.spread >= 0 && w.recoilPattern.every(Number.isFinite), w.name);

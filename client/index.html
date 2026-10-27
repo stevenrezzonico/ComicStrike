@@ -66,6 +66,16 @@
   #buymenu .price { color: #9fd67a; }
   #buymenu .hint { margin-top: 10px; font-size: 11px; opacity: 0.6; }
   @media (max-width: 520px) { #buymenu .items { grid-template-columns: 1fr; } }
+  #roundbar.planted { color: #ff5a4a; }
+  #hud-bomb { position: fixed; left: 20px; bottom: 86px; color: #d8a24a; font: 700 18px/1 Verdana, Tahoma, sans-serif;
+    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7); pointer-events: none; }
+  #hud-bomb.site { color: #7cf27c; animation: blink 0.8s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0.35; } }
+  #progress { position: fixed; left: 50%; top: 62%; transform: translateX(-50%); width: min(320px, calc(100vw - 32px));
+    display: none; pointer-events: none; color: #f2ecd8; font: 600 13px/1.4 Verdana, Tahoma, sans-serif;
+    text-align: center; text-shadow: 1px 1px 0 #000; }
+  #progress > div:first-child { height: 8px; width: 0; background: #e8c46a; border-radius: 2px;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6); }
   #death {
     position: fixed; left: 0; right: 0; top: 32%; text-align: center; display: none;
     color: #f2ecd8; font: 700 22px/1.4 Verdana, Tahoma, sans-serif; text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7);
@@ -81,6 +91,8 @@
 <div id="roundbar"></div>
 <div id="banner"></div>
 <div id="hud-money"></div>
+<div id="hud-bomb"></div>
+<div id="progress"><div></div><div></div></div>
 <div id="scoreboard"></div>
 <div id="buymenu"></div>
 <div id="death"></div>

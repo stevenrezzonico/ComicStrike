@@ -14,6 +14,8 @@ const POLYMER = [0.16, 0.16, 0.15];
 const GLOVE = [0.13, 0.12, 0.1];
 const SLEEVE = [0.34, 0.31, 0.22];
 const FLASH = [1.0, 0.75, 0.3];
+const C4_TAN = [0.52, 0.47, 0.3];
+const LED = [0.9, 0.08, 0.05];
 
 // No two boxes may share a face plane where they overlap (z-fighting).
 // Boxes in weapon space (x forward, y left, z up, inches): [cx, cy, cz, sx, sy, sz, color, pitchDeg].
@@ -57,6 +59,14 @@ const MODELS = {
     boxes: [
       [12, 0, 0, 7, 1.1, 1.3, METAL], [11.6, 0, -0.9, 6, 1.0, 0.8, POLYMER], [9.5, 0, -2.6, 1.6, 1.0, 3.2, POLYMER, 15],
       [18.6, 0, 0.2, 6, 1.0, 1.0, BLACK], ...HANDS_PISTOL,
+    ],
+  },
+  c4: {
+    offset: [3, -3.5, -6], muzzle: null,
+    boxes: [
+      [12, 0, 0, 7, 4.6, 3, C4_TAN], [12.6, 0, 1.8, 3.8, 3.2, 0.5, BLACK], [10, 1.6, 1.8, 0.5, 0.5, 0.5, LED],
+      [8.3, -0.6, -0.25, 2.4, 2.6, 3.3, GLOVE], [15.8, 0.4, -0.4, 2.2, 2.6, 3.0, GLOVE],
+      [2, 2.5, -4.5, 10, 3.2, 3.2, SLEEVE, -25],
     ],
   },
   knife: {

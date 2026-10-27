@@ -6,7 +6,7 @@
 // so it can rewind them (lag compensation). Offline (?offline, or when no server
 // answers): everything runs locally.
 // URL: ?team=t|ct&primary=awp&secondary=deagle&name=me  offline only: &offline&map=de_dust2
-// V toggles noclip (offline only).
+// V toggles noclip (offline only). 5 draws the C4, G drops it, E defuses.
 
 import { parseBSP, parseVec3 } from '../shared/bsp.js';
 import {
@@ -16,14 +16,18 @@ import { CollisionWorld } from '../shared/trace.js';
 import { eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_SIZE, FL_ONGROUND, FL_DUCKING } from '../shared/pmove.js';
 import {
   WEAPONS, WEAPON_ID, ShotList, giveWeapon, weaponTick, viewPunchPitch, viewPunchYaw, hash32, WS_LAST_SLOT,
-  WS_EVENTS, WS_SIZE,
+  WS_EVENTS, WS_SIZE, WS_SLOTS, WS_ACTION, WS_ACTION_END, SLOT_C4, ACTION_PLANT, ACTION_DEFUSE,
 } from '../shared/weapons.js';
+import {
+  BombSites, PLANT_TIME, DEFUSE_TIME, DEFUSE_TIME_KIT, C4_TIMER, BOMB_DROPPED, BOMB_PLANTED, BOMB_DEFUSED,
+  BOMB_EXPLODED,
+} from '../shared/bomb.js';
 import { Breakables } from '../shared/breakables.js';
 import { HitTargets } from '../shared/hitgroups.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import { Player, spawnPlayer, runCommand, resolveShots, ImpactList, TEAM_T, TEAM_CT } from '../shared/player.js';
 import {
-  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, E_ACTIVE, E_X, E_Y, E_Z, E_PITCH, E_YAW,
+  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, E_ACTIVE, E_X, E_Y, E_Z, E_PITCH, E_YAW,
   E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw,
 } from '../shared/protocol.js';
 import { buildMapMesh } from './mapmesh.js';
@@ -36,6 +40,7 @@ import { Input, SELECT_LAST } from './input.js';
 import { WeaponView } from './weaponview.js';
 import { NetClient } from './net.js';
 import { Hud } from './hud.js';
+import { Sounds } from './audio.js';
 import { PHASE_FREEZE, buyError, applyBuy } from '../shared/economy.js';
 
 const DEG = Math.PI / 180;
@@ -62,6 +67,7 @@ const overlays = [decals, debris, players];
 const weaponView = new WeaponView(renderer.gl, FOV_Y);
 const input = new Input(canvas);
 const hud = new Hud((item) => buy(item));
+const sounds = new Sounds();
 const OFFLINE_MONEY = 16000;
 
 const player = new Player();
@@ -96,6 +102,9 @@ const interp = new Float32Array(MAX_PLAYERS * E_FIELDS);
 const targets = new HitTargets(MAX_PLAYERS);
 const seenKills = new Int32Array(32).fill(-1);
 let seenKillNext = 0;
+let lastBombState = 0;
+let nextBeep = 0; // ms
+let lastBeep = -1e9;
 
 const prevOrigin = new Float32Array(3);
 let prevEye = 0, prevPunchP = 0, prevPunchY = 0;
@@ -120,6 +129,7 @@ async function loadMap(name) {
   debris.clear();
   world = CollisionWorld.fromBSP(bsp);
   world.surfaces = new SurfaceMap(bsp);
+  world.bombSites = new BombSites(bsp);
   breakables = new Breakables(bsp, world);
   breakableColors = mesh.breakableColors;
   const ms = (performance.now() - t0).toFixed(0);
@@ -209,6 +219,8 @@ function storePrediction(t) {
 
 // Freeze time (from the newest snapshot): the same input mask the server applies.
 const frozen = () => net !== null && net.own.round.phase === PHASE_FREEZE;
+// The bomb as of the newest snapshot (defusing is predicted against it).
+const simBomb = () => (net ? net.own.bomb : null);
 
 // Runs our commands after `from` again on top of the state we were just given.
 function replayFrom(from) {
@@ -216,7 +228,8 @@ function replayFrom(from) {
     if (!cmds.has(t)) continue;
     const k = t & cmds.mask;
     if (player.health > 0) {
-      runCommand(world, player, cmds.buttons[k], cmds.select[k], cmds.pitch[k], cmds.yaw[k], t, replayShots, frozen());
+      runCommand(world, player, cmds.buttons[k], cmds.select[k], cmds.pitch[k], cmds.yaw[k], t, replayShots, frozen(),
+        simBomb());
     }
     storePrediction(t);
   }
@@ -234,6 +247,7 @@ function buy(item) {
 function applySnapshot() {
   const own = net.own;
   netStats.rtt = (tickCount - own.lastCmd) * TICK_DT * 1000;
+  player.defuser = (own.flags & OWN_DEFUSER) !== 0; // before any replay: it sets the defuse time
 
   if (own.spawnCount !== player.spawnCount || !synced) {
     // (Re)spawned by the server: take its state and replay what it has not run yet.
@@ -299,6 +313,18 @@ function applySnapshot() {
     }
   }
 
+  // The bomb: announce the plant, blow up.
+  const bomb = own.bomb;
+  if (bomb.state !== lastBombState) {
+    if (bomb.state === BOMB_PLANTED) {
+      hud.flash('The bomb has been planted', 3000, performance.now());
+      nextBeep = 0;
+    } else if (bomb.state === BOMB_EXPLODED && lastBombState === BOMB_PLANTED) {
+      explosion(bomb.x, bomb.y, bomb.z);
+    }
+    lastBombState = bomb.state;
+  }
+
   // Keep the server clock estimate near the newest snapshot (it drifts with jitter).
   const seq = net.latestSeq;
   if (serverClock < 0 || Math.abs(seq - serverClock) > 16) serverClock = seq;
@@ -326,6 +352,23 @@ function applyEvents() {
   }
 }
 
+function explosion(x, y, z) {
+  debris.puff(x, y, z + 24, 1.0, 0.55, 0.12, 70);
+  debris.puff(x, y, z + 40, 0.25, 0.23, 0.2, 60);
+  sounds.explosion(Math.min(1, Sounds.falloff(Math.hypot(x - eye[0], y - eye[1], z - eye[2]), 1500)));
+}
+
+// While planted: beep, faster and faster (approximation of CS:GO's 1.4 s down to
+// 0.1 s), from the bomb's position.
+function bombBeeps(now) {
+  const b = net.own.bomb;
+  if (b.state !== BOMB_PLANTED || now < nextBeep) return;
+  const left = Math.max(0, b.ticksLeft - (serverClock - net.latestSeq)) / TICK_RATE;
+  nextBeep = now + 1000 * Math.max(0.1, 0.1 + 1.3 * left / C4_TIMER);
+  lastBeep = now;
+  sounds.beep(Sounds.falloff(Math.hypot(b.x - eye[0], b.y - eye[1], b.z - eye[2])));
+}
+
 function teamClass(id) {
   return net.teams[id] === TEAM_CT ? 'ct' : 't';
 }
@@ -335,8 +378,9 @@ function addKill(killer, victim, weapon, headshot) {
   const name = (id) => net.names[id] || `player${id}`;
   const wname = WEAPONS[weapon] ? WEAPONS[weapon].label : 'world';
   if (killer === victim) {
-    row.innerHTML = `<span class="${teamClass(victim)}"></span> died`;
-    row.firstChild.textContent = name(victim);
+    row.innerHTML = WEAPONS[weapon]?.c4 ? `[C4] <span class="${teamClass(victim)}"></span>`
+      : `<span class="${teamClass(victim)}"></span> died`;
+    row.querySelector('span').textContent = name(victim);
   } else {
     row.innerHTML = `<span class="${teamClass(killer)}"></span> [<span></span>]${headshot ? ' <b class="hs">HS</b>' : ''}` +
       ` <span class="${teamClass(victim)}"></span>`;
@@ -350,7 +394,8 @@ function addKill(killer, victim, weapon, headshot) {
   while (killfeed.children.length > 5) killfeed.firstChild.remove();
   setTimeout(() => row.remove(), KILLFEED_MS);
   if (victim === selfId) {
-    deathNotice.textContent = killer === victim ? 'You died' : `Killed by ${name(killer)}${headshot ? ' (headshot)' : ''}`;
+    deathNotice.textContent = WEAPONS[weapon]?.c4 ? 'Killed by the bomb'
+      : killer === victim ? 'You died' : `Killed by ${name(killer)}${headshot ? ' (headshot)' : ''}`;
   }
 }
 
@@ -442,7 +487,7 @@ function tick() {
     noclipTick(buttons);
     weaponTick(ws, ps, buttons, select, angles[0], angles[1], t, shots);
   } else if (alive) {
-    const died = runCommand(world, player, buttons, select, angles[0], angles[1], t, shots, frozen());
+    const died = runCommand(world, player, buttons, select, angles[0], angles[1], t, shots, frozen(), simBomb());
     if (died && !net) offlineRespawn();
   }
   if (shots.count) {
@@ -518,7 +563,14 @@ function draw(now, alpha, dt) {
   const pitch = angles[0] + prevPunchP + (viewPunchPitch(ws) - prevPunchP) * alpha;
   const yaw = angles[1] + prevPunchY + (viewPunchYaw(ws) - prevPunchY) * alpha;
 
-  if (net && synced && interpolatePlayers(serverClock - INTERP_TICKS, interp)) players.update(interp, 0, selfId);
+  if (net && synced && interpolatePlayers(serverClock - INTERP_TICKS, interp)) {
+    players.update(interp, 0, selfId);
+    const b = net.own.bomb;
+    if (b.state === BOMB_DROPPED || b.state === BOMB_PLANTED || b.state === BOMB_DEFUSED) {
+      players.addBomb(b.x, b.y, b.z, 0, b.state === BOMB_PLANTED && now - lastBeep < 120);
+    }
+  }
+  if (net && synced) bombBeeps(now);
 
   const aspect = renderer.resize(1);
   perspective(proj, FOV_Y, aspect, 4, 16384);
@@ -528,7 +580,14 @@ function draw(now, alpha, dt) {
   debris.update(dt, world);
   renderer.render(viewProj, invViewProj, eye, now / 1000, overlays);
 
-  hud.update(net ? net.own.round : null, player.money);
+  hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now);
+  const action = ws.f[WS_ACTION];
+  const simTime = (tickCount - 1 + alpha) * TICK_DT;
+  const actionTime = action === ACTION_PLANT ? PLANT_TIME : player.defuser ? DEFUSE_TIME_KIT : DEFUSE_TIME;
+  hud.bombStatus(ws.f[WS_SLOTS + SLOT_C4 * 3] > 0 && player.health > 0,
+    world.bombSites.touches(f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2], 16, 16, 36),
+    action === ACTION_PLANT ? 'Planting the bomb' : action === ACTION_DEFUSE ? 'Defusing the bomb' : '',
+    1 - (ws.f[WS_ACTION_END] - simTime) / actionTime);
   hud.refreshMenu(player, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true);
   hud.scoreboard((input.buttons & IN_SCORE) !== 0 && input.locked, net, selfId,
     (id) => id === selfId ? player.health > 0 : interp[id * E_FIELDS + E_HEALTH] > 0);
@@ -536,7 +595,6 @@ function draw(now, alpha, dt) {
   const dead = player.health <= 0;
   weaponView.hidden = dead;
   deathNotice.style.display = dead && net ? 'block' : 'none';
-  const simTime = (tickCount - 1 + alpha) * TICK_DT;
   weaponView.draw(canvas.width, canvas.height, aspect, ws, ps, lastButtons, simTime, dt, Math.max(player.health, 0),
     player.armor);
 }
@@ -557,6 +615,7 @@ document.addEventListener('keydown', (e) => {
   else if (hud.menuOpen && /^Digit[1-9]$/.test(e.code)) hud.menuKey(+e.code.slice(5));
 });
 canvas.addEventListener('click', () => {
+  sounds.resume(); // audio may only start after a user gesture
   if (hud.menuOpen) hud.toggleMenu(false);
 });
 document.addEventListener('pointerlockchange', () => {
@@ -616,6 +675,7 @@ globalThis.webcs = {
   targets,
   hud,
   buy,
+  sounds,
   setNoclip: (on) => {
     noclip = on && !net;
   },

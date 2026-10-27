@@ -16,3 +16,4 @@ export const IN_ATTACK2 = 1 << 11;
 export const IN_RELOAD = 1 << 13;
 export const IN_SCORE = 1 << 15;
 export const IN_SPEED = 1 << 17; // walk (shift)
+export const IN_DROP = 1 << 21; // drop the active weapon (a console command in Source; a button here)

@@ -3,8 +3,8 @@
 
 import { PS_VEL, PS_FLAGS, FL_ONGROUND } from '../shared/pmove.js';
 import {
-  activeWeapon, getInaccuracy, WS_ACTIVE, WS_SLOTS, WS_RELOAD_END, WS_DEPLOY_END,
-  WEV_FIRE, WEV_MELEE, WEV_MELEE2, WEV_DEPLOY,
+  activeWeapon, getInaccuracy, WS_ACTIVE, WS_SLOTS, WS_RELOAD_END, WS_DEPLOY_END, WS_ACTION,
+  WEV_FIRE, WEV_MELEE, WEV_MELEE2, WEV_DEPLOY, ACTION_PLANT, ACTION_DEFUSE,
 } from '../shared/weapons.js';
 import { Viewmodel } from './gl/viewmodel.js';
 import { Crosshair } from './gl/crosshair.js';
@@ -78,13 +78,22 @@ export class WeaponView {
         a.pitch -= s * 10;
         a.x -= s * 3;
       }
+      const action = ws.f[WS_ACTION];
+      if (action === ACTION_PLANT) { // C4 tipped toward the camera, thumb on the keypad
+        a.y -= 1;
+        a.pitch -= 12;
+        a.y += Math.abs(Math.sin(time * 16)) * 0.3;
+      } else if (action === ACTION_DEFUSE) {
+        a.y -= 14; // hands busy: weapon out of sight
+      }
+
       a.flash = time < this.flashUntil;
       this.viewmodel.draw(id, aspect, a, 1.0);
     }
 
     // Crosshair gap follows the real bullet cone (inaccuracy + spread).
     let gap = 3;
-    if (w && !w.melee) {
+    if (w && w.gun) {
       const cone = getInaccuracy(ws, ps, buttons) + w.spread;
       gap = Math.max(3, Math.tan(cone) / Math.tan(this.fovY / 2) * height * 0.5);
     }
@@ -103,8 +112,8 @@ export class WeaponView {
       s.clip = s.reserve = -1;
     }
     const o = WS_SLOTS + ws.f[WS_ACTIVE] * 3;
-    const clip = w && !w.melee ? ws.f[o + 1] : -2;
-    const reserve = w && !w.melee ? ws.f[o + 2] : -2;
+    const clip = w && w.gun ? ws.f[o + 1] : -2;
+    const reserve = w && w.gun ? ws.f[o + 2] : -2;
     if (clip !== s.clip || reserve !== s.reserve) {
       s.clip = clip;
       s.reserve = reserve;

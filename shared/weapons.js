@@ -5,7 +5,7 @@
 // Timing is in ticks, so fire rates quantize to 64 Hz exactly like CS:GO on 64-tick
 // servers.
 
-import { TICK_DT, IN_ATTACK, IN_ATTACK2, IN_RELOAD, IN_SPEED } from './constants.js';
+import { TICK_DT, IN_ATTACK, IN_ATTACK2, IN_RELOAD, IN_SPEED, IN_DROP } from './constants.js';
 import {
   MOVE, eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_EVENTS, PS_LAND_SPEED,
   FL_ONGROUND, FL_DUCKING, FL_ONLADDER, EV_JUMP, EV_LAND,
@@ -28,7 +28,9 @@ export const RECOIL = {
 export const SLOT_PRIMARY = 0;
 export const SLOT_SECONDARY = 1;
 export const SLOT_KNIFE = 2;
-export const NUM_SLOTS = 4;
+export const SLOT_GRENADE = 3;
+export const SLOT_C4 = 4;
+export const NUM_SLOTS = 5;
 
 const mr = (x) => x * 0.001; // milliradians -> radians
 
@@ -83,6 +85,10 @@ export const WEAPONS = [
     maxSpeed: 250, deployTime: 1.0, price: 0, killAward: 1500, armorRatio: 1.7, flinchLarge: 0, flinchSmall: 0,
   },
   ...Object.keys(EXTRA).map(fromGameData),
+  {
+    name: 'c4', label: 'C4 Explosive', slot: SLOT_C4, c4: true, clip: 0, reserve: 0,
+    maxSpeed: 250, deployTime: 1.0, price: 0, killAward: 0, teams: 0, armorRatio: 1, flinchLarge: 0, flinchSmall: 0,
+  },
 ];
 
 export const WEAPON_ID = Object.fromEntries(WEAPONS.map((w, i) => [w ? w.name : 'none', i]));
@@ -182,7 +188,8 @@ export function buildRecoilPattern(w) {
   }
   return out;
 }
-for (const w of WEAPONS) if (w && !w.melee) w.recoilPattern = buildRecoilPattern(w);
+for (const w of WEAPONS) if (w) w.gun = !w.melee && !w.c4;
+for (const w of WEAPONS) if (w && w.gun) w.recoilPattern = buildRecoilPattern(w);
 
 // --- Weapon state ---------------------------------------------------------
 
@@ -199,7 +206,9 @@ export const WS_PUNCH_VEL = 10; // 10..11
 export const WS_LAST_SHOT = 12;
 export const WS_OLD_BUTTONS = 13;
 export const WS_EVENTS = 14; // output: WEV_* bits this tick
-export const WS_SLOTS = 16; // per slot: weapon id, clip, reserve
+export const WS_ACTION = 15; // ACTION_*: planting or defusing the bomb
+export const WS_ACTION_END = 16; // seconds: when that action completes
+export const WS_SLOTS = 17; // per slot: weapon id, clip, reserve
 export const WS_SIZE = WS_SLOTS + NUM_SLOTS * 3;
 
 export const WEV_FIRE = 1;
@@ -209,6 +218,12 @@ export const WEV_DEPLOY = 8;
 export const WEV_DRYFIRE = 16;
 export const WEV_MELEE = 32;
 export const WEV_MELEE2 = 64;
+export const WEV_PLANTED = 128;
+export const WEV_DEFUSED = 256;
+export const WEV_DROP = 512; // dropped the C4
+
+export const ACTION_PLANT = 1;
+export const ACTION_DEFUSE = 2;
 
 export function createWeaponState() {
   return { f: new Float64Array(WS_SIZE) };
@@ -260,7 +275,7 @@ export function damageAtRange(w, damage, dist) {
 // penalty plus movement and airborne terms.
 export function getInaccuracy(ws, ps, buttons) {
   const w = activeWeapon(ws);
-  if (!w || w.melee) return 0;
+  if (!w || !w.gun) return 0;
   let inacc = ws.f[WS_PENALTY];
 
   const speed = Math.hypot(ps.f[PS_VEL], ps.f[PS_VEL + 1]);
@@ -350,6 +365,35 @@ function startReload(f, w, time, o) {
 
 const DEG = Math.PI / 180;
 
+function deploy(ws, slot, time) {
+  const f = ws.f;
+  f[WS_LAST_SLOT] = f[WS_ACTIVE];
+  f[WS_ACTIVE] = slot;
+  const nw = activeWeapon(ws);
+  f[WS_DEPLOY_END] = time + nw.deployTime;
+  f[WS_NEXT_ATTACK] = f[WS_NEXT_ATTACK2] = f[WS_DEPLOY_END];
+  f[WS_RELOAD_END] = 0;
+  f[WS_RECOIL_INDEX] = 0;
+  f[WS_PENALTY] = nw.gun ? nw.inaccuracyStand : 0;
+  f[WS_EVENTS] |= WEV_DEPLOY;
+}
+
+// Empties `slot`; if it was in hand, switches to the best weapon left (primary,
+// secondary, knife), like CS:GO after a drop or a plant.
+export function removeWeapon(ws, slot, time) {
+  const f = ws.f;
+  f[WS_SLOTS + slot * 3] = f[WS_SLOTS + slot * 3 + 1] = f[WS_SLOTS + slot * 3 + 2] = 0;
+  if (f[WS_LAST_SLOT] === slot) f[WS_LAST_SLOT] = SLOT_KNIFE;
+  if (f[WS_ACTIVE] !== slot) return;
+  for (const s of [SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE]) {
+    if (f[WS_SLOTS + s * 3] > 0) {
+      deploy(ws, s, time);
+      f[WS_LAST_SLOT] = SLOT_KNIFE;
+      return;
+    }
+  }
+}
+
 // One weapon tick. select = slot to switch to, or -1. tick = command number
 // (also the spread seed, like CS:GO's usercmd random_seed).
 export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
@@ -359,20 +403,17 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
   shots.count = 0;
 
   if (select >= 0 && select < NUM_SLOTS && select !== f[WS_ACTIVE] && f[WS_SLOTS + select * 3] > 0) {
-    f[WS_LAST_SLOT] = f[WS_ACTIVE];
-    f[WS_ACTIVE] = select;
-    const nw = activeWeapon(ws);
-    f[WS_DEPLOY_END] = time + nw.deployTime;
-    f[WS_NEXT_ATTACK] = f[WS_NEXT_ATTACK2] = f[WS_DEPLOY_END];
-    f[WS_RELOAD_END] = 0;
-    f[WS_RECOIL_INDEX] = 0;
-    f[WS_PENALTY] = nw.melee ? 0 : nw.inaccuracyStand;
-    f[WS_EVENTS] |= WEV_DEPLOY;
+    deploy(ws, select, time);
+  }
+  // Drop (G): only the C4 for now.
+  if ((buttons & IN_DROP) && !(f[WS_OLD_BUTTONS] & IN_DROP) && activeWeapon(ws)?.c4) {
+    removeWeapon(ws, SLOT_C4, time);
+    f[WS_EVENTS] |= WEV_DROP;
   }
 
   const w = activeWeapon(ws);
   decayPunch(f);
-  if (!w) {
+  if (!w || w.c4) { // the C4 is planted by the player simulation (player.js)
     f[WS_OLD_BUTTONS] = buttons;
     return;
   }
@@ -387,7 +428,7 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
     f[WS_EVENTS] |= WEV_RELOADED;
   }
 
-  if (!w.melee) updateAccuracyPenalty(ws, ps, w, time);
+  if (w.gun) updateAccuracyPenalty(ws, ps, w, time);
 
   const oldButtons = f[WS_OLD_BUTTONS];
   const pressed = (buttons & IN_ATTACK) && !(oldButtons & IN_ATTACK);

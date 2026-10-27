@@ -99,9 +99,9 @@ Deno.test('snapshots: full, then small deltas, removals and the breakable mask',
   server.ents[server.row(k, 3) + E_X] += 4;
   server.ents.fill(0, server.row(k, 7), server.row(k, 7) + E_FIELDS);
   const delta = writeSnapshot(w, server, k, base, 0, ownInfo);
-  // header 14 + round 7 + own block (8 + money 3 + state) + 2 entries (moved: 2 + 12 bytes,
-  // removed: 2 bytes) + 2 empty event lists
-  assert.equal(delta.length, 14 + 7 + 8 + 3 + player.psBytes.length + player.wsBytes.length + 1 + 14 + 2 + 2);
+  // header 14 + round 7 + bomb 1 + own block (8 + money 3 + state) + 2 entries (moved: 2 + 12
+  // bytes, removed: 2 bytes) + 2 empty event lists
+  assert.equal(delta.length, 14 + 7 + 1 + 8 + 3 + player.psBytes.length + player.wsBytes.length + 1 + 14 + 2 + 2);
   r.set(delta);
   r.u8v();
   const c2 = readSnapshot(r, client, own);

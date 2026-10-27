@@ -1,10 +1,12 @@
-// Round HUD (score, clock, round-end banner), money, scoreboard and the buy menu.
-// DOM only; every element is rewritten only when its text changes.
+// Round HUD (score, clock, round-end banner), money, the bomb (carrier icon, plant /
+// defuse progress), scoreboard and the buy menu. DOM only; every element is rewritten
+// only when its text changes.
 
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import {
-  PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, BUY_MENU, itemLabel, itemPrice,
+  PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, BUY_MENU, itemLabel, itemPrice,
 } from '../shared/economy.js';
+import { BOMB_PLANTED } from '../shared/bomb.js';
 import { TICK_RATE } from '../shared/constants.js';
 
 const $ = (id) => document.getElementById(id);
@@ -17,7 +19,13 @@ export class Hud {
     this.elBanner = $('banner');
     this.elScore = $('scoreboard');
     this.elMenu = $('buymenu');
-    this.shown = { money: '', round: '', banner: '' };
+    this.elBomb = $('hud-bomb');
+    this.elProgress = $('progress');
+    this.elProgressBar = this.elProgress.firstElementChild;
+    this.elProgressLabel = this.elProgress.lastElementChild;
+    this.shown = { money: '', round: '', banner: '', bomb: '', progress: '' };
+    this.notice = '';
+    this.noticeUntil = 0;
     this.menuOpen = false;
     this.category = -1;
     this.buildMenu();
@@ -29,8 +37,14 @@ export class Hud {
     el.textContent = text;
   }
 
-  // rs: RoundState, or null offline.
-  update(rs, money) {
+  // A banner message for `ms` (unless the round's own banner is showing).
+  flash(text, ms, now) {
+    this.notice = text;
+    this.noticeUntil = now + ms;
+  }
+
+  // rs: RoundState and bomb: BombState (null offline); now: ms.
+  update(rs, bomb, money, now) {
     this.set(this.elMoney, 'money', `$${money}`);
     if (!rs) {
       this.set(this.elRound, 'round', 'OFFLINE');
@@ -39,17 +53,35 @@ export class Hud {
     }
     const secs = Math.max(0, Math.ceil(rs.ticksLeft / TICK_RATE));
     const clock = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
-    const mid = rs.phase === PHASE_WARMUP ? 'WARMUP' : rs.phase === PHASE_FREEZE ? `buy ${clock}` : clock;
+    // CS:GO hides the clock once the bomb is down: the beeps tell the time.
+    const planted = bomb.state === BOMB_PLANTED;
+    const mid = rs.phase === PHASE_WARMUP ? 'WARMUP' : rs.phase === PHASE_FREEZE ? `buy ${clock}` : planted ? ' C4 ' : clock;
     this.set(this.elRound, 'round', `CT ${rs.scoreCT}   ${mid}   ${rs.scoreT} T`);
+    this.elRound.classList.toggle('planted', planted && rs.phase !== PHASE_OVER);
     let banner = '';
     if (rs.phase === PHASE_OVER) {
       const winner = rs.info & 3, reason = rs.info >> 2;
       banner = winner === TEAM_CT ? 'Counter-Terrorists Win' : winner === TEAM_T ? 'Terrorists Win' : 'Round Draw';
       if (reason === END_TIME) banner += ' (time)';
+      else if (reason === END_BOMB) banner = 'Target Bombed: ' + banner;
+      else if (reason === END_DEFUSE) banner = 'Bomb Defused: ' + banner;
     } else if (rs.phase === PHASE_WARMUP) {
       banner = 'Warmup: waiting for both teams';
+    } else if (now < this.noticeUntil) {
+      banner = this.notice;
     }
     this.set(this.elBanner, 'banner', banner);
+  }
+
+  // The C4 icon while we carry it (bright inside a bomb site), and the plant/defuse
+  // progress bar (`label` '' hides it; `frac` 0..1).
+  bombStatus(carrying, inSite, label, frac) {
+    this.set(this.elBomb, 'bomb', carrying ? 'C4' : '');
+    this.elBomb.classList.toggle('site', carrying && inSite);
+    this.elProgress.style.display = label ? 'block' : 'none';
+    if (!label) return;
+    this.set(this.elProgressLabel, 'progress', label);
+    this.elProgressBar.style.width = `${Math.round(Math.min(Math.max(frac, 0), 1) * 100)}%`;
   }
 
   // --- Scoreboard (hold Tab) -----------------------------------------------------

@@ -19,8 +19,9 @@
 //   SNAPSHOT u8 type, u32 seq, u32 baseSeq (0 = full), u32 lastCmd, u8 flags,
 //            [u32 x 8 broken-breakable mask if flags & SNAP_BROKEN],
 //            round: u8 phase, u16 ticksLeft, u8 scoreT, u8 scoreCT, u8 roundInfo, u8 round,
+//            bomb: u8 state, [f32 x, y, z, u16 ticksLeft if state >= BOMB_DROPPED],
 //            own player: u8 health, u8 armor (bit 7: helmet), u8 spawnCount, u8 team, f32 spawnYaw,
-//                        u16 money, u8 ownFlags (OWN_CAN_BUY),
+//                        u16 money, u8 ownFlags (OWN_CAN_BUY, OWN_DEFUSER),
 //                        PlayerState bytes, WeaponState bytes (full every time, for prediction),
 //            u8 n, n x { u8 id, u8 fieldMask, changed fields } (other players, delta vs base),
 //            events of this tick (not delta-compressed, lost with their datagram):
@@ -30,8 +31,9 @@
 
 import { PS_SIZE } from './pmove.js';
 import { WS_SIZE } from './weapons.js';
+import { BombState, BOMB_DROPPED } from './bomb.js';
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -54,6 +56,7 @@ const CMD_BYTES = 21;
 
 export const SNAP_BROKEN = 1;
 export const OWN_CAN_BUY = 1;
+export const OWN_DEFUSER = 2;
 const BROKEN_WORDS = 8; // 256-bit mask, one bit per breakable slot
 
 // --- Byte buffers ------------------------------------------------------------
@@ -466,11 +469,12 @@ export class RoundState {
   }
 }
 const NO_ROUND = new RoundState();
+const NO_BOMB = new BombState();
 
 // Encodes snapshot `k` of `ring` for player `self`, as a delta against slot `base`
 // (-1 = full), followed by the tick's events `ev` (optional).
 // `own` = { lastCmd, spawnYaw, canBuy, player }.
-export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_ROUND) {
+export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_ROUND, bomb = NO_BOMB) {
   const E = ring.ents;
   w.reset();
   w.u8v(S2C_SNAPSHOT);
@@ -486,6 +490,13 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
   w.u8v(rs.scoreCT);
   w.u8v(rs.info);
   w.u8v(rs.round);
+  w.u8v(bomb.state);
+  if (bomb.state >= BOMB_DROPPED) {
+    w.f32v(bomb.x);
+    w.f32v(bomb.y);
+    w.f32v(bomb.z);
+    w.u16v(Math.min(Math.max(bomb.ticksLeft, 0), 65535));
+  }
 
   const p = own.player;
   w.u8v(Math.min(Math.max(Math.ceil(p.health), 0), 255));
@@ -494,7 +505,7 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
   w.u8v(p.team);
   w.f32v(own.spawnYaw);
   w.u16v(Math.min(Math.max(p.money, 0), 65535));
-  w.u8v(own.canBuy ? OWN_CAN_BUY : 0);
+  w.u8v((own.canBuy ? OWN_CAN_BUY : 0) | (p.defuser ? OWN_DEFUSER : 0));
   w.bytes(p.psBytes);
   w.bytes(p.wsBytes);
 
@@ -565,6 +576,7 @@ export class OwnState {
     this.money = 0;
     this.flags = 0; // OWN_*
     this.round = new RoundState();
+    this.bomb = new BombState();
     this.ps = new Uint8Array(PS_SIZE * 4); // raw PlayerState bytes
     this.psF = new Float32Array(this.ps.buffer); // the same bytes as floats
     this.ws = new Uint8Array(WS_SIZE * 8); // raw WeaponState bytes
@@ -601,6 +613,14 @@ export function readSnapshot(r, ring, own, ev = null) {
   rs.scoreCT = r.u8v();
   rs.info = r.u8v();
   rs.round = r.u8v();
+  const bomb = own.bomb;
+  bomb.state = r.u8v();
+  if (bomb.state >= BOMB_DROPPED) {
+    bomb.x = r.f32v();
+    bomb.y = r.f32v();
+    bomb.z = r.f32v();
+    bomb.ticksLeft = r.u16v();
+  }
   own.health = r.u8v();
   const armor = r.u8v();
   own.armor = armor & 127;

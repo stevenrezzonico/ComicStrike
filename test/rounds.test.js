@@ -113,16 +113,20 @@ Deno.test('buying: zone, time, team, price; kevlar then the helmet upgrade', asy
   assert.equal(slotId(t1, SLOT_SECONDARY), WEAPON_ID.glock);
 });
 
-Deno.test('time runs out on a bomb map: CTs win; the loss bonus climbs', async (t) => {
+Deno.test('time runs out on a bomb map: CTs win, surviving Ts get nothing; the loss bonus climbs', async (t) => {
   const s = await setup(t);
   if (!s) return;
-  const { game, t1, run } = s;
+  const { game, t1, ct, run } = s;
   run(1 + 64 + 3 * 64 + 2);
   assert.equal(game.phase, PHASE_OVER);
   assert.equal(game.round.info, TEAM_CT | (END_TIME << 2));
-  assert.equal(t1.player.money, START_MONEY + lossBonus(1));
-  run(64 + 64 + 3 * 64 + 2); // a second loss
-  assert.equal(t1.player.money, START_MONEY + lossBonus(1) + lossBonus(2));
+  assert.equal(t1.player.money, START_MONEY, 'alive when the clock ran out: no loss bonus');
+  assert.equal(ct.player.money, START_MONEY + WIN_REWARD);
+  while (game.phase !== PHASE_LIVE) run(1);
+  game.kill(ct, t1, WEAPON_ID.usp_silencer, false);
+  run(1);
+  assert.equal(game.round.info, TEAM_CT | (END_ELIMINATION << 2));
+  assert.equal(t1.player.money, START_MONEY + lossBonus(2), 'second loss in a row');
   assert.equal(lossBonus(2), 1900);
   assert.equal(lossBonus(9), 3400);
 });

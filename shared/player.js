@@ -2,14 +2,19 @@
 // (authority): a user command moves the player, applies fall damage and runs the
 // weapon; shots are then traced against the world and its breakables.
 
-import { TICK_DT, IN_DUCK, IN_RELOAD, IN_SCORE } from './constants.js';
 import {
-  createPlayerState, copyPlayerState, playerMove, fallDamage, PS_ORIGIN, PS_EVENTS, PS_LAND_SPEED, PS_VELMOD, EV_LAND,
+  TICK_DT, IN_DUCK, IN_RELOAD, IN_SCORE, IN_ATTACK, IN_USE, IN_JUMP, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT,
+} from './constants.js';
+import {
+  createPlayerState, copyPlayerState, playerMove, fallDamage, eyeOffset, PS_ORIGIN, PS_FLAGS, PS_EVENTS, PS_LAND_SPEED,
+  PS_VELMOD, EV_LAND, FL_ONGROUND, FL_DUCKING,
 } from './pmove.js';
 import {
-  createWeaponState, copyWeaponState, giveWeapon, weaponTick, activeWeapon, WEAPON_ID, SLOT_PRIMARY, SLOT_SECONDARY,
-  NUM_SLOTS, WS_ACTIVE, WS_SLOTS,
+  createWeaponState, copyWeaponState, giveWeapon, weaponTick, activeWeapon, removeWeapon, WEAPON_ID, SLOT_PRIMARY,
+  SLOT_SECONDARY, SLOT_C4, NUM_SLOTS, WS_ACTIVE, WS_SLOTS, WS_EVENTS, WS_ACTION, WS_ACTION_END, WEV_PLANTED, WEV_DEFUSED,
+  ACTION_PLANT, ACTION_DEFUSE,
 } from './weapons.js';
+import { PLANT_TIME, DEFUSE_TIME, DEFUSE_TIME_KIT, USE_RANGE, USE_CONE, BOMB_PLANTED } from './bomb.js';
 import { Trace, traceHull, hullFits, HULL_POINT } from './trace.js';
 import { hitgroupScale, HITGROUP_HEAD, HITGROUP_LEGS } from './hitgroups.js';
 import {
@@ -28,6 +33,7 @@ export class Player {
     this.health = 100;
     this.armor = 0;
     this.helmet = false;
+    this.defuser = false; // defuse kit
     this.team = TEAM_T;
     this.spawnCount = 0; // bumps on every respawn, so clients notice a teleport
     this.primary = 0; // warmup loadout weapon ids (0 = team default)
@@ -63,21 +69,83 @@ export function spawnPlayer(p, x, y, z, keepGear = false, withLoadout = true) {
     if (withLoadout) giveWeapon(p.ws, p.primary || (ct ? WEAPON_ID.m4a1 : WEAPON_ID.ak47));
     p.armor = 0;
     p.helmet = false;
+    p.defuser = false;
   }
   p.ws.f[WS_ACTIVE] = p.ws.f[WS_SLOTS + SLOT_PRIMARY * 3] ? SLOT_PRIMARY : SLOT_SECONDARY;
   p.health = 100;
   p.spawnCount = (p.spawnCount + 1) & 255;
 }
 
-// Runs one user command (`frozen`: freeze time). Returns true if the player died
-// (fall damage).
-export function runCommand(world, p, buttons, select, pitch, yaw, tick, shots, frozen = false) {
+// Planting or defusing roots the player (they may still look around and crouch).
+const MOVE_BUTTONS = IN_FORWARD | IN_BACK | IN_MOVELEFT | IN_MOVERIGHT | IN_JUMP;
+
+// Runs one user command (`frozen`: freeze time; `bomb`: the BombState, for
+// defusing). Returns true if the player died (fall damage).
+export function runCommand(world, p, buttons, select, pitch, yaw, tick, shots, frozen = false, bomb = null) {
   if (frozen) buttons &= FREEZE_BUTTONS;
+  const action = p.ws.f[WS_ACTION];
+  let moveButtons = buttons;
+  if (action) moveButtons &= ~MOVE_BUTTONS;
+  if (action === ACTION_DEFUSE) buttons &= ~IN_ATTACK; // no shooting while defusing
   const w = activeWeapon(p.ws);
-  playerMove(world, p.ps, buttons, pitch, yaw, TICK_DT, w ? w.maxSpeed : 250);
+  playerMove(world, p.ps, moveButtons, pitch, yaw, TICK_DT, w ? w.maxSpeed : 250);
   if (p.ps.i[PS_EVENTS] & EV_LAND) p.health -= Math.round(fallDamage(p.ps.f[PS_LAND_SPEED]));
   weaponTick(p.ws, p.ps, buttons, select, pitch, yaw, tick, shots);
+  bombAction(world, p, buttons, pitch, yaw, tick, bomb);
   return p.health <= 0;
+}
+
+const DEG = Math.PI / 180;
+const useTrace = new Trace();
+
+// Can a player with this view start defusing the bomb: close enough, roughly
+// looking at it, nothing solid in between.
+export function canReachBomb(world, ps, pitch, yaw, bomb) {
+  const ex = ps.f[PS_ORIGIN], ey = ps.f[PS_ORIGIN + 1], ez = ps.f[PS_ORIGIN + 2] + eyeOffset(ps);
+  const dx = bomb.x - ex, dy = bomb.y - ey, dz = bomb.z + 2 - ez;
+  const dist = Math.hypot(dx, dy, dz);
+  if (dist > USE_RANGE) return false;
+  const sp = Math.sin(pitch * DEG), cp = Math.cos(pitch * DEG);
+  const facing = (cp * Math.cos(yaw * DEG) * dx + cp * Math.sin(yaw * DEG) * dy - sp * dz) / Math.max(dist, 1);
+  if (facing < USE_CONE) return false;
+  traceHull(world, HULL_POINT, ex, ey, ez, bomb.x, bomb.y, bomb.z + 2, useTrace);
+  return useTrace.fraction >= 1 || Math.hypot(useTrace.endx - bomb.x, useTrace.endy - bomb.y) < 12;
+}
+
+// CS:GO C4 arming and defusing. Planting: C4 in hand, attack held, on the ground,
+// touching a bomb site, for PLANT_TIME; then the C4 leaves the inventory (WEV_PLANTED,
+// the server places the bomb). Defusing: a CT holding use, on the ground, who
+// started next to the planted bomb looking at it, for 10 s (5 s with a kit);
+// WEV_DEFUSED tells the server. Letting go, leaving the site or the ground cancels.
+function bombAction(world, p, buttons, pitch, yaw, tick, bomb) {
+  const f = p.ws.f, ps = p.ps, time = tick * TICK_DT;
+  const onGround = (ps.i[PS_FLAGS] & FL_ONGROUND) !== 0;
+  const w = activeWeapon(p.ws);
+  let want = 0;
+  if (w && w.c4 && (buttons & IN_ATTACK) && onGround && world.bombSites) {
+    const hz = (ps.i[PS_FLAGS] & FL_DUCKING) ? 18 : 36;
+    if (world.bombSites.touches(ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1], ps.f[PS_ORIGIN + 2], 16, 16, hz)) {
+      want = ACTION_PLANT;
+    }
+  } else if (p.team === TEAM_CT && (buttons & IN_USE) && onGround && bomb && bomb.state === BOMB_PLANTED &&
+    (f[WS_ACTION] === ACTION_DEFUSE || canReachBomb(world, ps, pitch, yaw, bomb))) {
+    want = ACTION_DEFUSE;
+  }
+  if (want !== f[WS_ACTION]) {
+    f[WS_ACTION] = want;
+    f[WS_ACTION_END] = want === ACTION_PLANT
+      ? time + PLANT_TIME
+      : want === ACTION_DEFUSE ? time + (p.defuser ? DEFUSE_TIME_KIT : DEFUSE_TIME) : 0;
+    return;
+  }
+  if (!want || time < f[WS_ACTION_END]) return;
+  f[WS_ACTION] = f[WS_ACTION_END] = 0;
+  if (want === ACTION_PLANT) {
+    removeWeapon(p.ws, SLOT_C4, time);
+    f[WS_EVENTS] |= WEV_PLANTED;
+  } else {
+    f[WS_EVENTS] |= WEV_DEFUSED;
+  }
 }
 
 // CS:GO OnTakeDamage for a bullet hit: armor (kevlar; the head only with a helmet,

@@ -3,7 +3,7 @@
 
 import {
   IN_ATTACK, IN_ATTACK2, IN_JUMP, IN_DUCK, IN_FORWARD, IN_BACK, IN_MOVELEFT,
-  IN_MOVERIGHT, IN_USE, IN_RELOAD, IN_SCORE, IN_SPEED,
+  IN_MOVERIGHT, IN_USE, IN_RELOAD, IN_SCORE, IN_SPEED, IN_DROP,
 } from '../shared/constants.js';
 
 const KEY_BINDS = {
@@ -17,11 +17,12 @@ const KEY_BINDS = {
   KeyE: IN_USE,
   KeyR: IN_RELOAD,
   Tab: IN_SCORE,
+  KeyG: IN_DROP,
 };
 
 // Weapon slot keys; SELECT_LAST switches to the previous weapon (Q).
 export const SELECT_LAST = -2;
-const SLOT_KEYS = { Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3, KeyQ: SELECT_LAST };
+const SLOT_KEYS = { Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3, Digit5: 4, KeyQ: SELECT_LAST };
 
 export class Input {
   constructor(canvas) {
