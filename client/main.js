@@ -13,11 +13,13 @@ import {
 } from '../shared/pmove.js';
 import {
   WEAPONS, WEAPON_ID, SLOT_PRIMARY, ShotList, createWeaponState, copyWeaponState, giveWeapon, weaponTick, activeWeapon,
-  viewPunchPitch, viewPunchYaw, hash32, WS_ACTIVE, WS_LAST_SLOT, WS_EVENTS,
+  viewPunchPitch, viewPunchYaw, hash32, damageAtRange, WS_ACTIVE, WS_LAST_SLOT, WS_EVENTS,
 } from '../shared/weapons.js';
+import { Breakables } from '../shared/breakables.js';
 import { buildMapMesh } from './mapmesh.js';
 import { Renderer } from './gl/renderer.js';
 import { Decals } from './gl/decals.js';
+import { Debris } from './gl/debris.js';
 import { perspective, viewFromAngles, multiply, invert } from './gl/mat4.js';
 import { Input, SELECT_LAST } from './input.js';
 import { WeaponView } from './weaponview.js';
@@ -34,6 +36,7 @@ const debug = document.getElementById('debug');
 
 const renderer = new Renderer(canvas);
 const decals = new Decals(renderer.gl);
+const debris = new Debris(renderer.gl);
 const weaponView = new WeaponView(renderer.gl, FOV_Y);
 const input = new Input(canvas);
 
@@ -49,6 +52,8 @@ let lastButtons = 0;
 let health = 100;
 const armor = 0; // bought with the economy in Phase 7
 let world = null;
+let breakables = null;
+let breakableColors = null; // rgb per breakable slot, for debris
 let noclip = false;
 
 const prevOrigin = new Float32Array(3);
@@ -72,9 +77,12 @@ async function loadMap(name) {
   renderer.loadMap(mesh);
   decals.clear();
   world = CollisionWorld.fromBSP(bsp);
+  breakables = new Breakables(bsp, world);
+  breakableColors = mesh.breakableColors;
   const ms = (performance.now() - t0).toFixed(0);
   console.log(`${name}: ${mesh.numVerts} verts, ${(mesh.opaqueCount + mesh.skyCount + mesh.transCount) / 3} tris, ` +
-    `lightmap ${mesh.lightmap.width}x${mesh.lightmap.height}, ${world.ents.length} collision ents, built in ${ms} ms`);
+    `lightmap ${mesh.lightmap.width}x${mesh.lightmap.height}, ${world.ents.length} collision ents, ` +
+    `${breakables.count} breakables, built in ${ms} ms`);
 
   ct = params.get('team') === 'ct';
   const spawn = bsp.entities.find((e) => e.classname === (ct ? 'info_player_start' : 'info_player_deathmatch')) ||
@@ -87,7 +95,15 @@ async function loadMap(name) {
   status.textContent = 'click to play';
 }
 
+// Round restart: breakables come back.
+function resetBreakables() {
+  breakables.reset(world);
+  renderer.clearBroken();
+  debris.clear();
+}
+
 function respawn() {
+  resetBreakables();
   copyPlayerState(ps, createPlayerState());
   ps.f.set(spawnOrigin, PS_ORIGIN);
   copyWeaponState(ws, createWeaponState());
@@ -116,19 +132,33 @@ function noclipTick(buttons) {
   f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
 }
 
-// Bullets and knife swings: trace against the world, mark impacts.
+// Bullets and knife swings: trace against the world, damage breakables, mark impacts.
 function resolveShots() {
+  const w = activeWeapon(ws);
   for (let i = 0; i < shots.count; i++) {
     const ox = shots.origin[i * 3], oy = shots.origin[i * 3 + 1], oz = shots.origin[i * 3 + 2];
     const r = shots.range[i];
     traceHull(world, HULL_POINT, ox, oy, oz,
       ox + shots.dir[i * 3] * r, oy + shots.dir[i * 3 + 1] * r, oz + shots.dir[i * 3 + 2] * r, bulletTrace);
     const t = bulletTrace;
-    if (t.fraction < 1 && !t.startsolid) {
-      const melee = activeWeapon(ws).melee;
-      decals.add(t.endx, t.endy, t.endz, t.nx, t.ny, t.nz, melee ? 1.2 : 1.6, (hash32(tickCount * 7 + i) & 0xffff) / 65536);
+    if (t.fraction >= 1 || t.startsolid) continue;
+    const owner = t.ent > 0 ? breakables.slotOfEnt[t.ent] : 0;
+    const broke = breakables.damage(world, t.ent, damageAtRange(w, shots.damage[i], r * t.fraction), w.melee);
+    if (broke) {
+      breakModel(broke);
+    } else {
+      const seed = (hash32(tickCount * 7 + i) & 0xffff) / 65536;
+      decals.add(t.endx, t.endy, t.endz, t.nx, t.ny, t.nz, w.melee ? 1.2 : 1.6, seed, owner);
     }
   }
+}
+
+function breakModel(slot) {
+  renderer.setBroken(slot, true);
+  decals.removeOwner(slot);
+  const c = breakableColors;
+  debris.burst(breakables.mins, breakables.maxs, slot * 3, breakables.material[slot],
+    c[slot * 3], c[slot * 3 + 1], c[slot * 3 + 2]);
 }
 
 function tick() {
@@ -212,7 +242,8 @@ function draw(now, alpha, dt) {
   viewFromAngles(view, eye[0], eye[1], eye[2], pitch, yaw);
   multiply(viewProj, proj, view);
   invert(invViewProj, viewProj);
-  renderer.render(viewProj, invViewProj, eye, now / 1000, decals);
+  debris.update(dt, world);
+  renderer.render(viewProj, invViewProj, eye, now / 1000, decals, debris);
 
   const simTime = (tickCount - 1 + alpha) * TICK_DT;
   weaponView.draw(canvas.width, canvas.height, aspect, ws, ps, lastButtons, simTime, dt, health, armor);
@@ -243,6 +274,10 @@ globalThis.webcs = {
   tick,
   draw: () => draw(performance.now(), 1, 1 / 60),
   setNoclip: (on) => { noclip = on; },
+  get breakables() {
+    return breakables;
+  },
+  resetBreakables,
   // Equip any weapon by name until the buy menu exists, e.g. webcs.give('negev').
   give: (name) => {
     const id = WEAPON_ID[name];

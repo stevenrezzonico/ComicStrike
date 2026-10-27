@@ -236,15 +236,22 @@ export class ShotList {
     this.dir = new Float64Array(capacity * 3);
     this.range = new Float64Array(capacity);
     this.weapon = new Int32Array(capacity);
+    this.damage = new Float64Array(capacity); // base damage before range falloff
   }
 
-  push(ox, oy, oz, dx, dy, dz, range, weapon) {
+  push(ox, oy, oz, dx, dy, dz, range, weapon, damage) {
     const i = this.count++;
     this.origin[i * 3] = ox; this.origin[i * 3 + 1] = oy; this.origin[i * 3 + 2] = oz;
     this.dir[i * 3] = dx; this.dir[i * 3 + 1] = dy; this.dir[i * 3 + 2] = dz;
     this.range[i] = range;
     this.weapon[i] = weapon;
+    this.damage[i] = damage;
   }
+}
+
+// CS:GO bullet damage after travelling `dist` units: damage * rangeModifier^(dist / 500).
+export function damageAtRange(w, damage, dist) {
+  return w.melee ? damage : damage * Math.pow(w.rangeModifier, dist / 500);
 }
 
 // Current inaccuracy (radians, cone radius) as CS:GO's GetInaccuracy: accuracy
@@ -395,7 +402,8 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
     if (primary || secondary) {
       const sp = Math.sin(pitch * DEG), cp = Math.cos(pitch * DEG);
       const sy = Math.sin(yaw * DEG), cy = Math.cos(yaw * DEG);
-      shots.push(eyeX, eyeY, eyeZ, cp * cy, cp * sy, -sp, primary ? w.range : w.range2, f[o]);
+      shots.push(eyeX, eyeY, eyeZ, cp * cy, cp * sy, -sp, primary ? w.range : w.range2, f[o],
+        primary ? w.damage : w.damage2);
       const cycle = primary ? w.cycle : w.cycle2;
       f[WS_NEXT_ATTACK] = f[WS_NEXT_ATTACK2] = time + cycle;
       f[WS_EVENTS] |= primary ? WEV_MELEE : WEV_MELEE2;
@@ -438,7 +446,7 @@ function fire(ws, ps, w, o, buttons, pitch, yaw, tick, time, ex, ey, ez, shots) 
     let dx = fx + x * rx + y * ux, dy = fy + x * ry + y * uy, dz = fz + y * uz;
     const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
     dx /= len; dy /= len; dz /= len;
-    shots.push(ex, ey, ez, dx, dy, dz, w.range, f[o]);
+    shots.push(ex, ey, ez, dx, dy, dz, w.range, f[o], w.damage);
   }
 
   f[WS_PENALTY] += w.inaccuracyFire;

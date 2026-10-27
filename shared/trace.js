@@ -16,6 +16,7 @@ export const HULL_MAXS = new Float32Array([0, 0, 0, 16, 16, 36, 32, 32, 32, 16, 
 export const ENT_SOLID = 0;
 export const ENT_LADDER = 1;
 export const ENT_WATER = 2;
+export const ENT_NONE = 3; // disabled: collides with nothing (broken func_breakable)
 
 const DIST_EPSILON = 0.03125;
 
@@ -83,6 +84,7 @@ export class CollisionWorld {
       pushX: push ? push[0] : 0,
       pushY: push ? push[1] : 0,
       pushZ: push ? push[2] : 0,
+      bspEntity: -1,
     });
     return this.ents.length - 1;
   }
@@ -122,7 +124,7 @@ export class CollisionWorld {
     const mins = new Float32Array(3);
     const maxs = new Float32Array(3);
     const origin = new Float32Array(3);
-    const add = (kind, m, o, push = null) => {
+    const add = (kind, m, o, push = null, bspEntity = -1) => {
       for (let h = 0; h < 4; h++) {
         const head = modelHeadnode(bsp, m, h);
         heads[h] = h === 0 && head >= 0 ? nc + head : head;
@@ -131,23 +133,24 @@ export class CollisionWorld {
         mins[k] = bsp.modelsF[m * 16 + k];
         maxs[k] = bsp.modelsF[m * 16 + 3 + k];
       }
-      world.addEntity(kind, heads, o[0], o[1], o[2], mins, maxs, push);
+      const i = world.addEntity(kind, heads, o[0], o[1], o[2], mins, maxs, push);
+      world.ents[i].bspEntity = bspEntity; // index into bsp.entities, -1 for the world
     };
 
     add(ENT_SOLID, 0, [0, 0, 0]);
-    for (const e of bsp.entities) {
+    bsp.entities.forEach((e, bspEntity) => {
       const m = entityModelIndex(e);
-      if (m <= 0) continue;
+      if (m <= 0) return;
       const cls = e.classname || '';
       let kind;
       if (cls === 'func_ladder') kind = ENT_LADDER;
       else if (cls === 'func_water') kind = ENT_WATER;
-      else if (cls === 'func_conveyor' && (+(e.spawnflags || 0) & SF_CONVEYOR_NOTSOLID)) continue;
+      else if (cls === 'func_conveyor' && (+(e.spawnflags || 0) & SF_CONVEYOR_NOTSOLID)) return;
       else if (cls.startsWith('func_') && !NONSOLID.has(cls)) kind = ENT_SOLID;
-      else continue;
+      else return;
       parseVec3(e.origin, origin);
-      add(kind, m, origin, cls === 'func_conveyor' ? conveyorPush(e) : null);
-    }
+      add(kind, m, origin, cls === 'func_conveyor' ? conveyorPush(e) : null, bspEntity);
+    });
     return world;
   }
 }

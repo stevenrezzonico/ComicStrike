@@ -6,11 +6,13 @@ import {
   faceTexinfo, faceNumEdges, facePlane, faceSide, faceLightOfs, faceStyle,
   faceVertex, modelFirstFace, modelNumFaces, entityModelIndex, parseVec3,
 } from '../shared/bsp.js';
+import { breakableEntities, MAX_BREAKABLES } from '../shared/breakables.js';
 import { classify, isSkipped, MAT } from './materials.js';
 
 // Vertex layout (40 bytes):
 //  0 pos   f32x3     12 uv f32x2 (texture tiles)   20 lm f32x2 (atlas 0..1)
-// 28 nrm   i8x4 norm 32 col u8x4 norm (rgb, alpha) 36 mat u8x4 int (material, flags, seed, 0)
+// 28 nrm   i8x4 norm 32 col u8x4 norm (rgb, alpha)
+// 36 mat   u8x4 int (material, flags, seed, breakable slot or 0)
 export const VERTEX_STRIDE = 40;
 
 const TEX_SPECIAL = 1; // texinfo flag: sky / water / no lightmap
@@ -56,9 +58,11 @@ class Atlas {
 }
 
 function collectModels(bsp) {
-  const out = [{ model: 0, ox: 0, oy: 0, oz: 0, alpha: 255 }];
+  const out = [{ model: 0, ox: 0, oy: 0, oz: 0, alpha: 255, slot: 0 }];
   const origin = new Float32Array(3);
-  for (const e of bsp.entities) {
+  const slotOf = new Map(breakableEntities(bsp).map((bi, k) => [bi, k + 1]));
+  for (let ei = 0; ei < bsp.entities.length; ei++) {
+    const e = bsp.entities[ei];
     const m = entityModelIndex(e);
     if (m <= 0) continue;
     const cls = e.classname || '';
@@ -71,7 +75,7 @@ function collectModels(bsp) {
       if (alpha <= 0) continue;
     }
     parseVec3(e.origin, origin);
-    out.push({ model: m, ox: origin[0], oy: origin[1], oz: origin[2], alpha });
+    out.push({ model: m, ox: origin[0], oy: origin[1], oz: origin[2], alpha, slot: slotOf.get(ei) || 0 });
   }
   return out;
 }
@@ -116,6 +120,9 @@ export function buildMapMesh(bsp) {
       atlas.data.set([160, 160, 160, 255], p);
     }
   }
+
+  // Average albedo per breakable slot (rgb sum, face count), for debris colors.
+  const slotColor = new Float32Array((MAX_BREAKABLES + 1) * 4);
 
   const sArr = new Float32Array(64);
   const tArr = new Float32Array(64);
@@ -230,6 +237,13 @@ export function buildMapMesh(bsp) {
         vu8[b + 36] = mat.mat;
         vu8[b + 37] = mat.flags;
         vu8[b + 38] = mat.seed;
+        vu8[b + 39] = m.slot;
+      }
+      if (m.slot) {
+        slotColor[m.slot * 4] += mat.r;
+        slotColor[m.slot * 4 + 1] += mat.g;
+        slotColor[m.slot * 4 + 2] += mat.b;
+        slotColor[m.slot * 4 + 3]++;
       }
 
       const translucent = alpha < 255;
@@ -258,6 +272,12 @@ export function buildMapMesh(bsp) {
   indices.set(sky.subarray(0, nSky), nOpaque);
   indices.set(trans.subarray(0, nTrans), nOpaque + nSky);
 
+  const breakableColors = new Uint8Array((MAX_BREAKABLES + 1) * 3);
+  for (let k = 0; k <= MAX_BREAKABLES; k++) {
+    const n = slotColor[k * 4 + 3];
+    for (let c = 0; c < 3; c++) breakableColors[k * 3 + c] = n ? slotColor[k * 4 + c] / n : 128;
+  }
+
   return {
     vertices: vbuf,
     numVerts,
@@ -266,5 +286,6 @@ export function buildMapMesh(bsp) {
     skyCount: nSky,
     transCount: nTrans,
     lightmap: { width: atlas.width, height: atlas.height, data: atlas.data },
+    breakableColors, // rgb per breakable slot
   };
 }

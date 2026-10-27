@@ -1,5 +1,5 @@
 // WebGL2 renderer: one VBO + one index buffer for the whole map.
-// Draw order: opaque world, sky brushes, sky fill, translucent world (4 draw calls).
+// Draw order: opaque world, sky brushes, sky fill, decals/debris, translucent world.
 
 import { WORLD_VS, WORLD_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS } from './shaders.js';
 import { VERTEX_STRIDE } from '../mapmesh.js';
@@ -20,7 +20,8 @@ export class Renderer {
     if (!gl) throw new Error('WebGL2 is not available');
     this.gl = gl;
     this.canvas = canvas;
-    this.world = program(gl, WORLD_VS, WORLD_FS, ['u_viewProj', 'u_lightmap', 'u_eye', 'u_time', 'u_fogColor']);
+    this.world = program(gl, WORLD_VS, WORLD_FS, ['u_viewProj', 'u_lightmap', 'u_eye', 'u_time', 'u_fogColor', 'u_broken']);
+    this.broken = new Uint32Array(8); // bit per breakable slot
     const skyUniforms = ['u_eye', 'u_horizon', 'u_zenith', 'u_time'];
     this.skyMesh = program(gl, SKY_MESH_VS, SKY_FS, ['u_viewProj', ...skyUniforms]);
     this.skyFill = program(gl, SKY_FILL_VS, SKY_FS, ['u_invViewProj', ...skyUniforms]);
@@ -84,6 +85,17 @@ export class Renderer {
     this.transCount = mesh.transCount;
   }
 
+  // Hides (or restores) a breakable's faces without touching the vertex buffer.
+  setBroken(slot, broken) {
+    const bit = 1 << (slot & 31);
+    if (broken) this.broken[slot >> 5] |= bit;
+    else this.broken[slot >> 5] &= ~bit;
+  }
+
+  clearBroken() {
+    this.broken.fill(0);
+  }
+
   resize(scale = 1) {
     const c = this.canvas;
     const w = Math.max(1, Math.round(c.clientWidth * scale));
@@ -105,8 +117,8 @@ export class Renderer {
     gl.uniform1f(s.loc.u_time, time);
   }
 
-  // decals (optional) are drawn after the sky, before translucent surfaces.
-  render(viewProj, invViewProj, eye, time, decals = null) {
+  // decals and debris (optional) are drawn after the sky, before translucent surfaces.
+  render(viewProj, invViewProj, eye, time, decals = null, debris = null) {
     const gl = this.gl;
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -118,6 +130,7 @@ export class Renderer {
       gl.uniform1f(w.loc.u_time, time);
       gl.uniform3fv(w.loc.u_fogColor, this.horizon);
       gl.uniform1i(w.loc.u_lightmap, 0);
+      gl.uniform4uiv(w.loc.u_broken, this.broken);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.lightmapTex);
       gl.bindVertexArray(this.vao);
@@ -144,6 +157,7 @@ export class Renderer {
     gl.depthFunc(gl.LESS);
 
     if (decals) decals.draw(viewProj);
+    if (debris) debris.draw(viewProj);
 
     // Translucent last so glass and water blend over the sky behind them.
     if (this.vao && this.transCount > 0) {

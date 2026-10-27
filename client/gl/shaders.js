@@ -9,6 +9,7 @@ layout(location=4) in vec4 a_col;
 layout(location=5) in uvec4 a_mat;
 
 uniform mat4 u_viewProj;
+uniform uvec4 u_broken[2]; // 256-bit mask of broken breakable slots (a_mat.w)
 
 out vec3 v_pos;
 out vec2 v_uv;
@@ -18,6 +19,12 @@ out vec4 v_col;
 flat out uvec3 v_mat;
 
 void main() {
+  uint slot = a_mat.w;
+  uint word = u_broken[slot >> 7u][(slot >> 5u) & 3u];
+  if (slot != 0u && (word & (1u << (slot & 31u))) != 0u) {
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0); // outside the clip volume: triangle dropped
+    return;
+  }
   v_pos = a_pos;
   v_uv = a_uv;
   v_lm = a_lm;
@@ -263,6 +270,38 @@ void main() {
   if (r > edge) discard;
   float core = 1.0 - smoothstep(0.25, 0.35, r);
   o_color = vec4(vec3(0.05 + 0.08 * (1.0 - core)), mix(0.55, 0.95, core));
+}`;
+
+// Breakable debris: one unit cube, instanced (position, scale, euler rotation, color).
+export const DEBRIS_VS = `#version 300 es
+layout(location=0) in vec3 a_pos;
+layout(location=1) in vec3 a_nrm;
+layout(location=2) in vec3 i_pos;
+layout(location=3) in vec3 i_scale;
+layout(location=4) in vec3 i_rot;
+layout(location=5) in vec3 i_col;
+uniform mat4 u_viewProj;
+out vec3 v_col;
+out vec3 v_nrm;
+void main() {
+  vec3 c = cos(i_rot), s = sin(i_rot);
+  mat3 rx = mat3(1.0, 0.0, 0.0, 0.0, c.x, s.x, 0.0, -s.x, c.x);
+  mat3 ry = mat3(c.y, 0.0, -s.y, 0.0, 1.0, 0.0, s.y, 0.0, c.y);
+  mat3 rz = mat3(c.z, s.z, 0.0, -s.z, c.z, 0.0, 0.0, 0.0, 1.0);
+  mat3 r = rz * ry * rx;
+  v_col = i_col;
+  v_nrm = r * a_nrm;
+  gl_Position = u_viewProj * vec4(i_pos + r * (a_pos * i_scale), 1.0);
+}`;
+
+export const DEBRIS_FS = `#version 300 es
+precision mediump float;
+in vec3 v_col;
+in vec3 v_nrm;
+out vec4 o_color;
+void main() {
+  float diff = max(dot(normalize(v_nrm), normalize(vec3(0.35, 0.25, 0.9))), 0.0);
+  o_color = vec4(v_col * (0.45 + 0.6 * diff), 1.0);
 }`;
 
 // Viewmodel: flat-shaded boxes in eye space with their own projection.

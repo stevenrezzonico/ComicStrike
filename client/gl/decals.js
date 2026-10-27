@@ -14,6 +14,7 @@ export class Decals {
     this.count = 0;
     this.next = 0;
     this.data = new Float32Array(capacity * FLOATS_PER_DECAL);
+    this.owner = new Uint8Array(capacity); // breakable slot the decal sits on, 0 = world
     this.prog = program(gl, DECAL_VS, DECAL_FS, ['u_viewProj']);
 
     this.vao = gl.createVertexArray();
@@ -40,8 +41,9 @@ export class Decals {
     this.next = 0;
   }
 
-  // Places a decal of radius `size` at p facing along unit normal n.
-  add(px, py, pz, nx, ny, nz, size, seed) {
+  // Places a decal of radius `size` at p facing along unit normal n. `owner` is the
+  // breakable slot it sits on (0 = static world), so it can vanish with it.
+  add(px, py, pz, nx, ny, nz, size, seed, owner = 0) {
     // Tangent basis around the normal, spun by the seed so holes vary.
     let tx, ty, tz;
     if (Math.abs(nz) < 0.9) {
@@ -61,6 +63,7 @@ export class Decals {
 
     const d = this.data;
     const slot = this.next;
+    this.owner[slot] = owner;
     let o = slot * FLOATS_PER_DECAL;
     for (let k = 0; k < 4; k++) {
       const su = k === 0 || k === 3 ? -1 : 1;
@@ -78,6 +81,22 @@ export class Decals {
 
     this.next = (slot + 1) % this.capacity;
     if (this.count < this.capacity) this.count++;
+  }
+
+  // Removes every decal on a breakable (collapses its quad to a point).
+  removeOwner(owner) {
+    if (!owner) return;
+    let changed = false;
+    for (let i = 0; i < this.count; i++) {
+      if (this.owner[i] !== owner) continue;
+      this.data.fill(0, i * FLOATS_PER_DECAL, (i + 1) * FLOATS_PER_DECAL);
+      this.owner[i] = 0;
+      changed = true;
+    }
+    if (!changed) return;
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.data, 0, this.count * FLOATS_PER_DECAL);
   }
 
   draw(viewProj) {
