@@ -8,6 +8,7 @@ import {
 } from '../shared/bsp.js';
 import { breakableEntities, MAX_BREAKABLES } from '../shared/breakables.js';
 import { classify, isSkipped, MAT } from '../shared/materials.js';
+import { withOriginalColor } from './texcolors.js';
 
 // Vertex layout (40 bytes):
 //  0 pos   f32x3     12 uv f32x2 (texture tiles)   20 lm f32x2 (atlas 0..1)
@@ -81,7 +82,8 @@ function collectModels(bsp) {
 }
 
 export function buildMapMesh(bsp) {
-  const materials = bsp.textureNames.map((n) => (isSkipped(n) ? null : classify(n)));
+  // Name classes pick the pattern; colors come from the original textures when known.
+  const materials = bsp.textureNames.map((n) => (isSkipped(n) ? null : withOriginalColor(classify(n), n)));
   const skyTex = bsp.textureNames.map((n) => n === 'sky');
   const models = collectModels(bsp);
 
