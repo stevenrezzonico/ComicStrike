@@ -363,3 +363,35 @@ out vec4 o_color;
 void main() {
   o_color = u_color;
 }`;
+
+// Skinned models (client/gl/skinned.js): every vertex follows one bone. Cartoon shading:
+// two flat tones split by a crisp terminator, times the map's light at the model.
+export const SKINNED_VS = `#version 300 es
+layout(location=0) in vec3 a_pos;
+layout(location=1) in vec3 a_nrm;
+layout(location=2) in uint a_bone;
+layout(location=3) in vec3 a_col;
+uniform mat4 u_viewProj;
+uniform mat4 u_model;
+uniform mat4 u_bones[24];
+out vec3 v_nrm;
+out vec3 v_col;
+void main() {
+  mat4 m = u_model * u_bones[a_bone];
+  v_nrm = mat3(m) * a_nrm;
+  v_col = a_col;
+  gl_Position = u_viewProj * m * vec4(a_pos, 1.0);
+}`;
+
+export const SKINNED_FS = `#version 300 es
+precision mediump float;
+in vec3 v_nrm;
+in vec3 v_col;
+uniform vec3 u_light; // map light at the model, lifted like the world's
+uniform vec3 u_lightDir;
+out vec4 o_color;
+void main() {
+  float d = dot(normalize(v_nrm), u_lightDir);
+  float tone = mix(0.62, 1.0, smoothstep(-0.05, 0.05, d));
+  o_color = vec4(v_col * tone * u_light, 1.0);
+}`;

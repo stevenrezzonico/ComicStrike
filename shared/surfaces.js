@@ -4,7 +4,7 @@
 // surfaceproperties_cs.txt (penetrationmodifier, gamematerial).
 
 import {
-  faceTexinfo, faceNumEdges, facePlane, faceVertex, modelHeadnode, entityModelIndex,
+  faceTexinfo, faceNumEdges, facePlane, faceVertex, faceLightOfs, faceStyle, modelHeadnode, entityModelIndex,
 } from './bsp.js';
 import { classify, MAT } from './materials.js';
 import {
@@ -99,6 +99,8 @@ export class SurfaceMap {
     }
     // Render-tree head node per bsp entity with a brush model (others use model 0).
     this.entityHead = new Map();
+    this.hitS = 0;
+    this.hitT = 0;
     bsp.entities.forEach((e, i) => {
       const m = entityModelIndex(e);
       if (m > 0) this.entityHead.set(i, modelHeadnode(bsp, m, 0));
@@ -133,6 +135,8 @@ export class SurfaceMap {
         const t = mx * tf[ti + 4] + my * tf[ti + 5] + mz * tf[ti + 6] + tf[ti + 7];
         const e = f * 4;
         if (s >= this.extents[e] && s <= this.extents[e + 1] && t >= this.extents[e + 2] && t <= this.extents[e + 3]) {
+          this.hitS = s; // texture coordinates of the hit, for lightAt
+          this.hitT = t;
           return f;
         }
       }
@@ -142,6 +146,29 @@ export class SurfaceMap {
       az = mz;
     }
     return -1;
+  }
+
+  // Lightmap color (0..255, style 0) of the world under (x, y, z), as GoldSrc's
+  // R_LightPoint: the first face straight below within 2048 units. Writes rgb into out
+  // and returns false (out = 0) where nothing lit is found. Client only (models).
+  lightAt(out, x, y, z) {
+    out[0] = out[1] = out[2] = 0;
+    const b = this.bsp;
+    const f = this.findFace(0, x, y, z, x, y, z - 2048);
+    if (f < 0) return false;
+    const ofs = faceLightOfs(b, f);
+    if (ofs < 0 || faceStyle(b, f, 0) === 255) return false;
+    const e = f * 4;
+    const minS = Math.floor((this.extents[e] + 0.5) / 16), minT = Math.floor((this.extents[e + 2] + 0.5) / 16);
+    const w = Math.ceil((this.extents[e + 1] - 0.5) / 16) - minS + 1, h = Math.ceil((this.extents[e + 3] - 0.5) / 16) - minT + 1;
+    const ds = Math.min(w - 1, Math.max(0, Math.floor(this.hitS / 16 - minS + 0.5)));
+    const dt = Math.min(h - 1, Math.max(0, Math.floor(this.hitT / 16 - minT + 0.5)));
+    const p = ofs + (dt * w + ds) * 3;
+    if (p + 2 >= b.lighting.length) return false;
+    out[0] = b.lighting[p];
+    out[1] = b.lighting[p + 1];
+    out[2] = b.lighting[p + 2];
+    return true;
   }
 
   // Surface at world point (x, y, z) approached along unit (dx, dy, dz), on collision

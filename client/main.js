@@ -866,6 +866,10 @@ globalThis.webcs = {
   get breakables() {
     return breakables;
   },
+  get world() {
+    return world;
+  },
+  overlays, // objects drawn with draw(viewProj) after the opaque world
   // Offline only: equip any weapon by name, e.g. webcs.give('negev').
   give: (name) => {
     const id = WEAPON_ID[name];
