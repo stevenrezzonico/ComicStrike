@@ -3,9 +3,10 @@
 // the same shared simulation the server runs and reconciled against every snapshot
 // (replaying unacknowledged commands); other players are interpolated cl_interp_ratio
 // ticks behind the server clock, and each command tells the server which tick we were
-// seeing so it can rewind them (lag compensation). Offline (?offline, or when no server
-// answers): everything runs locally.
-// URL: ?team=t|ct&primary=awp&secondary=deagle&name=me  offline only: &offline&map=de_dust2
+// seeing so it can rewind them (lag compensation). Practice (offline): everything runs
+// locally. The page opens on the start menu (client/menu.js); URL parameters skip it
+// (testing): ?team=t|ct&primary=awp&secondary=deagle&name=me joins at once (offline if
+// no server answers), &offline&map=de_dust2 practices.
 // Keys are CS:GO binds (client/binds.js); ` opens the console (client/settings.js).
 
 import { parseBSP, parseVec3 } from '../shared/bsp.js';
@@ -55,6 +56,9 @@ import { Sounds } from './audio.js';
 import { SoundScape } from './soundscape.js';
 import { Spectator, SPEC_EYES } from './spectate.js';
 import { ConsoleWindow } from './console.js';
+import { Menu } from './menu.js';
+import { Items } from '../shared/items.js';
+import { Hostages } from '../shared/hostages.js';
 import { NetGraph } from './netgraph.js';
 import { createConsole, watch } from './settings.js';
 import { releaseOf, quote } from '../shared/cvars.js';
@@ -102,6 +106,8 @@ const overlays = [decals, debris, players, models, fx];
 const weaponView = new WeaponView(renderer.gl, FOV_Y, cv, guns);
 const input = new Input(canvas);
 const hud = new Hud((item) => buy(item));
+const menu = new Menu(document.getElementById('menu'), con, cv, binds);
+let playing = false; // in a game (online or practice); false: the start menu
 const sounds = new Sounds();
 const soundTrace = new Trace();
 // A wall between the listener and a sound muffles it.
@@ -578,6 +584,7 @@ function buildTargets() {
 // --- Simulation -------------------------------------------------------------------
 
 function tick() {
+  if (!playing) return;
   prevOrigin[0] = ps.f[PS_ORIGIN];
   prevOrigin[1] = ps.f[PS_ORIGIN + 1];
   prevOrigin[2] = ps.f[PS_ORIGIN + 2];
@@ -595,8 +602,8 @@ function tick() {
       return;
     }
     if (synced) applyEvents();
-    if (net.closed) status.textContent = `disconnected: ${net.closeReason}`;
-    if (!synced || net.closed) return;
+    if (net.closed) return leaveGame(`Disconnected: ${net.closeReason}`);
+    if (!synced) return;
     viewTick = serverClock - cv.cl_interp_ratio.number;
     if (interpolatePlayers(viewTick, interp)) buildTargets();
   }
@@ -659,6 +666,12 @@ let frameMsMax = 0;
 let fps = 0;
 
 function frame(now) {
+  if (!playing) { // the start menu: nothing runs
+    last = now;
+    accumulator = 0;
+    requestAnimationFrame(frame);
+    return;
+  }
   const elapsed = (now - last) / 1000;
   frameMsMax = Math.max(frameMsMax, now - last);
   last = now;
@@ -842,12 +855,13 @@ setInterval(() => {
 input.onKey = (key, down) => {
   if (conWin.isOpen) return false;
   if (hud.menuOpen && down && (key === 'escape' || /^[1-9]$/.test(key))) {
-    if (key === 'escape') hud.toggleMenu(false);
+    if (key === 'escape') closeBuyMenu();
     else hud.menuKey(+key);
     return true;
   }
   const b = binds.get(key);
   if (b === undefined) return false;
+  if (menu.visible && b !== 'toggleconsole') return false; // the menu takes the keys (typing a name)
   if (down) {
     if (b[0] === '+' && !input.locked) return false;
     con.exec(b, { key });
@@ -883,7 +897,15 @@ const cycleSlot = (dir) => { // next/previous slot that holds a weapon
 con.command('invnext', () => cycleSlot(1), 'Next weapon');
 con.command('invprev', () => cycleSlot(-1), 'Previous weapon in the slot order');
 con.command('drop', () => input.pulse(IN_DROP), 'Drop the active weapon (the C4 for now)');
-con.command('buymenu', () => hud.toggleMenu(), 'Opens the buy menu');
+con.command('buymenu', () => {
+  if (hud.menuOpen) closeBuyMenu();
+  else if (playing) hud.toggleMenu(true);
+}, 'Opens the buy menu');
+con.command('teammenu', () => {
+  if (!playing) return;
+  if (document.pointerLockElement) document.exitPointerLock();
+  menu.showPause('team');
+}, 'Opens the team menu');
 const BUY_NAMES = { vest: ITEM_KEVLAR, vesthelm: ITEM_ASSAULTSUIT, defuser: ITEM_DEFUSER };
 con.command('buy', (a, ctx) => {
   const item = BUY_NAMES[a[1]] || WEAPON_ID[a[1]];
@@ -941,52 +963,83 @@ con.command('status', (_a, ctx) => {
   con.out(ctx, lines.join('\n'));
 }, 'Players on the server (rcon status shows the server side)');
 con.command('disconnect', () => {
-  if (net) net.close('disconnect');
-}, 'Leaves the server');
+  if (playing) leaveGame();
+}, 'Leaves the server (or the practice) for the start menu');
 con.command('retry', () => reconnect(), 'Reconnects to the server');
 con.command('map', (a, ctx) => {
   if (!a[1]) return con.out(ctx, 'map <name>');
   if (net) return con.out(ctx, 'online, the server picks the map: rcon map <name>');
-  loadMap(a[1]).then(() => offlineRespawn(), (err) => con.out(ctx, `map ${a[1]}: ${err.message}`));
-}, 'map <name>: loads a map (offline; online use rcon map)');
+  run(() => startPractice(a[1], player.team === TEAM_CT ? 3 : 2));
+}, 'map <name>: practices on a map (offline; online use rcon map)');
 watch(cv.name, () => {
   if (net) net.command(`name ${quote(cv.name.value)}`);
 });
 const applyDrawHud = () => document.body.classList.toggle('nohud', !cv.cl_drawhud.bool);
 watch(cv.cl_drawhud, applyDrawHud);
 applyDrawHud();
-conWin.onToggle = (open) => {
-  status.style.display = open || document.pointerLockElement ? 'none' : '';
-};
 
-canvas.addEventListener('click', () => {
-  sounds.resume(); // audio may only start after a user gesture
-  if (hud.menuOpen) hud.toggleMenu(false);
-});
-document.addEventListener('pointerlockchange', () => {
-  status.style.display = document.pointerLockElement ? 'none' : '';
-});
+// --- Menus ----------------------------------------------------------------------------
+
+// In a game, releasing the mouse (Escape) opens the pause menu, unless the console or
+// the buy menu took it; closing those takes the mouse back (the key press allows it).
+function updateOverlay() {
+  if (!playing) return;
+  if (document.pointerLockElement) menu.hide();
+  else if (!conWin.isOpen && !hud.menuOpen) menu.showPause();
+}
+function closeBuyMenu() {
+  hud.toggleMenu(false);
+  input.lock().catch(() => {});
+  updateOverlay();
+}
+conWin.onToggle = (open) => {
+  if (!open && playing && !hud.menuOpen) input.lock().catch(() => {});
+  if (open) menu.hide();
+  else if (playing) updateOverlay();
+  else menu.showStart();
+};
+document.addEventListener('pointerlockchange', updateOverlay);
+document.addEventListener('pointerdown', () => sounds.resume()); // audio may only start after a user gesture
+
+menu.onPlay = (team) => run(() => startOnline(team));
+menu.onPractice = (map, team) => run(() => startPractice(map, team));
+menu.onResume = () => input.lock().catch(() => {});
+menu.onLeave = () => leaveGame();
+menu.onTeam = (team) => {
+  con.exec(`jointeam ${team}`);
+  menu.hide();
+  input.lock().catch(() => {}).finally(updateOverlay); // no mouse yet: the pause menu again
+};
+// A menu action, its failure shown on the start menu.
+let starting = false;
+async function run(action) {
+  if (starting) return;
+  starting = true;
+  try {
+    await action();
+  } catch (err) {
+    leaveGame(`Could not start: ${err.message || err}`);
+  }
+  starting = false;
+}
 
 const primary = WEAPON_ID[params.get('primary')] || 0;
 const secondary = WEAPON_ID[params.get('secondary')] || 0;
 
 async function joinServer(team) {
-  status.textContent = 'connecting...';
+  menu.busy('Connecting...');
   net = new NetClient();
   await net.connect();
   const welcome = await net.join(team, primary, secondary, cv.name.value);
   selfId = welcome.playerId;
+  menu.busy(`Loading ${welcome.map}...`);
   await loadMap(welcome.map);
 }
 
-// Map change (the server closed us with "changelevel"), or `retry`: join again on our
-// current team; the WELCOME names the map.
-let reconnecting = false;
-async function reconnect() {
-  if (reconnecting) return;
-  reconnecting = true;
-  const team = player.team;
-  if (net && !net.closed) net.close('reconnect');
+const NO_ITEMS = new Items(), NO_HOSTAGES = new Hostages();
+
+// Forgets everything from the last game (server state, other players, effects).
+function resetSession() {
   synced = false;
   serverClock = -1;
   predictedTick.fill(-1);
@@ -995,6 +1048,75 @@ async function reconnect() {
   seenKills.fill(-1);
   lastBombState = 0;
   netStats.compared = netStats.corrected = 0;
+  noclip = false;
+  interp.fill(0);
+  players.update(interp, 0, -1, false);
+  models.update(interp, 0, -1, 0, null, false);
+  models.setItems(NO_ITEMS);
+  models.updateHostages(NO_HOSTAGES, 0, null);
+  itemsVersion = grenadesVersion = -1;
+  models.setBomb(false);
+  fx.clear();
+  if (hud.menuOpen) hud.toggleMenu(false);
+}
+
+// Play: join the server on a team (2 T, 3 CT, 0 auto).
+async function startOnline(team) {
+  if (playing) leaveGame();
+  resetSession();
+  try {
+    await joinServer(team === 3 ? TEAM_CT : team === 2 ? TEAM_T : 0);
+  } catch (err) {
+    if (net) net.close('failed');
+    net = null;
+    throw new Error(`could not connect (${err.message})`);
+  }
+  conWin.print(`connected: ${currentMap}`);
+  enterGame();
+}
+
+// Practice: a map offline, on a team (2 T, 3 CT).
+async function startPractice(map, team) {
+  if (playing) leaveGame();
+  resetSession();
+  menu.busy(`Loading ${map}...`);
+  player.team = team === 3 ? TEAM_CT : TEAM_T;
+  player.primary = primary;
+  player.secondary = secondary;
+  player.money = OFFLINE_MONEY;
+  await loadMap(map);
+  offlineRespawn();
+  enterGame();
+}
+
+function enterGame() {
+  playing = true;
+  menu.online = net !== null;
+  menu.busy('');
+  menu.hide();
+  input.lock().catch(() => {});
+  if (!document.pointerLockElement) menu.showPause(); // locking may need a click: Resume
+}
+
+// Back to the start menu (disconnect, quit practice, or the server went away).
+function leaveGame(message = '') {
+  if (net && !net.closed) net.close('disconnect');
+  net = null;
+  playing = false;
+  resetSession();
+  if (document.pointerLockElement) document.exitPointerLock();
+  menu.showStart(message);
+}
+
+// Map change (the server closed us with "changelevel"), or `retry`: join again on our
+// current team; the WELCOME names the map.
+let reconnecting = false;
+async function reconnect() {
+  if (reconnecting || !net) return;
+  reconnecting = true;
+  const team = player.team;
+  if (net && !net.closed) net.close('reconnect');
+  resetSession();
   status.textContent = 'reconnecting...';
   status.style.display = '';
   try {
@@ -1007,39 +1129,34 @@ async function reconnect() {
         await new Promise((r) => setTimeout(r, 500));
       }
     }
-    status.textContent = 'click to play';
+    status.style.display = 'none';
     conWin.print(`connected: ${currentMap}`);
+    reconnecting = false;
   } catch (err) {
-    status.textContent = `disconnected: ${err.message}`;
+    reconnecting = false;
+    leaveGame(`Disconnected: ${err.message}`);
   }
-  reconnecting = false;
 }
 
 async function start() {
-  const team = params.get('team') === 'ct' ? TEAM_CT : params.get('team') === 't' ? TEAM_T : 0;
   if (params.get('name')) cv.name.set(params.get('name').slice(0, 31));
+  status.style.display = 'none';
+  requestAnimationFrame(frame);
+  // URL parameters skip the menu (testing): join at once, or practice if no server answers.
+  if (!params.has('team') && !params.has('offline') && !params.has('map')) return menu.showStart();
+  const team = params.get('team') === 'ct' ? 3 : params.get('team') === 't' ? 2 : 0;
   if (!params.has('offline')) {
     try {
-      await joinServer(team);
+      return await startOnline(team);
     } catch (err) {
       console.warn(`playing offline: ${err.message}`);
-      net = null;
     }
   }
-  if (!net) {
-    player.team = team || TEAM_T;
-    player.primary = primary;
-    player.secondary = secondary;
-    player.money = OFFLINE_MONEY;
-    await loadMap(params.get('map') || 'de_dust2');
-    offlineRespawn();
-  }
-  status.textContent = net ? 'click to play' : 'click to play (offline)';
-  requestAnimationFrame(frame);
+  await startPractice(params.get('map') || 'de_dust2', team || 2);
 }
 
 start().catch((err) => {
-  status.textContent = String(err.message || err);
+  leaveGame(String(err.message || err));
   console.error(err);
 });
 

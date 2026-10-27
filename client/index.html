@@ -104,6 +104,69 @@
     color: #f2ecd8; font: 700 22px/1.4 Verdana, Tahoma, sans-serif; text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7);
     pointer-events: none;
   }
+  /* Start / pause menu (client/menu.js): actions on the left, the open panel beside them. */
+  #menu { position: fixed; inset: 0; z-index: 5; display: none; gap: 28px; padding: 6vh 6vw; box-sizing: border-box;
+    background: linear-gradient(160deg, #1b1e23 0%, #101215 60%, #0b0c0e 100%); color: #e6e1d2;
+    font: 14px/1.45 Verdana, Tahoma, sans-serif; overflow-y: auto; }
+  #menu.open { display: flex; }
+  #menu.pause { background: rgba(8, 10, 12, 0.72); }
+  #menu h1 { margin: 0 0 28px; font: 700 44px/1 Verdana, Tahoma, sans-serif; letter-spacing: 2px; color: #e8c46a;
+    text-shadow: 3px 3px 0 rgba(0, 0, 0, 0.6); }
+  #menu h2 { margin: 0 0 14px; font-size: 20px; }
+  #menu h3 { margin: 14px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: #9aa0a8; }
+  #menu button { font: inherit; color: inherit; background: #262a31; border: 1px solid #3a3f48; border-radius: 3px;
+    padding: 7px 12px; cursor: pointer; }
+  #menu button:hover { background: #354050; }
+  #menu button.active { border-color: #e8c46a; background: #3a3627; }
+  .menu-side { flex: 0 0 220px; display: flex; flex-direction: column; }
+  .menu-nav { display: flex; flex-direction: column; gap: 4px; }
+  #menu .menu-nav button { background: none; border: 0; border-left: 3px solid transparent; text-align: left;
+    padding: 8px 12px; font-size: 20px; font-weight: 700; }
+  #menu .menu-nav button:hover { background: rgba(255, 255, 255, 0.06); }
+  #menu .menu-nav button.active { border-left-color: #e8c46a; background: rgba(232, 196, 106, 0.1); }
+  .menu-note { margin-top: 18px; color: #9fd67a; min-height: 1.4em; }
+  .menu-note.error { color: #f08a7a; }
+  .menu-panel { flex: 0 1 640px; min-width: 0; align-self: flex-start; background: rgba(14, 16, 20, 0.86);
+    border: 1px solid #333840; border-radius: 4px; padding: 18px 20px; }
+  .menu-panel.empty { display: none; }
+  .menu-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+  .menu-row > span:first-child { flex: 0 0 190px; }
+  .menu-row input[type=range] { flex: 1; min-width: 80px; accent-color: #e8c46a; }
+  .menu-row input.num { width: 70px; }
+  .menu-row input, .menu-row select { font: inherit; color: #eee; background: #1d2027; border: 1px solid #3a3f48;
+    border-radius: 3px; padding: 4px 6px; }
+  .menu-row input[type=checkbox] { width: 18px; height: 18px; accent-color: #e8c46a; }
+  .menu-bind button.key { flex: 0 0 120px; padding: 4px 8px; font-size: 12px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .menu-settings, .menu-maps { scrollbar-color: #3a3f48 transparent; }
+  .menu-bind button.key.waiting { border-color: #e8c46a; color: #e8c46a; }
+  .menu-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .menu-settings { max-height: calc(100vh - 12vh - 170px); overflow-y: auto; padding-right: 6px; }
+  .menu-preview canvas { display: block; width: 100%; height: 120px; border-radius: 3px; margin-bottom: 8px; }
+  .menu-teams { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  #menu .menu-teams button { flex: 1 1 160px; padding: 14px; font-size: 16px; font-weight: 700; }
+  #menu .menu-teams button.t { color: #e8c46a; }
+  #menu .menu-teams button.ct { color: #8cb4f0; }
+  .menu-maps button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .menu-maps { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px;
+    max-height: 40vh; overflow-y: auto; }
+  #menu button.menu-go { margin-top: 8px; padding: 10px 28px; font-size: 16px; font-weight: 700; background: #3a3627;
+    border-color: #e8c46a; }
+  #menu button.menu-reset { margin-top: 12px; font-size: 12px; }
+  .menu-server { color: #c8c2b0; }
+  .menu-hint { color: #9aa0a8; font-size: 12px; }
+  @media (max-width: 720px) {
+    #menu { flex-direction: column; padding: 16px; gap: 12px; }
+    .menu-side { flex: none; }
+    #menu h1 { font-size: 32px; margin-bottom: 12px; }
+    .menu-nav { flex-direction: row; flex-wrap: wrap; }
+    #menu .menu-nav button { font-size: 16px; border-left: 0; border-bottom: 3px solid transparent; }
+    #menu .menu-nav button.active { border-bottom-color: #e8c46a; }
+    .menu-row { flex-wrap: wrap; }
+    .menu-row > span:first-child { flex-basis: 100%; }
+    .menu-row.check > span:first-child { flex: 1; }
+    .menu-settings { max-height: none; }
+  }
 </style>
 </head>
 <body>
@@ -122,6 +185,7 @@
 <div id="scoreboard"></div>
 <div id="buymenu"></div>
 <div id="death"></div>
+<div id="menu"></div>
 <div id="hud-left" class="hud">
   <span><small>HP</small><span id="hud-health"></span></span>
   <span><small>ARMOR</small><span id="hud-armor"></span></span>

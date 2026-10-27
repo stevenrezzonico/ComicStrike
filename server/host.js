@@ -151,6 +151,11 @@ export class Host {
     return g.clients.find((c) => c && c.joined && c.name === q) || null;
   }
 
+  // What the start menu shows before joining (connect.json).
+  info() {
+    return { hostname: this.hostname.value, map: this.game.mapName, players: this.game.playerCount, maxPlayers: MAX_PLAYERS };
+  }
+
   status() {
     const g = this.game, rs = g.round;
     const lines = [

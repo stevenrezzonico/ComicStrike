@@ -108,8 +108,9 @@ async function serveStatic(pathname) {
 Deno.serve({ port: HTTP_PORT, onListen: () => {} }, async (req) => {
   const { pathname } = new URL(req.url);
   if (pathname === '/connect.json') {
-    return Response.json({ port: GAME_PORT, certHash: Array.from(certInfo.hash) });
+    return Response.json({ port: GAME_PORT, certHash: Array.from(certInfo.hash), ...host.info() });
   }
+  if (pathname === '/maps.json') return Response.json(host.opts.listMaps()); // for offline practice
   return (await serveStatic(pathname)) || new Response('not found', { status: 404 });
 });
 

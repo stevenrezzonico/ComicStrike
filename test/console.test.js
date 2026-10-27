@@ -75,6 +75,15 @@ Deno.test('server console: mp_* cvars become the game rules (round time by map t
   assert.equal(host.game.rules.roundTime, 180, '0 falls back to mp_roundtime');
 });
 
+Deno.test('server info for the start menu: hostname, map, players', async (t) => {
+  const s = await setup(t);
+  if (!s) return;
+  const { host, join } = s;
+  host.con.exec('hostname "Test server"');
+  join('a', TEAM_T);
+  assert.deepEqual(host.info(), { hostname: 'Test server', map: 'de_dust2', players: 1, maxPlayers: 20 });
+});
+
 Deno.test('client commands: name, jointeam, kill; unknown ones answer', async (t) => {
   const s = await setup(t);
   if (!s) return;
