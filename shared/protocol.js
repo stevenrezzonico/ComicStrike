@@ -605,6 +605,8 @@ export const ANIM_PLANT = 2;
 export const ANIM_DEFUSE = 4;
 export const ANIM_HELMET = 8;
 export const ANIM_SILENCED = 16; // the gun in hand wears its silencer (M4A1-S, USP-S)
+export const ANIM_SPOTTED_T = 32; // on the Terrorists' radar (seen by one of them, or firing)
+export const ANIM_SPOTTED_CT = 64; // on the Counter-Terrorists' radar
 
 const F_ORIGIN = 1;
 const F_ANGLES = 2;

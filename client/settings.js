@@ -58,6 +58,11 @@ export function createConsole(print) {
   add('net_graph', 0, 'Network graph: ping, loss, rates, prediction', 0, 1);
   add('cl_drawhud', 1, 'Draw the HUD', 0, 1);
   add('cl_showhitboxes', 0, 'Draw other players as their hit boxes instead of their models', 0, 1);
+  // Radar (client/radar.js).
+  add('cl_radar_scale', 0.7, 'Radar zoom (smaller: more of the map)', 0.25, 1);
+  add('cl_radar_rotate', 1, 'The radar turns with the view', 0, 1);
+  add('cl_radar_always_centered', 1, '0: the radar stops at the map edges (when it does not turn)', 0, 1);
+  add('cl_hud_radar_scale', 1, 'Radar size', 0.8, 1.3);
   // View.
   add('viewmodel_fov', 60, 'Weapon model field of view', 54, 68);
   add('viewmodel_offset_x', 1, 'Weapon model offset: right', -2.5, 2.5);

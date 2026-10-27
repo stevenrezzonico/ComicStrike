@@ -57,6 +57,8 @@ import { SoundScape } from './soundscape.js';
 import { Spectator, SPEC_EYES, SPEC_ROAM } from './spectate.js';
 import { ConsoleWindow } from './console.js';
 import { Menu } from './menu.js';
+import { Radar } from './radar.js';
+import { Overview } from '../shared/overview.js';
 import { Items } from '../shared/items.js';
 import { Hostages } from '../shared/hostages.js';
 import { NetGraph } from './netgraph.js';
@@ -109,6 +111,7 @@ const weaponView = new WeaponView(renderer.gl, FOV_Y, cv, guns);
 const input = new Input(canvas);
 const hud = new Hud((item) => buy(item));
 const menu = new Menu(document.getElementById('menu'), con, cv, binds);
+const radar = new Radar(document.getElementById('radar'), cv);
 let playing = false; // in a game (online or practice); false: the start menu
 const sounds = new Sounds();
 const soundTrace = new Trace();
@@ -252,6 +255,7 @@ async function loadMap(name) {
   world = CollisionWorld.fromBSP(bsp);
   world.surfaces = new SurfaceMap(bsp);
   world.bombSites = new BombSites(bsp);
+  radar.setMap(new Overview(bsp, world), world.bombSites);
   breakables = new Breakables(bsp, world);
   breakableColors = mesh.breakableColors;
   const ms = (performance.now() - t0).toFixed(0);
@@ -846,6 +850,11 @@ function draw(now, alpha, dt) {
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
   else showFlash(flash.left, flash.total);
 
+  // The radar centers on whoever we see the game through.
+  const watched = spectating && !roaming ? spectator.target : -1, w = watched * E_FIELDS;
+  radar.draw(playing, watched >= 0 ? interp[w + E_X] : eye[0], watched >= 0 ? interp[w + E_Y] : eye[1],
+    watched >= 0 ? interp[w + E_Z] : eye[2], yaw, interpolated ? interp : null, selfId, watched, player.team,
+    (gameMode() & GAME_FFA) !== 0, net ? net.own.bomb : null, net ? net.hostages : null, now);
   hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now, leader());
   document.body.classList.toggle('dm', (gameMode() & GAME_DM) !== 0); // no money in deathmatch
   const action = ws.f[WS_ACTION];
@@ -967,6 +976,12 @@ con.command('buy', (a, ctx) => {
   buy(item);
 }, 'buy <item>: buys a weapon or gear');
 con.command('toggleconsole', () => conWin.toggle(), 'Opens or closes the console');
+con.command('drawradar', () => {
+  radar.hidden = false;
+}, 'Shows the radar');
+con.command('hideradar', () => {
+  radar.hidden = true;
+}, 'Hides the radar');
 con.command('clear', () => conWin.clear(), 'Clears the console');
 con.command('noclip', (_a, ctx) => {
   if (net) return con.out(ctx, 'noclip: offline only');
@@ -1237,6 +1252,7 @@ globalThis.webcs = {
   hud,
   weaponView,
   spectator,
+  radar,
   buy,
   sounds,
   con,

@@ -46,7 +46,7 @@ import {
   quantizeYaw,
   E_ACTIVE, E_X, E_Y, E_Z,
   E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS, E_FIELDS, ANIM_RELOAD, ANIM_PLANT,
-  ANIM_DEFUSE, ANIM_HELMET, ANIM_SILENCED,
+  ANIM_DEFUSE, ANIM_HELMET, ANIM_SILENCED, ANIM_SPOTTED_T, ANIM_SPOTTED_CT,
 } from '../shared/protocol.js';
 
 const CMD_BANK = 8; // commands a client may run ahead of server time (absorbs jitter, stops speedhacks)
@@ -59,6 +59,12 @@ const THROW_DISTANCE = 64; // a dropped (G) bomb or weapon lands this far ahead
 const PICKUP_DELAY = TICK_RATE; // ticks before a thrown bomb or weapon can be picked up
 const USE_RANGE = 96; // E picks up a weapon on the ground this close to the eyes
 const USE_CONE = 0.8; // cos of the largest angle off the view it may be at
+
+// Radar spotting (approx. of CS:GO's: how often, how wide a view, how long a shot shows).
+const SPOT_TICKS = 4;
+const SPOT_CONE = 0.5; // cos 60 degrees off the view
+const SHOT_REVEAL_TICKS = TICK_RATE; // firing an unsilenced gun shows the shooter for 1 s
+const DEG = Math.PI / 180;
 
 // Lag compensation: how far back shots may rewind other players (CS:GO sv_maxunlag 1 s).
 const HISTORY = 64; // ticks, power of two
@@ -82,6 +88,8 @@ class Client {
     this.respawnTick = Infinity; // while dead in warmup / with respawns: server tick to respawn at
     this.spawnTick = 0; // server tick of the last spawn (deathmatch buy time)
     this.immuneUntil = 0; // server tick: spawn protection (mp_respawn_immunitytime) until then
+    this.spotted = 0; // ANIM_SPOTTED_T / _CT: on whose radar he shows
+    this.revealUntil = 0; // server tick: fired an unsilenced gun, on everyone's radar until then
     this.life = 0; // increments per spawn: history never interpolates across a respawn
     this.placed = false; // round start: already put on a spawn point
     this.canBuy = false;
@@ -206,6 +214,7 @@ export class Game {
     this.shots = new ShotList();
     this.impacts = new ImpactList();
     this.reader = new Reader();
+    this.spotTrace = new Trace();
     this.infoWriter = new Writer();
 
     // Rounds.
@@ -488,6 +497,7 @@ export class Game {
     this.grenades.update(this.world, this.grenadeTargets);
     for (const c of this.clients) if (c) c.flashLeft = Math.max(0, c.flashLeft - 1 / TICK_RATE);
     this.updateItems();
+    this.updateSpotting();
     this.updateRound();
     for (const c of this.clients) if (c && c.joined) c.canBuy = this.canBuy(c);
     this.recordHistory();
@@ -530,6 +540,7 @@ export class Game {
     if (events & (WEV_FIRE | WEV_MELEE | WEV_THROW)) {
       c.shots = (c.shots + 1) & 255;
       c.immuneUntil = 0; // CS:GO: shooting ends spawn protection
+      if ((events & WEV_FIRE) && !silenced(p.ws, p.ws.f[WS_ACTIVE])) c.revealUntil = this.tick + SHOT_REVEAL_TICKS;
     }
     if (events & WEV_THROW) {
       const f = p.ps.f, thrown = p.ws.f[WS_THROWN];
@@ -1197,6 +1208,45 @@ export class Game {
     console.log('halftime: teams swap');
   }
 
+  // --- Radar ----------------------------------------------------------------------
+
+  // CS:GO's "spotted": a player shows on the other team's radar while one of them sees
+  // him (in the view cone, no wall or smoke between their eye and his head or chest),
+  // and on everyone's for a moment after firing an unsilenced gun. Free for all has no
+  // team to share sight with: only firing shows (approx. of CS:GO's deathmatch radar).
+  updateSpotting() {
+    if (this.tick % SPOT_TICKS !== 0) return;
+    const ffa = this.rules.teammatesAreEnemies;
+    for (const c of this.clients) {
+      if (!c || !c.joined) continue;
+      let bits = c.alive && this.tick < c.revealUntil ? ANIM_SPOTTED_T | ANIM_SPOTTED_CT : 0;
+      if (c.alive && !ffa) {
+        for (const o of this.clients) {
+          if (!o || !o.joined || !o.alive || !o.playing || o.team === c.team) continue;
+          const bit = o.team === TEAM_T ? ANIM_SPOTTED_T : ANIM_SPOTTED_CT;
+          if (!(bits & bit) && this.sees(o, c)) bits |= bit;
+        }
+      }
+      c.spotted = bits;
+    }
+  }
+
+  // Can `o` see `c` (head or chest)?
+  sees(o, c) {
+    const f = o.player.ps.f, ex = f[PS_ORIGIN], ey = f[PS_ORIGIN + 1], ez = f[PS_ORIGIN + 2] + eyeOffset(o.player.ps);
+    const cp = Math.cos(o.pitch * DEG), vx = cp * Math.cos(o.yaw * DEG), vy = cp * Math.sin(o.yaw * DEG);
+    const vz = -Math.sin(o.pitch * DEG);
+    const g = c.player.ps.f, tr = this.spotTrace;
+    for (const dz of [eyeOffset(c.player.ps), 0]) {
+      const x = g[PS_ORIGIN], y = g[PS_ORIGIN + 1], z = g[PS_ORIGIN + 2] + dz;
+      const dx = x - ex, dy = y - ey, dzz = z - ez, d = Math.hypot(dx, dy, dzz);
+      if (d > 0 && (dx * vx + dy * vy + dzz * vz) / d < SPOT_CONE) continue; // outside their view
+      traceHull(this.world, HULL_POINT, ex, ey, ez, x, y, z, tr);
+      if (tr.fraction >= 1 && !this.grenades.smokeBetween(ex, ey, ez, x, y, z)) return true;
+    }
+    return false;
+  }
+
   // --- Lag compensation ---------------------------------------------------------
 
   recordHistory() {
@@ -1286,7 +1336,7 @@ export class Game {
       const action = p.ws.f[WS_ACTION];
       E[row + E_ANIM] = (p.ws.f[WS_RELOAD_END] > 0 ? ANIM_RELOAD : 0) | (action === ACTION_PLANT ? ANIM_PLANT : 0) |
         (action === ACTION_DEFUSE ? ANIM_DEFUSE : 0) | (p.helmet && p.armor > 0 ? ANIM_HELMET : 0) |
-        (silenced(p.ws, p.ws.f[WS_ACTIVE]) ? ANIM_SILENCED : 0);
+        (silenced(p.ws, p.ws.f[WS_ACTIVE]) ? ANIM_SILENCED : 0) | c.spotted;
       E[row + E_SHOTS] = c.shots;
     }
     const words = ring.broken;

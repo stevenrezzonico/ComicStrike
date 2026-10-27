@@ -182,6 +182,18 @@ export class Grenades {
     return false;
   }
 
+  // Does a smoke cloud cut the line between two points?
+  smokeBetween(x0, y0, z0, x1, y1, z1) {
+    const dx = x1 - x0, dy = y1 - y0, dz = (z1 - z0) * 1.5, len2 = dx * dx + dy * dy + dz * dz;
+    for (let k = 0; k < this.fxCount; k++) {
+      if (this.fxKind[k] !== FX_SMOKE) continue;
+      const o = k * 3, cx = this.fxPos[o] - x0, cy = this.fxPos[o + 1] - y0, cz = (this.fxPos[o + 2] - z0) * 1.5;
+      const t = len2 > 0 ? Math.min(Math.max((cx * dx + cy * dy + cz * dz) / len2, 0), 1) : 0;
+      if (Math.hypot(cx - dx * t, cy - dy * t, cz - dz * t) < smokeRadius(this.fxAge[k])) return true;
+    }
+    return false;
+  }
+
   // One tick. `targets` (see GrenadeTargets) takes damage and flashes.
   update(world, targets) {
     const dt = TICK_DT;
