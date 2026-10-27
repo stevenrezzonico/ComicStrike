@@ -24,6 +24,8 @@ import {
 
 export const TEAM_T = 1;
 export const TEAM_CT = 2;
+export const TEAM_SPECTATOR = 3; // watches, never spawns (CS:GO's team 1; jointeam 1)
+export const TEAM_NAMES = ['', 'T', 'CT', 'SPEC'];
 
 export class Player {
   constructor() {

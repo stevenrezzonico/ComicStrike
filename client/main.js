@@ -5,7 +5,7 @@
 // ticks behind the server clock, and each command tells the server which tick we were
 // seeing so it can rewind them (lag compensation). Practice (offline): everything runs
 // locally. The page opens on the start menu (client/menu.js); URL parameters skip it
-// (testing): ?team=t|ct&primary=awp&secondary=deagle&name=me joins at once (offline if
+// (testing): ?team=t|ct|spec&primary=awp&secondary=deagle&name=me joins at once (offline if
 // no server answers), &offline&map=de_dust2 practices.
 // Keys are CS:GO binds (client/binds.js); ` opens the console (client/settings.js).
 
@@ -29,7 +29,7 @@ import { Breakables } from '../shared/breakables.js';
 import { HitTargets, feetOffset } from '../shared/hitgroups.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import {
-  Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT,
+  Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT, TEAM_SPECTATOR, TEAM_NAMES,
 } from '../shared/player.js';
 import { Grenades, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE } from '../shared/grenades.js';
 import { HITGROUP_CHEST, HITGROUP_LEGS } from '../shared/hitgroups.js';
@@ -54,7 +54,7 @@ import { NetClient } from './net.js';
 import { Hud } from './hud.js';
 import { Sounds } from './audio.js';
 import { SoundScape } from './soundscape.js';
-import { Spectator, SPEC_EYES } from './spectate.js';
+import { Spectator, SPEC_EYES, SPEC_ROAM } from './spectate.js';
 import { ConsoleWindow } from './console.js';
 import { Menu } from './menu.js';
 import { Items } from '../shared/items.js';
@@ -88,6 +88,8 @@ const spectator = new Spectator();
 const specAngles = new Float32Array(2);
 const specTrace = new Trace();
 let deadAt = 0, wasDead = false, specShown = '';
+let wasSpecTeam = false, specFollowing = false; // last frame: on the spectator team / following someone
+const lastCam = new Float32Array(5); // last spectator camera: x, y, z, pitch, yaw
 
 // The console first: settings are read by everything below.
 let conWin = null;
@@ -416,6 +418,7 @@ function applySnapshot() {
     }
   }
   player.health = own.health;
+  player.team = own.team; // jointeam without a respawn (spectators, mid-round)
   player.armor = own.armor;
   player.helmet = own.helmet;
   player.money = own.money;
@@ -748,20 +751,46 @@ function draw(now, alpha, dt) {
   let pitch = angles[0] + prevPunchP + (viewPunchPitch(ws) - prevPunchP) * alpha;
   let yaw = angles[1] + prevPunchY + (viewPunchYaw(ws) - prevPunchY) * alpha;
 
-  // Dead: after a moment, follow a living player (client/spectate.js).
+  // Dead: after a moment, follow a living player (client/spectate.js). The spectator
+  // team follows anyone at once or roams free.
   const dead = player.health <= 0;
   if (dead && !wasDead) deadAt = now;
+  const specTeam = player.team === TEAM_SPECTATOR;
+  if (specTeam && !wasSpecTeam) { // just joined the spectators: roam from our eye (or a spawn)
+    const s = spawns[TEAM_CT][0] || spawns[TEAM_T][0];
+    if (!wasDead) spectator.place(eye[0], eye[1], eye[2]);
+    else if (s) spectator.place(s[0], s[1], s[2] + 28); // spawn origins are hull centers; eye 28 up
+  }
+  wasSpecTeam = specTeam;
   wasDead = dead;
+  const buttons = input.locked ? input.buttons : 0;
   const interpolated = net && synced && interpolatePlayers(serverClock - cv.cl_interp_ratio.number, interp);
+  const roamedBefore = spectator.mode === SPEC_ROAM;
   const spectating = interpolated && dead &&
-    spectator.update(interp, selfId, player.team, (now - deadAt) / 1000, input.locked ? input.buttons : 0);
+    spectator.update(interp, selfId, player.team, (now - deadAt) / 1000, buttons, specTeam);
+  const roaming = spectating && spectator.mode === SPEC_ROAM;
+  if (roaming && !roamedBefore && specFollowing) { // from following someone: go on from that view
+    spectator.place(lastCam[0], lastCam[1], lastCam[2]);
+    angles[0] = lastCam[3];
+    angles[1] = lastCam[4];
+  }
   const inEyes = spectating && spectator.mode === SPEC_EYES;
   if (spectating) {
+    if (roaming) spectator.fly(buttons, angles[0], angles[1], dt);
     spectator.camera(interp, eye, specAngles, (x0, y0, z0, x1, y1, z1) =>
       traceHull(world, HULL_POINT, x0, y0, z0, x1, y1, z1, specTrace).fraction);
-    pitch = specAngles[0];
-    yaw = specAngles[1];
+    pitch = roaming ? angles[0] : specAngles[0];
+    yaw = roaming ? angles[1] : specAngles[1];
+    lastCam[0] = eye[0];
+    lastCam[1] = eye[1];
+    lastCam[2] = eye[2];
+    lastCam[3] = pitch;
+    lastCam[4] = yaw;
   }
+  specFollowing = spectating && !roaming;
+  // Spectators have no health, armor, ammo or money of their own to show.
+  document.body.classList.toggle('spectator', specTeam);
+  document.body.classList.toggle('nostats', specTeam && !inEyes);
 
   if (interpolated) {
     const boxes = cv.cl_showhitboxes.bool;
@@ -823,8 +852,10 @@ function draw(now, alpha, dt) {
     for (let c = 0; c < 3; c++) weaponView.light[c] += (lightTarget[c] - weaponView.light[c]) * k;
   }
   deathNotice.style.display = dead && net ? 'block' : 'none';
-  const spec = spectating ? `Spectating ${net.names[spectator.target] || 'player'} · ${interp[target + E_HEALTH]} HP\n` +
-    'Mouse1 / Mouse2: next / previous · Jump: eyes / chase' : '';
+  const modes = specTeam ? 'Jump: eyes / chase / free roam' : 'Jump: eyes / chase';
+  const spec = !spectating ? '' : roaming ? `Free roam\nMouse1 / Mouse2: follow a player · ${modes}`
+    : `Spectating ${net.names[spectator.target] || 'player'} · ${interp[target + E_HEALTH]} HP\n` +
+      `Mouse1 / Mouse2: next / previous · ${modes}`;
   if (spec !== specShown) {
     specShown = spec;
     deathNotice.style.whiteSpace = 'pre';
@@ -899,7 +930,7 @@ con.command('invprev', () => cycleSlot(-1), 'Previous weapon in the slot order')
 con.command('drop', () => input.pulse(IN_DROP), 'Drop the active weapon (the C4 for now)');
 con.command('buymenu', () => {
   if (hud.menuOpen) closeBuyMenu();
-  else if (playing) hud.toggleMenu(true);
+  else if (playing && player.team !== TEAM_SPECTATOR) hud.toggleMenu(true);
 }, 'Opens the buy menu');
 con.command('teammenu', () => {
   if (!playing) return;
@@ -936,11 +967,14 @@ con.command('setang', (a, ctx) => {
 }, 'setang <pitch> <yaw>: sets your view angles');
 con.command('jointeam', (a, ctx) => {
   const n = +a[1];
-  if (n !== 2 && n !== 3) return con.out(ctx, 'jointeam 2 (Terrorists) or 3 (Counter-Terrorists)');
+  if (n !== 1 && n !== 2 && n !== 3) {
+    return con.out(ctx, 'jointeam 1 (Spectators), 2 (Terrorists) or 3 (Counter-Terrorists)');
+  }
   if (net) return net.command(`jointeam ${n}`);
+  if (n === 1) return con.out(ctx, 'jointeam 1: spectating needs a server');
   player.team = n === 3 ? TEAM_CT : TEAM_T;
   offlineRespawn();
-}, 'jointeam <2|3>: switch to the Terrorists or Counter-Terrorists');
+}, 'jointeam <1|2|3>: watch, or switch to the Terrorists or Counter-Terrorists');
 con.command('kill', () => {
   if (net) net.command('kill');
   else offlineRespawn();
@@ -958,7 +992,7 @@ con.command('status', (_a, ctx) => {
   const lines = [`map: ${currentMap}  you: #${selfId}  ping: ${netStats.rtt.toFixed(0)} ms`, '# id  name  team  kills deaths'];
   for (let id = 0; id < MAX_PLAYERS; id++) {
     if (!net.names[id]) continue;
-    lines.push(`# ${id}  ${net.names[id]}  ${net.teams[id] === TEAM_CT ? 'CT' : 'T'}  ${net.kills[id]} ${net.deaths[id]}`);
+    lines.push(`# ${id}  ${net.names[id]}  ${TEAM_NAMES[net.teams[id]]}  ${net.kills[id]} ${net.deaths[id]}`);
   }
   con.out(ctx, lines.join('\n'));
 }, 'Players on the server (rcon status shows the server side)');
@@ -1049,6 +1083,7 @@ function resetSession() {
   lastBombState = 0;
   netStats.compared = netStats.corrected = 0;
   noclip = false;
+  wasDead = true; // no body to start a free roam camera from
   interp.fill(0);
   players.update(interp, 0, -1, false);
   models.update(interp, 0, -1, 0, null, false);
@@ -1060,12 +1095,12 @@ function resetSession() {
   if (hud.menuOpen) hud.toggleMenu(false);
 }
 
-// Play: join the server on a team (2 T, 3 CT, 0 auto).
+// Play: join the server on a team (CS:GO numbers: 1 spectators, 2 T, 3 CT; 0 auto).
 async function startOnline(team) {
   if (playing) leaveGame();
   resetSession();
   try {
-    await joinServer(team === 3 ? TEAM_CT : team === 2 ? TEAM_T : 0);
+    await joinServer(team === 3 ? TEAM_CT : team === 2 ? TEAM_T : team === 1 ? TEAM_SPECTATOR : 0);
   } catch (err) {
     if (net) net.close('failed');
     net = null;
@@ -1144,7 +1179,7 @@ async function start() {
   requestAnimationFrame(frame);
   // URL parameters skip the menu (testing): join at once, or practice if no server answers.
   if (!params.has('team') && !params.has('offline') && !params.has('map')) return menu.showStart();
-  const team = params.get('team') === 'ct' ? 3 : params.get('team') === 't' ? 2 : 0;
+  const team = { spec: 1, t: 2, ct: 3 }[params.get('team')] || 0;
   if (!params.has('offline')) {
     try {
       return await startOnline(team);
@@ -1152,7 +1187,7 @@ async function start() {
       console.warn(`playing offline: ${err.message}`);
     }
   }
-  await startPractice(params.get('map') || 'de_dust2', team || 2);
+  await startPractice(params.get('map') || 'de_dust2', team === 3 ? 3 : 2);
 }
 
 start().catch((err) => {
@@ -1179,6 +1214,7 @@ globalThis.webcs = {
   targets,
   hud,
   weaponView,
+  spectator,
   buy,
   sounds,
   con,

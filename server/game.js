@@ -24,7 +24,7 @@ import {
   BOMB_DEFUSED, BOMB_EXPLODED,
 } from '../shared/bomb.js';
 import {
-  Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT,
+  Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT, TEAM_SPECTATOR, TEAM_NAMES,
 } from '../shared/player.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import { Items } from '../shared/items.js';
@@ -108,6 +108,11 @@ class Client {
 
   get alive() {
     return this.player.health > 0;
+  }
+
+  // On a team (not a spectator).
+  get playing() {
+    return this.player.team !== TEAM_SPECTATOR;
   }
 
   get kills() {
@@ -335,26 +340,27 @@ export class Game {
     const p = c.player;
     p.primary = WEAPONS[h.primary] ? h.primary : 0;
     p.secondary = WEAPONS[h.secondary] ? h.secondary : 0;
-    if (h.team === TEAM_T || h.team === TEAM_CT) p.team = h.team;
+    if (h.team === TEAM_T || h.team === TEAM_CT || h.team === TEAM_SPECTATOR) p.team = h.team;
     else { // auto-balance
       let t = 0, ct = 0;
-      for (const o of this.clients) if (o && o !== c && o.joined) o.team === TEAM_CT ? ct++ : t++;
+      for (const o of this.clients) if (o && o !== c && o.joined && o.playing) o.team === TEAM_CT ? ct++ : t++;
       p.team = ct < t ? TEAM_CT : TEAM_T;
     }
     p.money = this.phase === PHASE_WARMUP ? WARMUP_MONEY : this.rules.startMoney;
-    if (this.phase === PHASE_WARMUP || this.phase === PHASE_FREEZE) {
+    if (c.playing && (this.phase === PHASE_WARMUP || this.phase === PHASE_FREEZE)) {
       this.respawn(c, false, this.phase === PHASE_WARMUP);
     } else {
-      p.health = 0; // joined mid-round: wait for the next one
+      p.health = 0; // joined mid-round: wait for the next one (spectators: never spawn)
       c.life++;
     }
     this.rosterDirty = true;
-    console.log(`player ${c.id} "${c.name}" joined (${p.team === TEAM_CT ? 'CT' : 'T'})`);
+    console.log(`player ${c.id} "${c.name}" joined (${TEAM_NAMES[p.team]})`);
   }
 
   // Free spawn point of the player's team: one no other live player stands on (at a
   // round start: no one placed yet this round).
   respawn(c, keepGear = false, withLoadout = false) {
+    if (!c.playing) return;
     const list = this.spawns[c.team].length ? this.spawns[c.team] : this.spawns[TEAM_T];
     let pick = list[0] || [0, 0, 0, 0];
     for (const s of list) {
@@ -524,7 +530,7 @@ export class Game {
   updateRound() {
     let t = 0, ct = 0, aliveT = 0, aliveCT = 0;
     for (const c of this.clients) {
-      if (!c || !c.joined) continue;
+      if (!c || !c.joined || !c.playing) continue;
       if (c.team === TEAM_CT) {
         ct++;
         if (c.alive) aliveCT++;
@@ -681,7 +687,7 @@ export class Game {
   endWarmup() {
     if (this.phase !== PHASE_WARMUP) return 'not in warmup';
     let t = 0, ct = 0;
-    for (const c of this.clients) if (c && c.joined) c.team === TEAM_CT ? ct++ : t++;
+    for (const c of this.clients) if (c && c.joined && c.playing) c.team === TEAM_CT ? ct++ : t++;
     if (!t || !ct) return 'the match needs players on both teams';
     this.warmupManual = false;
     this.startMatch();
@@ -749,19 +755,20 @@ export class Game {
     return out;
   }
 
-  // CS:GO jointeam: 2 = T, 3 = CT. Switching sides while alive costs the life (no death
-  // counted); you play from the next round (at once in warmup or freeze time).
+  // CS:GO jointeam: 1 = spectators, 2 = T, 3 = CT. Switching while alive costs the life
+  // (no death counted); you play from the next round (at once in warmup or freeze time).
   joinTeam(c, n) {
-    const team = n === 2 ? TEAM_T : n === 3 ? TEAM_CT : 0;
-    if (!team) return this.print(c, 'jointeam 2 (Terrorists) or 3 (Counter-Terrorists)');
+    const team = n === 1 ? TEAM_SPECTATOR : n === 2 ? TEAM_T : n === 3 ? TEAM_CT : 0;
+    if (!team) return this.print(c, 'jointeam 1 (Spectators), 2 (Terrorists) or 3 (Counter-Terrorists)');
     if (team === c.team) return;
     if (this.bombCarrier === c) this.dropBomb(c, false);
+    this.dropHostage(c);
     c.player.team = team;
     c.player.health = 0;
     c.life++;
     this.rosterDirty = true;
     if (this.phase === PHASE_WARMUP || this.phase === PHASE_FREEZE) this.respawn(c, false, this.phase === PHASE_WARMUP);
-    console.log(`player ${c.id} "${c.name}" joined the ${team === TEAM_CT ? 'CT' : 'T'}s`);
+    console.log(`player ${c.id} "${c.name}" joined ${team === TEAM_SPECTATOR ? 'the spectators' : `the ${TEAM_NAMES[team]}s`}`);
   }
 
   // Drops a client from the server with a reason.
@@ -1078,7 +1085,7 @@ export class Game {
     [rs.scoreT, rs.scoreCT] = [rs.scoreCT, rs.scoreT];
     [this.lossStreak[TEAM_T], this.lossStreak[TEAM_CT]] = [0, 0];
     for (const c of this.clients) {
-      if (!c || !c.joined) continue;
+      if (!c || !c.joined || !c.playing) continue;
       c.player.team = c.team === TEAM_CT ? TEAM_T : TEAM_CT;
       c.player.money = this.rules.startMoney;
     }
@@ -1156,7 +1163,7 @@ export class Game {
     for (let id = 0; id < MAX_PLAYERS; id++) {
       const c = this.clients[id];
       const row = ring.row(k, id);
-      if (!c || !c.joined) {
+      if (!c || !c.joined || !c.playing) { // spectators are nowhere
         E.fill(0, row, row + E_FIELDS);
         continue;
       }

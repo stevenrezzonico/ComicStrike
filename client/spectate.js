@@ -2,6 +2,9 @@
 // own death, the camera follows a living teammate (anyone alive once our team is all
 // dead). Mouse1 / mouse2 switch to the next / previous player, jump toggles between
 // their eyes (with their weapon in view) and a chase camera behind them.
+// The spectator team (`free`) watches anyone at once, and jump cycles on to free roam:
+// a camera flying through walls along the view (movement keys; crouch sinks, walk is
+// slower); mouse1 / mouse2 from there follow a player again.
 //
 // Their first-person weapon is animated by the normal view code from a weapon state
 // rebuilt from what snapshots say: the weapon in hand, reload / plant / defuse bits,
@@ -16,12 +19,17 @@ import {
   MAX_PLAYERS, E_ACTIVE, E_X, E_Y, E_Z, E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS,
   E_FIELDS, ANIM_RELOAD, ANIM_PLANT, ANIM_DEFUSE, ANIM_SILENCED, dequantizePitch, dequantizeYaw,
 } from '../shared/protocol.js';
-import { IN_ATTACK, IN_ATTACK2, IN_JUMP } from '../shared/constants.js';
+import {
+  IN_ATTACK, IN_ATTACK2, IN_JUMP, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_DUCK, IN_SPEED,
+} from '../shared/constants.js';
 
 export const SPEC_DELAY = 2; // seconds on our own death before following someone (approx.)
 export const SPEC_EYES = 0;
 export const SPEC_CHASE = 1;
+export const SPEC_ROAM = 2; // spectator team only
 const CHASE_DISTANCE = 96;
+const ROAM_SPEED = 800; // units/s, walk (+speed) 30 % (approx. of CS:GO's sv_specspeed)
+const DEG = Math.PI / 180;
 
 export class Spectator {
   constructor() {
@@ -36,29 +44,59 @@ export class Spectator {
     this.px = NaN;
     this.py = 0;
     this.synced = -1; // the target the weapon state is for
+    this.roam = new Float32Array(3); // free roam camera position
+  }
+
+  // Puts the free roam camera at (x, y, z) (the eye).
+  place(x, y, z) {
+    this.roam[0] = x;
+    this.roam[1] = y;
+    this.roam[2] = z;
+  }
+
+  // Free roam: flies along the view (pitch, yaw degrees) with the movement buttons.
+  fly(buttons, pitch, yaw, dt) {
+    const fwd = ((buttons & IN_FORWARD) ? 1 : 0) - ((buttons & IN_BACK) ? 1 : 0);
+    const side = ((buttons & IN_MOVERIGHT) ? 1 : 0) - ((buttons & IN_MOVELEFT) ? 1 : 0);
+    const up = buttons & IN_DUCK ? -1 : 0;
+    const speed = ROAM_SPEED * (buttons & IN_SPEED ? 0.3 : 1) * dt;
+    const sp = Math.sin(pitch * DEG), cp = Math.cos(pitch * DEG), sy = Math.sin(yaw * DEG), cy = Math.cos(yaw * DEG);
+    const r = this.roam;
+    r[0] += (fwd * cp * cy + side * sy) * speed;
+    r[1] += (fwd * cp * sy - side * cy) * speed;
+    r[2] += (-fwd * sp + up) * speed;
   }
 
   // Each frame while dead (`deadFor` seconds): picks the target and handles the
-  // buttons. Returns true while following someone.
-  update(rows, selfId, selfTeam, deadFor, buttons) {
+  // buttons; `free`: the spectator team (anyone, no delay, free roam). Returns true while
+  // following someone or roaming.
+  update(rows, selfId, selfTeam, deadFor, buttons, free = false) {
     const pressed = buttons & ~this.oldButtons;
     this.oldButtons = buttons;
-    if (deadFor < SPEC_DELAY) {
+    if (!free && this.mode === SPEC_ROAM) this.mode = SPEC_EYES; // joined a team
+    if (deadFor < SPEC_DELAY && !free) {
       this.target = -1;
       return false;
     }
-    if (pressed & IN_JUMP) this.mode = this.mode === SPEC_EYES ? SPEC_CHASE : SPEC_EYES;
+    if (pressed & IN_JUMP) this.mode = (this.mode + 1) % (free ? 3 : 2);
     const step = pressed & IN_ATTACK ? 1 : pressed & IN_ATTACK2 ? -1 : 0;
-    if (step || !this.watchable(rows, this.target, selfId, selfTeam)) this.target = this.next(rows, selfId, selfTeam, step || 1);
-    return this.target >= 0;
+    if (this.mode === SPEC_ROAM) {
+      if (!step) return true;
+      this.mode = SPEC_EYES; // mouse1 / mouse2 from free roam: follow someone
+    }
+    if (step || !this.watchable(rows, this.target, selfId, selfTeam, free)) {
+      this.target = this.next(rows, selfId, selfTeam, step || 1, free);
+    }
+    if (this.target < 0 && free) this.mode = SPEC_ROAM; // nobody to watch
+    return this.target >= 0 || this.mode === SPEC_ROAM;
   }
 
-  // Teammates while any live; then anyone.
-  watchable(rows, id, selfId, selfTeam) {
+  // Teammates while any live; then anyone (`free`: anyone).
+  watchable(rows, id, selfId, selfTeam, free = false) {
     if (id < 0 || id === selfId) return false;
     const r = id * E_FIELDS;
     if (!rows[r + E_ACTIVE] || rows[r + E_HEALTH] <= 0) return false;
-    return rows[r + E_TEAM] === selfTeam || !this.teamAlive(rows, selfId, selfTeam);
+    return free || rows[r + E_TEAM] === selfTeam || !this.teamAlive(rows, selfId, selfTeam);
   }
 
   teamAlive(rows, selfId, team) {
@@ -69,18 +107,23 @@ export class Spectator {
     return false;
   }
 
-  next(rows, selfId, selfTeam, dir) {
+  next(rows, selfId, selfTeam, dir, free = false) {
     const start = this.target < 0 ? (dir > 0 ? -1 : 0) : this.target;
     for (let i = 1; i <= MAX_PLAYERS; i++) {
       const id = (start + dir * i + MAX_PLAYERS * 2) % MAX_PLAYERS;
-      if (this.watchable(rows, id, selfId, selfTeam)) return id;
+      if (this.watchable(rows, id, selfId, selfTeam, free)) return id;
     }
     return -1;
   }
 
   // The camera: eye position into `eye`, returns [pitch, yaw] (degrees) in `angles`.
   // clear(x0, y0, z0, x1, y1, z1) -> fraction of the way that is open (chase camera).
+  // Free roam: the roam position; `angles` keeps the caller's view.
   camera(rows, eye, angles, clear) {
+    if (this.mode === SPEC_ROAM) {
+      eye.set(this.roam);
+      return;
+    }
     const r = this.target * E_FIELDS;
     const ps = this.ps;
     ps.i[PS_FLAGS] = rows[r + E_FLAGS];

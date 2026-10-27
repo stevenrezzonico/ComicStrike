@@ -273,13 +273,15 @@ export class Menu {
     this.renderTeam(body, (team) => this.onPlay(team), true);
   }
 
-  // Team buttons: 2 Terrorists, 3 Counter-Terrorists (CS:GO jointeam numbers), 0 auto.
+  // Team buttons, CS:GO jointeam numbers: 1 spectators (online only), 2 Terrorists,
+  // 3 Counter-Terrorists; 0 auto-select.
   renderTeam(body, pick, auto = false) {
     if (!auto) body.append(el('h2', '', 'Choose team'));
     const row = el('div', 'menu-teams');
     row.append(button('Terrorists', () => pick(2), 't'));
     row.append(button('Counter-Terrorists', () => pick(3), 'ct'));
     if (auto) row.append(button('Auto-select', () => pick(0)));
+    if (auto || this.online) row.append(button('Spectate', () => pick(1), 'spec'));
     body.append(row);
   }
 

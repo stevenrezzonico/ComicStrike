@@ -2,7 +2,7 @@
 // defuse progress), scoreboard and the buy menu. DOM only; every element is rewritten
 // only when its text changes.
 
-import { TEAM_T, TEAM_CT } from '../shared/player.js';
+import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, BUY_MENU, itemLabel, itemPrice,
 } from '../shared/economy.js';
@@ -101,6 +101,11 @@ export class Hud {
         lines.push([`${id === selfId ? 'me' : ''}${alive(id) ? '' : ' dead'}`, net.names[id], net.kills[id], net.deaths[id]]);
       }
     }
+    const watching = [];
+    for (let id = 0; id < net.names.length; id++) {
+      if (net.names[id] && net.teams[id] === TEAM_SPECTATOR) watching.push(net.names[id]);
+    }
+    if (watching.length) lines.push(['spec', `Spectators: ${watching.join(', ')}`, '', '']);
     const key = JSON.stringify(lines);
     if (this.shown.score === key) return;
     this.shown.score = key;

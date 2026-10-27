@@ -4,7 +4,7 @@
 
 import { Console, FCVAR_PROTECTED } from '../shared/cvars.js';
 import { writeChangelevel, MAX_PLAYERS } from '../shared/protocol.js';
-import { TEAM_CT } from '../shared/player.js';
+import { TEAM_NAMES } from '../shared/player.js';
 import { PHASE_WARMUP } from '../shared/economy.js';
 import { Game, DEFAULT_RULES } from './game.js';
 
@@ -167,7 +167,7 @@ export class Host {
     ];
     for (const c of g.clients) {
       if (!c || !c.joined) continue;
-      lines.push(`# ${String(c.id).padEnd(3)} ${c.name.padEnd(20).slice(0, 20)} ${c.team === TEAM_CT ? 'CT' : 'T '}    ` +
+      lines.push(`# ${String(c.id).padEnd(3)} ${c.name.padEnd(20).slice(0, 20)} ${TEAM_NAMES[c.team].padEnd(4)}  ` +
         `${String(c.kills).padStart(5)} ${String(c.deaths).padStart(6)} ${String(c.player.money).padStart(6)}  ${c.alive ? 'yes' : 'no'}`);
     }
     return lines.join('\n');
