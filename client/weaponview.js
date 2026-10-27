@@ -14,9 +14,10 @@ const VM_TAN = Math.tan(27 * Math.PI / 180) / Math.tan(30 * Math.PI / 180);
 const SWING_TIME = 0.3;
 
 export class WeaponView {
-  // cv: the client cvars (crosshair, viewmodel_fov / viewmodel_offset_*).
-  constructor(gl, fovY, cv) {
-    this.viewmodel = new Viewmodel(gl);
+  // cv: the client cvars (crosshair, viewmodel_fov / viewmodel_offset_*); guns: GunMeshes.
+  constructor(gl, fovY, cv, guns) {
+    this.viewmodel = new Viewmodel(gl, guns);
+    this.light = new Float32Array([1, 1, 1]); // map light at the player (main keeps it current)
     this.crosshair = new Crosshair(gl, cv);
     this.cv = cv;
     this.fovY = fovY;
@@ -99,7 +100,7 @@ export class WeaponView {
       this.viewmodel.fovY = 2 * Math.atan(VM_TAN * Math.tan(cv.viewmodel_fov.number * Math.PI / 360));
 
       a.flash = time < this.flashUntil;
-      this.viewmodel.draw(id, aspect, a, 1.0);
+      this.viewmodel.draw(id, aspect, a, this.light);
     }
 
     // Dynamic crosshairs open up with the real bullet cone (inaccuracy + spread).

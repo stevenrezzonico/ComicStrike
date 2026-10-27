@@ -1,12 +1,12 @@
 // Player models on the player skeleton (client/anim/skeleton.js), built in the bind
 // T-pose: CS:GO's default looks in flat cartoon form, a few colors each. Proportions
 // follow the hit boxes (shared/hitgroups.js): head 59..69, chest 41..59 and 22 wide,
-// stomach 31..42, legs 0..31. Held weapons are simple per-hold shapes on the right hand
-// bone until each gun gets its own model.
+// stomach 31..42, legs 0..31. The gun in hand is drawn separately (client/models/guns.js).
 
 import { MeshBuilder } from '../gl/meshkit.js';
 import { PLAYER_SKELETON as S } from '../anim/skeleton.js';
 
+// How a weapon is held (client/anim/playeranim.js).
 export const HOLD_RIFLE = 0;
 export const HOLD_PISTOL = 1;
 export const HOLD_KNIFE = 2;
@@ -81,35 +81,5 @@ export function buildPlayer(team, helmet = false) {
     if (team === 'T') m.color(L.pants).push().translate(0, ly + 3.4, 27).box(4, 1.6, 5).pop(); // cargo pocket
     m.color(L.boots).bone(S.bone('ankle_L')).push().translate(1.8, ly, 2.6).slab(9, 4.4, 5.2, 1.6).pop();
   }, 1, S.mirror);
-  return b.build();
-}
-
-const GUNMETAL = [0.16, 0.16, 0.17];
-const GRIP = [0.1, 0.1, 0.1];
-const STEEL = [0.62, 0.64, 0.68];
-const C4_TAN = [0.52, 0.47, 0.3];
-
-// A held weapon shape in the right hand's frame (x along the aim, z up, origin in the
-// grip), placed at the hand's bind position so the hand bone's skin matrix carries it.
-export function buildHeld(hold) {
-  const b = new MeshBuilder().bone(S.bone('hand_R'));
-  const [hx, hy, hz] = bind('hand_R');
-  b.translate(hx, hy, hz);
-  if (hold === HOLD_RIFLE) {
-    b.color(GUNMETAL).push().translate(4, 0, 2.2).box(14, 1.6, 2.6).pop(); // receiver
-    b.push().translate(11, 0, 2.6).rotate(90).lathe([[0.45, 0], [0.45, 13]], 6).pop(); // barrel (lathe z -> x)
-    b.push().translate(-7.5, 0, 1.6).box(9, 1.4, 3).pop(); // stock
-    b.push().translate(6.5, 0, -1).rotate(-15).box(2.2, 1.2, 5).pop(); // magazine
-    b.color(GRIP).push().translate(0, 0, -0.6).rotate(15).box(1.8, 1.3, 3.6).pop(); // pistol grip
-  } else if (hold === HOLD_PISTOL) {
-    b.color(GUNMETAL).push().translate(2.6, 0, 2.2).box(7, 1.1, 1.5).pop();
-    b.color(GRIP).push().translate(0, 0, 0).rotate(15).box(1.6, 1.0, 3.4).pop();
-  } else if (hold === HOLD_KNIFE) {
-    b.color(GRIP).push().translate(0.5, 0, 0).box(4, 1.1, 1.4).pop();
-    b.color(STEEL).push().translate(6.1, 0, 0.2).box(7.2, 0.3, 1.2).pop();
-  } else {
-    b.color(C4_TAN).push().translate(3, 0, 0).box(7, 4.6, 3).pop();
-    b.color(BLACK).push().translate(3.5, 0, 1.75).box(3.8, 3.2, 0.5).pop();
-  }
   return b.build();
 }

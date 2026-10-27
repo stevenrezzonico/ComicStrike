@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildPlayer, buildHeld, HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4 } from '../client/models/players.js';
+import { buildPlayer, HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4 } from '../client/models/players.js';
 import { PlayerAnimator, holdOf } from '../client/anim/playeranim.js';
 import { PLAYER_SKELETON as S } from '../client/anim/skeleton.js';
 import { WEAPON_ID } from '../shared/weapons.js';
@@ -26,7 +26,6 @@ Deno.test('player models: closed, under budget, team looks differ', () => {
     assert.ok(m.tris > 300);
   }
   assert.ok(buildPlayer('CT', true).tris > buildPlayer('CT', false).tris, 'the helmet adds geometry');
-  for (const h of [HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4]) assert.ok(buildHeld(h).tris <= 200);
   assert.equal(holdOf(WEAPON_ID.ak47), HOLD_RIFLE);
   assert.equal(holdOf(WEAPON_ID.deagle), HOLD_PISTOL);
   assert.equal(holdOf(WEAPON_ID.knife), HOLD_KNIFE);
@@ -97,4 +96,17 @@ Deno.test('player animation: a shot kicks, then settles', () => {
   assert.ok(a.kick > 0.8);
   run(a, 32, () => [0, 0, 0], { shots: 6 });
   assert.equal(a.kick, 0);
+});
+
+Deno.test('player animation: the off hand holds the gun at its support point', async () => {
+  const { buildGun } = await import('../client/models/guns.js');
+  for (const name of ['ak47', 'awp', 'deagle', 'p90']) {
+    const { support } = buildGun(name);
+    const a = run(new PlayerAnimator(), 8, () => [0, 0, 0], { hold: holdOf(WEAPON_ID[name]) });
+    // Level aim: the left wrist sits at the right wrist plus the support offset.
+    a.update(1 / 64, 0, 0, 0, 0, 0, 0, true, holdOf(WEAPON_ID[name]), 0, 0, true, support);
+    const l = bone(a, 'hand_L'), r = bone(a, 'hand_R');
+    const err = Math.hypot(l[0] - r[0] - support[0], l[1] - r[1] - support[1], l[2] - r[2] - support[2]);
+    assert.ok(err < 1, `${name}: off hand ${err.toFixed(2)} from the support point`);
+  }
 });

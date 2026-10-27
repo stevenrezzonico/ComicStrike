@@ -34,6 +34,13 @@ const GRIPS = {
 };
 const RELOAD_HAND = { [HOLD_RIFLE]: [7, -2, -11], [HOLD_PISTOL]: [5, 2, -14] }; // left hand fetching a magazine
 
+// Hands turn a quarter about z on top of the aim so their boxes point forward, like
+// fingers around a grip: the right +90 degrees, the left -90. The palm is PALM ahead of
+// the wrist; the gun's grip (its origin) sits in the right palm.
+export const PALM = 1.6;
+export const handTurn = [Q.fromAxisAngle(new Float32Array(4), 0, 0, 0, 1, -Math.PI / 2),
+  Q.fromAxisAngle(new Float32Array(4), 0, 0, 0, 1, Math.PI / 2)];
+
 export function holdOf(weaponId) {
   const w = WEAPONS[weaponId];
   if (!w || w.slot === SLOT_KNIFE) return HOLD_KNIFE;
@@ -66,8 +73,9 @@ export class PlayerAnimator {
   }
 
   // Advances by dt seconds and rebuilds the pose. (x, y, z): feet; yaw / pitch in degrees
-  // (pitch down-positive); duck 0..1.
-  update(dt, x, y, z, yaw, pitch, duck, onGround, hold, anim, shots, alive) {
+  // (pitch down-positive); duck 0..1; support: the gun's off-hand point in its frame
+  // (client/models/guns.js), or null for the hold's default.
+  update(dt, x, y, z, yaw, pitch, duck, onGround, hold, anim, shots, alive, support = null) {
     this.time += dt;
     // Velocity from positions, smoothed; teleports (spawns) start over.
     if (Number.isNaN(this.px) || Math.hypot(x - this.px, y - this.py, z - this.pz) > 96) {
@@ -135,11 +143,18 @@ export class PlayerAnimator {
     const w = p.wpos, cx = w[SPINE3 * 3], cyy = w[SPINE3 * 3 + 1], cz = w[SPINE3 * 3 + 2];
     const handP = grip.aimed ? aimP : 25;
     const hr = handP * Math.PI / 180, ch = Math.cos(hr), sh = Math.sin(hr);
-    for (let s = 0; s < 2; s++) {
+    for (let s = 1; s >= 0; s--) { // the gun hand first: the off hand follows the gun
       let [ox, oy, oz] = grip.hands[s];
       if (s === 0 && anim & ANIM_RELOAD && RELOAD_HAND[hold]) {
         [ox, oy, oz] = RELOAD_HAND[hold];
         oz += Math.sin(this.time * 7) * 1.2;
+      } else if (s === 0 && support && grip.aimed) {
+        // Off hand on the gun's support point: right wrist + palm offset + support, minus
+        // the left palm offset (all along the aim frame).
+        const [rx, ry, rz] = grip.hands[1];
+        ox = rx + support[0];
+        oy = ry + support[1];
+        oz = rz + support[2];
       }
       ox -= this.kick * 2;
       let tx, ty, tz;
@@ -157,7 +172,8 @@ export class PlayerAnimator {
         tz = cz + oz;
       }
       p.reach(ARM[s], ELBOW[s], HAND[s], tx, ty, tz, -0.2, SIDE[s] * 0.6, -1);
-      Q.fromEuler(tq, 0, grip.aimed || kneel ? handP : 0, 0, 0);
+      Q.fromEuler(tv, 0, grip.aimed || kneel ? handP : 0, 0, 0);
+      Q.mul(tq, 0, tv, 0, handTurn[s], 0);
       p.setWorldRotation(HAND[s], tq, 0);
     }
     p.skinMatrices();

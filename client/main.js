@@ -37,6 +37,8 @@ import { Decals } from './gl/decals.js';
 import { Debris } from './gl/debris.js';
 import { Players } from './gl/players.js';
 import { PlayerModels } from './gl/playermodels.js';
+import { GunMeshes } from './gl/gunmeshes.js';
+import { modelLight } from './gl/skinned.js';
 import { perspective, viewFromAngles, multiply, invert } from './gl/mat4.js';
 import { Input, SELECT_LAST } from './input.js';
 import { WeaponView } from './weaponview.js';
@@ -76,9 +78,10 @@ const renderer = new Renderer(canvas);
 const decals = new Decals(renderer.gl);
 const debris = new Debris(renderer.gl);
 const players = new Players(renderer.gl);
-const models = new PlayerModels(renderer.gl);
+const guns = new GunMeshes(renderer.gl); // every gun model, shared by first and third person
+const models = new PlayerModels(renderer.gl, guns);
 const overlays = [decals, debris, players, models];
-const weaponView = new WeaponView(renderer.gl, FOV_Y, cv);
+const weaponView = new WeaponView(renderer.gl, FOV_Y, cv, guns);
 const input = new Input(canvas);
 const hud = new Hud((item) => buy(item));
 const sounds = new Sounds();
@@ -92,6 +95,7 @@ const impacts = new ImpactList();
 let tickCount = 1;
 let lastButtons = 0;
 let world = null;
+const lightSample = new Float32Array(3), lightTarget = new Float32Array(3);
 let breakables = null;
 let breakableColors = null; // rgb per breakable slot, for debris
 const spawns = { [TEAM_T]: [], [TEAM_CT]: [] }; // offline spawn points [x, y, z, yaw]
@@ -605,9 +609,8 @@ function draw(now, alpha, dt) {
     players.update(interp, 0, selfId, boxes);
     models.update(interp, 0, selfId, dt, world && world.surfaces, !boxes);
     const b = net.own.bomb;
-    if (b.state === BOMB_DROPPED || b.state === BOMB_PLANTED || b.state === BOMB_DEFUSED) {
-      players.addBomb(b.x, b.y, b.z, 0, b.state === BOMB_PLANTED && now - lastBeep < 120);
-    }
+    models.setBomb(b.state === BOMB_DROPPED || b.state === BOMB_PLANTED || b.state === BOMB_DEFUSED, b.x, b.y, b.z, 0,
+      b.state === BOMB_PLANTED && now - lastBeep < 120, world && world.surfaces);
   }
   if (net && synced) bombBeeps(now);
 
@@ -633,6 +636,12 @@ function draw(now, alpha, dt) {
 
   const dead = player.health <= 0;
   weaponView.hidden = dead;
+  // The held weapon is lit by the map under the player, eased like other models.
+  if (world && world.surfaces.lightAt(lightSample, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2])) {
+    modelLight(lightTarget, lightSample);
+    const k = 1 - Math.exp(-dt * 8);
+    for (let c = 0; c < 3; c++) weaponView.light[c] += (lightTarget[c] - weaponView.light[c]) * k;
+  }
   deathNotice.style.display = dead && net ? 'block' : 'none';
   weaponView.draw(canvas.width, canvas.height, aspect, ws, ps, lastButtons, simTime, dt, Math.max(player.health, 0),
     player.armor);

@@ -15,6 +15,10 @@ const LIGHT_DIR = (() => {
   return new Float32Array(v.map((x) => x / l));
 })();
 
+// Skin for meshes drawn rigidly (guns, props): every bone at its bind pose.
+export const IDENTITY_SKIN = new Float32Array(MAX_BONES * 16);
+for (let i = 0; i < MAX_BONES; i++) for (let k = 0; k < 4; k++) IDENTITY_SKIN[i * 16 + k * 5] = 1;
+
 export class SkinnedMesh {
   constructor(gl, built) {
     this.count = built.count;
@@ -37,7 +41,8 @@ export class SkinnedMesh {
 export class SkinnedRenderer {
   constructor(gl) {
     this.gl = gl;
-    this.prog = program(gl, SKINNED_VS, SKINNED_FS, ['u_viewProj', 'u_model', 'u_bones', 'u_light', 'u_lightDir']);
+    this.emissive = 0;
+    this.prog = program(gl, SKINNED_VS, SKINNED_FS, ['u_viewProj', 'u_model', 'u_bones', 'u_light', 'u_lightDir', 'u_emissive']);
   }
 
   begin(viewProj) {
@@ -45,12 +50,15 @@ export class SkinnedRenderer {
     gl.useProgram(this.prog.p);
     gl.uniformMatrix4fv(this.prog.loc.u_viewProj, false, viewProj);
     gl.uniform3fv(this.prog.loc.u_lightDir, LIGHT_DIR);
+    gl.uniform1f(this.prog.loc.u_emissive, (this.emissive = 0));
     gl.frontFace(gl.CCW);
   }
 
-  // model: mat4 (model space -> world); skin: Pose.skin; light: rgb multiplier.
-  draw(mesh, model, skin, light) {
+  // model: mat4 (model space -> world); skin: Pose.skin (or IDENTITY_SKIN); light: rgb
+  // multiplier; emissive: 1 glows unlit.
+  draw(mesh, model, skin, light, emissive = 0) {
     const gl = this.gl;
+    if (emissive !== this.emissive) gl.uniform1f(this.prog.loc.u_emissive, (this.emissive = emissive));
     gl.uniformMatrix4fv(this.prog.loc.u_model, false, model);
     gl.uniformMatrix4fv(this.prog.loc.u_bones, false, skin, 0, MAX_BONES * 16);
     gl.uniform3fv(this.prog.loc.u_light, light);

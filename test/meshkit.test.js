@@ -87,7 +87,8 @@ Deno.test('skeleton: the bind pose skins to identity; poses rotate children with
   pose.turn(sh, 0, 0, 90).solve();
   const w = pose.wpos;
   assert.ok(Math.abs(w[hand * 3 + 1] - w[sh * 3 + 1]) < 1e-4);
-  assert.ok(Math.abs(w[hand * 3 + 2] - w[sh * 3 + 2] - 21) < 1e-4, 'hand 21 units above the shoulder');
+  const arm = skel.bind[hand * 3 + 1] - skel.bind[sh * 3 + 1];
+  assert.ok(Math.abs(w[hand * 3 + 2] - w[sh * 3 + 2] - arm) < 1e-4, 'hand straight above the shoulder');
   // The skin matrix moves the bind hand position to the posed one.
   const s = pose.skinMatrices(), o = hand * 16, b = skel.bind;
   const x = s[o] * b[hand * 3] + s[o + 4] * b[hand * 3 + 1] + s[o + 8] * b[hand * 3 + 2] + s[o + 12];
@@ -96,7 +97,7 @@ Deno.test('skeleton: the bind pose skins to identity; poses rotate children with
 
   const half = new Pose(skel).blend(new Pose(skel), pose, 0.5).solve();
   const up = half.wpos[hand * 3 + 2] - half.wpos[sh * 3 + 2];
-  assert.ok(Math.abs(up - 21 * Math.sin(Math.PI / 4)) < 1e-3, 'half way is 45 degrees');
+  assert.ok(Math.abs(up - arm * Math.sin(Math.PI / 4)) < 1e-3, 'half way is 45 degrees');
 });
 
 Deno.test('skeleton: two-bone reach puts the hand on reachable targets, bending toward the pole', () => {
@@ -112,13 +113,15 @@ Deno.test('skeleton: two-bone reach puts the hand on reachable targets, bending 
     const shZ = w[sh * 3 + 2], handZ = w[hand * 3 + 2];
     assert.ok(w[el * 3 + 2] < Math.max(shZ, handZ), 'elbow bends down');
     // Bone lengths are kept.
-    assert.ok(Math.abs(Math.hypot(w[el * 3] - w[sh * 3], w[el * 3 + 1] - w[sh * 3 + 1], w[el * 3 + 2] - shZ) - 11) < 1e-3);
+    const upper = skel.bind[sh * 3 + 1] - skel.bind[el * 3 + 1];
+    assert.ok(Math.abs(Math.hypot(w[el * 3] - w[sh * 3], w[el * 3 + 1] - w[sh * 3 + 1], w[el * 3 + 2] - shZ) - upper) < 1e-3);
   }
   // Out of reach: the arm points straight at the target.
   const pose = new Pose(skel).solve();
   pose.reach(sh, el, hand, 100, -7.5, 57.5, 0, 0, -1);
   const w = pose.wpos;
-  assert.ok(Math.abs(w[hand * 3] - w[sh * 3] - 21) < 0.05, `straight: ${w[hand * 3] - w[sh * 3]}`);
+  const reach = skel.bind[sh * 3 + 1] - skel.bind[hand * 3 + 1];
+  assert.ok(Math.abs(w[hand * 3] - w[sh * 3] - reach) < 0.05, `straight: ${w[hand * 3] - w[sh * 3]}`);
 });
 
 Deno.test('mannequin: closed, low-poly, and every part follows the bone it sits on', async () => {

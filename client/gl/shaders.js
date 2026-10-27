@@ -304,34 +304,6 @@ void main() {
   o_color = vec4(v_col * (0.45 + 0.6 * diff), 1.0);
 }`;
 
-// Viewmodel: flat-shaded boxes in eye space with their own projection.
-export const VIEWMODEL_VS = `#version 300 es
-layout(location=0) in vec3 a_pos;
-layout(location=1) in vec3 a_nrm;
-layout(location=2) in vec3 a_col;
-uniform mat4 u_proj;
-uniform mat4 u_model;
-out vec3 v_col;
-out vec3 v_nrm;
-void main() {
-  v_col = a_col;
-  v_nrm = mat3(u_model) * a_nrm;
-  gl_Position = u_proj * u_model * vec4(a_pos, 1.0);
-}`;
-
-export const VIEWMODEL_FS = `#version 300 es
-precision mediump float;
-in vec3 v_col;
-in vec3 v_nrm;
-uniform float u_light; // ambient light at the player's position
-uniform float u_emissive;
-out vec4 o_color;
-void main() {
-  float diff = max(dot(normalize(v_nrm), normalize(vec3(-0.3, 0.8, 0.5))), 0.0);
-  vec3 lit = v_col * (0.45 + 0.65 * diff) * u_light;
-  o_color = vec4(mix(lit, v_col * 1.6, u_emissive), 1.0);
-}`;
-
 // Crosshair: four arms and a dot generated from gl_VertexID (6 vertices each), in
 // pixels. u_parts bits: 0 right, 1 left, 2 bottom, 3 top arm, 4 dot.
 export const CROSSHAIR_VS = `#version 300 es
@@ -389,9 +361,10 @@ in vec3 v_nrm;
 in vec3 v_col;
 uniform vec3 u_light; // map light at the model, lifted like the world's
 uniform vec3 u_lightDir;
+uniform float u_emissive; // 1: unlit glow (muzzle flash, LEDs)
 out vec4 o_color;
 void main() {
   float d = dot(normalize(v_nrm), u_lightDir);
   float tone = mix(0.62, 1.0, smoothstep(-0.05, 0.05, d));
-  o_color = vec4(v_col * tone * u_light, 1.0);
+  o_color = vec4(mix(v_col * tone * u_light, v_col * 1.6, u_emissive), 1.0);
 }`;
