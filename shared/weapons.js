@@ -48,6 +48,9 @@ const EXTRA = {
   nova: ['Nova', 4.0], xm1014: ['XM1014', 3.0], sawedoff: ['Sawed-Off', 3.5], mag7: ['MAG-7', 2.5],
   m249: ['M249', 5.7], negev: ['Negev', 5.7],
 };
+// Shotguns loading shell by shell (CS:GO's Nova, XM1014, Sawed-Off): seconds before the
+// first shell, then per shell (approximations of the animations); the MAG-7 uses a magazine.
+const SHELL_RELOAD = { nova: [0.5, 0.5], xm1014: [0.5, 0.4], sawedoff: [0.5, 0.5] };
 const PISTOLS = new Set(['glock', 'hkp2000', 'usp_silencer', 'p250', 'elite', 'fiveseven', 'tec9', 'cz75a',
   'deagle', 'revolver']);
 
@@ -56,11 +59,13 @@ function fromGameData(name) {
   const d = CSGO_WEAPONS[name];
   const [label, reloadTime, alt = false] = EXTRA[name];
   const m = (k) => (alt && d[k + 'Alt'] !== null ? d[k + 'Alt'] : d[k]);
+  const [reloadStart, shellTime] = SHELL_RELOAD[name] || [0, 0];
   return {
     name, label, slot: PISTOLS.has(name) ? SLOT_SECONDARY : SLOT_PRIMARY, auto: d.isFullAuto === 1,
     bullets: d.bullets, cycle: d.cycletime, damage: d.damage, armorRatio: d.armorRatio,
     penetration: d.penetration, range: d.range, rangeModifier: d.rangeModifier, headshotMult: d.headshotMultiplier,
-    maxSpeed: m('maxPlayerSpeed'), clip: d.primaryClipSize, reserve: d.primaryReserveAmmoMax, reloadTime,
+    maxSpeed: m('maxPlayerSpeed'), clip: d.primaryClipSize, reserve: d.primaryReserveAmmoMax,
+    reloadTime: shellTime ? reloadStart + d.primaryClipSize * shellTime : reloadTime, reloadStart, shellTime,
     deployTime: 1.0, price: d.inGamePrice, killAward: d.killAward,
     spread: mr(m('spread')), inaccuracyStand: mr(m('inaccuracyStand')), inaccuracyCrouch: mr(m('inaccuracyCrouch')),
     inaccuracyMove: mr(m('inaccuracyMove')), inaccuracyJump: mr(m('inaccuracyJump')),
@@ -221,6 +226,7 @@ export const WEV_MELEE2 = 64;
 export const WEV_PLANTED = 128;
 export const WEV_DEFUSED = 256;
 export const WEV_DROP = 512; // dropped the weapon in hand (G)
+export const WEV_SHELL = 1024; // a shotgun shell went in
 
 export const ACTION_PLANT = 1;
 export const ACTION_DEFUSE = 2;
@@ -356,9 +362,11 @@ function decayPunch(f) {
   f[WS_PUNCH_VEL] = vp; f[WS_PUNCH_VEL + 1] = vy;
 }
 
+// WS_RELOAD_END is when the reload completes, or for shell-by-shell shotguns when the
+// next shell goes in (the first after reloadStart).
 function startReload(f, w, time, o) {
   if (f[WS_RELOAD_END] > 0 || f[o + 1] >= w.clip || f[o + 2] <= 0) return false;
-  f[WS_RELOAD_END] = time + w.reloadTime;
+  f[WS_RELOAD_END] = time + (w.shellTime ? w.reloadStart + w.shellTime : w.reloadTime);
   f[WS_EVENTS] |= WEV_RELOAD;
   return true;
 }
@@ -421,13 +429,17 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
   }
   const o = WS_SLOTS + f[WS_ACTIVE] * 3;
 
-  // Finish a reload.
+  // Finish a reload, or put a shell in.
   if (f[WS_RELOAD_END] > 0 && time >= f[WS_RELOAD_END]) {
-    const take = Math.min(w.clip - f[o + 1], f[o + 2]);
+    const take = Math.min(w.shellTime ? 1 : w.clip - f[o + 1], f[o + 2]);
     f[o + 1] += take;
     f[o + 2] -= take;
-    f[WS_RELOAD_END] = 0;
-    f[WS_EVENTS] |= WEV_RELOADED;
+    if (w.shellTime) f[WS_EVENTS] |= WEV_SHELL;
+    if (w.shellTime && f[o + 1] < w.clip && f[o + 2] > 0) f[WS_RELOAD_END] += w.shellTime;
+    else {
+      f[WS_RELOAD_END] = 0;
+      f[WS_EVENTS] |= WEV_RELOADED;
+    }
   }
 
   if (w.gun) updateAccuracyPenalty(ws, ps, w, time);
@@ -437,6 +449,8 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
   const ready = time >= f[WS_DEPLOY_END];
 
   if (!w.melee && ready && (buttons & IN_RELOAD)) startReload(f, w, time, o);
+  // Shotguns stop loading to fire what they hold, like CS:GO.
+  if (w.shellTime && f[WS_RELOAD_END] > 0 && (buttons & IN_ATTACK) && f[o + 1] > 0) f[WS_RELOAD_END] = 0;
 
   // Eye position and view axes (with aim punch for guns).
   const eyeX = ps.f[PS_ORIGIN], eyeY = ps.f[PS_ORIGIN + 1], eyeZ = ps.f[PS_ORIGIN + 2] + eyeOffset(ps);

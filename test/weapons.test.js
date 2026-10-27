@@ -4,6 +4,7 @@ import { createPlayerState, PS_VEL, PS_FLAGS, FL_ONGROUND, FL_DUCKING } from '..
 import {
   WEAPONS, WEAPON_ID, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, ShotList, createWeaponState, giveWeapon,
   weaponTick, getInaccuracy, recoveryTime, UniformRandomStream, WS_ACTIVE, WS_SLOTS, WS_PUNCH, WS_EVENTS, WEV_FIRE, WEV_RELOADED,
+  WEV_SHELL, WS_RELOAD_END,
 } from '../shared/weapons.js';
 
 const DEG = Math.PI / 180;
@@ -63,6 +64,42 @@ Deno.test('manual reload keeps the remaining rounds', () => {
   hold(ctx, IN_RELOAD, 2010, Math.ceil(2.43 / TICK_DT) + 2);
   assert.equal(clip(ctx, SLOT_PRIMARY), 30);
   assert.equal(reserve(ctx, SLOT_PRIMARY), 85);
+});
+
+Deno.test('shotguns load shell by shell and stop loading to fire', () => {
+  const ctx = setup('nova');
+  const nova = WEAPONS[WEAPON_ID.nova];
+  hold(ctx, 0, 990, 1);
+  for (let t = 1000, n = 0; n < 3; t++) { // three shots, a trigger press each
+    weaponTick(ctx.ws, ctx.ps, t % 2 ? 0 : IN_ATTACK, -1, 0, 0, t, ctx.shots);
+    if (ctx.ws.f[WS_EVENTS] & WEV_FIRE) n++;
+    if (t > 1300) throw new Error('did not fire');
+  }
+  assert.equal(clip(ctx, SLOT_PRIMARY), 5);
+  const start = 1400;
+  const shells = [];
+  for (let t = start; t < start + 256; t++) {
+    weaponTick(ctx.ws, ctx.ps, t === start ? IN_RELOAD : 0, -1, 0, 0, t, ctx.shots);
+    if (ctx.ws.f[WS_EVENTS] & WEV_SHELL) shells.push((t - start) * TICK_DT);
+  }
+  assert.equal(shells.length, 3, 'one shell per missing round');
+  assert.ok(Math.abs(shells[0] - (nova.reloadStart + nova.shellTime)) < 0.02);
+  assert.ok(Math.abs(shells[1] - shells[0] - nova.shellTime) < 0.02);
+  assert.equal(clip(ctx, SLOT_PRIMARY), 8);
+  assert.equal(ctx.ws.f[WS_RELOAD_END], 0);
+
+  // Fire twice, start loading, then pull the trigger after the first shell: it fires.
+  hold(ctx, IN_ATTACK, 2000, 1);
+  hold(ctx, 0, 2001, 80);
+  hold(ctx, IN_ATTACK, 2081, 1);
+  hold(ctx, 0, 2082, 80);
+  assert.equal(clip(ctx, SLOT_PRIMARY), 6);
+  hold(ctx, IN_RELOAD, 2200, 1);
+  hold(ctx, 0, 2201, Math.ceil((nova.reloadStart + nova.shellTime) / TICK_DT) + 1);
+  assert.equal(clip(ctx, SLOT_PRIMARY), 7);
+  assert.equal(hold(ctx, IN_ATTACK, 2201 + Math.ceil((nova.reloadStart + nova.shellTime) / TICK_DT) + 1, 1).fired, 1);
+  assert.equal(ctx.ws.f[WS_RELOAD_END], 0, 'the reload stopped');
+  assert.equal(clip(ctx, SLOT_PRIMARY), 6);
 });
 
 Deno.test('semi-automatic pistols fire once per trigger press', () => {

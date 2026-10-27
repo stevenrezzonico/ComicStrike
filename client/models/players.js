@@ -27,6 +27,9 @@ const CT_LOOK = {
   helmet: [0.2, 0.23, 0.22], cap: [0.15, 0.15, 0.17],
 };
 
+export const LOOKS = { T: T_LOOK, CT: CT_LOOK };
+export { SKIN };
+
 const bind = (name) => {
   const i = S.bone(name);
   return [S.bind[i * 3], S.bind[i * 3 + 1], S.bind[i * 3 + 2]];

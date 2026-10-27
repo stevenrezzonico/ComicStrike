@@ -67,6 +67,21 @@ export class Skeleton {
 
 export const PLAYER_SKELETON = new Skeleton();
 
+// First-person arms (client/anim/viewanim.js): bound pointing forward (+x) from shoulders
+// beside the eye, palms facing in; the animator moves the shoulders per hold. Longer
+// than the player's arms, like CS:GO's viewmodel arms, to reach a rifle's handguard.
+export const VIEW_ARM_UPPER = 13.5;
+export const VIEW_ARM_LOWER = 13.5;
+export const ARMS_SKELETON = new Skeleton([
+  ['view', null, [0, 0, 0]],
+  ['arm_upper_L', 'view', [0, 6, 0]],
+  ['arm_lower_L', 'arm_upper_L', [VIEW_ARM_UPPER, 6, 0]],
+  ['hand_L', 'arm_lower_L', [VIEW_ARM_UPPER + VIEW_ARM_LOWER, 6, 0]],
+  ['arm_upper_R', 'view', [0, -6, 0]],
+  ['arm_lower_R', 'arm_upper_R', [VIEW_ARM_UPPER, -6, 0]],
+  ['hand_R', 'arm_lower_R', [VIEW_ARM_UPPER + VIEW_ARM_LOWER, -6, 0]],
+]);
+
 // Local rotation (quaternion) and translation of every bone, plus the derived world
 // transforms (model space) and skin matrices.
 export class Pose {

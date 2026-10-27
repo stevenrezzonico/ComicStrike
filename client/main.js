@@ -641,6 +641,7 @@ function draw(now, alpha, dt) {
 
   const dead = player.health <= 0;
   weaponView.hidden = dead;
+  weaponView.team = player.team;
   // The held weapon is lit by the map under the player, eased like other models.
   if (world && world.surfaces.lightAt(lightSample, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2])) {
     modelLight(lightTarget, lightSample);
@@ -689,7 +690,7 @@ for (const [name, bit] of [['forward', IN_FORWARD], ['back', IN_BACK], ['movelef
   con.command(`+${name}`, (_a, ctx) => input.press(bit, ctx.key), `Hold: ${name}`);
   con.command(`-${name}`, (_a, ctx) => input.release(bit, ctx.key), `Release: ${name}`);
 }
-con.command('+lookatweapon', () => {}, 'Inspect the weapon (arrives with the arm animations)');
+con.command('+lookatweapon', () => weaponView.inspect((tickCount - 1) * TICK_DT), 'Inspect the weapon');
 con.command('-lookatweapon', () => {});
 for (let n = 1; n <= NUM_SLOTS; n++) {
   con.command(`slot${n}`, () => {
@@ -886,6 +887,7 @@ globalThis.webcs = {
   interp,
   targets,
   hud,
+  weaponView,
   buy,
   sounds,
   con,

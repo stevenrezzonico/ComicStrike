@@ -14,12 +14,14 @@ export class GunMeshes {
     this.flash = []; // muzzle flash at the muzzle (guns only)
     this.muzzle = [];
     this.support = []; // off-hand point in the gun frame, or null
+    this.points = []; // buildGun's points (muzzle, support, mag, bolt, ...) for the hands
     WEAPONS.forEach((w, id) => {
       if (!w) return;
       const g = buildGun(w.name);
       this.mesh[id] = new SkinnedMesh(gl, g.mesh);
       this.muzzle[id] = g.muzzle;
       this.support[id] = g.support;
+      this.points[id] = { ...g, mesh: null };
       if (w.gun) {
         const [mx, my, mz] = g.muzzle;
         const f = new MeshBuilder().color(FLASH).box(3, 0.2, 1.8, mx + 1.5, my, mz).box(3, 1.8, 0.2, mx + 1.5, my, mz);

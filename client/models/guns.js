@@ -5,7 +5,7 @@
 // Gun frame: x along the barrel, y left, z up; the origin is where the shooting hand
 // holds the grip (the top of the pistol grip). Three bones: GUN_ROOT, GUN_MAG (the
 // magazine, so reloads can drop it) and GUN_BOLT (slide, bolt, pump). Each model also
-// reports its muzzle point and the support hand's point (handguard or the off-hand cup).
+// reports the points hands and effects need (see buildGun).
 
 import { MeshBuilder } from '../gl/meshkit.js';
 import { WEAPONS } from '../../shared/weapons.js';
@@ -42,9 +42,10 @@ function tube(b, x0, x1, r, z, color, seg = 6, y = 0) {
   b.color(color).push().translate(x0, y, z).rotate(90).lathe([[r, 0], [r, x1 - x0]], seg).pop();
 }
 
-// Pistol grip at the origin, raked back `rake` degrees, `len` long.
+// Pistol grip at the origin, raked back `rake` degrees (the bottom behind the top), `len`
+// long.
 function grip(b, len, w, color, rake = 15, depth = 1.6) {
-  b.color(color).push().rotate(-rake).extrude([[-depth * 0.55, 0.2], [depth * 0.45, 0.2], [depth * 0.4, -len],
+  b.color(color).push().rotate(rake).extrude([[-depth * 0.55, 0.2], [depth * 0.45, 0.2], [depth * 0.4, -len],
     [-depth * 0.6, -len]], w).pop();
   b.color(color).box(1.6, w * 0.4, 0.25, 1.5, 0, -0.9); // trigger guard bar
 }
@@ -111,7 +112,11 @@ function pistol(b, s) {
   const bx = -Math.tan(rake * Math.PI / 180) * gripLen;
   b.bone(GUN_MAG).color(BLACK).box(1.6, w * 1.1, 0.4, bx, 0, -gripLen - 0.1).bone(GUN_ROOT);
   if (barrel) tube(b, -1.4 + len, -1.4 + len + barrel, 0.3, 0.9, DARK);
-  return { muzzle: [-1.4 + len + barrel, 0, 0.95], support: [0.2, -0.6, -2.4] };
+  const r = rake * Math.PI / 180;
+  return {
+    muzzle: [-1.4 + len + barrel, 0, 0.95], support: [-0.4, -0.6, -2.4],
+    mag: [bx, 0, -gripLen - 0.3], magDir: [-Math.sin(r), 0, -Math.cos(r)], bolt: [-0.9, 0, 0.35 + h / 2],
+  };
 }
 
 // Long gun from a spec (see GUNS): receiver, grip, barrel and handguard, magazine,
@@ -148,12 +153,19 @@ function longGun(b, s) {
     tube(b, rx1, rx1 + s.tubeMag, 0.42, bore - 1.05, metal);
     if (s.pump) b.bone(GUN_BOLT).color(furn).box(s.pump, 1.5, 1.3, rx1 + 2.5 + s.pump / 2, 0, bore - 1.05).bone(GUN_ROOT);
   }
-  // Magazine.
+  // Magazine; the hand takes it by its lower part.
   const m = s.mag;
+  let mag = null, magDir = null;
   if (m) {
+    const curve = m.curve || 0, lean = Math.tan((m.rake || 0) * Math.PI / 180);
+    mag = m.drum ? [m.x, 0, z0 - m.drum * 1.6] : [m.x - (m.depth || 1.4) / 2 + (curve * 0.5 + lean) * m.len * 0.6, 0, z0 - m.len * 0.6];
+    magDir = norm([m.drum ? 0 : curve + lean, 0, -1]);
+
     if (m.drum) drum(b, m.x, z0 - m.drum, m.drum, m.t || 2.2, m.color || metal);
     else magazine(b, m.x, z0 + 0.1, m.len, m.depth || 1.4, m.w || rw * 0.75, m.color || metal, m.curve || 0, m.rake || 0);
   }
+  // Bolt handle on the right, or the pump under the barrel.
+  const bolt = s.pump ? [rx1 + 2.5 + s.pump / 2, 0, bore - 1.75] : [bh, -rw / 2 - 0.8, z0 + rh * 0.7];
   if (s.stock) stock(b, s.stock, rx0, z0 + rh, s.stockLen || 9, s.stockH || 3.2, s.stockDrop ?? 1, s.stockColor || furn);
   if (s.scope) scope(b, s.scope[0], z0 + rh + 1.5, s.scope[1], s.scope[2] || 0.7, z0 + rh, s.scopeColor || BLACK);
   if (s.sights !== false && !s.scope) sights(b, rx0 + 1.5, muzzle - 1, bore + 0.3);
@@ -163,7 +175,12 @@ function longGun(b, s) {
   // grip, where long guns are held), else under the receiver front.
   const support = s.support || (s.foregrip ? [s.foregrip, 0, z0 - 1.6]
     : s.handguard ? [Math.min(rx1 + s.handguard[0] * 0.55, 12.5), 0, bore - 1.2] : [rx1 - 1.5, 0, z0]);
-  return { muzzle: [muzzle, 0, bore], support };
+  return { muzzle: [muzzle, 0, bore], support, mag, magDir, bolt, pump: !!s.pump, port: [rx1 - 2, 0, z0 - 0.3] };
+}
+
+function norm(v) {
+  const l = Math.hypot(v[0], v[1], v[2]);
+  return [v[0] / l, v[1] / l, v[2] / l];
 }
 
 // --- specifications ----------------------------------------------------------------------
@@ -178,7 +195,7 @@ const GUNS = {
   p250: { pistol: { len: 7.0, slide: DARK, frame: POLY } },
   elite: { pistol: { len: 8.4, slide: SILVER, frame: SILVER, h: 1.3 } },
   fiveseven: { pistol: { len: 7.8, slide: DARK, frame: [0.25, 0.27, 0.25] } },
-  tec9: { long: { receiver: [-3, 6], height: 2.0, width: 1.2, barrel: 3, barrelR: 0.4, handguard: [2.5, 1.6], mag: { x: 1.6, len: 7, depth: 1.1 }, gripLen: 3.4, sights: true } },
+  tec9: { long: { receiver: [-3, 6], height: 2.0, width: 1.2, barrel: 3, barrelR: 0.4, handguard: [2.5, 1.6], mag: { x: 1.6, len: 7, depth: 1.1 }, gripLen: 3.4, sights: true, support: [1.2, 0, -2.2] } },
   cz75a: { pistol: { len: 7.6, slide: DARK, frame: WOOD_DARK } },
   deagle: { pistol: { len: 10.6, h: 1.55, w: 1.25, slide: [0.42, 0.42, 0.44], frame: BLACK, gripLen: 4.6 } },
   revolver: { revolver: true },
@@ -219,7 +236,7 @@ function buildRevolver(b) {
   b.color(SILVER).box(6.4, 0.6, 0.45, 5.7, 0, 1.6); // top strap / rib
   sights(b, -1, 8.6, 1.8);
   grip(b, 4.2, 1.15, WOOD, 25, 1.6);
-  return { muzzle: [9, 0, 1.1], support: [0.2, -0.6, -2.4] };
+  return { muzzle: [9, 0, 1.1], support: [-0.4, -0.6, -2.4], cylinder: [0.3, 0, 0.85] };
 }
 
 function buildKnife(b) {
@@ -245,7 +262,11 @@ export function buildDefuser() {
   return b.build();
 }
 
-// Builds the model of weapon `name` (shared/weapons.js names): { mesh, muzzle, support }.
+// Builds the model of weapon `name` (shared/weapons.js names): { mesh, muzzle, support,
+// mag, magDir, bolt, pump, port, cylinder }, points in the gun frame: the muzzle; the off
+// hand's place (null: one-handed); where a hand takes the magazine and the way it comes
+// out (null: no magazine); the bolt handle, slide rear or pump (pump: the bolt bone is a
+// pump); a shotgun's loading port; the revolver's cylinder.
 export function buildGun(name, opts = {}) {
   const b = new MeshBuilder().bone(GUN_ROOT);
   let pts;
@@ -265,13 +286,20 @@ export function buildGun(name, opts = {}) {
     if (g.long.top) { // P90: the magazine lies on top
       b.bone(GUN_MAG).color([0.35, 0.33, 0.28]).box(12, 1.8, 0.9, 0, 0, 2.4).bone(GUN_ROOT);
       b.color(BLACK).box(5, 1, 1, 7, 0, 3.2); // optic
+      pts.mag = [-3, 0, 2.9];
+      pts.magDir = norm([-0.4, 0, 1]);
     }
     if (g.long.helical) { // PP-Bizon: the helical magazine under the barrel
       b.bone(GUN_MAG).color(DARK).push().translate(5, 0, -1.4).rotate(90).lathe([[1.15, 0], [1.15, 8], [0.9, 8.6]], 8).pop()
         .bone(GUN_ROOT);
+      pts.mag = [8, 0, -2.5];
+      pts.magDir = norm([0.3, 0, -1]);
     }
   }
-  return { mesh: b.build(), muzzle: pts.muzzle, support: pts.support };
+  return {
+    mesh: b.build(), muzzle: pts.muzzle, support: pts.support, mag: pts.mag || null, magDir: pts.magDir || null,
+    bolt: pts.bolt || null, pump: !!pts.pump, port: pts.port || null, cylinder: pts.cylinder || null,
+  };
 }
 
 // Every weapon id's model (index = weapon id; 0 empty).

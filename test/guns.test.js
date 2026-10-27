@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildGun, buildAllGuns, buildDefuser, GUN_MAG, GUN_BOLT } from '../client/models/guns.js';
+import { buildGun, buildAllGuns, buildDefuser, GUN_ROOT, GUN_MAG, GUN_BOLT } from '../client/models/guns.js';
 import { WEAPONS } from '../shared/weapons.js';
 import { MESH_STRIDE } from '../client/gl/meshkit.js';
 
@@ -104,4 +104,29 @@ Deno.test('guns: magazines and bolts are separate bones; sizes follow the real g
   assert.ok(len('glock') > 6 && len('glock') < 9, `glock ${len('glock')}`);
   assert.ok(len('deagle') > 9.5 && len('deagle') < 12.5, `deagle ${len('deagle')}`);
   assert.ok(len('awp') > len('ssg08') && len('ak47') > len('mp7'));
+});
+
+// The triangles of one bone, as a mesh for nearest().
+function part(m, bone) {
+  const u8 = new Uint8Array(m.data), pos = [];
+  for (let t = 0; t < m.count; t += 3) {
+    if (u8[t * MESH_STRIDE + 15] === bone) pos.push(...m.positions.subarray(t * 3, t * 3 + 9));
+  }
+  return { positions: Float32Array.from(pos), count: pos.length / 3 };
+}
+
+Deno.test('guns: hands find the magazine, the bolt or pump and the loading port on their parts', () => {
+  WEAPONS.forEach((w) => {
+    if (!w || !w.gun) return;
+    const g = buildGun(w.name);
+    if (g.mag) {
+      assert.ok(nearest(part(g.mesh, GUN_MAG), g.mag) < 1.2, `${w.name}: magazine point off the magazine`);
+      assert.ok(Math.abs(Math.hypot(...g.magDir) - 1) < 1e-6, `${w.name}: magazine direction`);
+    } else assert.ok(w.shellTime || w.name === 'revolver', `${w.name} has a magazine`);
+    if (g.bolt) assert.ok(nearest(part(g.mesh, GUN_BOLT), g.bolt) < 1.2, `${w.name}: bolt point off the bolt`);
+    if (w.shellTime) assert.ok(nearest(part(g.mesh, GUN_ROOT), g.port) < 1, `${w.name}: loading port off the gun`);
+  });
+  // Grips rake back: the bottom of a pistol grip is behind its top.
+  const glock = buildGun('glock');
+  assert.ok(glock.mag[0] < -0.5 && glock.magDir[0] < 0);
 });
