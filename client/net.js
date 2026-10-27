@@ -3,14 +3,14 @@
 // simulation.
 
 import {
-  Writer, Reader, SnapshotRing, OwnState, writeHello, writeCmds, readWelcome, readSnapshot, S2C_WELCOME,
-  S2C_SNAPSHOT, S2C_REJECT, C2S_CMDS,
+  MAX_PLAYERS, Writer, Reader, SnapshotRing, OwnState, EventList, writeHello, writeCmds, readWelcome, readSnapshot,
+  readInfo, S2C_WELCOME, S2C_SNAPSHOT, S2C_REJECT, S2C_INFO, C2S_CMDS, C2S_BYE,
 } from '../shared/protocol.js';
 
 const HELLO_RETRY_MS = 250;
 const KEEPALIVE_MS = 1000; // hidden tabs stop ticking; keep the server from timing us out
 const JOIN_TIMEOUT_MS = 5000;
-const QUEUE = 64; // datagrams buffered between ticks
+const QUEUE = 256; // datagrams buffered between polls (4 s: hidden tabs poll at 1 Hz)
 const SEND_BUFFERS = 8;
 
 export class NetClient {
@@ -35,6 +35,10 @@ export class NetClient {
     this.received = 0;
     this.dropped = 0; // snapshots that could not be decoded (base missing)
     this.lastSend = 0;
+    this.events = new EventList(); // shots and kills decoded by the last poll()
+    this.names = new Array(MAX_PLAYERS).fill('');
+    this.teams = new Uint8Array(MAX_PLAYERS);
+    this.arrival = 0; // performance.now() when the newest snapshot arrived
   }
 
   // Opens the WebTransport session using the server's pinned certificate hash.
@@ -61,6 +65,9 @@ export class NetClient {
         this.closeReason = reason || 'closed';
       });
     this.readLoop();
+    // Leaving or reloading the page: close the session so the server frees our player
+    // at once instead of waiting for the timeout.
+    addEventListener('pagehide', () => this.close('page closed'));
     const keepalive = setInterval(() => {
       if (this.closed) clearInterval(keepalive);
       else if (this.welcome && performance.now() - this.lastSend > KEEPALIVE_MS / 2) this.sendKeepalive();
@@ -90,6 +97,19 @@ export class NetClient {
         this.qLen++;
       }
     } catch { /* closed */ }
+  }
+
+  close(reason) {
+    if (this.closed) return;
+    // Say goodbye first: the session close itself does not always reach the server.
+    const w = this.nextWriter().reset();
+    w.u8v(C2S_BYE);
+    this.send(w.view());
+    this.closed = true;
+    this.closeReason = reason;
+    try {
+      this.wt.close({ closeCode: 0, reason });
+    } catch { /* already closed */ }
   }
 
   send(bytes) {
@@ -123,9 +143,12 @@ export class NetClient {
     this.send(writeCmds(this.nextWriter(), this.latestSeq, ring, newestTick));
   }
 
-  // Decodes queued datagrams. Returns true if a newer snapshot arrived.
+  // Decodes queued datagrams into the snapshot ring and `events` (emptied first).
+  // Returns true if a newer snapshot arrived.
   poll() {
     let fresh = false;
+    this.events.shots = 0;
+    this.events.kills = 0;
     while (this.qLen) {
       const bytes = this.queue[this.qHead];
       this.queue[this.qHead] = null;
@@ -134,7 +157,7 @@ export class NetClient {
       const r = this.reader.set(bytes);
       const type = r.u8v();
       if (type === S2C_SNAPSHOT) {
-        const k = readSnapshot(r, this.ring, this.scratch);
+        const k = readSnapshot(r, this.ring, this.scratch, this.events);
         if (k < 0) {
           this.dropped++;
           continue;
@@ -147,12 +170,15 @@ export class NetClient {
           const t = this.own;
           this.own = this.scratch;
           this.scratch = t;
+          this.arrival = performance.now();
           fresh = true;
         }
       } else if (type === S2C_WELCOME) {
         if (!this.welcome) this.welcome = readWelcome(r);
       } else if (type === S2C_REJECT) {
         this.rejected = r.str();
+      } else if (type === S2C_INFO) {
+        readInfo(r, this.names, this.teams);
       }
     }
     return fresh;

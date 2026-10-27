@@ -41,10 +41,15 @@ export function listen({ hostname = '0.0.0.0', port, cert, key }, onSession) {
     const session = new Session(nextId++, wt);
     const handlers = onSession(session);
     const reader = wt.datagrams.readable.getReader();
-    wt.closed.finally(() => {
+    // Whichever notices first (closed promise or the end of the datagram stream).
+    let ended = false;
+    const end = () => {
+      if (ended) return;
+      ended = true;
       session.open = false;
       handlers.onClose();
-    }).catch(() => {});
+    };
+    wt.closed.then(end, end);
     try {
       while (true) {
         const { value, done } = await reader.read();
@@ -53,6 +58,7 @@ export function listen({ hostname = '0.0.0.0', port, cert, key }, onSession) {
       }
     } catch { /* connection dropped */ }
     session.close();
+    end();
   }
 
   return endpoint;

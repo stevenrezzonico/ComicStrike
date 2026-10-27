@@ -1,24 +1,30 @@
-// Client entry point. Online (default): joins the game server over WebTransport,
-// sends 64 Hz user commands and draws the server's snapshots. The local player runs
-// the same shared simulation as the server, immediately (prediction); Phase 6 adds
-// reconciliation, interpolation and lag compensation. Offline (?offline, or when no
-// server answers): everything runs locally, as in Phase 4.
+// Client entry point. Online (default): joins the game server over WebTransport and
+// sends 64 Hz user commands. Source-style netcode: the local player is predicted with
+// the same shared simulation the server runs and reconciled against every snapshot
+// (replaying unacknowledged commands); other players are interpolated INTERP_TICKS
+// behind the server clock, and each command tells the server which tick we were seeing
+// so it can rewind them (lag compensation). Offline (?offline, or when no server
+// answers): everything runs locally.
 // URL: ?team=t|ct&primary=awp&secondary=deagle&name=me  offline only: &offline&map=de_dust2
 // V toggles noclip (offline only).
 
 import { parseBSP, parseVec3 } from '../shared/bsp.js';
 import {
-  TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED,
+  TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED,
 } from '../shared/constants.js';
 import { CollisionWorld } from '../shared/trace.js';
 import { eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_SIZE, FL_ONGROUND, FL_DUCKING } from '../shared/pmove.js';
 import {
   WEAPONS, WEAPON_ID, ShotList, giveWeapon, weaponTick, viewPunchPitch, viewPunchYaw, hash32, WS_LAST_SLOT,
-  WS_EVENTS,
+  WS_EVENTS, WS_SIZE,
 } from '../shared/weapons.js';
 import { Breakables } from '../shared/breakables.js';
+import { HitTargets } from '../shared/hitgroups.js';
 import { Player, spawnPlayer, runCommand, resolveShots, ImpactList, TEAM_T, TEAM_CT } from '../shared/player.js';
-import { CmdRing } from '../shared/protocol.js';
+import {
+  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, E_ACTIVE, E_X, E_Y, E_Z, E_PITCH, E_YAW,
+  E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw,
+} from '../shared/protocol.js';
 import { buildMapMesh } from './mapmesh.js';
 import { Renderer } from './gl/renderer.js';
 import { Decals } from './gl/decals.js';
@@ -34,11 +40,16 @@ const FOV_Y = 73.74 * DEG; // CS:GO fov 90 at 4:3, kept vertical (Hor+)
 const NOCLIP_SPEED = 800;
 const MAX_TICKS_PER_FRAME = 8;
 const HISTORY = 64; // commands / predicted states kept (power of two)
+const INTERP_TICKS = 2; // CS:GO cl_interp_ratio 2 at 64 updates/s: other players shown 31 ms behind
+const SMOOTH_RATE = 15; // 1/s: how fast a visible prediction correction is blended away
+const KILLFEED_MS = 5000;
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('view');
 const status = document.getElementById('status');
 const debug = document.getElementById('debug');
+const killfeed = document.getElementById('killfeed');
+const deathNotice = document.getElementById('death');
 
 const renderer = new Renderer(canvas);
 const decals = new Decals(renderer.gl);
@@ -66,11 +77,20 @@ let net = null;
 let selfId = -1;
 let synced = false; // false until the first snapshot gives us our spawn
 const cmds = new CmdRing(HISTORY);
-const predicted = new Float32Array(HISTORY * PS_SIZE); // our state after each command
+const predictedPs = new Uint8Array(HISTORY * PS_SIZE * 4); // our state after each command
+const predictedWs = new Uint8Array(HISTORY * WS_SIZE * 8);
 const predictedTick = new Int32Array(HISTORY).fill(-1);
 const serverBroken = new Uint32Array(8); // breakable mask of the last applied snapshot
 const replayShots = new ShotList();
-const netStats = { rtt: 0, compared: 0, mismatched: 0, lastErr: 0 };
+const smooth = new Float32Array(3); // visual offset hiding prediction corrections
+const netStats = { rtt: 0, compared: 0, corrected: 0, lastErr: 0 };
+
+// Other players, interpolated between snapshots around renderTick.
+let serverClock = -1; // estimated newest server tick (fractional), advanced every frame
+const interp = new Float32Array(MAX_PLAYERS * E_FIELDS);
+const targets = new HitTargets(MAX_PLAYERS);
+const seenKills = new Int32Array(32).fill(-1);
+let seenKillNext = 0;
 
 const prevOrigin = new Float32Array(3);
 let prevEye = 0, prevPunchP = 0, prevPunchY = 0;
@@ -116,6 +136,7 @@ function resetView(yaw) {
   angles[1] = yaw;
   prevOrigin.set(ps.f.subarray(PS_ORIGIN, PS_ORIGIN + 3));
   prevEye = eyeOffset(ps);
+  smooth.fill(0);
 }
 
 // Offline round restart: breakables come back, we spawn at our team's first spawn.
@@ -142,10 +163,12 @@ function noclipTick(buttons) {
   f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
 }
 
-// Decals for this tick's hits; debris for anything our shots broke.
+// Decals for this tick's world hits; debris for anything our shots broke. Player hits
+// show nothing until the server confirms them (blood events).
 function showImpacts() {
   const melee = WEAPONS[shots.weapon[0]]?.melee;
   for (let i = 0; i < impacts.count; i++) {
+    if (impacts.player[i] >= 0) continue;
     if (impacts.broke[i]) {
       breakVisual(impacts.broke[i]);
       continue;
@@ -166,45 +189,78 @@ function breakVisual(slot) {
 
 // --- Snapshots -------------------------------------------------------------------
 
+function sameBytes(a, ao, b, n) {
+  for (let i = 0; i < n; i++) if (a[ao + i] !== b[i]) return false;
+  return true;
+}
+
+function storePrediction(t) {
+  const k = t & (HISTORY - 1);
+  predictedPs.set(player.psBytes, k * PS_SIZE * 4);
+  predictedWs.set(player.wsBytes, k * WS_SIZE * 8);
+  predictedTick[k] = t;
+}
+
+// Runs our commands after `from` again on top of the state we were just given.
+function replayFrom(from) {
+  for (let t = from + 1; t < tickCount; t++) {
+    if (!cmds.has(t)) continue;
+    const k = t & cmds.mask;
+    if (player.health > 0) {
+      runCommand(world, player, cmds.buttons[k], cmds.select[k], cmds.pitch[k], cmds.yaw[k], t, replayShots);
+    }
+    storePrediction(t);
+  }
+}
+
 function applySnapshot() {
   const own = net.own;
-  player.health = own.health;
-  player.armor = own.armor;
   netStats.rtt = (tickCount - own.lastCmd) * TICK_DT * 1000;
 
   if (own.spawnCount !== player.spawnCount || !synced) {
-    // (Re)spawned by the server: take its state, then replay our commands it has
-    // not run yet so we stay ahead of it.
+    // (Re)spawned by the server: take its state and replay what it has not run yet.
     player.psBytes.set(own.ps);
     player.wsBytes.set(own.ws);
+    player.health = own.health;
     player.spawnCount = own.spawnCount;
     player.team = own.team;
     resetView(own.spawnYaw);
     predictedTick.fill(-1);
-    if (synced) {
-      for (let t = own.lastCmd + 1; t < tickCount; t++) {
-        if (!cmds.has(t)) continue;
-        const k = t & cmds.mask;
-        runCommand(world, player, cmds.buttons[k], cmds.select[k], cmds.pitch[k], cmds.yaw[k], t, replayShots);
-      }
-    }
+    if (synced) replayFrom(own.lastCmd);
     synced = true;
   } else {
-    // Prediction check: our state after command lastCmd vs the server's.
+    // Reconciliation: compare our prediction after command lastCmd with the server's
+    // result. Exact (the normal case): nothing to do. Otherwise rewind to the server's
+    // state, replay every later command, and blend the visible jump away.
     const t = own.lastCmd, k = t & (HISTORY - 1);
     if (predictedTick[k] === t) {
-      const sp = own.psF;
-      const o = k * PS_SIZE;
-      const err = Math.hypot(sp[PS_ORIGIN] - predicted[o + PS_ORIGIN], sp[PS_ORIGIN + 1] - predicted[o + PS_ORIGIN + 1],
-        sp[PS_ORIGIN + 2] - predicted[o + PS_ORIGIN + 2]);
       netStats.compared++;
-      if (err > 0) {
-        netStats.mismatched++;
-        netStats.lastErr = err;
-      }
+      // (Health is not compared: damage from other players is never predicted.)
+      const exact = sameBytes(predictedPs, k * PS_SIZE * 4, own.ps, PS_SIZE * 4) &&
+        sameBytes(predictedWs, k * WS_SIZE * 8, own.ws, WS_SIZE * 8);
       predictedTick[k] = -1;
+      if (!exact) {
+        netStats.corrected++;
+        const x = ps.f[PS_ORIGIN], y = ps.f[PS_ORIGIN + 1], z = ps.f[PS_ORIGIN + 2];
+        player.psBytes.set(own.ps);
+        player.wsBytes.set(own.ws);
+        player.health = own.health;
+        replayFrom(t);
+        const dx = x - ps.f[PS_ORIGIN], dy = y - ps.f[PS_ORIGIN + 1], dz = z - ps.f[PS_ORIGIN + 2];
+        netStats.lastErr = Math.hypot(dx, dy, dz);
+        if (netStats.lastErr < 64) { // small: smooth it; large (teleport): snap
+          smooth[0] += dx;
+          smooth[1] += dy;
+          smooth[2] += dz;
+        }
+        prevOrigin[0] -= dx;
+        prevOrigin[1] -= dy;
+        prevOrigin[2] -= dz;
+      }
     }
   }
+  player.health = own.health;
+  player.armor = own.armor;
 
   // Breakables: apply what changed on the server since the last snapshot (our own
   // predicted breaks stay as they are).
@@ -223,7 +279,114 @@ function applySnapshot() {
     }
   }
 
-  players.update(net.ring.ents, net.ring.row(net.latest, 0), selfId);
+  // Keep the server clock estimate near the newest snapshot (it drifts with jitter).
+  const seq = net.latestSeq;
+  if (serverClock < 0 || Math.abs(seq - serverClock) > 16) serverClock = seq;
+  else serverClock += (seq - serverClock) * 0.05;
+}
+
+// Other players' shots and the kill feed.
+function applyEvents() {
+  const ev = net.events;
+  for (let k = 0; k < ev.shots; k++) {
+    const x = ev.pos[k * 3], y = ev.pos[k * 3 + 1], z = ev.pos[k * 3 + 2];
+    if (ev.kind[k] === SHOT_BLOOD) {
+      debris.puff(x, y, z, 0.55, 0.05, 0.04, 6);
+    } else if (!breakables.broken[ev.breakable[k]] || !ev.breakable[k]) {
+      decals.add(x, y, z, ev.normal[k * 3], ev.normal[k * 3 + 1], ev.normal[k * 3 + 2], 1.6,
+        (hash32(k * 31 + net.latestSeq) & 0xffff) / 65536, ev.breakable[k]);
+    }
+  }
+  for (let k = 0; k < ev.kills; k++) {
+    const id = ev.killId[k];
+    if (seenKills.includes(id)) continue;
+    seenKills[seenKillNext] = id;
+    seenKillNext = (seenKillNext + 1) % seenKills.length;
+    addKill(ev.killer[k], ev.victim[k], ev.weapon[k], (ev.killFlags[k] & KILL_HEADSHOT) !== 0);
+  }
+}
+
+function teamClass(id) {
+  return net.teams[id] === TEAM_CT ? 'ct' : 't';
+}
+
+function addKill(killer, victim, weapon, headshot) {
+  const row = document.createElement('div');
+  const name = (id) => net.names[id] || `player${id}`;
+  const wname = WEAPONS[weapon] ? WEAPONS[weapon].label : 'world';
+  if (killer === victim) {
+    row.innerHTML = `<span class="${teamClass(victim)}"></span> died`;
+    row.firstChild.textContent = name(victim);
+  } else {
+    row.innerHTML = `<span class="${teamClass(killer)}"></span> [<span></span>]${headshot ? ' <b class="hs">HS</b>' : ''}` +
+      ` <span class="${teamClass(victim)}"></span>`;
+    const spans = row.querySelectorAll('span');
+    spans[0].textContent = name(killer);
+    spans[1].textContent = wname;
+    spans[2].textContent = name(victim);
+  }
+  if (killer === selfId || victim === selfId) row.className = 'mine';
+  killfeed.appendChild(row);
+  while (killfeed.children.length > 5) killfeed.firstChild.remove();
+  setTimeout(() => row.remove(), KILLFEED_MS);
+  if (victim === selfId) {
+    deathNotice.textContent = killer === victim ? 'You died' : `Killed by ${name(killer)}${headshot ? ' (headshot)' : ''}`;
+  }
+}
+
+// Interpolated rows of the other players at server tick `at` into `out`.
+function interpolatePlayers(at, out) {
+  const ring = net.ring, E = ring.ents;
+  let k0 = -1, k1 = -1, s0 = -Infinity, s1 = Infinity;
+  for (let k = 0; k < SNAPSHOT_HISTORY; k++) {
+    const s = ring.seq[k];
+    if (s < 0) continue;
+    if (s <= at && s > s0) {
+      s0 = s;
+      k0 = k;
+    } else if (s > at && s < s1) {
+      s1 = s;
+      k1 = k;
+    }
+  }
+  if (k0 < 0) { // older than anything we hold: use the oldest newer one
+    k0 = k1;
+    s0 = s1;
+  }
+  if (k0 < 0) return false;
+  const f = k1 >= 0 && k0 !== k1 ? (at - s0) / (s1 - s0) : 0;
+  for (let id = 0; id < MAX_PLAYERS; id++) {
+    const a = ring.row(k0, id), o = id * E_FIELDS;
+    const b = f > 0 ? ring.row(k1, id) : a;
+    if (!E[a + E_ACTIVE] || !E[b + E_ACTIVE] || E[a + E_HEALTH] === 0 !== (E[b + E_HEALTH] === 0)) {
+      // Appeared, left or died between the two: no blending.
+      const src = f < 0.5 ? a : b;
+      for (let i = 0; i < E_FIELDS; i++) out[o + i] = E[src + i];
+      continue;
+    }
+    const near = f < 0.5 ? a : b;
+    for (let i = 0; i < E_FIELDS; i++) out[o + i] = E[near + i];
+    out[o + E_X] = E[a + E_X] + (E[b + E_X] - E[a + E_X]) * f;
+    out[o + E_Y] = E[a + E_Y] + (E[b + E_Y] - E[a + E_Y]) * f;
+    out[o + E_Z] = E[a + E_Z] + (E[b + E_Z] - E[a + E_Z]) * f;
+    out[o + E_PITCH] = E[a + E_PITCH] + (E[b + E_PITCH] - E[a + E_PITCH]) * f;
+    let dyaw = E[b + E_YAW] - E[a + E_YAW];
+    dyaw -= Math.round(dyaw / 65536) * 65536;
+    out[o + E_YAW] = (E[a + E_YAW] + dyaw * f + 65536) % 65536;
+    out[o + E_DUCK] = E[a + E_DUCK] + (E[b + E_DUCK] - E[a + E_DUCK]) * f;
+  }
+  return true;
+}
+
+// Hit targets from what we see (interpolated), so our shots stop at players we hit.
+function buildTargets() {
+  targets.clear();
+  for (let id = 0; id < MAX_PLAYERS; id++) {
+    const o = id * E_FIELDS;
+    if (id === selfId || !interp[o + E_ACTIVE] || !interp[o + E_HEALTH]) continue;
+    targets.set(id, interp[o + E_X], interp[o + E_Y], interp[o + E_Z], dequantizeYaw(interp[o + E_YAW]),
+      interp[o + E_FLAGS], interp[o + E_DUCK] / 255, interp[o + E_TEAM]);
+  }
 }
 
 // --- Simulation -------------------------------------------------------------------
@@ -236,10 +399,14 @@ function tick() {
   prevPunchP = viewPunchPitch(ws);
   prevPunchY = viewPunchYaw(ws);
 
+  let viewTick = 0;
   if (net) {
     if (net.poll()) applySnapshot();
+    if (synced) applyEvents();
     if (net.closed) status.textContent = `disconnected: ${net.closeReason}`;
     if (!synced || net.closed) return;
+    viewTick = serverClock - INTERP_TICKS;
+    if (interpolatePlayers(viewTick, interp)) buildTargets();
   }
 
   const buttons = input.sampleButtons();
@@ -247,21 +414,26 @@ function tick() {
   if (select === SELECT_LAST) select = ws.f[WS_LAST_SLOT];
   lastButtons = buttons;
   const t = tickCount;
+  const alive = player.health > 0;
 
+  shots.count = 0;
+  impacts.count = 0;
   if (noclip && !net) {
     noclipTick(buttons);
     weaponTick(ws, ps, buttons, select, angles[0], angles[1], t, shots);
-  } else {
+  } else if (alive) {
     const died = runCommand(world, player, buttons, select, angles[0], angles[1], t, shots);
     if (died && !net) offlineRespawn();
   }
-  resolveShots(world, breakables, ws, shots, impacts);
-  showImpacts();
+  if (shots.count) {
+    resolveShots(world, breakables, ws, shots, impacts, net ? targets : null, selfId, player.team);
+    showImpacts();
+  }
 
   if (net) {
-    cmds.put(t, buttons, select, angles[0], angles[1]);
-    predicted.set(ps.f, (t & (HISTORY - 1)) * PS_SIZE);
-    predictedTick[t & (HISTORY - 1)] = t;
+    // Dead players keep sending commands: the server uses them up, and they carry acks.
+    cmds.put(t, buttons, select, angles[0], angles[1], viewTick);
+    storePrediction(t);
     net.sendCmds(cmds, t);
   }
   weaponView.onTick(ws.f[WS_EVENTS], t * TICK_DT);
@@ -281,6 +453,7 @@ function frame(now) {
 
   input.applyMouse(angles);
   accumulator += elapsed;
+  if (serverClock >= 0) serverClock += Math.min(elapsed, 0.25) * TICK_RATE;
   let ticks = 0;
   while (accumulator >= TICK_DT && ticks < MAX_TICKS_PER_FRAME) {
     tick();
@@ -301,8 +474,8 @@ function frame(now) {
       `${fl & FL_ONGROUND ? '  ground' : ''}${fl & FL_DUCKING ? '  duck' : ''}${noclip ? '  NOCLIP' : ''}\n` +
       (net
         ? `net: player ${selfId}  rtt ${netStats.rtt.toFixed(0)} ms  snapshots ${net.received} (${net.dropped} undecodable)\n` +
-          `prediction: ${netStats.compared - netStats.mismatched}/${netStats.compared} exact` +
-          `${netStats.mismatched ? `  last error ${netStats.lastErr.toFixed(3)} u` : ''}`
+          `prediction: ${netStats.compared - netStats.corrected}/${netStats.compared} exact` +
+          `${netStats.corrected ? `  last correction ${netStats.lastErr.toFixed(2)} u` : ''}`
         : 'offline');
     frames = 0;
     fpsTime = now;
@@ -313,13 +486,19 @@ function frame(now) {
 
 function draw(now, alpha, dt) {
   const f = ps.f;
-  eye[0] = prevOrigin[0] + (f[PS_ORIGIN] - prevOrigin[0]) * alpha;
-  eye[1] = prevOrigin[1] + (f[PS_ORIGIN + 1] - prevOrigin[1]) * alpha;
-  eye[2] = prevOrigin[2] + (f[PS_ORIGIN + 2] - prevOrigin[2]) * alpha;
+  const k = Math.exp(-dt * SMOOTH_RATE);
+  smooth[0] *= k;
+  smooth[1] *= k;
+  smooth[2] *= k;
+  eye[0] = prevOrigin[0] + (f[PS_ORIGIN] - prevOrigin[0]) * alpha + smooth[0];
+  eye[1] = prevOrigin[1] + (f[PS_ORIGIN + 1] - prevOrigin[1]) * alpha + smooth[1];
+  eye[2] = prevOrigin[2] + (f[PS_ORIGIN + 2] - prevOrigin[2]) * alpha + smooth[2];
   eye[2] += prevEye + (eyeOffset(ps) - prevEye) * alpha;
   // The camera shows a fraction of the aim punch (view_recoil_tracking).
   const pitch = angles[0] + prevPunchP + (viewPunchPitch(ws) - prevPunchP) * alpha;
   const yaw = angles[1] + prevPunchY + (viewPunchYaw(ws) - prevPunchY) * alpha;
+
+  if (net && synced && interpolatePlayers(serverClock - INTERP_TICKS, interp)) players.update(interp, 0, selfId);
 
   const aspect = renderer.resize(1);
   perspective(proj, FOV_Y, aspect, 4, 16384);
@@ -329,9 +508,21 @@ function draw(now, alpha, dt) {
   debris.update(dt, world);
   renderer.render(viewProj, invViewProj, eye, now / 1000, overlays);
 
+  const dead = player.health <= 0;
+  weaponView.hidden = dead;
+  deathNotice.style.display = dead && net ? 'block' : 'none';
   const simTime = (tickCount - 1 + alpha) * TICK_DT;
-  weaponView.draw(canvas.width, canvas.height, aspect, ws, ps, lastButtons, simTime, dt, player.health, player.armor);
+  weaponView.draw(canvas.width, canvas.height, aspect, ws, ps, lastButtons, simTime, dt, Math.max(player.health, 0),
+    player.armor);
 }
+
+// Hidden tabs get no animation frames (and timers at most once a second): keep
+// applying snapshots and events so the world is current when we come back.
+setInterval(() => {
+  if (!document.hidden || !net || !synced) return;
+  if (net.poll()) applySnapshot();
+  applyEvents();
+}, 250);
 
 document.addEventListener('keydown', (e) => {
   if (e.code === 'KeyV' && input.locked && !e.repeat && !net) noclip = !noclip;
@@ -388,6 +579,8 @@ globalThis.webcs = {
     return net;
   },
   netStats,
+  interp,
+  targets,
   setNoclip: (on) => {
     noclip = on && !net;
   },

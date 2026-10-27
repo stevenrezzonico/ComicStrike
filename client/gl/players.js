@@ -1,12 +1,12 @@
-// Other players as procedural boxes (body hull + head), one instanced draw using the
-// debris cube shader. Placeholder until Phase 7's player models.
+// Other players drawn as their hitboxes (what you see is what you can hit), one
+// instanced draw using the debris cube shader. Placeholder until Phase 7's models.
 
 import { program } from './program.js';
 import { DEBRIS_VS, DEBRIS_FS } from './shaders.js';
-import { FL_DUCKING } from '../../shared/pmove.js';
 import { TEAM_CT } from '../../shared/player.js';
+import { BOX_DATA, BOX_STRIDE, HITGROUP_HEAD, feetOffset, crouchScale } from '../../shared/hitgroups.js';
 import {
-  MAX_PLAYERS, E_ACTIVE, E_X, E_Y, E_Z, E_YAW, E_FLAGS, E_TEAM, E_FIELDS, dequantizeYaw,
+  MAX_PLAYERS, E_ACTIVE, E_X, E_Y, E_Z, E_YAW, E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw,
 } from '../../shared/protocol.js';
 
 const I = 12; // instance floats: pos, scale, rot, color
@@ -17,7 +17,7 @@ export class Players {
   constructor(gl) {
     this.gl = gl;
     this.count = 0;
-    this.inst = new Float32Array(MAX_PLAYERS * 2 * I);
+    this.inst = new Float32Array(MAX_PLAYERS * (BOX_DATA.length / BOX_STRIDE) * I);
     this.prog = program(gl, DEBRIS_VS, DEBRIS_FS, ['u_viewProj']);
 
     const cube = [];
@@ -58,14 +58,18 @@ export class Players {
     let n = 0;
     for (let id = 0; id < MAX_PLAYERS; id++) {
       const r = row0 + id * E_FIELDS;
-      if (id === self || !ents[r + E_ACTIVE]) continue;
-      const ducked = (ents[r + E_FLAGS] & FL_DUCKING) !== 0;
-      const h = ducked ? 36 : 72; // hull height; origin is the hull center
-      const yaw = dequantizeYaw(ents[r + E_YAW]) * Math.PI / 180;
+      if (id === self || !ents[r + E_ACTIVE] || !ents[r + E_HEALTH]) continue; // the dead vanish
+      const yawDeg = dequantizeYaw(ents[r + E_YAW]);
+      const yaw = yawDeg * Math.PI / 180, c = Math.cos(yaw), sn = Math.sin(yaw);
       const col = ents[r + E_TEAM] === TEAM_CT ? CT_COLOR : T_COLOR;
-      // Body: slightly narrower than the 32-unit hull, below the head.
-      n = this.box(d, n, ents[r + E_X], ents[r + E_Y], ents[r + E_Z] - 5, 24, 16, h - 10, yaw, col, 1);
-      n = this.box(d, n, ents[r + E_X], ents[r + E_Y], ents[r + E_Z] + h / 2 - 5, 10, 10, 10, yaw, col, 1.25);
+      const feet = ents[r + E_Z] - feetOffset(ents[r + E_FLAGS]);
+      const s = crouchScale(ents[r + E_DUCK] / 255);
+      for (let b = 0; b < BOX_DATA.length; b += BOX_STRIDE) {
+        const fx = BOX_DATA[b + 1], fy = BOX_DATA[b + 2]; // forward / left offsets in the yaw frame
+        n = this.box(d, n, ents[r + E_X] + fx * c - fy * sn, ents[r + E_Y] + fx * sn + fy * c,
+          feet + BOX_DATA[b + 3] * s, BOX_DATA[b + 4] * 2, BOX_DATA[b + 5] * 2, BOX_DATA[b + 6] * 2 * s, yaw, col,
+          BOX_DATA[b] === HITGROUP_HEAD ? 1.25 : 1);
+      }
     }
     this.count = n;
   }

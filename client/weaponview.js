@@ -22,6 +22,7 @@ export class WeaponView {
     this.swingStart = -1;
     this.bobPhase = 0;
     this.anim = { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0, flash: false };
+    this.hidden = false; // dead: no viewmodel or crosshair, HUD only
 
     this.elHealth = document.getElementById('hud-health');
     this.elArmor = document.getElementById('hud-armor');
@@ -47,7 +48,7 @@ export class WeaponView {
     const a = this.anim;
     a.x = a.y = a.z = a.pitch = a.yaw = a.roll = 0;
 
-    if (w) {
+    if (w && !this.hidden) {
       // Walk bob.
       const speed = Math.hypot(ps.f[PS_VEL], ps.f[PS_VEL + 1]) / 250;
       if (ps.i[PS_FLAGS] & FL_ONGROUND) this.bobPhase += dt * speed * Math.PI * 3;
@@ -87,7 +88,7 @@ export class WeaponView {
       const cone = getInaccuracy(ws, ps, buttons) + w.spread;
       gap = Math.max(3, Math.tan(cone) / Math.tan(this.fovY / 2) * height * 0.5);
     }
-    this.crosshair.draw(width, height, gap);
+    if (!this.hidden) this.crosshair.draw(width, height, gap);
 
     this.updateHud(w, ws, id, health, armor);
   }

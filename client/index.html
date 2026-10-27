@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WebCS</title>
+<link rel="icon" href="data:,">
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   #view { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
@@ -25,12 +26,28 @@
   #hud-left { left: 20px; }
   #hud-right { right: 20px; flex-direction: column; align-items: flex-end; gap: 4px; }
   #hud-weapon { font-size: 14px; font-weight: 600; opacity: 0.8; }
+  #killfeed {
+    position: fixed; right: 12px; top: 10px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+    font: 600 13px/1.2 Verdana, Tahoma, sans-serif; pointer-events: none;
+  }
+  #killfeed div { background: rgba(0, 0, 0, 0.45); padding: 4px 8px; border-radius: 3px; color: #eee; }
+  #killfeed div.mine { outline: 1px solid #c33; }
+  #killfeed .t { color: #e8c46a; }
+  #killfeed .ct { color: #8cb4f0; }
+  #killfeed .hs { color: #f66; }
+  #death {
+    position: fixed; left: 0; right: 0; top: 32%; text-align: center; display: none;
+    color: #f2ecd8; font: 700 22px/1.4 Verdana, Tahoma, sans-serif; text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7);
+    pointer-events: none;
+  }
 </style>
 </head>
 <body>
 <canvas id="view"></canvas>
 <div id="status">loading...</div>
 <pre id="debug"></pre>
+<div id="killfeed"></div>
+<div id="death"></div>
 <div id="hud-left" class="hud">
   <span><small>HP</small><span id="hud-health"></span></span>
   <span><small>ARMOR</small><span id="hud-armor"></span></span>
@@ -39,6 +56,8 @@
   <span id="hud-weapon"></span>
   <span id="hud-ammo"></span>
 </div>
-<script type="module" src="/client/main.js"></script>
+<!-- If any module fails to load (often an ad blocker), say so instead of hanging on "loading...". -->
+<script type="module" src="/client/main.js"
+  onerror="document.getElementById('status').textContent = 'Failed to load the game scripts. If an ad blocker is on, allow this site; then check the console.'"></script>
 </body>
 </html>

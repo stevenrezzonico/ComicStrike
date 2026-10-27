@@ -4,22 +4,30 @@
 //
 // Client -> server
 //   HELLO    u8 type, u16 version, u8 team, u8 primary, u8 secondary, str name
-//   CMDS     u8 type, u32 ackSeq, u8 n, n x { u32 tick, u32 buttons, f32 pitch, f32 yaw, i8 select }
+//   BYE      u8 type (leaving: free my player now; sent best-effort on page hide)
+//   CMDS     u8 type, u32 ackSeq, u8 n,
+//            n x { u32 tick, u32 buttons, f32 pitch, f32 yaw, i8 select, u32 viewTick * 256 }
 //            (oldest first; the newest command plus the previous CMD_REDUNDANCY - 1, so a
-//            lost datagram loses no input)
+//            lost datagram loses no input. viewTick: the server tick the player was seeing
+//            other players at, for lag compensation)
 // Server -> client
 //   WELCOME  u8 type, u16 version, u8 playerId, u32 serverTick, u8 tickRate, str map
 //   REJECT   u8 type, str reason
+//   INFO     u8 type, u8 n, n x { u8 id, u8 team, str name } (every player, resent periodically)
 //   SNAPSHOT u8 type, u32 seq, u32 baseSeq (0 = full), u32 lastCmd, u8 flags,
 //            [u32 x 8 broken-breakable mask if flags & SNAP_BROKEN],
 //            own player: u8 health, u8 armor, u8 spawnCount, u8 team, f32 spawnYaw,
 //                        PlayerState bytes, WeaponState bytes (full every time, for prediction),
-//            u8 n, n x { u8 id, u8 fieldMask, changed fields } (other players, delta vs base)
+//            u8 n, n x { u8 id, u8 fieldMask, changed fields } (other players, delta vs base),
+//            events of this tick (not delta-compressed, lost with their datagram):
+//            u8 n, n x { u8 shooter, u8 kind, f32 x, y, z, i8 nx, ny, nz, u8 breakable }
+//            u8 n, n x { u16 killId, u8 killer, u8 victim, u8 weapon, u8 flags } (kills of the
+//            last KILL_REPEAT_TICKS, repeated every snapshot so one loss loses nothing)
 
 import { PS_SIZE } from './pmove.js';
 import { WS_SIZE } from './weapons.js';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -27,9 +35,17 @@ export const SNAPSHOT_HISTORY = 32; // power of two
 
 export const C2S_HELLO = 1;
 export const C2S_CMDS = 2;
+export const C2S_BYE = 3;
 export const S2C_WELCOME = 10;
 export const S2C_SNAPSHOT = 11;
 export const S2C_REJECT = 12;
+export const S2C_INFO = 13;
+
+export const SHOT_IMPACT = 0; // bullet hit the world
+export const SHOT_BLOOD = 1; // bullet hit a player
+export const KILL_HEADSHOT = 1;
+export const KILL_REPEAT_TICKS = 32;
+const CMD_BYTES = 21;
 
 export const SNAP_BROKEN = 1;
 const BROKEN_WORDS = 8; // 256-bit mask, one bit per breakable slot
@@ -150,6 +166,39 @@ export function writeReject(w, reason) {
   return w.view();
 }
 
+// players: array indexed by id of { team, name } or null.
+export function writeInfo(w, players) {
+  w.reset();
+  w.u8v(S2C_INFO);
+  const countAt = w.pos;
+  w.u8v(0);
+  let n = 0;
+  for (let id = 0; id < players.length; id++) {
+    const p = players[id];
+    if (!p) continue;
+    w.u8v(id);
+    w.u8v(p.team);
+    w.str(p.name);
+    n++;
+  }
+  w.u8[countAt] = n;
+  return w.view();
+}
+
+// Fills names[id] / teams[id] (others cleared).
+export function readInfo(r, names, teams) {
+  names.fill('');
+  teams.fill(0);
+  const n = r.u8v();
+  for (let i = 0; i < n; i++) {
+    const id = r.u8v(), team = r.u8v(), name = r.str();
+    if (id < names.length) {
+      names[id] = name;
+      teams[id] = team;
+    }
+  }
+}
+
 // --- User commands -------------------------------------------------------------
 
 // Ring of user commands indexed by command tick (client history / server inbox).
@@ -161,10 +210,11 @@ export class CmdRing {
     this.select = new Int8Array(size);
     this.pitch = new Float32Array(size);
     this.yaw = new Float32Array(size);
+    this.view = new Float64Array(size); // server tick the player was seeing (lag compensation)
     this.newest = -1; // newest tick ever stored
   }
 
-  put(tick, buttons, select, pitch, yaw) {
+  put(tick, buttons, select, pitch, yaw, view = 0) {
     const k = tick & this.mask;
     if (tick > this.newest) this.newest = tick;
     this.tick[k] = tick;
@@ -172,6 +222,7 @@ export class CmdRing {
     this.select[k] = select;
     this.pitch[k] = pitch;
     this.yaw[k] = yaw;
+    this.view[k] = Math.round(view * 256) / 256; // as sent
   }
 
   has(tick) {
@@ -195,6 +246,7 @@ export function writeCmds(w, ackSeq, ring, newest, n = CMD_REDUNDANCY) {
     w.f32v(ring.pitch[k]);
     w.f32v(ring.yaw[k]);
     w.i8v(ring.select[k]);
+    w.u32v(Math.round(ring.view[k] * 256));
     count++;
   }
   w.u8[countAt] = count;
@@ -206,11 +258,119 @@ export function writeCmds(w, ackSeq, ring, newest, n = CMD_REDUNDANCY) {
 export function readCmds(r, ring, minTick) {
   const ack = r.u32v();
   const n = r.u8v();
-  for (let i = 0; i < n && r.remaining >= 17; i++) {
+  for (let i = 0; i < n && r.remaining >= CMD_BYTES; i++) {
     const t = r.u32v(), buttons = r.u32v(), pitch = r.f32v(), yaw = r.f32v(), select = r.i8v();
-    if (t >= minTick && Number.isFinite(pitch) && Number.isFinite(yaw)) ring.put(t, buttons, select, pitch, yaw);
+    const view = r.u32v() / 256;
+    if (t >= minTick && Number.isFinite(pitch) && Number.isFinite(yaw)) ring.put(t, buttons, select, pitch, yaw, view);
   }
   return ack;
+}
+
+// --- Events ----------------------------------------------------------------------
+
+// Shot impacts and kills of a tick (server: gathered while simulating; client: decoded).
+export class EventList {
+  constructor(shotCapacity = 64, killCapacity = 16) {
+    this.shots = 0;
+    this.shooter = new Uint8Array(shotCapacity);
+    this.kind = new Uint8Array(shotCapacity);
+    this.pos = new Float32Array(shotCapacity * 3);
+    this.normal = new Float32Array(shotCapacity * 3);
+    this.breakable = new Uint8Array(shotCapacity);
+    this.kills = 0;
+    this.killId = new Uint16Array(killCapacity);
+    this.killer = new Uint8Array(killCapacity);
+    this.victim = new Uint8Array(killCapacity);
+    this.weapon = new Uint8Array(killCapacity);
+    this.killFlags = new Uint8Array(killCapacity);
+    this.killTick = new Uint32Array(killCapacity); // server only
+  }
+
+  addShot(shooter, kind, x, y, z, nx, ny, nz, breakable) {
+    if (this.shots === this.shooter.length) return;
+    const k = this.shots++;
+    this.shooter[k] = shooter;
+    this.kind[k] = kind;
+    this.pos[k * 3] = x;
+    this.pos[k * 3 + 1] = y;
+    this.pos[k * 3 + 2] = z;
+    this.normal[k * 3] = nx;
+    this.normal[k * 3 + 1] = ny;
+    this.normal[k * 3 + 2] = nz;
+    this.breakable[k] = breakable;
+  }
+
+  addKill(id, killer, victim, weapon, flags, tick) {
+    if (this.kills === this.killId.length) this.dropOldestKill();
+    const k = this.kills++;
+    this.killId[k] = id;
+    this.killer[k] = killer;
+    this.victim[k] = victim;
+    this.weapon[k] = weapon;
+    this.killFlags[k] = flags;
+    this.killTick[k] = tick;
+  }
+
+  dropOldestKill() {
+    this.killId.copyWithin(0, 1, this.kills);
+    this.killer.copyWithin(0, 1, this.kills);
+    this.victim.copyWithin(0, 1, this.kills);
+    this.weapon.copyWithin(0, 1, this.kills);
+    this.killFlags.copyWithin(0, 1, this.kills);
+    this.killTick.copyWithin(0, 1, this.kills);
+    this.kills--;
+  }
+}
+
+const SHOT_BYTES = 18;
+const KILL_BYTES = 6;
+const quantizeNormal = (v) => Math.max(-127, Math.min(127, Math.round(v * 127)));
+
+// Appends a tick's events for player `self`, as many shots as the datagram has room
+// for. The shooter's own world impacts are left out: it predicted and drew them.
+function writeEvents(w, ev, self) {
+  const killBytes = 1 + ev.kills * KILL_BYTES;
+  const room = Math.floor((MAX_DATAGRAM - w.pos - 1 - killBytes) / SHOT_BYTES);
+  const countAt = w.pos;
+  w.u8v(0);
+  let n = 0;
+  for (let k = 0; k < ev.shots && n < room; k++) {
+    if (ev.shooter[k] === self && ev.kind[k] === SHOT_IMPACT) continue;
+    w.u8v(ev.shooter[k]);
+    w.u8v(ev.kind[k]);
+    w.f32v(ev.pos[k * 3]);
+    w.f32v(ev.pos[k * 3 + 1]);
+    w.f32v(ev.pos[k * 3 + 2]);
+    w.i8v(quantizeNormal(ev.normal[k * 3]));
+    w.i8v(quantizeNormal(ev.normal[k * 3 + 1]));
+    w.i8v(quantizeNormal(ev.normal[k * 3 + 2]));
+    w.u8v(ev.breakable[k]);
+    n++;
+  }
+  w.u8[countAt] = n;
+  w.u8v(ev.kills);
+  for (let k = 0; k < ev.kills; k++) {
+    w.u16v(ev.killId[k]);
+    w.u8v(ev.killer[k]);
+    w.u8v(ev.victim[k]);
+    w.u8v(ev.weapon[k]);
+    w.u8v(ev.killFlags[k]);
+  }
+}
+
+// Appends decoded events to `ev` (which the caller empties).
+function readEvents(r, ev) {
+  const n = r.u8v();
+  for (let i = 0; i < n; i++) {
+    const shooter = r.u8v(), kind = r.u8v(), x = r.f32v(), y = r.f32v(), z = r.f32v();
+    const nx = r.i8v() / 127, ny = r.i8v() / 127, nz = r.i8v() / 127;
+    ev.addShot(shooter, kind, x, y, z, nx, ny, nz, r.u8v());
+  }
+  const kills = r.u8v();
+  for (let i = 0; i < kills; i++) {
+    const id = r.u16v(), killer = r.u8v(), victim = r.u8v(), weapon = r.u8v(), flags = r.u8v();
+    ev.addKill(id, killer, victim, weapon, flags, 0);
+  }
 }
 
 // --- Snapshots -------------------------------------------------------------------
@@ -275,8 +435,9 @@ function sameBroken(a, ak, b, bk) {
 }
 
 // Encodes snapshot `k` of `ring` for player `self`, as a delta against slot `base`
-// (-1 = full). `own` = { lastCmd, spawnYaw, player }.
-export function writeSnapshot(w, ring, k, base, self, own) {
+// (-1 = full), followed by the tick's events `ev` (optional).
+// `own` = { lastCmd, spawnYaw, player }.
+export function writeSnapshot(w, ring, k, base, self, own, ev = null) {
   const E = ring.ents;
   w.reset();
   w.u8v(S2C_SNAPSHOT);
@@ -341,6 +502,12 @@ export function writeSnapshot(w, ring, k, base, self, own) {
     count++;
   }
   w.u8[countAt] = count;
+  if (ev) {
+    writeEvents(w, ev, self);
+  } else {
+    w.u8v(0);
+    w.u8v(0);
+  }
   return w.view();
 }
 
@@ -359,9 +526,10 @@ export class OwnState {
   }
 }
 
-// Decodes a snapshot (after the type byte) into `ring`. Returns its slot index, or -1
-// if its delta base is no longer held (the snapshot is then dropped).
-export function readSnapshot(r, ring, own) {
+// Decodes a snapshot (after the type byte) into `ring`, appending its events to `ev`
+// (optional). Returns its slot index, or -1 if its delta base is no longer held (the
+// snapshot is then dropped).
+export function readSnapshot(r, ring, own, ev = null) {
   const seq = r.u32v();
   const baseSeq = r.u32v();
   const base = baseSeq ? ring.find(baseSeq) : -1;
@@ -423,5 +591,6 @@ export function readSnapshot(r, ring, own) {
     if (mask & F_HEALTH) E[c + E_HEALTH] = r.u8v();
     if (mask & F_TEAM) E[c + E_TEAM] = r.u8v();
   }
+  if (ev) readEvents(r, ev);
   return k;
 }

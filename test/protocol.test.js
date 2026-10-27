@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { IN_FORWARD, IN_ATTACK } from '../shared/constants.js';
 import { Player, TEAM_CT } from '../shared/player.js';
 import {
-  MAX_PLAYERS, MAX_DATAGRAM, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, S2C_WELCOME, S2C_SNAPSHOT, Writer, Reader,
+  PROTOCOL_VERSION, MAX_PLAYERS, MAX_DATAGRAM, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, S2C_WELCOME, S2C_SNAPSHOT, Writer, Reader,
   CmdRing, SnapshotRing, OwnState, writeHello, readHello, writeWelcome, readWelcome, writeCmds, readCmds,
   writeSnapshot, readSnapshot, quantizePitch, dequantizePitch, quantizeYaw, dequantizeYaw, E_ACTIVE, E_X, E_Y, E_Z,
   E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_FIELDS,
@@ -12,10 +12,10 @@ Deno.test('hello and welcome round-trip', () => {
   const w = new Writer(), r = new Reader();
   r.set(writeHello(w, 2, 7, 3, 'gabe'));
   assert.equal(r.u8v(), C2S_HELLO);
-  assert.deepEqual(readHello(r), { version: 1, team: 2, primary: 7, secondary: 3, name: 'gabe' });
+  assert.deepEqual(readHello(r), { version: PROTOCOL_VERSION, team: 2, primary: 7, secondary: 3, name: 'gabe' });
   r.set(writeWelcome(w, 5, 123456, 64, 'de_dust2'));
   assert.equal(r.u8v(), S2C_WELCOME);
-  assert.deepEqual(readWelcome(r), { version: 1, playerId: 5, serverTick: 123456, tickRate: 64, map: 'de_dust2' });
+  assert.deepEqual(readWelcome(r), { version: PROTOCOL_VERSION, playerId: 5, serverTick: 123456, tickRate: 64, map: 'de_dust2' });
 });
 
 Deno.test('command redundancy survives dropped datagrams', () => {
@@ -34,7 +34,7 @@ Deno.test('command redundancy survives dropped datagrams', () => {
     assert.equal(server.buttons[k], t & 1 ? IN_FORWARD : IN_ATTACK);
     assert.equal(server.pitch[k], Math.fround(t * 0.5));
   }
-  assert.equal(writeCmds(w, 0, client, 40).length, 6 + CMD_REDUNDANCY * 17);
+  assert.equal(writeCmds(w, 0, client, 40).length, 6 + CMD_REDUNDANCY * 21);
 });
 
 Deno.test('angle quantization round-trips within 0.01 degrees', () => {
@@ -99,8 +99,8 @@ Deno.test('snapshots: full, then small deltas, removals and the breakable mask',
   server.ents[server.row(k, 3) + E_X] += 4;
   server.ents.fill(0, server.row(k, 7), server.row(k, 7) + E_FIELDS);
   const delta = writeSnapshot(w, server, k, base, 0, ownInfo);
-  // header 14 + own block + 2 entries (moved: 2 + 12 bytes, removed: 2 bytes)
-  assert.equal(delta.length, 14 + 8 + player.psBytes.length + player.wsBytes.length + 1 + 14 + 2);
+  // header 14 + own block + 2 entries (moved: 2 + 12 bytes, removed: 2 bytes) + 2 empty event lists
+  assert.equal(delta.length, 14 + 8 + player.psBytes.length + player.wsBytes.length + 1 + 14 + 2 + 2);
   r.set(delta);
   r.u8v();
   const c2 = readSnapshot(r, client, own);

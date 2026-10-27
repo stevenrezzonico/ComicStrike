@@ -107,6 +107,31 @@ export class Debris {
     }
   }
 
+  // A short burst of n small chunks at a point (blood hits).
+  puff(x, y, z, r, g, b, n) {
+    for (let k = 0; k < n && this.count < this.capacity; k++) {
+      const s = this.sim;
+      const o = this.count++ * S;
+      s[o] = x;
+      s[o + 1] = y;
+      s[o + 2] = z;
+      s[o + 3] = rand(-90, 90);
+      s[o + 4] = rand(-90, 90);
+      s[o + 5] = rand(0, 140);
+      for (let a = 0; a < 3; a++) {
+        s[o + 6 + a] = rand(0, 6.283);
+        s[o + 9 + a] = rand(-8, 8);
+        s[o + 12 + a] = rand(0.8, 2);
+      }
+      const shade = rand(0.7, 1.1);
+      s[o + 15] = r * shade;
+      s[o + 16] = g * shade;
+      s[o + 17] = b * shade;
+      s[o + 18] = rand(0.6, 1.1);
+      s[o + 19] = 0;
+    }
+  }
+
   update(dt, world) {
     const s = this.sim, t = this.trace;
     for (let i = 0; i < this.count; i++) {
