@@ -10,7 +10,7 @@
 
 import { parseBSP, parseVec3 } from '../shared/bsp.js';
 import {
-  TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED,
+  TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED, IN_SCORE,
 } from '../shared/constants.js';
 import { CollisionWorld } from '../shared/trace.js';
 import { eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_SIZE, FL_ONGROUND, FL_DUCKING } from '../shared/pmove.js';
@@ -23,7 +23,7 @@ import { HitTargets } from '../shared/hitgroups.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import { Player, spawnPlayer, runCommand, resolveShots, ImpactList, TEAM_T, TEAM_CT } from '../shared/player.js';
 import {
-  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, E_ACTIVE, E_X, E_Y, E_Z, E_PITCH, E_YAW,
+  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, E_ACTIVE, E_X, E_Y, E_Z, E_PITCH, E_YAW,
   E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw,
 } from '../shared/protocol.js';
 import { buildMapMesh } from './mapmesh.js';
@@ -35,6 +35,8 @@ import { perspective, viewFromAngles, multiply, invert } from './gl/mat4.js';
 import { Input, SELECT_LAST } from './input.js';
 import { WeaponView } from './weaponview.js';
 import { NetClient } from './net.js';
+import { Hud } from './hud.js';
+import { PHASE_FREEZE, buyError, applyBuy } from '../shared/economy.js';
 
 const DEG = Math.PI / 180;
 const FOV_Y = 73.74 * DEG; // CS:GO fov 90 at 4:3, kept vertical (Hor+)
@@ -59,6 +61,8 @@ const players = new Players(renderer.gl);
 const overlays = [decals, debris, players];
 const weaponView = new WeaponView(renderer.gl, FOV_Y);
 const input = new Input(canvas);
+const hud = new Hud((item) => buy(item));
+const OFFLINE_MONEY = 16000;
 
 const player = new Player();
 const ps = player.ps;
@@ -203,15 +207,27 @@ function storePrediction(t) {
   predictedTick[k] = t;
 }
 
+// Freeze time (from the newest snapshot): the same input mask the server applies.
+const frozen = () => net !== null && net.own.round.phase === PHASE_FREEZE;
+
 // Runs our commands after `from` again on top of the state we were just given.
 function replayFrom(from) {
   for (let t = from + 1; t < tickCount; t++) {
     if (!cmds.has(t)) continue;
     const k = t & cmds.mask;
     if (player.health > 0) {
-      runCommand(world, player, cmds.buttons[k], cmds.select[k], cmds.pitch[k], cmds.yaw[k], t, replayShots);
+      runCommand(world, player, cmds.buttons[k], cmds.select[k], cmds.pitch[k], cmds.yaw[k], t, replayShots, frozen());
     }
     storePrediction(t);
+  }
+}
+
+// Buy menu: the server decides online; offline it is instant (anywhere, $16000).
+function buy(item) {
+  if (net) {
+    if (!buyError(player, item, (net.own.flags & OWN_CAN_BUY) !== 0)) net.buy(item);
+  } else if (!buyError(player, item, true)) {
+    applyBuy(player, item);
   }
 }
 
@@ -264,6 +280,7 @@ function applySnapshot() {
   player.health = own.health;
   player.armor = own.armor;
   player.helmet = own.helmet;
+  player.money = own.money;
 
   // Breakables: apply what changed on the server since the last snapshot (our own
   // predicted breaks stay as they are).
@@ -425,7 +442,7 @@ function tick() {
     noclipTick(buttons);
     weaponTick(ws, ps, buttons, select, angles[0], angles[1], t, shots);
   } else if (alive) {
-    const died = runCommand(world, player, buttons, select, angles[0], angles[1], t, shots);
+    const died = runCommand(world, player, buttons, select, angles[0], angles[1], t, shots, frozen());
     if (died && !net) offlineRespawn();
   }
   if (shots.count) {
@@ -511,6 +528,11 @@ function draw(now, alpha, dt) {
   debris.update(dt, world);
   renderer.render(viewProj, invViewProj, eye, now / 1000, overlays);
 
+  hud.update(net ? net.own.round : null, player.money);
+  hud.refreshMenu(player, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true);
+  hud.scoreboard((input.buttons & IN_SCORE) !== 0 && input.locked, net, selfId,
+    (id) => id === selfId ? player.health > 0 : interp[id * E_FIELDS + E_HEALTH] > 0);
+
   const dead = player.health <= 0;
   weaponView.hidden = dead;
   deathNotice.style.display = dead && net ? 'block' : 'none';
@@ -529,6 +551,13 @@ setInterval(() => {
 
 document.addEventListener('keydown', (e) => {
   if (e.code === 'KeyV' && input.locked && !e.repeat && !net) noclip = !noclip;
+  if (e.repeat) return;
+  if (e.code === 'KeyB' && (input.locked || hud.menuOpen)) hud.toggleMenu();
+  else if (e.code === 'Escape' && hud.menuOpen) hud.toggleMenu(false);
+  else if (hud.menuOpen && /^Digit[1-9]$/.test(e.code)) hud.menuKey(+e.code.slice(5));
+});
+canvas.addEventListener('click', () => {
+  if (hud.menuOpen) hud.toggleMenu(false);
 });
 document.addEventListener('pointerlockchange', () => {
   status.style.display = document.pointerLockElement ? 'none' : '';
@@ -555,6 +584,7 @@ async function start() {
     player.team = team || TEAM_T;
     player.primary = primary;
     player.secondary = secondary;
+    player.money = OFFLINE_MONEY;
     await loadMap(params.get('map') || 'de_dust2');
     offlineRespawn();
   }
@@ -584,6 +614,8 @@ globalThis.webcs = {
   netStats,
   interp,
   targets,
+  hud,
+  buy,
   setNoclip: (on) => {
     noclip = on && !net;
   },

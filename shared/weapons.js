@@ -71,6 +71,7 @@ function fromGameData(name) {
     recoilMagnitude: m('recoilMagnitude'), recoilMagnitudeVariance: m('recoilMagnitudeVariance'),
     recoilSeed: d.recoilSeed,
     flinchLarge: d.flinchVelocityModifierLarge, flinchSmall: d.flinchVelocityModifierSmall,
+    teams: d.teams, // who can buy it: 1 T, 2 CT, 3 both
   };
 }
 

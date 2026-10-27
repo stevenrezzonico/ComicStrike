@@ -2,12 +2,13 @@
 // (authority): a user command moves the player, applies fall damage and runs the
 // weapon; shots are then traced against the world and its breakables.
 
-import { TICK_DT } from './constants.js';
+import { TICK_DT, IN_DUCK, IN_RELOAD, IN_SCORE } from './constants.js';
 import {
   createPlayerState, copyPlayerState, playerMove, fallDamage, PS_ORIGIN, PS_EVENTS, PS_LAND_SPEED, PS_VELMOD, EV_LAND,
 } from './pmove.js';
 import {
-  createWeaponState, copyWeaponState, giveWeapon, weaponTick, activeWeapon, WEAPON_ID, SLOT_PRIMARY, WS_ACTIVE,
+  createWeaponState, copyWeaponState, giveWeapon, weaponTick, activeWeapon, WEAPON_ID, SLOT_PRIMARY, SLOT_SECONDARY,
+  NUM_SLOTS, WS_ACTIVE, WS_SLOTS,
 } from './weapons.js';
 import { Trace, traceHull, hullFits, HULL_POINT } from './trace.js';
 import { hitgroupScale, HITGROUP_HEAD, HITGROUP_LEGS } from './hitgroups.js';
@@ -29,31 +30,49 @@ export class Player {
     this.helmet = false;
     this.team = TEAM_T;
     this.spawnCount = 0; // bumps on every respawn, so clients notice a teleport
-    this.primary = 0; // loadout weapon ids (0 = team default)
+    this.primary = 0; // warmup loadout weapon ids (0 = team default)
     this.secondary = 0;
+    this.money = 0;
+    this.kills = 0;
+    this.deaths = 0;
   }
 }
 
-// Resets a player to a fresh life at a spawn point with the round loadout.
-export function spawnPlayer(p, x, y, z) {
+// Freeze time: players may look, crouch, reload and switch weapons, nothing else.
+export const FREEZE_BUTTONS = IN_DUCK | IN_RELOAD | IN_SCORE;
+
+const savedSlots = new Float64Array(NUM_SLOTS * 3);
+
+// Puts a player at a spawn point with full health.
+//  keepGear: a round survivor keeps weapons, ammo and armor (CS:GO).
+//  otherwise a new life: knife + team pistol, no armor; `withLoadout` (warmup and
+//  offline) also hands out the requested primary/secondary.
+export function spawnPlayer(p, x, y, z, keepGear = false, withLoadout = true) {
+  if (keepGear) savedSlots.set(p.ws.f.subarray(WS_SLOTS, WS_SLOTS + NUM_SLOTS * 3));
   copyPlayerState(p.ps, createPlayerState());
   p.ps.f[PS_ORIGIN] = x;
   p.ps.f[PS_ORIGIN + 1] = y;
   p.ps.f[PS_ORIGIN + 2] = z;
   copyWeaponState(p.ws, createWeaponState());
   const ct = p.team === TEAM_CT;
-  giveWeapon(p.ws, WEAPON_ID.knife);
-  giveWeapon(p.ws, p.secondary || (ct ? WEAPON_ID.usp_silencer : WEAPON_ID.glock));
-  giveWeapon(p.ws, p.primary || (ct ? WEAPON_ID.m4a1 : WEAPON_ID.ak47));
-  p.ws.f[WS_ACTIVE] = SLOT_PRIMARY;
+  if (keepGear) {
+    p.ws.f.set(savedSlots, WS_SLOTS);
+  } else {
+    giveWeapon(p.ws, WEAPON_ID.knife);
+    giveWeapon(p.ws, (withLoadout && p.secondary) || (ct ? WEAPON_ID.usp_silencer : WEAPON_ID.glock));
+    if (withLoadout) giveWeapon(p.ws, p.primary || (ct ? WEAPON_ID.m4a1 : WEAPON_ID.ak47));
+    p.armor = 0;
+    p.helmet = false;
+  }
+  p.ws.f[WS_ACTIVE] = p.ws.f[WS_SLOTS + SLOT_PRIMARY * 3] ? SLOT_PRIMARY : SLOT_SECONDARY;
   p.health = 100;
-  p.armor = 0; // a new life starts without armor (round restarts keep it: see the round code)
-  p.helmet = false;
   p.spawnCount = (p.spawnCount + 1) & 255;
 }
 
-// Runs one user command. Returns true if the player died (fall damage).
-export function runCommand(world, p, buttons, select, pitch, yaw, tick, shots) {
+// Runs one user command (`frozen`: freeze time). Returns true if the player died
+// (fall damage).
+export function runCommand(world, p, buttons, select, pitch, yaw, tick, shots, frozen = false) {
+  if (frozen) buttons &= FREEZE_BUTTONS;
   const w = activeWeapon(p.ws);
   playerMove(world, p.ps, buttons, pitch, yaw, TICK_DT, w ? w.maxSpeed : 250);
   if (p.ps.i[PS_EVENTS] & EV_LAND) p.health -= Math.round(fallDamage(p.ps.f[PS_LAND_SPEED]));

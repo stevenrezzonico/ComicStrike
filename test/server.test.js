@@ -92,7 +92,7 @@ class FakeClient {
 Deno.test('server: two players join, move, and the client prediction matches the server bit for bit', async (t) => {
   const bsp = await loadBSP(t, 'de_dust2');
   if (!bsp) return;
-  const game = new Game('de_dust2', bsp);
+  const game = new Game('de_dust2', bsp, { rounds: false });
   const a = new FakeClient(game, bsp, 'alice', TEAM_T);
   const b = new FakeClient(game, bsp, 'bob', TEAM_CT);
   assert.equal(a.inbox.length, 1, 'welcome sent');
@@ -133,7 +133,7 @@ Deno.test('server: two players join, move, and the client prediction matches the
 Deno.test('server: a client cannot run commands faster than real time', async (t) => {
   const bsp = await loadBSP(t, 'de_dust2');
   if (!bsp) return;
-  const game = new Game('de_dust2', bsp);
+  const game = new Game('de_dust2', bsp, { rounds: false });
   const a = new FakeClient(game, bsp, 'speedy', TEAM_T);
   game.step();
   a.poll();
@@ -149,7 +149,7 @@ Deno.test('server: a client cannot run commands faster than real time', async (t
 Deno.test('server: commands lost beyond the redundancy window are replaced, not waited for', async (t) => {
   const bsp = await loadBSP(t, 'de_dust2');
   if (!bsp) return;
-  const game = new Game('de_dust2', bsp);
+  const game = new Game('de_dust2', bsp, { rounds: false });
   const a = new FakeClient(game, bsp, 'lossy', TEAM_T);
   game.step();
   a.poll();
@@ -207,7 +207,7 @@ function aimAt(shooter, x, y, z) {
 async function strafeAndShoot(t, viewFromPast) {
   const bsp = await loadBSP(t, 'de_dust2');
   if (!bsp) return null;
-  const game = new Game('de_dust2', bsp);
+  const game = new Game('de_dust2', bsp, { rounds: false });
   const a = new FakeClient(game, bsp, 'shooter', TEAM_T);
   const b = new FakeClient(game, bsp, 'target', TEAM_CT);
   game.step();
@@ -253,7 +253,7 @@ Deno.test('lag compensation: the same shot claimed at the current tick misses', 
 Deno.test('a headshot kills; everyone gets the kill; the victim respawns after 2 s', async (t) => {
   const bsp = await loadBSP(t, 'de_dust2');
   if (!bsp) return;
-  const game = new Game('de_dust2', bsp);
+  const game = new Game('de_dust2', bsp, { rounds: false });
   const a = new FakeClient(game, bsp, 'shooter', TEAM_T);
   const b = new FakeClient(game, bsp, 'target', TEAM_CT);
   game.step();

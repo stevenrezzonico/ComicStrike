@@ -4,7 +4,7 @@
 
 import {
   MAX_PLAYERS, Writer, Reader, SnapshotRing, OwnState, EventList, writeHello, writeCmds, readWelcome, readSnapshot,
-  readInfo, S2C_WELCOME, S2C_SNAPSHOT, S2C_REJECT, S2C_INFO, C2S_CMDS, C2S_BYE,
+  readInfo, writeBuy, S2C_WELCOME, S2C_SNAPSHOT, S2C_REJECT, S2C_INFO, C2S_CMDS, C2S_BYE,
 } from '../shared/protocol.js';
 
 const HELLO_RETRY_MS = 250;
@@ -38,6 +38,9 @@ export class NetClient {
     this.events = new EventList(); // shots and kills decoded by the last poll()
     this.names = new Array(MAX_PLAYERS).fill('');
     this.teams = new Uint8Array(MAX_PLAYERS);
+    this.kills = new Int32Array(MAX_PLAYERS);
+    this.deaths = new Int32Array(MAX_PLAYERS);
+    this.buyId = 0;
     this.arrival = 0; // performance.now() when the newest snapshot arrived
   }
 
@@ -138,6 +141,12 @@ export class NetClient {
     return this.welcome;
   }
 
+  // A purchase. Datagrams can be lost: send it three times; the server acts once per id.
+  buy(item) {
+    this.buyId = (this.buyId + 1) & 0xffff;
+    for (let i = 0; i < 3; i++) this.send(writeBuy(this.nextWriter(), this.buyId, item));
+  }
+
   // Our newest commands (with redundancy) plus the newest snapshot we decoded.
   sendCmds(ring, newestTick) {
     this.send(writeCmds(this.nextWriter(), this.latestSeq, ring, newestTick));
@@ -178,7 +187,7 @@ export class NetClient {
       } else if (type === S2C_REJECT) {
         this.rejected = r.str();
       } else if (type === S2C_INFO) {
-        readInfo(r, this.names, this.teams);
+        readInfo(r, this.names, this.teams, this.kills, this.deaths);
       }
     }
     return fresh;

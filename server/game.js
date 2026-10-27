@@ -1,7 +1,8 @@
 // Authoritative game state: runs every client's user commands through the shared
-// player simulation, resolves shots with lag compensation, and sends each client a
-// delta-compressed snapshot (plus the tick's shot and kill events) every tick.
-// Transport-agnostic: sessions only need send(bytes) and close(reason).
+// player simulation, resolves shots with lag compensation, runs CS:GO rounds and the
+// economy, and sends each client a delta-compressed snapshot (plus the tick's shot and
+// kill events) every tick. Transport-agnostic: sessions only need send(bytes) and
+// close(reason).
 
 import { parseVec3 } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
@@ -15,18 +16,23 @@ import {
 } from '../shared/player.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import {
-  PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, SHOT_IMPACT, SHOT_BLOOD, KILL_HEADSHOT,
-  KILL_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, readHello, writeWelcome, writeReject,
-  writeInfo, readCmds, writeSnapshot, quantizePitch, quantizeYaw, E_ACTIVE, E_X, E_Y, E_Z, E_PITCH, E_YAW, E_FLAGS,
-  E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_FIELDS,
+  PHASE_WARMUP, PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, FREEZE_TIME, ROUND_TIME, BUY_TIME, ROUND_END_DELAY,
+  MAX_ROUNDS, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, LOSS_STREAK_MAX, TEAMKILL_PENALTY,
+  END_ELIMINATION, END_TIME, END_DRAW, lossBonus, buyError, applyBuy, BuyZones,
+} from '../shared/economy.js';
+import {
+  PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, SHOT_IMPACT, SHOT_BLOOD,
+  KILL_HEADSHOT, KILL_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
+  writeWelcome, writeReject, writeInfo, readCmds, writeSnapshot, quantizePitch, quantizeYaw, E_ACTIVE, E_X, E_Y, E_Z,
+  E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_FIELDS,
 } from '../shared/protocol.js';
 
 const CMD_BANK = 8; // commands a client may run ahead of server time (absorbs jitter, stops speedhacks)
 const MAX_CMDS_PER_TICK = 8;
 const TIMEOUT_TICKS = 30 * TICK_RATE; // clients in hidden tabs send a 1 Hz keepalive
-const RESPAWN_TICKS = 2 * TICK_RATE;
 const INFO_INTERVAL = TICK_RATE; // roster resent every second (datagrams can be lost)
 const SEND_BUFFERS = 8; // rotating send buffers: a datagram may still be queued when the next is written
+const WARMUP_MONEY = 16000; // CS:GO warmup: buy anything
 
 // Lag compensation: how far back shots may rewind other players (CS:GO sv_maxunlag 1 s).
 const HISTORY = 64; // ticks, power of two
@@ -47,8 +53,11 @@ class Client {
     this.ackSeq = 0; // newest snapshot the client has decoded
     this.lastHeard = 0;
     this.spawnYaw = 0;
-    this.respawnTick = 0; // while dead: server tick to respawn at
+    this.respawnTick = Infinity; // while dead in warmup: server tick to respawn at
     this.life = 0; // increments per spawn: history never interpolates across a respawn
+    this.placed = false; // round start: already put on a spawn point
+    this.canBuy = false;
+    this.lastBuy = -1; // newest BUY id handled
     // Last command run, repeated when one is lost.
     this.buttons = 0;
     this.pitch = 0;
@@ -66,6 +75,14 @@ class Client {
     return this.player.health > 0;
   }
 
+  get kills() {
+    return this.player.kills;
+  }
+
+  get deaths() {
+    return this.player.deaths;
+  }
+
   writer() {
     const w = this.out[this.outNext];
     this.outNext = (this.outNext + 1) % SEND_BUFFERS;
@@ -73,12 +90,23 @@ class Client {
   }
 }
 
+// Round rules; tests override them (shorter timings, or no rounds at all).
+export const DEFAULT_RULES = {
+  rounds: true, // false: stay in warmup (free respawns) forever
+  freezeTime: FREEZE_TIME,
+  roundTime: ROUND_TIME,
+  buyTime: BUY_TIME,
+  roundEndDelay: ROUND_END_DELAY,
+};
+
 export class Game {
-  constructor(mapName, bsp) {
+  constructor(mapName, bsp, rules = {}) {
     this.mapName = mapName;
+    this.rules = { ...DEFAULT_RULES, ...rules };
     this.world = CollisionWorld.fromBSP(bsp);
     this.world.surfaces = new SurfaceMap(bsp);
     this.breakables = new Breakables(bsp, this.world);
+    this.buyZones = new BuyZones(bsp);
     this.spawns = { [TEAM_T]: [], [TEAM_CT]: [] };
     const o = new Float32Array(3);
     for (const e of bsp.entities) {
@@ -88,6 +116,10 @@ export class Game {
       const yaw = e.angles ? +e.angles.trim().split(/\s+/)[1] || 0 : +(e.angle || 0);
       this.spawns[team].push([o[0], o[1], o[2], yaw]);
     }
+    // Who wins when the round clock runs out: CTs defend bomb sites, Ts hold hostages.
+    const has = (re) => bsp.entities.some((e) => re.test(e.classname || ''));
+    this.timeWinner = has(/^(func|info)_bomb_target$/) ? TEAM_CT : has(/^hostage_entity$/) ? TEAM_T : 0;
+
     this.clients = new Array(MAX_PLAYERS).fill(null);
     this.tick = 0;
     this.snapshots = new SnapshotRing();
@@ -101,10 +133,22 @@ export class Game {
     this.impacts = new ImpactList();
     this.reader = new Reader();
     this.infoWriter = new Writer();
+
+    // Rounds.
+    this.round = new RoundState();
+    this.phaseEnd = 0;
+    this.buyEnd = 0;
+    this.roundsPlayed = 0;
+    this.lossStreak = { [TEAM_T]: 0, [TEAM_CT]: 0 };
+    this.placing = false;
   }
 
   get playerCount() {
     return this.clients.filter(Boolean).length;
+  }
+
+  get phase() {
+    return this.round.phase;
   }
 
   // A new transport session. Returns its Client, or null if the server is full.
@@ -148,6 +192,12 @@ export class Game {
       c.joined = false; // the transport's close callback must not log it twice
       c.session.close('bye');
       this.disconnect(c);
+    } else if (type === C2S_BUY && c.joined && r.remaining >= 3) {
+      const id = r.u16v(), item = r.u8v();
+      const ahead = (id - c.lastBuy) & 0xffff; // ids wrap; each BUY arrives up to 3 times
+      if (c.lastBuy >= 0 && (ahead === 0 || ahead >= 0x8000)) return;
+      c.lastBuy = id;
+      if (!buyError(c.player, item, this.canBuy(c))) applyBuy(c.player, item);
     } else if (type === C2S_CMDS && c.joined) {
       const ack = readCmds(r, c.inbox, c.nextCmd < 0 ? 0 : c.nextCmd);
       if (ack > c.ackSeq && ack <= this.tick) c.ackSeq = ack;
@@ -168,18 +218,25 @@ export class Game {
       for (const o of this.clients) if (o && o !== c && o.joined) o.team === TEAM_CT ? ct++ : t++;
       p.team = ct < t ? TEAM_CT : TEAM_T;
     }
-    this.respawn(c);
+    p.money = this.phase === PHASE_WARMUP ? WARMUP_MONEY : START_MONEY;
+    if (this.phase === PHASE_WARMUP || this.phase === PHASE_FREEZE) {
+      this.respawn(c, false, this.phase === PHASE_WARMUP);
+    } else {
+      p.health = 0; // joined mid-round: wait for the next one
+      c.life++;
+    }
     this.rosterDirty = true;
     console.log(`player ${c.id} "${c.name}" joined (${p.team === TEAM_CT ? 'CT' : 'T'})`);
   }
 
-  // Free spawn point of the player's team: one no other live player stands on.
-  respawn(c) {
+  // Free spawn point of the player's team: one no other live player stands on (at a
+  // round start: no one placed yet this round).
+  respawn(c, keepGear = false, withLoadout = false) {
     const list = this.spawns[c.team].length ? this.spawns[c.team] : this.spawns[TEAM_T];
     let pick = list[0] || [0, 0, 0, 0];
     for (const s of list) {
       const taken = this.clients.some((o) =>
-        o && o !== c && o.joined && o.alive &&
+        o && o !== c && o.joined && o.alive && (!this.placing || o.placed) &&
         Math.hypot(o.player.ps.f[PS_ORIGIN] - s[0], o.player.ps.f[PS_ORIGIN + 1] - s[1]) < 48
       );
       if (!taken && hullFits(this.world, HULL_STAND, s[0], s[1], s[2])) {
@@ -187,12 +244,21 @@ export class Game {
         break;
       }
     }
-    spawnPlayer(c.player, pick[0], pick[1], pick[2]);
+    spawnPlayer(c.player, pick[0], pick[1], pick[2], keepGear, withLoadout);
     c.spawnYaw = pick[3];
+    c.respawnTick = Infinity;
+    c.placed = true;
     c.life++;
   }
 
-  // One server tick: run queued commands, record lag-compensation history, then
+  canBuy(c) {
+    const ph = this.phase;
+    const inTime = ph === PHASE_WARMUP || ph === PHASE_FREEZE || (ph === PHASE_LIVE && this.tick < this.buyEnd);
+    const f = c.player.ps.f;
+    return inTime && c.alive && this.buyZones.contains(c.team, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2]);
+  }
+
+  // One server tick: run queued commands, the round, lag-compensation history, then
   // snapshot everyone.
   step() {
     this.tick++;
@@ -209,9 +275,11 @@ export class Game {
         continue;
       }
       if (!c.joined) continue;
-      if (!c.alive && this.tick >= c.respawnTick) this.respawn(c);
+      if (!c.alive && this.tick >= c.respawnTick) this.respawn(c, false, true);
       this.runCommands(c);
     }
+    this.updateRound();
+    for (const c of this.clients) if (c && c.joined) c.canBuy = this.canBuy(c);
     this.recordHistory();
     if (this.rosterDirty || this.tick % INFO_INTERVAL === 0) this.sendInfo();
     this.sendSnapshots();
@@ -219,6 +287,7 @@ export class Game {
 
   runCommands(c) {
     c.bank = Math.min(c.bank + 1, CMD_BANK);
+    const frozen = this.phase === PHASE_FREEZE;
     for (let n = 0; n < MAX_CMDS_PER_TICK && c.nextCmd >= 0 && c.bank >= 1; n++) {
       const t = c.nextCmd;
       let select = -1;
@@ -232,16 +301,16 @@ export class Game {
       } else if (c.newestCmd < t + CMD_REDUNDANCY) {
         break; // not here yet
       } // else lost beyond redundancy: repeat the previous command
-      if (c.alive) this.runCommand(c, t, select); // the dead only use up their commands
+      if (c.alive) this.runCommand(c, t, select, frozen); // the dead only use up their commands
       c.lastCmd = t;
       c.nextCmd = t + 1;
       c.bank--;
     }
   }
 
-  runCommand(c, t, select) {
+  runCommand(c, t, select, frozen) {
     const p = c.player;
-    const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots);
+    const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots, frozen);
     if (this.shots.count) {
       this.rewind(c.view);
       resolveShots(this.world, this.breakables, p.ws, this.shots, this.impacts, this.targets, c.id, c.team);
@@ -271,10 +340,127 @@ export class Game {
   }
 
   kill(killer, victim, weapon, headshot) {
-    victim.player.health = 0;
-    victim.respawnTick = this.tick + RESPAWN_TICKS;
+    const k = killer.player, v = victim.player;
+    v.health = 0;
+    v.deaths++;
+    if (killer !== victim) {
+      if (killer.team === victim.team) {
+        k.kills--;
+        k.money = Math.max(0, k.money - TEAMKILL_PENALTY);
+      } else {
+        k.kills++;
+        if (this.phase !== PHASE_WARMUP) k.money = Math.min(MAX_MONEY, k.money + (WEAPONS[weapon]?.killAward || 0));
+      }
+    }
+    if (this.phase === PHASE_WARMUP) victim.respawnTick = this.tick + WARMUP_RESPAWN * TICK_RATE;
     this.events.addKill(this.nextKillId, killer.id, victim.id, weapon, headshot ? KILL_HEADSHOT : 0, this.tick);
     this.nextKillId = (this.nextKillId + 1) & 0xffff || 1;
+    this.rosterDirty = true;
+  }
+
+  // --- Rounds -----------------------------------------------------------------------
+
+  updateRound() {
+    let t = 0, ct = 0, aliveT = 0, aliveCT = 0;
+    for (const c of this.clients) {
+      if (!c || !c.joined) continue;
+      if (c.team === TEAM_CT) {
+        ct++;
+        if (c.alive) aliveCT++;
+      } else {
+        t++;
+        if (c.alive) aliveT++;
+      }
+    }
+    const rs = this.round;
+    if (rs.phase === PHASE_WARMUP) {
+      if (t && ct && this.rules.rounds) this.startMatch();
+    } else if (!t || !ct) { // a team emptied out
+      this.setPhase(PHASE_WARMUP, 0);
+      console.log('waiting for players');
+    } else if (rs.phase === PHASE_FREEZE && this.tick >= this.phaseEnd) {
+      this.setPhase(PHASE_LIVE, this.rules.roundTime);
+      this.buyEnd = this.tick + this.rules.buyTime * TICK_RATE;
+    } else if (rs.phase === PHASE_LIVE) {
+      if (!aliveT || !aliveCT) this.endRound(aliveT ? TEAM_T : aliveCT ? TEAM_CT : 0, aliveT || aliveCT ? END_ELIMINATION : END_DRAW);
+      else if (this.tick >= this.phaseEnd) this.endRound(this.timeWinner, this.timeWinner ? END_TIME : END_DRAW);
+    } else if (rs.phase === PHASE_OVER && this.tick >= this.phaseEnd) {
+      const half = MAX_ROUNDS / 2;
+      if (rs.scoreT > half || rs.scoreCT > half || this.roundsPlayed >= MAX_ROUNDS) this.startMatch();
+      else {
+        if (this.roundsPlayed === half) this.halftime();
+        this.startRound(this.roundsPlayed === half);
+      }
+    }
+    rs.ticksLeft = rs.phase === PHASE_WARMUP ? 0 : this.phaseEnd - this.tick;
+  }
+
+  setPhase(phase, seconds) {
+    this.round.phase = phase;
+    this.phaseEnd = this.tick + seconds * TICK_RATE;
+  }
+
+  startMatch() {
+    const rs = this.round;
+    rs.scoreT = rs.scoreCT = rs.info = rs.round = 0;
+    this.roundsPlayed = 0;
+    this.lossStreak[TEAM_T] = this.lossStreak[TEAM_CT] = 0;
+    for (const c of this.clients) {
+      if (!c || !c.joined) continue;
+      c.player.money = START_MONEY;
+      c.player.kills = c.player.deaths = 0;
+    }
+    this.rosterDirty = true;
+    console.log('match start');
+    this.startRound(true);
+  }
+
+  // Everyone to a spawn point; survivors keep their gear unless `fresh`.
+  startRound(fresh) {
+    this.breakables.reset(this.world);
+    this.placing = true;
+    for (const c of this.clients) if (c) c.placed = false;
+    for (const c of this.clients) {
+      if (!c || !c.joined) continue;
+      this.respawn(c, !fresh && c.alive, false);
+    }
+    this.placing = false;
+    this.round.round++;
+    this.setPhase(PHASE_FREEZE, this.rules.freezeTime);
+  }
+
+  endRound(winner, reason) {
+    const rs = this.round;
+    this.roundsPlayed++;
+    if (winner === TEAM_T) rs.scoreT++;
+    if (winner === TEAM_CT) rs.scoreCT++;
+    rs.info = winner | (reason << 2);
+    for (const team of [TEAM_T, TEAM_CT]) {
+      const won = team === winner;
+      if (won) this.lossStreak[team] = Math.max(0, this.lossStreak[team] - 1);
+      else if (winner) this.lossStreak[team] = Math.min(this.lossStreak[team] + 1, LOSS_STREAK_MAX + 1);
+      const reward = won ? WIN_REWARD : lossBonus(Math.max(this.lossStreak[team], 1));
+      for (const c of this.clients) {
+        if (c && c.joined && c.team === team) c.player.money = Math.min(MAX_MONEY, c.player.money + reward);
+      }
+    }
+    this.setPhase(PHASE_OVER, this.rules.roundEndDelay);
+    const who = winner === TEAM_T ? 'Terrorists' : winner === TEAM_CT ? 'Counter-Terrorists' : 'nobody';
+    console.log(`round ${rs.round}: ${who} win (${rs.scoreT}-${rs.scoreCT})`);
+  }
+
+  // After round 15: teams swap sides, scores follow them, money restarts.
+  halftime() {
+    const rs = this.round;
+    [rs.scoreT, rs.scoreCT] = [rs.scoreCT, rs.scoreT];
+    [this.lossStreak[TEAM_T], this.lossStreak[TEAM_CT]] = [0, 0];
+    for (const c of this.clients) {
+      if (!c || !c.joined) continue;
+      c.player.team = c.team === TEAM_CT ? TEAM_T : TEAM_CT;
+      c.player.money = START_MONEY;
+    }
+    this.rosterDirty = true;
+    console.log('halftime: teams swap');
   }
 
   // --- Lag compensation ---------------------------------------------------------
@@ -367,7 +553,7 @@ export class Game {
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
       const base = c.ackSeq ? ring.find(c.ackSeq) : -1;
-      c.session.send(writeSnapshot(c.writer(), ring, k, base, c.id, c, this.events));
+      c.session.send(writeSnapshot(c.writer(), ring, k, base, c.id, c, this.events, this.round));
     }
   }
 }

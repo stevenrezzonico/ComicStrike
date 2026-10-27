@@ -35,6 +35,37 @@
   #killfeed .t { color: #e8c46a; }
   #killfeed .ct { color: #8cb4f0; }
   #killfeed .hs { color: #f66; }
+  #hud-money { position: fixed; left: 20px; bottom: 56px; color: #9fd67a; font: 700 22px/1 Verdana, Tahoma, sans-serif;
+    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7); pointer-events: none; }
+  #roundbar { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); padding: 4px 14px; border-radius: 3px;
+    background: rgba(0, 0, 0, 0.45); color: #f2ecd8; font: 700 16px/1.3 Verdana, Tahoma, sans-serif; white-space: pre;
+    pointer-events: none; }
+  #banner { position: fixed; left: 0; right: 0; top: 20%; text-align: center; color: #f2ecd8;
+    font: 700 30px/1.4 Verdana, Tahoma, sans-serif; text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.8); pointer-events: none; }
+  #scoreboard { position: fixed; left: 50%; top: 14%; transform: translateX(-50%); display: none; min-width: 420px;
+    background: rgba(10, 12, 16, 0.82); padding: 10px 14px; border-radius: 4px; color: #ddd;
+    font: 13px/1.6 Verdana, Tahoma, sans-serif; pointer-events: none; }
+  #scoreboard table { width: 100%; border-collapse: collapse; }
+  #scoreboard td:not(:first-child) { text-align: right; width: 40px; }
+  #scoreboard tr.ct td { color: #8cb4f0; font-weight: 700; padding-top: 8px; }
+  #scoreboard tr.t td { color: #e8c46a; font-weight: 700; padding-top: 8px; }
+  #scoreboard tr.me td { color: #fff; font-weight: 700; }
+  #scoreboard tr.dead td { opacity: 0.45; }
+  #buymenu { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); display: none;
+    width: min(560px, calc(100vw - 32px)); box-sizing: border-box; max-height: calc(100vh - 32px); overflow-y: auto;
+    background: rgba(12, 14, 18, 0.92); border: 1px solid #444; border-radius: 4px; padding: 12px;
+    color: #eee; font: 14px/1.4 Verdana, Tahoma, sans-serif; }
+  #buymenu.closed .items::before { content: 'Buying is not possible here or now'; display: block; color: #e88; margin-bottom: 6px; }
+  #buymenu .cats { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  #buymenu button { font: inherit; color: inherit; background: #262a31; border: 1px solid #3a3f48; border-radius: 3px;
+    padding: 6px 10px; cursor: pointer; }
+  #buymenu button:hover:not(:disabled) { background: #354050; }
+  #buymenu button:disabled { opacity: 0.4; cursor: default; }
+  #buymenu .items { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  #buymenu .items button { display: flex; justify-content: space-between; }
+  #buymenu .price { color: #9fd67a; }
+  #buymenu .hint { margin-top: 10px; font-size: 11px; opacity: 0.6; }
+  @media (max-width: 520px) { #buymenu .items { grid-template-columns: 1fr; } }
   #death {
     position: fixed; left: 0; right: 0; top: 32%; text-align: center; display: none;
     color: #f2ecd8; font: 700 22px/1.4 Verdana, Tahoma, sans-serif; text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7);
@@ -47,6 +78,11 @@
 <div id="status">loading...</div>
 <pre id="debug"></pre>
 <div id="killfeed"></div>
+<div id="roundbar"></div>
+<div id="banner"></div>
+<div id="hud-money"></div>
+<div id="scoreboard"></div>
+<div id="buymenu"></div>
 <div id="death"></div>
 <div id="hud-left" class="hud">
   <span><small>HP</small><span id="hud-health"></span></span>
