@@ -45,6 +45,7 @@ export class Player {
     this.money = 0;
     this.kills = 0;
     this.deaths = 0;
+    this.score = 0; // deathmatch points
   }
 }
 

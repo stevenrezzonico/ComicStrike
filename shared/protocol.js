@@ -18,11 +18,11 @@
 //   REJECT   u8 type, str reason
 //   PRINT    u8 type, lstr text (console output: rcon replies, server messages)
 //   CHANGELEVEL u8 type, str map (the server is switching maps: reconnect)
-//   INFO     u8 type, u8 n, n x { u8 id, u8 team, u16 kills, u16 deaths, str name }
+//   INFO     u8 type, u8 n, n x { u8 id, u8 team, u16 kills, u16 deaths, u16 score, str name }
 //            (every player, resent periodically and on changes)
 //   SNAPSHOT u8 type, u32 seq, u32 baseSeq (0 = full), u32 lastCmd, u8 flags,
 //            [u32 x 8 broken-breakable mask if flags & SNAP_BROKEN],
-//            round: u8 phase, u16 ticksLeft, u8 scoreT, u8 scoreCT, u8 roundInfo, u8 round,
+//            round: u8 phase, u32 ticksLeft, u8 scoreT, u8 scoreCT, u8 roundInfo, u8 round, u8 mode,
 //            bomb: u8 state, [f32 x, y, z, u16 ticksLeft if state >= BOMB_DROPPED],
 //            own player: u8 health, u8 armor (bit 7: helmet), u8 spawnCount, u8 team, f32 spawnYaw,
 //                        u16 money, u8 ownFlags (OWN_CAN_BUY, OWN_DEFUSER),
@@ -45,7 +45,7 @@ import { PS_SIZE } from './pmove.js';
 import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -210,7 +210,7 @@ export function writeReject(w, reason) {
   return w.view();
 }
 
-// players: array indexed by id of { team, name, kills, deaths } or null.
+// players: array indexed by id of { team, name, kills, deaths, score } or null.
 export function writeInfo(w, players) {
   w.reset();
   w.u8v(S2C_INFO);
@@ -224,6 +224,7 @@ export function writeInfo(w, players) {
     w.u8v(p.team);
     w.u16v(p.kills);
     w.u16v(p.deaths);
+    w.u16v(Math.min(Math.max(p.score, 0), 65535));
     w.str(p.name);
     n++;
   }
@@ -231,20 +232,22 @@ export function writeInfo(w, players) {
   return w.view();
 }
 
-// Fills names / teams / kills / deaths indexed by id (others cleared).
-export function readInfo(r, names, teams, kills, deaths) {
+// Fills names / teams / kills / deaths / scores indexed by id (others cleared).
+export function readInfo(r, names, teams, kills, deaths, scores) {
   names.fill('');
   teams.fill(0);
   kills.fill(0);
   deaths.fill(0);
+  scores.fill(0);
   const n = r.u8v();
   for (let i = 0; i < n; i++) {
-    const id = r.u8v(), team = r.u8v(), k = r.u16v(), d = r.u16v(), name = r.str();
+    const id = r.u8v(), team = r.u8v(), k = r.u16v(), d = r.u16v(), score = r.u16v(), name = r.str();
     if (id < names.length) {
       names[id] = name;
       teams[id] = team;
       kills[id] = k;
       deaths[id] = d;
+      scores[id] = score;
     }
   }
 }
@@ -657,6 +660,7 @@ export class RoundState {
     this.scoreCT = 0;
     this.info = 0; // last round: winner team | reason << 2
     this.round = 0;
+    this.mode = 0; // GAME_FFA | GAME_DM (shared/economy.js)
   }
 }
 const NO_ROUND = new RoundState();
@@ -676,11 +680,12 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
   w.u8v(sendBroken ? SNAP_BROKEN : 0);
   if (sendBroken) for (let i = 0; i < BROKEN_WORDS; i++) w.u32v(ring.broken[k * BROKEN_WORDS + i]);
   w.u8v(rs.phase);
-  w.u16v(Math.min(Math.max(rs.ticksLeft, 0), 65535));
+  w.u32v(Math.max(rs.ticksLeft, 0));
   w.u8v(rs.scoreT);
   w.u8v(rs.scoreCT);
   w.u8v(rs.info);
   w.u8v(rs.round);
+  w.u8v(rs.mode);
   w.u8v(bomb.state);
   if (bomb.state >= BOMB_DROPPED) {
     w.f32v(bomb.x);
@@ -832,11 +837,12 @@ export function readSnapshot(r, ring, own, ev = null) {
   own.lastCmd = lastCmd;
   const rs = own.round;
   rs.phase = r.u8v();
-  rs.ticksLeft = r.u16v();
+  rs.ticksLeft = r.u32v();
   rs.scoreT = r.u8v();
   rs.scoreCT = r.u8v();
   rs.info = r.u8v();
   rs.round = r.u8v();
+  rs.mode = r.u8v();
   const bomb = own.bomb;
   bomb.state = r.u8v();
   if (bomb.state >= BOMB_DROPPED) {

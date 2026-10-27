@@ -4,7 +4,8 @@
 
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import {
-  PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, BUY_MENU, itemLabel, itemPrice,
+  PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, END_MATCH, GAME_FFA, GAME_DM,
+  BUY_MENU, itemLabel, itemPrice,
 } from '../shared/economy.js';
 import { BOMB_PLANTED } from '../shared/bomb.js';
 import { TICK_RATE } from '../shared/constants.js';
@@ -43,8 +44,9 @@ export class Hud {
     this.noticeUntil = now + ms;
   }
 
-  // rs: RoundState and bomb: BombState (null offline); now: ms.
-  update(rs, bomb, money, now) {
+  // rs: RoundState and bomb: BombState (null offline); now: ms; leader: the top scorer
+  // { name, score, self, tied } (deathmatch) or null.
+  update(rs, bomb, money, now, leader = null) {
     this.set(this.elMoney, 'money', `$${money}`);
     if (!rs) {
       this.set(this.elRound, 'round', 'OFFLINE');
@@ -52,14 +54,20 @@ export class Hud {
       return;
     }
     const secs = Math.max(0, Math.ceil(rs.ticksLeft / TICK_RATE));
-    const clock = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+    const clock = rs.ticksLeft > 0 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : '';
     // CS:GO hides the clock once the bomb is down: the beeps tell the time.
     const planted = bomb.state === BOMB_PLANTED;
     const mid = rs.phase === PHASE_WARMUP ? 'WARMUP' : rs.phase === PHASE_FREEZE ? `buy ${clock}` : planted ? ' C4 ' : clock;
-    this.set(this.elRound, 'round', `CT ${rs.scoreCT}   ${mid}   ${rs.scoreT} T`);
+    const dm = (rs.mode & GAME_DM) !== 0;
+    const lead = leader && leader.score > 0 && !leader.tied
+      ? `   lead: ${leader.self ? 'you' : leader.name} ${leader.score}` : '';
+    this.set(this.elRound, 'round', dm ? `DEATHMATCH   ${mid}${lead}` : `CT ${rs.scoreCT}   ${mid}   ${rs.scoreT} T`);
     this.elRound.classList.toggle('planted', planted && rs.phase !== PHASE_OVER);
     let banner = '';
-    if (rs.phase === PHASE_OVER) {
+    if (rs.phase === PHASE_OVER && rs.info >> 2 === END_MATCH) {
+      banner = !leader || leader.tied ? 'Match over: a draw'
+        : `${leader.self ? 'You win' : `${leader.name} wins`} the match (${leader.score} points)`;
+    } else if (rs.phase === PHASE_OVER) {
       const winner = rs.info & 3, reason = rs.info >> 2;
       banner = winner === TEAM_CT ? 'Counter-Terrorists Win' : winner === TEAM_T ? 'Terrorists Win' : 'Round Draw';
       if (reason === END_TIME) banner += ' (time)';
@@ -67,7 +75,7 @@ export class Hud {
       else if (reason === END_DEFUSE) banner = 'Bomb Defused: ' + banner;
       else if (reason === END_RESCUE) banner = 'Hostage Rescued: ' + banner;
     } else if (rs.phase === PHASE_WARMUP) {
-      banner = 'Warmup: waiting for both teams';
+      banner = rs.mode & GAME_FFA ? 'Warmup: waiting for players' : 'Warmup: waiting for both teams';
     } else if (now < this.noticeUntil) {
       banner = this.notice;
     }
@@ -87,25 +95,32 @@ export class Hud {
 
   // --- Scoreboard (hold Tab) -----------------------------------------------------
 
-  // net: NetClient (names/teams/kills/deaths), alive(id) -> bool
+  // net: NetClient (names/teams/kills/deaths/scores), alive(id) -> bool. Deathmatch
+  // adds the points (and sorts by them); free for all is one list.
   scoreboard(show, net, selfId, alive) {
     this.elScore.style.display = show ? 'block' : 'none';
     if (!show || !net) return;
+    const mode = net.own.round.mode, dm = (mode & GAME_DM) !== 0;
+    const groups = mode & GAME_FFA ? [[[TEAM_CT, TEAM_T], 'Players', 'ffa']]
+      : [[[TEAM_CT], 'Counter-Terrorists', 'ct'], [[TEAM_T], 'Terrorists', 't']];
     const lines = [];
-    for (const [team, title, cls] of [[TEAM_CT, 'Counter-Terrorists', 'ct'], [TEAM_T, 'Terrorists', 't']]) {
-      lines.push([cls, title, 'K', 'D']);
+    for (const [teams, title, cls] of groups) {
+      lines.push(dm ? [cls, title, 'Score', 'K', 'D'] : [cls, title, 'K', 'D']);
       const ids = [];
-      for (let id = 0; id < net.names.length; id++) if (net.names[id] && net.teams[id] === team) ids.push(id);
-      ids.sort((a, b) => net.kills[b] - net.kills[a] || net.deaths[a] - net.deaths[b]);
+      for (let id = 0; id < net.names.length; id++) if (net.names[id] && teams.includes(net.teams[id])) ids.push(id);
+      ids.sort((a, b) => (dm ? net.scores[b] - net.scores[a] : 0) || net.kills[b] - net.kills[a] ||
+        net.deaths[a] - net.deaths[b]);
       for (const id of ids) {
-        lines.push([`${id === selfId ? 'me' : ''}${alive(id) ? '' : ' dead'}`, net.names[id], net.kills[id], net.deaths[id]]);
+        const cls = `${id === selfId ? 'me' : ''}${alive(id) ? '' : ' dead'}`;
+        lines.push(dm ? [cls, net.names[id], net.scores[id], net.kills[id], net.deaths[id]]
+          : [cls, net.names[id], net.kills[id], net.deaths[id]]);
       }
     }
     const watching = [];
     for (let id = 0; id < net.names.length; id++) {
       if (net.names[id] && net.teams[id] === TEAM_SPECTATOR) watching.push(net.names[id]);
     }
-    if (watching.length) lines.push(['spec', `Spectators: ${watching.join(', ')}`, '', '']);
+    if (watching.length) lines.push(['spec', `Spectators: ${watching.join(', ')}`]);
     const key = JSON.stringify(lines);
     if (this.shown.score === key) return;
     this.shown.score = key;
@@ -149,18 +164,19 @@ export class Hud {
       b.addEventListener('click', () => this.onBuy(item));
       this.items.appendChild(b);
     });
-    this.refreshMenu(this.lastPlayer, this.lastCanBuy);
+    this.refreshMenu(this.lastPlayer, this.lastCanBuy, this.lastFree);
   }
 
-  // Grey out what this player cannot buy now; show prices.
-  refreshMenu(player, canBuy) {
+  // Grey out what this player cannot buy now; show prices (`free`: deathmatch).
+  refreshMenu(player, canBuy, free = false) {
     this.lastPlayer = player;
     this.lastCanBuy = canBuy;
+    this.lastFree = free;
     if (!this.menuOpen || !player) return;
     for (const b of this.items.children) {
       const price = itemPrice(player, +b.dataset.item);
-      b.lastChild.textContent = price < 0 ? '—' : `$${price}`;
-      b.disabled = !canBuy || price < 0 || price > player.money || player.health <= 0;
+      b.lastChild.textContent = price < 0 ? '—' : free ? 'free' : `$${price}`;
+      b.disabled = !canBuy || price < 0 || (!free && price > player.money) || player.health <= 0;
     }
     this.elMenu.classList.toggle('closed', !canBuy);
   }

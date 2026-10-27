@@ -11,6 +11,12 @@ import { Game, DEFAULT_RULES } from './game.js';
 const PHASE_NAMES = ['warmup', 'freeze time', 'live', 'round over'];
 const CHANGELEVEL_CLOSE_MS = 500;
 
+// CS:GO game modes by game_type / game_mode. A mode is a cfg of mode convars run when a
+// map loads (cfg/gamemode_<name>.cfg, then cfg/gamemode_<name>_server.cfg for the
+// server's own overrides, as in CS:GO); deathmatch also switches to free weapons and
+// points instead of money.
+export const GAME_MODES = { '0/1': 'competitive', '1/2': 'deathmatch' };
+
 export class Host {
   // opts: loadMap(name) -> parsed BSP (throws if missing), listMaps() -> names,
   //       readCfg(name) -> text or null, quit(), print(text), rules (test overrides),
@@ -36,6 +42,23 @@ export class Host {
     num('mp_maxmoney', DEFAULT_RULES.maxMoney, 'Money cap', 0, 65535);
     num('mp_warmuptime', DEFAULT_RULES.warmupTime, 'Warmup length once both teams have players (s)', 0, 3600);
     num('sv_cheats', 0, 'Allow cheat commands (setpos)', 0, 1);
+    // Game modes (cfg/gamemode_*.cfg set these).
+    con.cvar('game_type', 0, { help: 'Game type (0 classic, 1 gun game family); applies on the next map', min: 0, max: 3 });
+    con.cvar('game_mode', 1, { help: 'Game mode (0/1 competitive, 1/2 deathmatch); applies on the next map', min: 0, max: 3 });
+    num('mp_teammates_are_enemies', 0, 'Everyone is an enemy (free for all)', 0, 1);
+    num('mp_respawn_on_death_t', 0, 'Terrorists respawn after dying', 0, 1);
+    num('mp_respawn_on_death_ct', 0, 'Counter-Terrorists respawn after dying', 0, 1);
+    num('mp_randomspawn', 0, 'Spawn at any spawn point, away from enemies', 0, 1);
+    num('mp_ignore_round_win_conditions', 0, 'Rounds never end by elimination or objectives', 0, 1);
+    num('mp_timelimit', 0, 'Match length when rounds never end (min; 0: none)', 0, 600);
+    num('mp_buy_anywhere', 0, 'Buy outside the buy zones', 0, 1);
+    num('mp_free_armor', 0, 'Spawn with kevlar and a helmet', 0, 1);
+    num('mp_give_player_c4', 1, 'A terrorist gets the bomb each round', 0, 1);
+    num('mp_hostages_max', 2, 'Hostages per round on hostage maps', 0, 4);
+    num('mp_respawn_immunitytime', 0, 'Seconds a respawned player cannot be hurt (until he shoots)', 0, 60);
+    num('mp_match_restart_delay', 15, 'Seconds between the end of a match and the next', 1, 300);
+    num('mp_death_drop_gun', 1, 'The dead drop their best gun', 0, 1);
+    this.modeName = 'competitive'; // of the running map
 
     con.command('map', (a, ctx) => this.changeLevel(a[1], ctx), 'map <name>: switches to another map');
     con.command('changelevel', (a, ctx) => this.changeLevel(a[1], ctx), 'changelevel <name>: same as map');
@@ -61,7 +84,19 @@ export class Host {
 
   // Starts the first map.
   start(mapName) {
-    this.game = this.newGame(mapName, this.opts.loadMap(mapName));
+    const bsp = this.opts.loadMap(mapName);
+    this.loadMode();
+    this.game = this.newGame(mapName, bsp);
+  }
+
+  // Runs the game mode's cfgs (game_type / game_mode) for the map about to start.
+  loadMode() {
+    const key = `${this.con.get('game_type').number}/${this.con.get('game_mode').number}`;
+    this.modeName = GAME_MODES[key] || 'competitive';
+    if (!GAME_MODES[key]) this.con.out({}, `game_type / game_mode ${key} is not supported: competitive`);
+    const quiet = { print: () => {} };
+    this.execCfg(`gamemode_${this.modeName}`, quiet);
+    this.execCfg(`gamemode_${this.modeName}_server`, quiet);
   }
 
   newGame(mapName, bsp) {
@@ -85,6 +120,20 @@ export class Host {
       maxMoney: v('mp_maxmoney'),
       warmupTime: v('mp_warmuptime'),
       cheats: v('sv_cheats') !== 0,
+      deathmatch: this.modeName === 'deathmatch',
+      teammatesAreEnemies: v('mp_teammates_are_enemies') !== 0,
+      respawnT: v('mp_respawn_on_death_t') !== 0,
+      respawnCT: v('mp_respawn_on_death_ct') !== 0,
+      randomSpawn: v('mp_randomspawn') !== 0,
+      ignoreWinConditions: v('mp_ignore_round_win_conditions') !== 0,
+      timeLimit: Math.round(v('mp_timelimit') * 60),
+      buyAnywhere: v('mp_buy_anywhere') !== 0,
+      freeArmor: v('mp_free_armor') !== 0,
+      giveC4: v('mp_give_player_c4') !== 0,
+      hostagesMax: v('mp_hostages_max'),
+      immunityTime: v('mp_respawn_immunitytime'),
+      matchRestartDelay: v('mp_match_restart_delay'),
+      deathDropGun: v('mp_death_drop_gun') !== 0,
     };
   }
 
@@ -123,6 +172,7 @@ export class Host {
     (this.opts.defer || setTimeout)(() => {
       for (const s of sessions) s.close('changelevel');
     }, CHANGELEVEL_CLOSE_MS);
+    this.loadMode();
     this.game = this.newGame(name, bsp);
     this.con.out(ctx, `changelevel to ${name}`);
   }
@@ -153,13 +203,17 @@ export class Host {
 
   // What the start menu shows before joining (connect.json).
   info() {
-    return { hostname: this.hostname.value, map: this.game.mapName, players: this.game.playerCount, maxPlayers: MAX_PLAYERS };
+    return {
+      hostname: this.hostname.value, map: this.game.mapName, mode: this.modeName, players: this.game.playerCount,
+      maxPlayers: MAX_PLAYERS,
+    };
   }
 
   status() {
     const g = this.game, rs = g.round;
     const lines = [
       `hostname: ${this.hostname.value}`,
+      `mode    : ${this.modeName}`,
       `map     : ${g.mapName}  ${PHASE_NAMES[rs.phase]}${rs.phase === PHASE_WARMUP ? '' : `, round ${rs.round}`}` +
       `  T ${rs.scoreT} - ${rs.scoreCT} CT`,
       `players : ${g.playerCount}/${MAX_PLAYERS}`,

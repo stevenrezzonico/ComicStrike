@@ -81,7 +81,7 @@ Deno.test('server info for the start menu: hostname, map, players', async (t) =>
   const { host, join } = s;
   host.con.exec('hostname "Test server"');
   join('a', TEAM_T);
-  assert.deepEqual(host.info(), { hostname: 'Test server', map: 'de_dust2', players: 1, maxPlayers: 20 });
+  assert.deepEqual(host.info(), { hostname: 'Test server', map: 'de_dust2', mode: 'competitive', players: 1, maxPlayers: 20 });
 });
 
 Deno.test('client commands: name, jointeam, kill; unknown ones answer', async (t) => {

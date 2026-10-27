@@ -44,6 +44,14 @@ export const END_DRAW = 3;
 export const END_BOMB = 4; // target bombed
 export const END_DEFUSE = 5;
 export const END_RESCUE = 6; // a hostage reached a rescue zone
+export const END_MATCH = 7; // deathmatch: the time limit ended the match (winner: top score)
+
+// Game modes (RoundState.mode bits, set by the server's game_type / game_mode and the
+// mode convars).
+export const GAME_FFA = 1; // mp_teammates_are_enemies: everyone is an enemy
+export const GAME_DM = 2; // deathmatch: respawns, free weapons, points instead of money
+export const DM_KILL_POINTS = 10; // per enemy killed (approx.: CS:GO adds weapon bonuses)
+export const DM_RESPAWN = 2; // seconds dead before respawning (approx.)
 
 export const lossBonus = (streak) => LOSS_BONUS + LOSS_BONUS_STEP * Math.min(Math.max(streak - 1, 0), LOSS_STREAK_MAX);
 
@@ -87,19 +95,20 @@ export function itemPrice(p, item) {
   return w.price;
 }
 
-// Why `p` cannot buy `item` now ('' = it can). `canBuyNow`: in a buy zone in buy time.
-export function buyError(p, item, canBuyNow) {
+// Why `p` cannot buy `item` now ('' = it can). `canBuyNow`: in a buy zone in buy time;
+// `free`: deathmatch (no money).
+export function buyError(p, item, canBuyNow, free = false) {
   if (!canBuyNow) return 'not in a buy zone or out of buy time';
   if (p.health <= 0) return 'dead';
   const price = itemPrice(p, item);
   if (price < 0) return 'not available';
-  if (price > p.money) return 'not enough money';
+  if (!free && price > p.money) return 'not enough money';
   return '';
 }
 
 // Buys `item` (checked with buyError first). A weapon replaces the one in its slot.
-export function applyBuy(p, item) {
-  p.money -= itemPrice(p, item);
+export function applyBuy(p, item, free = false) {
+  if (!free) p.money -= itemPrice(p, item);
   if (item === ITEM_KEVLAR || item === ITEM_ASSAULTSUIT) {
     p.armor = 100;
     if (item === ITEM_ASSAULTSUIT) p.helmet = true;

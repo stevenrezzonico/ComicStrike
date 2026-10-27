@@ -63,7 +63,7 @@ import { NetGraph } from './netgraph.js';
 import { createConsole, watch } from './settings.js';
 import { releaseOf, quote } from '../shared/cvars.js';
 import {
-  PHASE_FREEZE, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
+  PHASE_FREEZE, GAME_FFA, GAME_DM, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
 } from '../shared/economy.js';
 
 const DEG = Math.PI / 180;
@@ -361,9 +361,27 @@ function replayFrom(from) {
 }
 
 // Buy menu: the server decides online; offline it is instant (anywhere, $16000).
+// The server's game mode (GAME_* bits; offline: none).
+const gameMode = () => (net ? net.own.round.mode : 0);
+
+// The top scorer (deathmatch): { name, score, self, tied } or null.
+function leader() {
+  if (!net) return null;
+  let best = -1, tied = false;
+  for (let id = 0; id < MAX_PLAYERS; id++) {
+    if (!net.names[id] || net.teams[id] === TEAM_SPECTATOR) continue;
+    if (best >= 0 && net.scores[id] === net.scores[best]) tied = true;
+    else if (best < 0 || net.scores[id] > net.scores[best]) {
+      best = id;
+      tied = false;
+    }
+  }
+  return best < 0 ? null : { name: net.names[best], score: net.scores[best], self: best === selfId, tied };
+}
+
 function buy(item) {
   if (net) {
-    if (!buyError(player, item, (net.own.flags & OWN_CAN_BUY) !== 0)) net.buy(item);
+    if (!buyError(player, item, (net.own.flags & OWN_CAN_BUY) !== 0, (gameMode() & GAME_DM) !== 0)) net.buy(item);
   } else if (!buyError(player, item, true)) {
     applyBuy(player, item);
   }
@@ -628,7 +646,9 @@ function tick() {
     if (died && !net) offlineRespawn();
   }
   if (shots.count) {
-    resolveShots(world, breakables, ws, shots, impacts, net ? targets : null, selfId, player.team);
+    // Free for all: bullets stop at everyone (team 0 skips nobody), as on the server.
+    resolveShots(world, breakables, ws, shots, impacts, net ? targets : null, selfId,
+      gameMode() & GAME_FFA ? 0 : player.team);
     showImpacts();
   }
   if (!net) { // offline grenades
@@ -826,7 +846,8 @@ function draw(now, alpha, dt) {
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
   else showFlash(flash.left, flash.total);
 
-  hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now);
+  hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now, leader());
+  document.body.classList.toggle('dm', (gameMode() & GAME_DM) !== 0); // no money in deathmatch
   const action = ws.f[WS_ACTION];
   const simTime = (tickCount - 1 + alpha) * TICK_DT;
   const actionTime = action === ACTION_PLANT ? PLANT_TIME : player.defuser ? DEFUSE_TIME_KIT : DEFUSE_TIME;
@@ -836,7 +857,7 @@ function draw(now, alpha, dt) {
     action === ACTION_PLANT ? 'Planting the bomb' : action === ACTION_DEFUSE ? 'Defusing the bomb'
     : picking > 0 ? 'Picking up the hostage' : '',
     picking > 0 ? picking : 1 - (ws.f[WS_ACTION_END] - simTime) / actionTime);
-  hud.refreshMenu(player, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true);
+  hud.refreshMenu(player, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, (gameMode() & GAME_DM) !== 0);
   hud.scoreboard((input.buttons & IN_SCORE) !== 0 && input.locked, net, selfId,
     (id) => id === selfId ? player.health > 0 : interp[id * E_FIELDS + E_HEALTH] > 0);
 
@@ -941,7 +962,7 @@ const BUY_NAMES = { vest: ITEM_KEVLAR, vesthelm: ITEM_ASSAULTSUIT, defuser: ITEM
 con.command('buy', (a, ctx) => {
   const item = BUY_NAMES[a[1]] || WEAPON_ID[a[1]];
   if (!item) return con.out(ctx, 'buy <ak47 | m4a1 | m4a1_silencer | awp | deagle | ... | vest | vesthelm | defuser>');
-  const err = buyError(player, item, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true);
+  const err = buyError(player, item, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, (gameMode() & GAME_DM) !== 0);
   if (err) return con.out(ctx, `${itemLabel(item)}: ${err}`);
   buy(item);
 }, 'buy <item>: buys a weapon or gear');
@@ -1165,6 +1186,7 @@ async function reconnect() {
       }
     }
     status.style.display = 'none';
+    menu.busy('');
     conWin.print(`connected: ${currentMap}`);
     reconnecting = false;
   } catch (err) {

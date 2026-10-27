@@ -1,6 +1,7 @@
 // Authoritative game state: runs every client's user commands through the shared
 // player simulation, resolves shots with lag compensation, runs CS:GO rounds, the
-// bomb and the economy, and sends each client a delta-compressed snapshot (plus the tick's shot and
+// bomb and the economy (or deathmatch: respawns, free weapons, points, a time limit;
+// free for all with mp_teammates_are_enemies), and sends each client a delta-compressed snapshot (plus the tick's shot and
 // kill events) every tick. Transport-agnostic: sessions only need send(bytes) and
 // close(reason).
 
@@ -35,7 +36,7 @@ import {
   MAX_ROUNDS, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD,
   PLANT_LOSS_BONUS, LOSS_STREAK_MAX, TEAMKILL_PENALTY, END_ELIMINATION, END_TIME, END_DRAW, END_BOMB, END_DEFUSE,
   END_RESCUE, RESCUE_WIN_REWARD, RESCUE_REWARD, HOSTAGE_TOUCH_REWARD, HOSTAGE_HIT_PENALTY, HOSTAGE_KILL_PENALTY,
-  lossBonus, buyError, applyBuy, BuyZones,
+  END_MATCH, GAME_FFA, GAME_DM, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
@@ -78,7 +79,9 @@ class Client {
     this.ackSeq = 0; // newest snapshot the client has decoded
     this.lastHeard = 0;
     this.spawnYaw = 0;
-    this.respawnTick = Infinity; // while dead in warmup: server tick to respawn at
+    this.respawnTick = Infinity; // while dead in warmup / with respawns: server tick to respawn at
+    this.spawnTick = 0; // server tick of the last spawn (deathmatch buy time)
+    this.immuneUntil = 0; // server tick: spawn protection (mp_respawn_immunitytime) until then
     this.life = 0; // increments per spawn: history never interpolates across a respawn
     this.placed = false; // round start: already put on a spawn point
     this.canBuy = false;
@@ -123,6 +126,10 @@ class Client {
     return this.player.deaths;
   }
 
+  get score() {
+    return this.player.score;
+  }
+
   writer() {
     const w = this.out[this.outNext];
     this.outNext = (this.outNext + 1) % SEND_BUFFERS;
@@ -144,6 +151,21 @@ export const DEFAULT_RULES = {
   maxMoney: MAX_MONEY,
   warmupTime: 0, // seconds of warmup once both teams have players (0: start at once)
   cheats: false, // sv_cheats: setpos for testing
+  // Game mode (server/host.js: game_type / game_mode and the mode convars).
+  deathmatch: false, // free weapons (kept for the next life), points instead of money
+  teammatesAreEnemies: false, // mp_teammates_are_enemies: free for all
+  respawnT: false, // mp_respawn_on_death_t
+  respawnCT: false, // mp_respawn_on_death_ct
+  randomSpawn: false, // mp_randomspawn: any spawn point, away from enemies
+  ignoreWinConditions: false, // mp_ignore_round_win_conditions
+  timeLimit: 0, // mp_timelimit (s): match length when rounds never end; 0 none
+  buyAnywhere: false, // mp_buy_anywhere
+  freeArmor: false, // mp_free_armor: kevlar + helmet at every spawn
+  giveC4: true, // mp_give_player_c4
+  hostagesMax: HOSTAGES_PER_ROUND, // mp_hostages_max
+  immunityTime: 0, // mp_respawn_immunitytime (s)
+  matchRestartDelay: 15, // mp_match_restart_delay (s)
+  deathDropGun: true, // mp_death_drop_gun
 };
 
 const RCON_MAX_FAILS = 5; // bad passwords before a client is ignored for a while
@@ -252,7 +274,8 @@ export class Game {
   // chest hit (armor helps), fire ignores armor.
   grenadeHurt(victim, damage, weapon, ownerId, ownerTeam) {
     const owner = this.clients[ownerId];
-    if (victim.team === ownerTeam && victim.id !== ownerId) return;
+    if (victim.team === ownerTeam && victim.id !== ownerId && !this.rules.teammatesAreEnemies) return;
+    if (this.tick < victim.immuneUntil) return;
     const w = WEAPONS[weapon];
     applyDamage(victim.player, damage, w, w.grenade === 'fire' ? HITGROUP_LEGS : HITGROUP_CHEST);
     if (victim.player.health <= 0) this.kill(owner && owner.joined ? owner : victim, victim, weapon, false);
@@ -260,6 +283,21 @@ export class Game {
 
   get playerCount() {
     return this.clients.filter(Boolean).length;
+  }
+
+  // Can `a` hurt `b` (free for all: anyone else)?
+  isEnemy(a, b) {
+    return a !== b && (this.rules.teammatesAreEnemies || a.team !== b.team);
+  }
+
+  // Does `c` respawn after dying (deathmatch)?
+  respawns(c) {
+    return c.team === TEAM_T ? this.rules.respawnT : c.team === TEAM_CT && this.rules.respawnCT;
+  }
+
+  // The match can be played: free for all needs two players, else both teams.
+  ready(t, ct) {
+    return this.rules.teammatesAreEnemies ? t + ct >= 2 : t > 0 && ct > 0;
   }
 
   get phase() {
@@ -314,11 +352,15 @@ export class Game {
       const ahead = (id - c.lastBuy) & 0xffff; // ids wrap; each BUY arrives up to 3 times
       if (c.lastBuy >= 0 && (ahead === 0 || ahead >= 0x8000)) return;
       c.lastBuy = id;
-      if (!buyError(c.player, item, this.canBuy(c))) {
-        // A weapon bought into a taken slot throws the old one down (CS:GO).
-        const w = WEAPONS[item];
-        if (w && !w.melee && !w.c4 && c.player.ws.f[WS_SLOTS + w.slot * 3]) this.dropSlot(c, w.slot, true);
-        applyBuy(c.player, item);
+      const free = this.rules.deathmatch;
+      if (!buyError(c.player, item, this.canBuy(c), free)) {
+        // A weapon bought into a taken slot throws the old one down (CS:GO; deathmatch:
+        // it is gone, and the new one is handed out again at every respawn).
+        const w = WEAPONS[item], p = c.player;
+        if (w && !w.melee && !w.c4 && p.ws.f[WS_SLOTS + w.slot * 3] && !free) this.dropSlot(c, w.slot, true);
+        applyBuy(p, item, free);
+        if (free && w && w.slot === SLOT_PRIMARY) p.primary = item;
+        if (free && w && w.slot === SLOT_SECONDARY) p.secondary = item;
       }
     } else if (type === C2S_COMMAND && c.joined && r.remaining >= 4) {
       const id = r.u16v(), text = r.lstr();
@@ -347,8 +389,9 @@ export class Game {
       p.team = ct < t ? TEAM_CT : TEAM_T;
     }
     p.money = this.phase === PHASE_WARMUP ? WARMUP_MONEY : this.rules.startMoney;
-    if (c.playing && (this.phase === PHASE_WARMUP || this.phase === PHASE_FREEZE)) {
-      this.respawn(c, false, this.phase === PHASE_WARMUP);
+    if (c.playing && (this.phase === PHASE_WARMUP || this.phase === PHASE_FREEZE ||
+      (this.phase === PHASE_LIVE && this.respawns(c)))) {
+      this.respawn(c, false, this.phase === PHASE_WARMUP || this.respawns(c));
     } else {
       p.health = 0; // joined mid-round: wait for the next one (spectators: never spawn)
       c.life++;
@@ -361,30 +404,63 @@ export class Game {
   // round start: no one placed yet this round).
   respawn(c, keepGear = false, withLoadout = false) {
     if (!c.playing) return;
-    const list = this.spawns[c.team].length ? this.spawns[c.team] : this.spawns[TEAM_T];
-    let pick = list[0] || [0, 0, 0, 0];
-    for (const s of list) {
-      const taken = this.clients.some((o) =>
-        o && o !== c && o.joined && o.alive && (!this.placing || o.placed) &&
-        Math.hypot(o.player.ps.f[PS_ORIGIN] - s[0], o.player.ps.f[PS_ORIGIN + 1] - s[1]) < 48
-      );
-      if (!taken && hullFits(this.world, HULL_STAND, s[0], s[1], s[2])) {
-        pick = s;
-        break;
-      }
-    }
+    const pick = this.rules.randomSpawn ? this.randomSpawn(c) : this.teamSpawn(c);
     spawnPlayer(c.player, pick[0], pick[1], pick[2], keepGear, withLoadout);
+    if (this.rules.freeArmor) {
+      c.player.armor = 100;
+      c.player.helmet = true;
+    }
     c.spawnYaw = pick[3];
     c.respawnTick = Infinity;
+    c.spawnTick = this.tick;
+    c.immuneUntil = this.tick + Math.round(this.rules.immunityTime * TICK_RATE);
     c.placed = true;
     c.life++;
   }
 
+  // Is spawn point `s` free for `c` (nobody standing on it, room to stand)?
+  spawnFree(c, s) {
+    const taken = this.clients.some((o) =>
+      o && o !== c && o.joined && o.alive && (!this.placing || o.placed) &&
+      Math.hypot(o.player.ps.f[PS_ORIGIN] - s[0], o.player.ps.f[PS_ORIGIN + 1] - s[1]) < 48
+    );
+    return !taken && hullFits(this.world, HULL_STAND, s[0], s[1], s[2]);
+  }
+
+  // The first free spawn point of the player's team.
+  teamSpawn(c) {
+    const list = this.spawns[c.team].length ? this.spawns[c.team] : this.spawns[TEAM_T];
+    return list.find((s) => this.spawnFree(c, s)) || list[0] || [0, 0, 0, 0];
+  }
+
+  // mp_randomspawn: any team's spawn point, one of the few farthest from living enemies
+  // (CS:GO picks deathmatch spawns out of the enemies' sight; GoldSrc maps have only the
+  // team spawns, so distance stands in for it - approx.).
+  randomSpawn(c) {
+    const scored = [];
+    for (const s of [...this.spawns[TEAM_T], ...this.spawns[TEAM_CT]]) {
+      if (!this.spawnFree(c, s)) continue;
+      let near = Infinity;
+      for (const o of this.clients) {
+        if (!o || !o.joined || !o.alive || !this.isEnemy(c, o)) continue;
+        const f = o.player.ps.f;
+        near = Math.min(near, Math.hypot(f[PS_ORIGIN] - s[0], f[PS_ORIGIN + 1] - s[1], f[PS_ORIGIN + 2] - s[2]));
+      }
+      scored.push([near, s]);
+    }
+    if (!scored.length) return this.teamSpawn(c);
+    scored.sort((a, b) => b[0] - a[0]);
+    return scored[Math.floor(Math.random() * Math.min(3, scored.length))][1];
+  }
+
+  // In a buy zone (or mp_buy_anywhere) in buy time; deathmatch: mp_buytime from each spawn.
   canBuy(c) {
-    const ph = this.phase;
-    const inTime = ph === PHASE_WARMUP || ph === PHASE_FREEZE || (ph === PHASE_LIVE && this.tick < this.buyEnd);
+    const ph = this.phase, r = this.rules;
+    const inTime = r.deathmatch ? ph !== PHASE_OVER && this.tick < c.spawnTick + r.buyTime * TICK_RATE
+      : ph === PHASE_WARMUP || ph === PHASE_FREEZE || (ph === PHASE_LIVE && this.tick < this.buyEnd);
     const f = c.player.ps.f;
-    return inTime && c.alive && this.buyZones.contains(c.team, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2]);
+    return inTime && c.alive &&
+      (r.buyAnywhere || this.buyZones.contains(c.team, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2]));
   }
 
   // One server tick: run queued commands, the round, lag-compensation history, then
@@ -404,7 +480,7 @@ export class Game {
         continue;
       }
       if (!c.joined) continue;
-      if (!c.alive && this.tick >= c.respawnTick) this.respawn(c, false, true);
+      if (!c.alive && this.tick >= c.respawnTick && this.phase !== PHASE_OVER) this.respawn(c, false, true);
       this.runCommands(c);
     }
     this.updateBomb();
@@ -451,7 +527,10 @@ export class Game {
     const heldId = wf[held], heldClip = wf[held + 1], heldReserve = wf[held + 2]; // what G may drop
     const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots, frozen, this.bomb);
     const events = p.ws.f[WS_EVENTS];
-    if (events & (WEV_FIRE | WEV_MELEE | WEV_THROW)) c.shots = (c.shots + 1) & 255;
+    if (events & (WEV_FIRE | WEV_MELEE | WEV_THROW)) {
+      c.shots = (c.shots + 1) & 255;
+      c.immuneUntil = 0; // CS:GO: shooting ends spawn protection
+    }
     if (events & WEV_THROW) {
       const f = p.ps.f, thrown = p.ws.f[WS_THROWN];
       this.grenades.throw(this.world, Math.floor(thrown / 4), c.id, c.team, f[PS_ORIGIN], f[PS_ORIGIN + 1],
@@ -469,7 +548,8 @@ export class Game {
     if (events & WEV_DEFUSED) this.defuseBomb(c);
     if (this.shots.count) {
       this.rewind(c.view);
-      resolveShots(this.world, this.breakables, p.ws, this.shots, this.impacts, this.targets, c.id, c.team);
+      const team = this.rules.teammatesAreEnemies ? 0 : c.team; // 0: nobody is skipped
+      resolveShots(this.world, this.breakables, p.ws, this.shots, this.impacts, this.targets, c.id, team);
       this.applyImpacts(c);
     }
     if (fell && p.health <= 0) this.kill(c, c, 0, false);
@@ -493,6 +573,7 @@ export class Game {
         ev.addShot(shooter.id, SHOT_IMPACT, x, y, z, nx, ny, nz, im.owner[i]);
         continue;
       }
+      if (this.tick < victim.immuneUntil) continue; // spawn protection: the bullet does nothing
       ev.addShot(shooter.id, SHOT_BLOOD, x, y, z, nx, ny, nz, 0);
       if (!victim.alive) continue; // already killed by an earlier pellet
       applyDamage(victim.player, im.damage[i], w, im.group[i]);
@@ -509,17 +590,22 @@ export class Game {
     // CS:GO: the dead drop their primary, else their pistol.
     const vf = v.ws.f;
     const slot = vf[WS_SLOTS + SLOT_PRIMARY * 3] ? SLOT_PRIMARY : vf[WS_SLOTS + SLOT_SECONDARY * 3] ? SLOT_SECONDARY : -1;
-    if (slot >= 0) this.dropSlot(victim, slot, false);
+    if (slot >= 0 && this.rules.deathDropGun) this.dropSlot(victim, slot, false);
+    const dm = this.rules.deathmatch;
     if (killer !== victim) {
-      if (killer.team === victim.team) {
+      if (!this.isEnemy(killer, victim)) {
         k.kills--;
-        k.money = Math.max(0, k.money - TEAMKILL_PENALTY);
+        if (!dm) k.money = Math.max(0, k.money - TEAMKILL_PENALTY);
       } else {
         k.kills++;
-        if (this.phase !== PHASE_WARMUP) k.money = Math.min(this.rules.maxMoney, k.money + (WEAPONS[weapon]?.killAward || 0));
+        if (dm) k.score += DM_KILL_POINTS;
+        else if (this.phase !== PHASE_WARMUP) {
+          k.money = Math.min(this.rules.maxMoney, k.money + (WEAPONS[weapon]?.killAward || 0));
+        }
       }
     }
     if (this.phase === PHASE_WARMUP) victim.respawnTick = this.tick + WARMUP_RESPAWN * TICK_RATE;
+    else if (this.respawns(victim)) victim.respawnTick = this.tick + DM_RESPAWN * TICK_RATE;
     this.events.addKill(this.nextKillId, killer.id, victim.id, weapon, headshot ? KILL_HEADSHOT : 0, this.tick);
     this.nextKillId = (this.nextKillId + 1) & 0xffff || 1;
     this.rosterDirty = true;
@@ -545,20 +631,25 @@ export class Game {
       if (t && ct && this.rules.rounds) this.startMatch();
       else this.startWarmup(false);
     }
+    const ready = this.ready(t, ct), r = this.rules;
+    rs.mode = (r.teammatesAreEnemies ? GAME_FFA : 0) | (r.deathmatch ? GAME_DM : 0);
     if (rs.phase === PHASE_WARMUP) {
-      if (!t || !ct) this.warmupReady = -1;
+      if (!ready) this.warmupReady = -1;
       else if (this.warmupReady < 0) this.warmupReady = this.tick;
-      // mp_warmuptime counts from the moment both teams have players.
-      if (t && ct && this.rules.rounds && !this.warmupManual &&
+      // mp_warmuptime counts from the moment both teams (free for all: two players) are there.
+      if (ready && this.rules.rounds && !this.warmupManual &&
         this.tick >= this.warmupReady + this.rules.warmupTime * TICK_RATE) this.startMatch();
-    } else if (!t || !ct) { // a team emptied out
+    } else if (!ready) { // a team emptied out
       this.setPhase(PHASE_WARMUP, 0);
       this.warmupReady = -1;
       this.resetBomb();
       console.log('waiting for players');
     } else if (rs.phase === PHASE_FREEZE && this.tick >= this.phaseEnd) {
-      this.setPhase(PHASE_LIVE, this.rules.roundTime);
+      // Rounds that never end run on the match clock (mp_timelimit; none: no clock).
+      this.setPhase(PHASE_LIVE, r.ignoreWinConditions ? r.timeLimit || Infinity : r.roundTime);
       this.buyEnd = this.tick + this.rules.buyTime * TICK_RATE;
+    } else if (rs.phase === PHASE_LIVE && r.ignoreWinConditions) {
+      if (this.tick >= this.phaseEnd) this.endMatch();
     } else if (rs.phase === PHASE_LIVE) {
       if (this.bomb.state === BOMB_PLANTED) { // the clock stops; dead Ts no longer lose, the bomb decides
         if (!aliveCT) this.endRound(TEAM_T, END_ELIMINATION);
@@ -569,13 +660,23 @@ export class Game {
       }
     } else if (rs.phase === PHASE_OVER && this.tick >= this.phaseEnd) {
       const max = this.rules.maxRounds, half = Math.floor(max / 2);
-      if (rs.scoreT > half || rs.scoreCT > half || this.roundsPlayed >= max) this.startMatch();
+      if (rs.info >> 2 === END_MATCH || rs.scoreT > half || rs.scoreCT > half || this.roundsPlayed >= max) this.startMatch();
       else {
         if (this.roundsPlayed === half) this.halftime();
         this.startRound(this.roundsPlayed === half);
       }
     }
-    rs.ticksLeft = rs.phase === PHASE_WARMUP ? 0 : this.phaseEnd - this.tick;
+    rs.ticksLeft = rs.phase === PHASE_WARMUP || this.phaseEnd === Infinity ? 0 : this.phaseEnd - this.tick;
+  }
+
+  // The time limit ran out (rounds that never end): the top score wins the match.
+  endMatch() {
+    const rs = this.round;
+    let best = null;
+    for (const c of this.clients) if (c && c.joined && c.playing && (!best || c.score > best.score)) best = c;
+    rs.info = END_MATCH << 2;
+    this.setPhase(PHASE_OVER, this.rules.matchRestartDelay);
+    console.log(`match over${best ? `: ${best.name} wins with ${best.score} points` : ''}`);
   }
 
   setPhase(phase, seconds) {
@@ -591,7 +692,7 @@ export class Game {
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
       c.player.money = this.rules.startMoney;
-      c.player.kills = c.player.deaths = 0;
+      c.player.kills = c.player.deaths = c.player.score = 0;
     }
     this.rosterDirty = true;
     console.log('match start');
@@ -605,7 +706,7 @@ export class Game {
     for (const c of this.clients) if (c) c.placed = false;
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
-      this.respawn(c, !fresh && c.alive, false);
+      this.respawn(c, !fresh && c.alive, this.rules.deathmatch); // deathmatch: the weapons picked
     }
     this.placing = false;
     this.resetBomb();
@@ -614,7 +715,7 @@ export class Game {
     this.grenades.clear();
     for (const c of this.clients) if (c) c.flashLeft = 0;
     // CS:GO puts two hostages at random spots.
-    this.hostages.reset(HOSTAGES_PER_ROUND, Math.random, (x, y, z) => this.floorBelow(x, y, z));
+    this.hostages.reset(this.rules.hostagesMax, Math.random, (x, y, z) => this.floorBelow(x, y, z));
     for (const c of this.clients) {
       if (!c) continue;
       c.player.carrying = false;
@@ -624,7 +725,7 @@ export class Game {
     this.hostagesDirty = true;
     // One random T carries the bomb.
     const ts = this.clients.filter((c) => c && c.joined && c.alive && c.team === TEAM_T);
-    if (this.bombSites.count && ts.length) {
+    if (this.bombSites.count && ts.length && this.rules.giveC4) {
       const c = ts[Math.floor(Math.random() * ts.length)];
       giveWeapon(c.player.ws, WEAPON_ID.c4);
       this.bomb.state = BOMB_CARRIED;
@@ -688,7 +789,9 @@ export class Game {
     if (this.phase !== PHASE_WARMUP) return 'not in warmup';
     let t = 0, ct = 0;
     for (const c of this.clients) if (c && c.joined && c.playing) c.team === TEAM_CT ? ct++ : t++;
-    if (!t || !ct) return 'the match needs players on both teams';
+    if (!this.ready(t, ct)) {
+      return this.rules.teammatesAreEnemies ? 'the match needs two players' : 'the match needs players on both teams';
+    }
     this.warmupManual = false;
     this.startMatch();
     return '';
@@ -768,6 +871,7 @@ export class Game {
     c.life++;
     this.rosterDirty = true;
     if (this.phase === PHASE_WARMUP || this.phase === PHASE_FREEZE) this.respawn(c, false, this.phase === PHASE_WARMUP);
+    else if (this.phase === PHASE_LIVE && this.respawns(c)) c.respawnTick = this.tick + DM_RESPAWN * TICK_RATE;
     console.log(`player ${c.id} "${c.name}" joined ${team === TEAM_SPECTATOR ? 'the spectators' : `the ${TEAM_NAMES[team]}s`}`);
   }
 

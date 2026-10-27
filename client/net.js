@@ -43,6 +43,7 @@ export class NetClient {
     this.names = new Array(MAX_PLAYERS).fill('');
     this.teams = new Uint8Array(MAX_PLAYERS);
     this.kills = new Int32Array(MAX_PLAYERS);
+    this.scores = new Int32Array(MAX_PLAYERS); // deathmatch points
     this.deaths = new Int32Array(MAX_PLAYERS);
     this.buyId = 0;
     this.cmdId = 0;
@@ -227,7 +228,7 @@ export class NetClient {
       } else if (type === S2C_REJECT) {
         this.rejected = r.str();
       } else if (type === S2C_INFO) {
-        readInfo(r, this.names, this.teams, this.kills, this.deaths);
+        readInfo(r, this.names, this.teams, this.kills, this.deaths, this.scores);
       } else if (type === S2C_PRINT) {
         this.prints.push(r.lstr());
       } else if (type === S2C_CHANGELEVEL) {

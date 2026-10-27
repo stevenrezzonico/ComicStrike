@@ -267,7 +267,7 @@ export class Menu {
     body.append(el('h2', '', 'Play online'));
     const s = this.server;
     body.append(el('p', 'menu-server', s
-      ? `${s.hostname} · ${s.map} · ${s.players}/${s.maxPlayers} players`
+      ? `${s.hostname} · ${s.map} · ${s.mode || 'competitive'} · ${s.players}/${s.maxPlayers} players`
       : 'No server answered.'));
     if (!s) return;
     this.renderTeam(body, (team) => this.onPlay(team), true);
