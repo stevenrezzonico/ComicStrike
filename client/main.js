@@ -1,6 +1,6 @@
 // Client entry point. Phase 4: single-player prototype. CS:GO movement and weapons
 // at a fixed 64 Hz tick, rendered with interpolation between ticks. V toggles noclip.
-// URL: ?map=de_dust2&team=t|ct
+// URL: ?map=de_dust2&team=t|ct&primary=awp&secondary=deagle (weapon names as in shared/weapons.js)
 
 import { parseBSP, parseVec3 } from '../shared/bsp.js';
 import {
@@ -12,7 +12,7 @@ import {
   PS_LAND_SPEED, FL_ONGROUND, FL_DUCKING, EV_LAND,
 } from '../shared/pmove.js';
 import {
-  WEAPON_ID, SLOT_PRIMARY, ShotList, createWeaponState, copyWeaponState, giveWeapon, weaponTick, activeWeapon,
+  WEAPONS, WEAPON_ID, SLOT_PRIMARY, ShotList, createWeaponState, copyWeaponState, giveWeapon, weaponTick, activeWeapon,
   viewPunchPitch, viewPunchYaw, hash32, WS_ACTIVE, WS_LAST_SLOT, WS_EVENTS,
 } from '../shared/weapons.js';
 import { buildMapMesh } from './mapmesh.js';
@@ -92,8 +92,8 @@ function respawn() {
   ps.f.set(spawnOrigin, PS_ORIGIN);
   copyWeaponState(ws, createWeaponState());
   giveWeapon(ws, WEAPON_ID.knife);
-  giveWeapon(ws, ct ? WEAPON_ID.usp_silencer : WEAPON_ID.glock);
-  giveWeapon(ws, ct ? WEAPON_ID.m4a1 : WEAPON_ID.ak47);
+  giveWeapon(ws, WEAPON_ID[params.get('secondary')] || (ct ? WEAPON_ID.usp_silencer : WEAPON_ID.glock));
+  giveWeapon(ws, WEAPON_ID[params.get('primary')] || (ct ? WEAPON_ID.m4a1 : WEAPON_ID.ak47));
   angles[0] = 0;
   angles[1] = spawnYaw;
   ws.f[WS_ACTIVE] = SLOT_PRIMARY;
@@ -243,4 +243,12 @@ globalThis.webcs = {
   tick,
   draw: () => draw(performance.now(), 1, 1 / 60),
   setNoclip: (on) => { noclip = on; },
+  // Equip any weapon by name until the buy menu exists, e.g. webcs.give('negev').
+  give: (name) => {
+    const id = WEAPON_ID[name];
+    if (!id) return Object.keys(WEAPON_ID).filter((n) => n !== 'none');
+    giveWeapon(ws, id);
+    input.select = WEAPONS[id].slot;
+    return WEAPONS[id].label;
+  },
 };

@@ -3,7 +3,7 @@ import { TICK_DT, IN_ATTACK, IN_RELOAD, IN_SPEED } from '../shared/constants.js'
 import { createPlayerState, PS_VEL, PS_FLAGS, FL_ONGROUND, FL_DUCKING } from '../shared/pmove.js';
 import {
   WEAPONS, WEAPON_ID, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, ShotList, createWeaponState, giveWeapon,
-  weaponTick, getInaccuracy, WS_ACTIVE, WS_SLOTS, WS_PUNCH, WS_EVENTS, WEV_FIRE, WEV_RELOADED,
+  weaponTick, getInaccuracy, recoveryTime, UniformRandomStream, WS_ACTIVE, WS_SLOTS, WS_PUNCH, WS_EVENTS, WEV_FIRE, WEV_RELOADED,
 } from '../shared/weapons.js';
 
 const DEG = Math.PI / 180;
@@ -126,6 +126,62 @@ Deno.test('spraying climbs, and the punch recovers once you stop', () => {
   assert.ok(ctx.ws.f[WS_PUNCH] < -1, 'aim punch should point up');
   hold(ctx, 0, 2000, 96);
   assert.ok(Math.abs(ctx.ws.f[WS_PUNCH]) < 0.05 && Math.abs(ctx.ws.f[WS_PUNCH + 1]) < 0.05, 'punch did not recover');
+});
+
+Deno.test('recoil RNG is Valve\'s Park-Miller stream (published check value)', () => {
+  // Park & Miller: from seed 1, the 10000th state is 1043618065. The stream runs 40
+  // warm-up steps on its first call, then one per call.
+  const r = new UniformRandomStream(1);
+  for (let k = 0; k < 10000 - 40; k++) r.generateRandomNumber();
+  assert.equal(r.idum, 1043618065);
+});
+
+// Aim-punch yaw (degrees, positive = right) at each shot of a full spray: the recoil
+// pattern itself, without random spread.
+function sprayPattern(name) {
+  const ctx = setup(name);
+  const w = WEAPONS[WEAPON_ID[name]];
+  const xs = [];
+  for (let t = 1000; xs.length < w.clip; t++) {
+    weaponTick(ctx.ws, ctx.ps, IN_ATTACK, -1, 0, 0, t, ctx.shots);
+    if (ctx.ws.f[WS_EVENTS] & WEV_FIRE) xs.push(-ctx.ws.f[WS_PUNCH + 1] * 2);
+  }
+  return xs;
+}
+
+Deno.test('spray patterns follow CS:GO\'s documented shapes', () => {
+  // AK-47: climbs straight for the first shots, sweeps right, then back left.
+  const ak = sprayPattern('ak47');
+  assert.ok(Math.abs(ak[4]) < 1, `ak shot 5 x ${ak[4]}`);
+  assert.ok(ak[14] > 2, `ak shot 15 x ${ak[14]}`);
+  assert.ok(ak[19] < -1, `ak shot 20 x ${ak[19]}`);
+  // Galil AR: drifts left while rising, then turns right.
+  const galil = sprayPattern('galilar');
+  assert.ok(galil[9] < -1 && galil[14] > 2, `galil ${galil[9]} ${galil[14]}`);
+  // FAMAS: stays near the middle, then pulls left late in the spray.
+  const famas = sprayPattern('famas');
+  assert.ok(Math.abs(famas[9]) < 1 && famas[23] < -2, `famas ${famas[9]} ${famas[23]}`);
+});
+
+Deno.test('recovery slows between the transition bullets', () => {
+  const ak = WEAPONS[WEAPON_ID.ak47];
+  assert.equal(recoveryTime(ak, false, 0), ak.recoveryStand);
+  assert.equal(recoveryTime(ak, false, 9), ak.recoveryStandFinal);
+  const mid = recoveryTime(ak, false, 3.5); // bullets 2..5 -> one third of the way
+  assert.ok(Math.abs(mid - (ak.recoveryStand + (ak.recoveryStandFinal - ak.recoveryStand) / 3)) < 1e-9);
+  const p2000 = WEAPONS[WEAPON_ID.hkp2000]; // final == base: no transition
+  assert.equal(recoveryTime(p2000, false, 20), p2000.recoveryStand);
+});
+
+Deno.test('every CS:GO gun builds from game data; shotguns fire pellets', () => {
+  const guns = WEAPONS.filter((w) => w && !w.melee);
+  assert.equal(guns.length, 34);
+  for (const w of guns) {
+    assert.ok(w.cycle > 0 && w.clip > 0 && w.spread >= 0 && w.recoilPattern.every(Number.isFinite), w.name);
+  }
+  const ctx = setup('nova');
+  hold(ctx, IN_ATTACK, 1000, 1);
+  assert.equal(ctx.shots.count, 9);
 });
 
 Deno.test('knife swings without ammo at its cycle rate', () => {

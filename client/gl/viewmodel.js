@@ -4,7 +4,7 @@
 import { program } from './program.js';
 import { VIEWMODEL_VS, VIEWMODEL_FS } from './shaders.js';
 import { perspective } from './mat4.js';
-import { WEAPONS } from '../../shared/weapons.js';
+import { WEAPONS, SLOT_SECONDARY } from '../../shared/weapons.js';
 
 const METAL = [0.2, 0.2, 0.22];
 const BLACK = [0.1, 0.1, 0.11];
@@ -15,6 +15,7 @@ const GLOVE = [0.13, 0.12, 0.1];
 const SLEEVE = [0.34, 0.31, 0.22];
 const FLASH = [1.0, 0.75, 0.3];
 
+// No two boxes may share a face plane where they overlap (z-fighting).
 // Boxes in weapon space (x forward, y left, z up, inches): [cx, cy, cz, sx, sy, sz, color, pitchDeg].
 const HANDS_RIFLE = [
   [10.5, -0.3, -3.6, 3.2, 2.4, 3.0, GLOVE, 15],
@@ -31,7 +32,7 @@ const MODELS = {
   ak47: {
     offset: [0, -6, -6.5], muzzle: [32.5, 0, 0.6],
     boxes: [
-      [14, 0, 0, 10, 1.6, 2.2, METAL], [25, 0, 0.6, 14, 0.6, 0.6, METAL], [21, 0, 1.3, 7, 0.7, 0.6, METAL],
+      [14, 0, 0, 10, 1.6, 2.2, METAL], [25, 0, 0.5, 14, 0.6, 0.6, METAL], [21, 0, 1.3, 7, 0.7, 0.6, METAL],
       [20, 0, 0, 6, 1.8, 1.8, WOOD], [15, 0, -3.2, 2, 1.2, 5, METAL, -15], [4.5, 0, -0.6, 7, 1.4, 2.4, WOOD],
       [10.5, 0, -2.6, 1.4, 1.2, 3.2, WOOD, 15], [31, 0, 1.4, 0.4, 0.3, 1, METAL], ...HANDS_RIFLE,
     ],
@@ -40,28 +41,28 @@ const MODELS = {
     offset: [0, -6, -6.5], muzzle: [32.5, 0, 0.4],
     boxes: [
       [14, 0, 0, 10, 1.6, 2.4, BLACK], [13, 0, 2.0, 6, 0.8, 1.2, BLACK], [25, 0, 0.4, 14, 0.6, 0.6, METAL],
-      [20, 0, 0.2, 6, 2.0, 2.0, POLYMER], [15, 0, -3, 1.8, 1.2, 4.2, BLACK, -5], [4.5, 0, -0.4, 7, 1.4, 2.2, POLYMER],
+      [20, 0, 0.15, 6, 2.0, 2.0, POLYMER], [15, 0, -3, 1.8, 1.2, 4.2, BLACK, -5], [4.5, 0, -0.4, 7, 1.4, 2.2, POLYMER],
       [10.5, 0, -2.6, 1.4, 1.2, 3.2, POLYMER, 15], ...HANDS_RIFLE,
     ],
   },
   glock: {
     offset: [5, -4.5, -4.2], muzzle: [15.7, 0, 0],
     boxes: [
-      [12, 0, 0, 7, 1.1, 1.3, BLACK], [11.5, 0, -0.9, 6, 1.0, 0.8, POLYMER], [9.5, 0, -2.6, 1.6, 1.0, 3.2, POLYMER, 15],
+      [12, 0, 0, 7, 1.1, 1.3, BLACK], [11.6, 0, -0.9, 6, 1.0, 0.8, POLYMER], [9.5, 0, -2.6, 1.6, 1.0, 3.2, POLYMER, 15],
       ...HANDS_PISTOL,
     ],
   },
   usp_silencer: {
     offset: [5, -4.5, -4.2], muzzle: [21.7, 0, 0.2],
     boxes: [
-      [12, 0, 0, 7, 1.1, 1.3, METAL], [11.5, 0, -0.9, 6, 1.0, 0.8, POLYMER], [9.5, 0, -2.6, 1.6, 1.0, 3.2, POLYMER, 15],
-      [18.5, 0, 0.2, 6, 1.0, 1.0, BLACK], ...HANDS_PISTOL,
+      [12, 0, 0, 7, 1.1, 1.3, METAL], [11.6, 0, -0.9, 6, 1.0, 0.8, POLYMER], [9.5, 0, -2.6, 1.6, 1.0, 3.2, POLYMER, 15],
+      [18.6, 0, 0.2, 6, 1.0, 1.0, BLACK], ...HANDS_PISTOL,
     ],
   },
   knife: {
     offset: [7, -5.5, -4.5], muzzle: null,
     boxes: [
-      [8, 0, -1, 3.5, 1, 1.2, BLACK], [10, 0, -0.8, 0.5, 1.2, 2, METAL], [14, 0, -0.6, 7, 0.3, 1.4, STEEL],
+      [8, 0, -1, 3.5, 1, 1.2, BLACK], [10.05, 0, -0.8, 0.5, 1.2, 2, METAL], [14, 0, -0.6, 7, 0.3, 1.4, STEEL],
       [8, -0.2, -1.2, 3.4, 2.4, 2.6, GLOVE], [2, 2.5, -4, 10, 3.2, 3.2, SLEEVE, -25],
     ],
   },
@@ -105,7 +106,8 @@ export class Viewmodel {
 
     const verts = [];
     WEAPONS.forEach((w, id) => {
-      const m = w && MODELS[w.name];
+      // Guns without their own boxes yet borrow a pistol or rifle model.
+      const m = w && (MODELS[w.name] || MODELS[w.slot === SLOT_SECONDARY ? 'glock' : 'm4a1']);
       if (!m) return;
       this.ranges[id * 4] = verts.length / 9;
       for (const b of m.boxes) pushBox(verts, b, m.offset);

@@ -1,14 +1,16 @@
 // CS:GO weapon simulation shared by client (prediction) and server (authority).
 // Mirrors CS:GO's structure: accuracy penalty with recovery, movement/air inaccuracy,
-// per-bullet spread seeded by the command number, and aim punch driven by a
-// per-weapon recoil pattern. Timing is in ticks, so fire rates quantize to 64 Hz
-// exactly like CS:GO on 64-tick servers.
+// per-bullet spread seeded by the command number, and aim punch driven by each
+// gun's recoil table, generated from CS:GO's game data exactly as the game does.
+// Timing is in ticks, so fire rates quantize to 64 Hz exactly like CS:GO on 64-tick
+// servers.
 
 import { TICK_DT, IN_ATTACK, IN_ATTACK2, IN_RELOAD, IN_SPEED } from './constants.js';
 import {
   MOVE, eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_EVENTS, PS_LAND_SPEED,
-  FL_ONGROUND, FL_DUCKING, FL_ONLADDER, EV_LAND,
+  FL_ONGROUND, FL_DUCKING, FL_ONLADDER, EV_JUMP, EV_LAND,
 } from './pmove.js';
+import { CSGO_WEAPONS } from './weapondata.js';
 
 // CS:GO recoil convars.
 export const RECOIL = {
@@ -17,9 +19,10 @@ export const RECOIL = {
   decayExp: 8, // weapon_recoil_decay2_exp
   decayLin: 18, // weapon_recoil_decay2_lin (degrees/s)
   velDecay: 4.5, // weapon_recoil_vel_decay
+  variance: 0.55, // weapon_recoil_variance: full-auto table lerps this far toward each new random kick
+  suppressionShots: 4, // weapon_recoil_suppression_shots
+  suppressionFactor: 0.75, // weapon_recoil_suppression_factor: first shot's kick scale, ramping to 1
   patternLength: 64,
-  smoothing: 0.7, // full-auto pattern: lerp toward each new random kick
-  varianceRamp: 4, // shots before the angle variance reaches full strength
 };
 
 export const SLOT_PRIMARY = 0;
@@ -29,9 +32,47 @@ export const NUM_SLOTS = 4;
 
 const mr = (x) => x * 0.001; // milliradians -> radians
 
-// Weapon data. Values approximate CS:GO's weapon scripts (from memory, not the
-// game files): treat them as a starting point and replace with real data when
-// available. Angles in radians unless noted; recoil angles/magnitudes in degrees.
+// What items_game.txt lacks (it lives in model animations): HUD label, reload time
+// (approximate), and whether the weapon spawns in its alt mode (silencer attached).
+const EXTRA = {
+  glock: ['Glock-18', 2.27], hkp2000: ['P2000', 2.2], usp_silencer: ['USP-S', 2.17, true],
+  p250: ['P250', 2.2], elite: ['Dual Berettas', 3.77], fiveseven: ['Five-SeveN', 2.2], tec9: ['Tec-9', 2.5],
+  cz75a: ['CZ75-Auto', 2.7], deagle: ['Desert Eagle', 2.2], revolver: ['R8 Revolver', 2.3],
+  mac10: ['MAC-10', 2.6], mp9: ['MP9', 2.1], mp7: ['MP7', 3.1], mp5sd: ['MP5-SD', 2.97], ump45: ['UMP-45', 3.5],
+  p90: ['P90', 3.3], bizon: ['PP-Bizon', 2.4],
+  galilar: ['Galil AR', 3.0], famas: ['FAMAS', 3.3], ak47: ['AK-47', 2.43], m4a1: ['M4A4', 3.07],
+  m4a1_silencer: ['M4A1-S', 3.07, true], sg556: ['SG 553', 2.8], aug: ['AUG', 3.8], ssg08: ['SSG 08', 3.7],
+  awp: ['AWP', 3.67], g3sg1: ['G3SG1', 4.7], scar20: ['SCAR-20', 3.1],
+  nova: ['Nova', 4.0], xm1014: ['XM1014', 3.0], sawedoff: ['Sawed-Off', 3.5], mag7: ['MAG-7', 2.5],
+  m249: ['M249', 5.7], negev: ['Negev', 5.7],
+};
+const PISTOLS = new Set(['glock', 'hkp2000', 'usp_silencer', 'p250', 'elite', 'fiveseven', 'tec9', 'cz75a',
+  'deagle', 'revolver']);
+
+// Builds a weapon from CS:GO's game data in its spawn mode. Inaccuracies become radians.
+function fromGameData(name) {
+  const d = CSGO_WEAPONS[name];
+  const [label, reloadTime, alt = false] = EXTRA[name];
+  const m = (k) => (alt && d[k + 'Alt'] !== null ? d[k + 'Alt'] : d[k]);
+  return {
+    name, label, slot: PISTOLS.has(name) ? SLOT_SECONDARY : SLOT_PRIMARY, auto: d.isFullAuto === 1,
+    bullets: d.bullets, cycle: d.cycletime, damage: d.damage, armorRatio: d.armorRatio,
+    penetration: d.penetration, range: d.range, rangeModifier: d.rangeModifier, headshotMult: d.headshotMultiplier,
+    maxSpeed: m('maxPlayerSpeed'), clip: d.primaryClipSize, reserve: d.primaryReserveAmmoMax, reloadTime,
+    deployTime: 1.0, price: d.inGamePrice, killAward: d.killAward,
+    spread: mr(m('spread')), inaccuracyStand: mr(m('inaccuracyStand')), inaccuracyCrouch: mr(m('inaccuracyCrouch')),
+    inaccuracyMove: mr(m('inaccuracyMove')), inaccuracyJump: mr(m('inaccuracyJump')),
+    inaccuracyJumpInitial: mr(d.inaccuracyJumpInitial), inaccuracyLand: m('inaccuracyLand'),
+    inaccuracyLadder: mr(m('inaccuracyLadder')), inaccuracyFire: mr(m('inaccuracyFire')),
+    recoveryStand: d.recoveryTimeStand, recoveryStandFinal: d.recoveryTimeStandFinal,
+    recoveryCrouch: d.recoveryTimeCrouch, recoveryCrouchFinal: d.recoveryTimeCrouchFinal,
+    recoveryStartBullet: d.recoveryTransitionStartBullet, recoveryEndBullet: d.recoveryTransitionEndBullet,
+    recoilAngle: m('recoilAngle'), recoilAngleVariance: m('recoilAngleVariance'),
+    recoilMagnitude: m('recoilMagnitude'), recoilMagnitudeVariance: m('recoilMagnitudeVariance'),
+    recoilSeed: d.recoilSeed,
+  };
+}
+
 export const WEAPONS = [
   null, // id 0: no weapon
   {
@@ -39,46 +80,7 @@ export const WEAPONS = [
     cycle: 0.4, cycle2: 1.0, damage: 40, damage2: 65, range: 48, range2: 32,
     maxSpeed: 250, deployTime: 1.0, price: 0, killAward: 1500,
   },
-  {
-    name: 'glock', label: 'Glock-18', slot: SLOT_SECONDARY, auto: false,
-    cycle: 0.15, damage: 30, armorRatio: 0.94, penetration: 1, range: 4096, rangeModifier: 0.85,
-    headshotMult: 4, maxSpeed: 240, clip: 20, reserve: 120, reloadTime: 2.27, deployTime: 1.0,
-    price: 200, killAward: 300,
-    spread: mr(2.0), inaccuracyStand: mr(8.4), inaccuracyCrouch: mr(6.3), inaccuracyMove: mr(13.3),
-    inaccuracyJump: 0.437, inaccuracyLand: 0.03, inaccuracyLadder: 0.1, inaccuracyFire: mr(56),
-    recoveryStand: 0.38, recoveryCrouch: 0.33,
-    recoilAngle: 0, recoilAngleVariance: 20, recoilMagnitude: 18, recoilMagnitudeVariance: 0, recoilSeed: 6,
-  },
-  {
-    name: 'usp_silencer', label: 'USP-S', slot: SLOT_SECONDARY, auto: false,
-    cycle: 0.17, damage: 35, armorRatio: 1.01, penetration: 1, range: 4096, rangeModifier: 0.99,
-    headshotMult: 4, maxSpeed: 240, clip: 12, reserve: 24, reloadTime: 2.17, deployTime: 1.0,
-    price: 200, killAward: 300,
-    spread: mr(2.0), inaccuracyStand: mr(4.9), inaccuracyCrouch: mr(3.1), inaccuracyMove: mr(12.8),
-    inaccuracyJump: 0.3, inaccuracyLand: 0.04, inaccuracyLadder: 0.1, inaccuracyFire: mr(52),
-    recoveryStand: 0.42, recoveryCrouch: 0.35,
-    recoilAngle: 0, recoilAngleVariance: 25, recoilMagnitude: 23, recoilMagnitudeVariance: 0, recoilSeed: 17,
-  },
-  {
-    name: 'ak47', label: 'AK-47', slot: SLOT_PRIMARY, auto: true,
-    cycle: 0.1, damage: 36, armorRatio: 1.55, penetration: 2, range: 8192, rangeModifier: 0.98,
-    headshotMult: 4, maxSpeed: 215, clip: 30, reserve: 90, reloadTime: 2.43, deployTime: 1.0,
-    price: 2700, killAward: 300,
-    spread: mr(0.6), inaccuracyStand: mr(6.41), inaccuracyCrouch: mr(4.81), inaccuracyMove: mr(175.06),
-    inaccuracyJump: 0.4, inaccuracyLand: 0.242, inaccuracyLadder: 0.14, inaccuracyFire: mr(7.8),
-    recoveryStand: 0.428, recoveryCrouch: 0.305,
-    recoilAngle: 0, recoilAngleVariance: 70, recoilMagnitude: 30, recoilMagnitudeVariance: 0, recoilSeed: 223,
-  },
-  {
-    name: 'm4a1', label: 'M4A4', slot: SLOT_PRIMARY, auto: true,
-    cycle: 0.09, damage: 33, armorRatio: 1.4, penetration: 2, range: 8192, rangeModifier: 0.97,
-    headshotMult: 4, maxSpeed: 225, clip: 30, reserve: 90, reloadTime: 3.07, deployTime: 1.0,
-    price: 3100, killAward: 300,
-    spread: mr(0.6), inaccuracyStand: mr(4.9), inaccuracyCrouch: mr(3.7), inaccuracyMove: mr(139.5),
-    inaccuracyJump: 0.4, inaccuracyLand: 0.18, inaccuracyLadder: 0.12, inaccuracyFire: mr(7.0),
-    recoveryStand: 0.386, recoveryCrouch: 0.275,
-    recoilAngle: 0, recoilAngleVariance: 70, recoilMagnitude: 23, recoilMagnitudeVariance: 0, recoilSeed: 38965,
-  },
+  ...Object.keys(EXTRA).map(fromGameData),
 ];
 
 export const WEAPON_ID = Object.fromEntries(WEAPONS.map((w, i) => [w ? w.name : 'none', i]));
@@ -103,28 +105,78 @@ function random() { // mulberry32
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 
-// Recoil pattern: per shot index, the aim-punch velocity kick (pitch, yaw) in deg/s.
-// Same shape as CS:GO's GenerateRecoilPattern (seeded angle/magnitude jitter,
-// smoothed for automatic weapons).
-function buildRecoilPattern(w) {
+// Valve's CUniformRandomStream (Source SDK 2013 vstdlib/random.cpp): Park-Miller
+// minimal standard generator with a Bays-Durham shuffle. CS:GO seeds one with each
+// weapon's "recoil seed", so reproducing it bit for bit reproduces the spray patterns.
+const RS_IA = 16807, RS_IM = 2147483647, RS_IQ = 127773, RS_IR = 2836, RS_NTAB = 32;
+const RS_NDIV = 1 + Math.floor((RS_IM - 1) / RS_NTAB);
+export class UniformRandomStream {
+  constructor(seed = 0) {
+    this.iv = new Int32Array(RS_NTAB);
+    this.setSeed(seed);
+  }
+
+  setSeed(seed) {
+    this.idum = seed < 0 ? seed : -seed;
+    this.iy = 0;
+  }
+
+  generateRandomNumber() {
+    let k;
+    if (this.idum <= 0 || !this.iy) {
+      this.idum = -this.idum < 1 ? 1 : -this.idum;
+      for (let j = RS_NTAB + 7; j >= 0; j--) {
+        k = Math.trunc(this.idum / RS_IQ);
+        this.idum = RS_IA * (this.idum - k * RS_IQ) - RS_IR * k;
+        if (this.idum < 0) this.idum += RS_IM;
+        if (j < RS_NTAB) this.iv[j] = this.idum;
+      }
+      this.iy = this.iv[0];
+    }
+    k = Math.trunc(this.idum / RS_IQ);
+    this.idum = RS_IA * (this.idum - k * RS_IQ) - RS_IR * k;
+    if (this.idum < 0) this.idum += RS_IM;
+    const j = Math.floor(this.iy / RS_NDIV);
+    this.iy = this.iv[j];
+    this.iv[j] = this.idum;
+    return this.iy;
+  }
+
+  // Float in [lo, hi), computed in single precision like the C++.
+  randomFloat(lo, hi) {
+    let fl = Math.fround((1 / RS_IM) * this.generateRandomNumber());
+    if (fl > 1 - 1.2e-7) fl = Math.fround(1 - 1.2e-7);
+    return Math.fround(fl * (hi - lo) + lo);
+  }
+}
+
+// Recoil table as CS:GO generates it: per shot index, a random angle (degrees from
+// straight up, positive = right) and magnitude. Full-auto weapons lerp toward each new
+// random value, so patterns sweep instead of jittering, and their first shots kick less.
+// Stored as the aim-punch velocity kick (pitch, yaw) in deg/s.
+const recoilRandom = new UniformRandomStream();
+export function buildRecoilPattern(w) {
   const n = RECOIL.patternLength;
   const out = new Float32Array(n * 2);
-  seedRandom(w.recoilSeed);
+  recoilRandom.setSeed(w.recoilSeed);
   let angle = 0, mag = 0;
   for (let j = 0; j < n; j++) {
-    const ramp = Math.min(1, j / RECOIL.varianceRamp);
-    const angleNew = w.recoilAngle + (random() * 2 - 1) * w.recoilAngleVariance * ramp;
-    const magNew = w.recoilMagnitude + (random() * 2 - 1) * w.recoilMagnitudeVariance;
+    const angleNew = w.recoilAngle + recoilRandom.randomFloat(-w.recoilAngleVariance, w.recoilAngleVariance);
+    const magNew = w.recoilMagnitude + recoilRandom.randomFloat(-w.recoilMagnitudeVariance, w.recoilMagnitudeVariance);
     if (w.auto && j > 0) {
-      angle += (angleNew - angle) * RECOIL.smoothing;
-      mag += (magNew - mag) * RECOIL.smoothing;
+      angle += (angleNew - angle) * RECOIL.variance;
+      mag += (magNew - mag) * RECOIL.variance;
     } else {
       angle = angleNew;
       mag = magNew;
     }
+    let kick = mag;
+    if (w.auto && j < RECOIL.suppressionShots) {
+      kick *= RECOIL.suppressionFactor + (1 - RECOIL.suppressionFactor) * j / RECOIL.suppressionShots;
+    }
     const a = angle * Math.PI / 180;
-    out[j * 2] = -Math.cos(a) * mag; // pitch: negative kicks the view up
-    out[j * 2 + 1] = -Math.sin(a) * mag;
+    out[j * 2] = -Math.cos(a) * kick; // pitch: negative kicks the view up
+    out[j * 2 + 1] = -Math.sin(a) * kick; // yaw: negative turns right
   }
   return out;
 }
@@ -221,7 +273,19 @@ export function getInaccuracy(ws, ps, buttons) {
   return inacc < 1 ? inacc : 1;
 }
 
-function updateAccuracyPenalty(ws, ps, w) {
+// CS:GO GetRecoveryTime: recovery slows from the base to the "final" time as the
+// recoil index climbs from the transition start bullet to the end bullet.
+export function recoveryTime(w, ducked, recoilIndex) {
+  const base = ducked ? w.recoveryCrouch : w.recoveryStand;
+  const final = ducked ? w.recoveryCrouchFinal : w.recoveryStandFinal;
+  if (final === -1) return base; // weapon has no transition
+  const a = w.recoveryStartBullet, b = w.recoveryEndBullet, i = Math.floor(recoilIndex);
+  if (a === b) return i >= b ? final : base;
+  const t = Math.min(Math.max((i - a) / (b - a), 0), 1);
+  return base + (final - base) * t;
+}
+
+function updateAccuracyPenalty(ws, ps, w, time) {
   const f = ws.f;
   const flags = ps.i[PS_FLAGS];
   const ducked = (flags & FL_DUCKING) !== 0;
@@ -230,15 +294,16 @@ function updateAccuracyPenalty(ws, ps, w) {
   else if (ducked) target = w.inaccuracyCrouch;
   else target = w.inaccuracyStand;
 
-  if (target > f[WS_PENALTY]) {
-    f[WS_PENALTY] = target;
-  } else {
-    const decay = Math.log(10) / (ducked ? w.recoveryCrouch : w.recoveryStand);
-    f[WS_PENALTY] = target + (f[WS_PENALTY] - target) * Math.exp(-TICK_DT * decay);
-  }
-  if (ps.i[PS_EVENTS] & EV_LAND) {
-    f[WS_PENALTY] += w.inaccuracyLand * Math.min(ps.f[PS_LAND_SPEED] / 600, 1);
-  }
+  // Penalty and recoil index decay by the same factor: to 10% over the recovery time.
+  const decay = Math.exp(-TICK_DT * Math.log(10) / recoveryTime(w, ducked, f[WS_RECOIL_INDEX]));
+  if (target > f[WS_PENALTY]) f[WS_PENALTY] = target;
+  else f[WS_PENALTY] = target + (f[WS_PENALTY] - target) * decay;
+  // The recoil index only decays once a little more than a cycle passes without a shot.
+  if (time > f[WS_LAST_SHOT] + w.cycle * 1.1) f[WS_RECOIL_INDEX] *= decay;
+
+  const events = ps.i[PS_EVENTS];
+  if (events & EV_JUMP) f[WS_PENALTY] += w.inaccuracyJumpInitial;
+  if (events & EV_LAND) f[WS_PENALTY] += w.inaccuracyLand * Math.min(ps.f[PS_LAND_SPEED] / 600, 1);
 }
 
 // CS:GO DecayAimPunchAngle: exponential + linear decay, then half-step velocity integration.
@@ -313,7 +378,7 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
     f[WS_EVENTS] |= WEV_RELOADED;
   }
 
-  if (!w.melee) updateAccuracyPenalty(ws, ps, w);
+  if (!w.melee) updateAccuracyPenalty(ws, ps, w, time);
 
   const oldButtons = f[WS_OLD_BUTTONS];
   const pressed = (buttons & IN_ATTACK) && !(oldButtons & IN_ATTACK);
@@ -347,10 +412,6 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
     }
   }
 
-  // Recoil index unwinds at the rate it builds up once we stop firing.
-  if (!w.melee && time - f[WS_LAST_SHOT] > w.cycle && f[WS_RECOIL_INDEX] > 0) {
-    f[WS_RECOIL_INDEX] = Math.max(0, f[WS_RECOIL_INDEX] - TICK_DT / w.cycle);
-  }
   f[WS_OLD_BUTTONS] = buttons;
 }
 
@@ -366,19 +427,22 @@ function fire(ws, ps, w, o, buttons, pitch, yaw, tick, time, ex, ey, ez, shots) 
   const rx = sy, ry = -cy; // right
   const ux = ry * fz, uy = -rx * fz, uz = rx * fy - ry * fx; // up = right x forward
 
-  // CS:GO FX_FireBullets: inaccuracy and spread each add a random polar offset.
+  // CS:GO FX_FireBullets: inaccuracy and spread each add a random polar offset,
+  // drawn per pellet for shotguns.
   seedRandom(hash32(tick + 1));
-  const t0 = random() * 2 * Math.PI, r0 = random() * inacc;
-  const t1 = random() * 2 * Math.PI, r1 = random() * w.spread;
-  const x = r0 * Math.cos(t0) + r1 * Math.cos(t1);
-  const y = r0 * Math.sin(t0) + r1 * Math.sin(t1);
-  let dx = fx + x * rx + y * ux, dy = fy + x * ry + y * uy, dz = fz + y * uz;
-  const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  dx /= len; dy /= len; dz /= len;
-  shots.push(ex, ey, ez, dx, dy, dz, w.range, f[o]);
+  for (let b = 0; b < w.bullets; b++) {
+    const t0 = random() * 2 * Math.PI, r0 = random() * inacc;
+    const t1 = random() * 2 * Math.PI, r1 = random() * w.spread;
+    const x = r0 * Math.cos(t0) + r1 * Math.cos(t1);
+    const y = r0 * Math.sin(t0) + r1 * Math.sin(t1);
+    let dx = fx + x * rx + y * ux, dy = fy + x * ry + y * uy, dz = fz + y * uz;
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    dx /= len; dy /= len; dz /= len;
+    shots.push(ex, ey, ez, dx, dy, dz, w.range, f[o]);
+  }
 
   f[WS_PENALTY] += w.inaccuracyFire;
-  const idx = Math.min(Math.floor(f[WS_RECOIL_INDEX]), RECOIL.patternLength - 1);
+  const idx = Math.floor(f[WS_RECOIL_INDEX]) % RECOIL.patternLength;
   f[WS_PUNCH_VEL] += w.recoilPattern[idx * 2];
   f[WS_PUNCH_VEL + 1] += w.recoilPattern[idx * 2 + 1];
   f[WS_RECOIL_INDEX] += 1;

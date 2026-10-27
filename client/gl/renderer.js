@@ -13,7 +13,8 @@ export class Renderer {
       depth: true,
       stencil: false,
       powerPreference: 'high-performance',
-      desynchronized: true,
+      // No desynchronized: it lets the display scan out half-drawn frames, so late
+      // passes (sky fill, viewmodel) flicker.
       preserveDrawingBuffer: false,
     });
     if (!gl) throw new Error('WebGL2 is not available');
