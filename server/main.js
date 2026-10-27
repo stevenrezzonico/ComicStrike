@@ -5,17 +5,22 @@
 //   deno run --unstable-net -A server/main.js
 //
 // Env: HTTP_PORT (tcp 27015), GAME_PORT (udp 27015), BIND (0.0.0.0),
-//      HOSTNAMES ("localhost,127.0.0.1,::1") - names/IPs the certificate covers
+//      HOSTNAMES ("localhost,127.0.0.1,::1") - names/IPs the certificate covers,
+//      MAP (de_dust2) - maps/<MAP>.bsp
 
 import { fileURLToPath } from 'node:url';
 import { ensureCert } from './cert.js';
 import { listen } from './transport.js';
+import { Game } from './game.js';
+import { parseBSP } from '../shared/bsp.js';
+import { TICK_RATE } from '../shared/constants.js';
 
 const ROOT = new URL('../', import.meta.url);
 const HTTP_PORT = Number(Deno.env.get('HTTP_PORT') || 27015);
 const GAME_PORT = Number(Deno.env.get('GAME_PORT') || 27015);
 const HOSTNAMES = (Deno.env.get('HOSTNAMES') || 'localhost,127.0.0.1,::1').split(',');
 const BIND = Deno.env.get('BIND') || '0.0.0.0';
+const MAP = Deno.env.get('MAP') || 'de_dust2';
 
 const STATIC_DIRS = ['client/', 'shared/', 'maps/'];
 const MIME = {
@@ -28,17 +33,39 @@ const MIME = {
 
 const certInfo = await ensureCert(fileURLToPath(new URL('certs', ROOT)), HOSTNAMES);
 
+if (!/^[\w-]+$/.test(MAP)) throw new Error(`bad MAP: ${MAP}`);
+const bsp = parseBSP((await Deno.readFile(new URL(`maps/${MAP}.bsp`, ROOT))).buffer);
+const game = new Game(MAP, bsp);
+
 listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key }, (session) => {
-  console.log(`session ${session.id} connected`);
+  const client = game.connect(session);
+  if (!client) return { onDatagram() {}, onClose() {} };
   return {
     onDatagram(bytes) {
-      session.send(bytes); // spike: echo
+      game.receive(client, bytes);
     },
     onClose() {
-      console.log(`session ${session.id} closed`);
+      if (client.joined) console.log(`player ${client.id} "${client.name}" left`);
+      game.disconnect(client);
     },
   };
 });
+
+// Fixed-rate loop on the monotonic clock: each wakeup runs every tick that is due, so
+// timer jitter never accumulates into drift. After a long stall it skips ahead.
+const TICK_MS = 1000 / TICK_RATE;
+let epoch = performance.now();
+function loop() {
+  const due = Math.floor((performance.now() - epoch) / TICK_MS);
+  let ran = 0;
+  while (game.tick < due && ran < 8) {
+    game.step();
+    ran++;
+  }
+  if (game.tick < due) epoch = performance.now() - game.tick * TICK_MS; // fell behind: resync
+  setTimeout(loop, Math.max(0, epoch + (game.tick + 1) * TICK_MS - performance.now()));
+}
+loop();
 
 async function serveStatic(pathname) {
   if (pathname === '/') pathname = '/client/index.html';
@@ -66,4 +93,4 @@ Deno.serve({ port: HTTP_PORT, onListen: () => {} }, async (req) => {
   return (await serveStatic(pathname)) || new Response('not found', { status: 404 });
 });
 
-console.log(`http: http://localhost:${HTTP_PORT}/   webtransport: udp/${GAME_PORT}`);
+console.log(`http: http://127.0.0.1:${HTTP_PORT}/   webtransport: udp/${GAME_PORT}   map: ${MAP}   ${TICK_RATE} tick`);

@@ -1,5 +1,5 @@
 // WebGL2 renderer: one VBO + one index buffer for the whole map.
-// Draw order: opaque world, sky brushes, sky fill, decals/debris, translucent world.
+// Draw order: opaque world, sky brushes, sky fill, overlays (decals, debris, players), translucent world.
 
 import { WORLD_VS, WORLD_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS } from './shaders.js';
 import { VERTEX_STRIDE } from '../mapmesh.js';
@@ -117,8 +117,9 @@ export class Renderer {
     gl.uniform1f(s.loc.u_time, time);
   }
 
-  // decals and debris (optional) are drawn after the sky, before translucent surfaces.
-  render(viewProj, invViewProj, eye, time, decals = null, debris = null) {
+  // overlays: objects with draw(viewProj) (decals, debris, players), drawn after the
+  // sky and before translucent surfaces.
+  render(viewProj, invViewProj, eye, time, overlays = null) {
     const gl = this.gl;
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -156,8 +157,7 @@ export class Renderer {
     gl.depthMask(true);
     gl.depthFunc(gl.LESS);
 
-    if (decals) decals.draw(viewProj);
-    if (debris) debris.draw(viewProj);
+    if (overlays) for (let i = 0; i < overlays.length; i++) overlays[i].draw(viewProj);
 
     // Translucent last so glass and water blend over the sky behind them.
     if (this.vao && this.transCount > 0) {

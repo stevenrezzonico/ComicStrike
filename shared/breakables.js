@@ -77,6 +77,15 @@ export class Breakables {
     }
   }
 
+  // Forces a slot's state (applying the server's view). Returns true if it changed.
+  setBroken(world, slot, broken) {
+    if (slot < 1 || slot > this.count || (this.broken[slot] !== 0) === broken) return false;
+    this.broken[slot] = broken ? 1 : 0;
+    this.health[slot] = broken ? 0 : this.maxHealth[slot];
+    if (this.ent[slot] >= 0) world.ents[this.ent[slot]].kind = broken ? ENT_NONE : ENT_SOLID;
+    return true;
+  }
+
   canTakeDamage(slot) {
     return slot > 0 && !this.broken[slot] && this.ent[slot] >= 0 &&
       !(this.flags[slot] & SF_BREAK_TRIGGER_ONLY) && this.material[slot] !== MAT_UNBREAKABLE_GLASS;
