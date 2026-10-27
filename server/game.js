@@ -8,10 +8,10 @@ import { parseVec3 } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
 import { CollisionWorld, Trace, traceHull, hullFits, HULL_STAND, HULL_POINT } from '../shared/trace.js';
 import { Breakables } from '../shared/breakables.js';
-import { PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT } from '../shared/pmove.js';
+import { PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, eyeOffset } from '../shared/pmove.js';
 import {
   ShotList, WEAPONS, WEAPON_ID, giveWeapon, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4, WEV_PLANTED, WEV_DEFUSED, WEV_DROP,
-  WEV_FIRE, WEV_MELEE, WS_RELOAD_END, WS_ACTION, ACTION_PLANT, ACTION_DEFUSE,
+  WEV_FIRE, WEV_MELEE, WS_RELOAD_END, WS_ACTION, ACTION_PLANT, ACTION_DEFUSE, SLOT_PRIMARY, SLOT_SECONDARY,
 } from '../shared/weapons.js';
 import { HitTargets, HITGROUP_HEAD, HITGROUP_CHEST, feetOffset } from '../shared/hitgroups.js';
 import {
@@ -22,6 +22,8 @@ import {
   Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT,
 } from '../shared/player.js';
 import { SurfaceMap } from '../shared/surfaces.js';
+import { Items } from '../shared/items.js';
+import { IN_USE } from '../shared/constants.js';
 import { parse } from '../shared/cvars.js';
 import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, FREEZE_TIME, ROUND_TIME, BUY_TIME, ROUND_END_DELAY,
@@ -33,7 +35,7 @@ import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
   SHOT_BLOOD, writePrint, printChunks,
   KILL_HEADSHOT, KILL_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
-  writeWelcome, writeReject, writeInfo, readCmds, writeSnapshot, quantizePitch, quantizeYaw, E_ACTIVE, E_X, E_Y, E_Z,
+  writeWelcome, writeReject, writeInfo, writeItems, readCmds, writeSnapshot, quantizePitch, quantizeYaw, E_ACTIVE, E_X, E_Y, E_Z,
   E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS, E_FIELDS, ANIM_RELOAD, ANIM_PLANT,
   ANIM_DEFUSE, ANIM_HELMET,
 } from '../shared/protocol.js';
@@ -44,8 +46,10 @@ const TIMEOUT_TICKS = 30 * TICK_RATE; // clients in hidden tabs send a 1 Hz keep
 const INFO_INTERVAL = TICK_RATE; // roster resent every second (datagrams can be lost)
 const SEND_BUFFERS = 8; // rotating send buffers: a datagram may still be queued when the next is written
 const WARMUP_MONEY = 16000; // CS:GO warmup: buy anything
-const THROW_DISTANCE = 64; // a dropped (G) bomb lands this far ahead
-const PICKUP_DELAY = TICK_RATE; // ticks before a thrown bomb can be picked up
+const THROW_DISTANCE = 64; // a dropped (G) bomb or weapon lands this far ahead
+const PICKUP_DELAY = TICK_RATE; // ticks before a thrown bomb or weapon can be picked up
+const USE_RANGE = 96; // E picks up a weapon on the ground this close to the eyes
+const USE_CONE = 0.8; // cos of the largest angle off the view it may be at
 
 // Lag compensation: how far back shots may rewind other players (CS:GO sv_maxunlag 1 s).
 const HISTORY = 64; // ticks, power of two
@@ -73,6 +77,7 @@ class Client {
     this.lastBuy = -1; // newest BUY id handled
     this.lastCommand = -1; // newest COMMAND id handled
     this.shots = 0; // shots fired mod 256 (E_SHOTS: third-person fire kicks)
+    this.useHeld = false; // +use was down last command (E picks up on the press)
     this.rconFails = 0;
     this.rconBlockedUntil = 0; // server tick
     // Last command run, repeated when one is lost.
@@ -183,6 +188,12 @@ export class Game {
     this.pickupTick = 0; // a dropped bomb can be picked up from this tick on
     this.planted = false; // this round: the Ts' plant bonus
     this.bombTrace = new Trace();
+    this.landing = new Float64Array(3);
+
+    // Weapons on the ground.
+    this.items = new Items();
+    this.itemsDirty = false;
+    this.itemsWriter = new Writer();
   }
 
   get playerCount() {
@@ -240,7 +251,12 @@ export class Game {
       const ahead = (id - c.lastBuy) & 0xffff; // ids wrap; each BUY arrives up to 3 times
       if (c.lastBuy >= 0 && (ahead === 0 || ahead >= 0x8000)) return;
       c.lastBuy = id;
-      if (!buyError(c.player, item, this.canBuy(c))) applyBuy(c.player, item);
+      if (!buyError(c.player, item, this.canBuy(c))) {
+        // A weapon bought into a taken slot throws the old one down (CS:GO).
+        const w = WEAPONS[item];
+        if (w && !w.melee && !w.c4 && c.player.ws.f[WS_SLOTS + w.slot * 3]) this.dropSlot(c, w.slot, true);
+        applyBuy(c.player, item);
+      }
     } else if (type === C2S_COMMAND && c.joined && r.remaining >= 4) {
       const id = r.u16v(), text = r.lstr();
       const ahead = (id - c.lastCommand) & 0xffff; // sent 3 times, like BUY
@@ -328,10 +344,12 @@ export class Game {
       this.runCommands(c);
     }
     this.updateBomb();
+    this.updateItems();
     this.updateRound();
     for (const c of this.clients) if (c && c.joined) c.canBuy = this.canBuy(c);
     this.recordHistory();
     if (this.rosterDirty || this.tick % INFO_INTERVAL === 0) this.sendInfo();
+    if (this.itemsDirty || this.tick % INFO_INTERVAL === 0) this.sendItems();
     this.sendSnapshots();
   }
 
@@ -360,10 +378,18 @@ export class Game {
 
   runCommand(c, t, select, frozen) {
     const p = c.player;
+    const wf = p.ws.f, held = WS_SLOTS + wf[WS_ACTIVE] * 3;
+    const heldId = wf[held], heldClip = wf[held + 1], heldReserve = wf[held + 2]; // what G may drop
     const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots, frozen, this.bomb);
     const events = p.ws.f[WS_EVENTS];
     if (events & (WEV_FIRE | WEV_MELEE)) c.shots = (c.shots + 1) & 255;
-    if (events & WEV_DROP) this.dropBomb(c, true);
+    if (events & WEV_DROP) {
+      if (WEAPONS[heldId]?.c4) this.dropBomb(c, true);
+      else this.spawnItem(c, heldId, heldClip, heldReserve, true);
+    }
+    // E on a weapon on the ground: swap it for the one in its slot (not while defusing).
+    if ((c.buttons & IN_USE) && !c.useHeld && !p.ws.f[WS_ACTION]) this.useItem(c);
+    c.useHeld = (c.buttons & IN_USE) !== 0;
     if (events & WEV_PLANTED) this.plantBomb(c);
     if (events & WEV_DEFUSED) this.defuseBomb(c);
     if (this.shots.count) {
@@ -399,6 +425,10 @@ export class Game {
     v.health = 0;
     v.deaths++;
     if (this.bombCarrier === victim) this.dropBomb(victim, false);
+    // CS:GO: the dead drop their primary, else their pistol.
+    const vf = v.ws.f;
+    const slot = vf[WS_SLOTS + SLOT_PRIMARY * 3] ? SLOT_PRIMARY : vf[WS_SLOTS + SLOT_SECONDARY * 3] ? SLOT_SECONDARY : -1;
+    if (slot >= 0) this.dropSlot(victim, slot, false);
     if (killer !== victim) {
       if (killer.team === victim.team) {
         k.kills--;
@@ -498,6 +528,8 @@ export class Game {
     }
     this.placing = false;
     this.resetBomb();
+    this.items.clear(); // CS:GO cleans up the ground between rounds
+    this.itemsDirty = true;
     // One random T carries the bomb.
     const ts = this.clients.filter((c) => c && c.joined && c.alive && c.team === TEAM_T);
     if (this.bombSites.count && ts.length) {
@@ -673,11 +705,10 @@ export class Game {
     return t.startsolid ? z : t.endz;
   }
 
-  // The carrier lets go of the bomb: thrown ahead (G) or where they died.
-  dropBomb(c, thrown) {
-    if (this.bombCarrier !== c) return;
-    c.player.ws.f.fill(0, WS_SLOTS + SLOT_C4 * 3, WS_SLOTS + SLOT_C4 * 3 + 3);
-    const f = c.player.ps.f;
+  // Where something a player lets go of lands: thrown THROW_DISTANCE ahead (stopping
+  // short of walls) or at their feet, on the floor. Returns this.landing [x, y, z].
+  landingSpot(c, thrown) {
+    const f = c.player.ps.f, out = this.landing;
     let x = f[PS_ORIGIN], y = f[PS_ORIGIN + 1];
     const z = f[PS_ORIGIN + 2];
     if (thrown) {
@@ -688,13 +719,102 @@ export class Game {
       x += dx * d;
       y += dy * d;
     }
-    const b = this.bomb;
+    out[0] = x;
+    out[1] = y;
+    out[2] = this.floorBelow(x, y, z);
+    return out;
+  }
+
+  // The carrier lets go of the bomb: thrown ahead (G) or where they died.
+  dropBomb(c, thrown) {
+    if (this.bombCarrier !== c) return;
+    c.player.ws.f.fill(0, WS_SLOTS + SLOT_C4 * 3, WS_SLOTS + SLOT_C4 * 3 + 3);
+    const spot = this.landingSpot(c, thrown), b = this.bomb;
     b.state = BOMB_DROPPED;
-    b.x = x;
-    b.y = y;
-    b.z = this.floorBelow(x, y, z);
+    b.x = spot[0];
+    b.y = spot[1];
+    b.z = spot[2];
     this.bombCarrier = null;
     this.pickupTick = this.tick + (thrown ? PICKUP_DELAY : 0);
+  }
+
+  // --- Weapons on the ground -----------------------------------------------------------
+
+  // Puts a weapon down where c lets go of it (thrown ahead, or at the feet).
+  spawnItem(c, weapon, clip, reserve, thrown) {
+    const w = WEAPONS[weapon];
+    if (!w || w.melee || w.c4) return;
+    const spot = this.landingSpot(c, thrown);
+    this.items.add(weapon, clip, reserve, spot[0], spot[1], spot[2], c.yaw + 90,
+      this.tick + (thrown ? PICKUP_DELAY : 0));
+    this.itemsDirty = true;
+  }
+
+  // Empties `slot` (without switching weapons: a purchase refills it, the dead hold
+  // nothing) and puts its weapon on the ground.
+  dropSlot(c, slot, thrown) {
+    const f = c.player.ws.f, o = WS_SLOTS + slot * 3;
+    const weapon = f[o], clip = f[o + 1], reserve = f[o + 2];
+    if (!weapon) return;
+    f[o] = f[o + 1] = f[o + 2] = 0;
+    this.spawnItem(c, weapon, clip, reserve, thrown);
+  }
+
+  // Gives item i to c (into its slot, which must be free) and takes it off the ground.
+  takeItem(c, i) {
+    const it = this.items, w = WEAPONS[it.weapon[i]];
+    const f = c.player.ws.f, o = WS_SLOTS + w.slot * 3;
+    f[o] = it.weapon[i];
+    f[o + 1] = it.clip[i];
+    f[o + 2] = it.reserve[i];
+    it.remove(i);
+    this.itemsDirty = true;
+  }
+
+  // Each tick: the living take weapons they walk over when that slot is free.
+  updateItems() {
+    const it = this.items;
+    for (const c of this.clients) {
+      if (!c || !c.joined || !c.alive) continue;
+      const f = c.player.ps.f, ws = c.player.ws.f;
+      const feet = f[PS_ORIGIN + 2] - feetOffset(c.player.ps.i[PS_FLAGS]);
+      for (let i = 0; i < it.count; i++) {
+        if (this.tick < it.pickupTick[i] || ws[WS_SLOTS + WEAPONS[it.weapon[i]].slot * 3]) continue;
+        if (Math.hypot(f[PS_ORIGIN] - it.x[i], f[PS_ORIGIN + 1] - it.y[i]) > PICKUP_RANGE) continue;
+        if (Math.abs(feet - it.z[i]) > 40) continue;
+        this.takeItem(c, i);
+        break;
+      }
+    }
+  }
+
+  // E: the nearest weapon on the ground in front of c's eyes (within USE_RANGE and
+  // USE_CONE) replaces the one in its slot, which drops at c's feet.
+  useItem(c) {
+    const it = this.items, f = c.player.ps.f;
+    const ex = f[PS_ORIGIN], ey = f[PS_ORIGIN + 1], ez = f[PS_ORIGIN + 2] + eyeOffset(c.player.ps);
+    const cp = Math.cos(c.pitch * Math.PI / 180);
+    const dx = cp * Math.cos(c.yaw * Math.PI / 180), dy = cp * Math.sin(c.yaw * Math.PI / 180);
+    const dz = -Math.sin(c.pitch * Math.PI / 180);
+    let best = -1, bestD = USE_RANGE;
+    for (let i = 0; i < it.count; i++) {
+      const vx = it.x[i] - ex, vy = it.y[i] - ey, vz = it.z[i] + 2 - ez, d = Math.hypot(vx, vy, vz);
+      if (d >= bestD || (vx * dx + vy * dy + vz * dz) / d < USE_CONE) continue;
+      best = i;
+      bestD = d;
+    }
+    if (best < 0) return;
+    const o = WS_SLOTS + WEAPONS[it.weapon[best]].slot * 3, ws = c.player.ws.f;
+    const old = ws[o], oldClip = ws[o + 1], oldReserve = ws[o + 2];
+    ws[o] = ws[o + 1] = ws[o + 2] = 0;
+    this.takeItem(c, best);
+    if (old) this.spawnItem(c, old, oldClip, oldReserve, false);
+  }
+
+  sendItems() {
+    this.itemsDirty = false;
+    const bytes = writeItems(this.itemsWriter, this.items).slice();
+    for (const c of this.clients) if (c && c.joined) c.session.send(bytes);
   }
 
   plantBomb(c) {

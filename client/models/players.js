@@ -78,7 +78,9 @@ export function buildPlayer(team, helmet = false) {
     m.color(L.pants).bone(S.bone('leg_upper_L')).push().translate(0, ly, kz - 1).capsule(3.5, lz - kz + 2.5, 6, 1).pop();
     m.bone(S.bone('leg_lower_L')).push().translate(0, ly, az + 1).capsule(2.9, kz - az + 0.5, 6, 1).pop();
     if (team === 'CT') m.color(L.pads).push().translate(2.6, ly, kz).box(1.6, 4.4, 4.4).pop();
-    if (team === 'T') m.color(L.pants).push().translate(0, ly + 3.4, 27).box(4, 1.6, 5).pop(); // cargo pocket
+    if (team === 'T') { // cargo pocket, on the thigh
+      m.color(L.pants).bone(S.bone('leg_upper_L')).push().translate(0, ly + 3.4, 27).box(4, 1.6, 5).pop();
+    }
     m.color(L.boots).bone(S.bone('ankle_L')).push().translate(1.8, ly, 2.6).slab(9, 4.4, 5.2, 1.6).pop();
   }, 1, S.mirror);
   return b.build();

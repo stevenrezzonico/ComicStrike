@@ -37,7 +37,7 @@ import { PS_SIZE } from './pmove.js';
 import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -54,6 +54,7 @@ export const S2C_REJECT = 12;
 export const S2C_INFO = 13;
 export const S2C_PRINT = 14;
 export const S2C_CHANGELEVEL = 15;
+export const S2C_ITEMS = 16; // weapons on the ground
 export const MAX_TEXT = 900; // bytes of console text per datagram
 
 export const SHOT_IMPACT = 0; // bullet hit the world
@@ -232,6 +233,34 @@ export function readInfo(r, names, teams, kills, deaths) {
       kills[id] = k;
       deaths[id] = d;
     }
+  }
+}
+
+// Weapons on the ground (shared/items.js): count, then per item id, weapon, position
+// and yaw (16 bytes each; MAX_ITEMS fits a datagram).
+export function writeItems(w, items) {
+  w.reset();
+  w.u8v(S2C_ITEMS);
+  w.u8v(items.count);
+  for (let i = 0; i < items.count; i++) {
+    w.u16v(items.id[i]);
+    w.u8v(items.weapon[i]);
+    w.f32v(items.x[i]);
+    w.f32v(items.y[i]);
+    w.f32v(items.z[i]);
+    w.u8v(Math.round(items.yaw[i] / 360 * 256) & 255);
+  }
+  return w.view();
+}
+
+// Replaces `items` with the list (ammo and pickup times are the server's business).
+export function readItems(r, items) {
+  const n = Math.min(r.u8v(), items.id.length);
+  items.count = 0;
+  for (let i = 0; i < n; i++) {
+    const id = r.u16v(), weapon = r.u8v(), x = r.f32v(), y = r.f32v(), z = r.f32v(), yaw = r.u8v() / 256 * 360;
+    const k = items.add(weapon, 0, 0, x, y, z, yaw);
+    items.id[k] = id;
   }
 }
 

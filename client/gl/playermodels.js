@@ -11,6 +11,7 @@ import * as Q from '../anim/quat.js';
 import { multiply } from './mat4.js';
 import { TEAM_CT } from '../../shared/player.js';
 import { WEAPON_ID } from '../../shared/weapons.js';
+import { MAX_ITEMS } from '../../shared/items.js';
 import { FL_ONGROUND } from '../../shared/pmove.js';
 import { feetOffset } from '../../shared/hitgroups.js';
 import {
@@ -35,6 +36,10 @@ export class PlayerModels {
     this.handM = new Float32Array(16);
     this.qGun = new Float32Array(8);
     this.bomb = { show: false, led: false, model: new Float32Array(16), light: new Float32Array([1, 1, 1]) };
+    this.itemCount = 0; // weapons on the ground
+    this.itemWeapon = new Uint8Array(MAX_ITEMS);
+    this.itemOf = Array.from({ length: MAX_ITEMS }, () => new Float32Array(16));
+    this.itemLightOf = Array.from({ length: MAX_ITEMS }, () => new Float32Array([1, 1, 1]));
     this.anim = Array.from({ length: MAX_PLAYERS }, () => new PlayerAnimator());
     this.visible = new Uint8Array(MAX_PLAYERS);
     this.body = new Array(MAX_PLAYERS).fill(null);
@@ -107,6 +112,25 @@ export class PlayerModels {
     multiply(this.gunOf[id], this.modelOf[id], m);
   }
 
+  // Weapons on the ground (shared/items.js): lying on their side, turned by their yaw,
+  // lit by the map under them. Call when the list changes.
+  setItems(items, surfaces = null) {
+    const n = Math.min(items.count, MAX_ITEMS);
+    for (let i = 0; i < n; i++) {
+      const yr = items.yaw[i] * Math.PI / 180, c = Math.cos(yr), s = Math.sin(yr), m = this.itemOf[i];
+      // Yaw about z, then a quarter roll about the barrel: the gun's right side down.
+      m[0] = c; m[1] = s; m[2] = 0; m[3] = 0;
+      m[4] = 0; m[5] = 0; m[6] = 1; m[7] = 0;
+      m[8] = s; m[9] = -c; m[10] = 0; m[11] = 0;
+      m[12] = items.x[i]; m[13] = items.y[i]; m[14] = items.z[i] + 0.8; m[15] = 1;
+      this.itemWeapon[i] = items.weapon[i];
+      const light = this.itemLightOf[i];
+      if (surfaces && surfaces.lightAt(this.lm, items.x[i], items.y[i], items.z[i] + 8)) modelLight(light, this.lm);
+      else light.fill(1);
+    }
+    this.itemCount = n;
+  }
+
   // The bomb lying at (x, y, z = floor), turned by yaw (radians); show = false hides it.
   setBomb(show, x = 0, y = 0, z = 0, yaw = 0, led = false, surfaces = null) {
     const b = this.bomb;
@@ -133,6 +157,13 @@ export class PlayerModels {
       const skin = this.anim[id].pose.skin;
       r.draw(this.body[id], model, skin, light);
       if (this.weapon[id]) r.draw(this.guns.mesh[this.weapon[id]], this.gunOf[id], IDENTITY_SKIN, light);
+    }
+    for (let i = 0; i < this.itemCount; i++) {
+      const mesh = this.guns.mesh[this.itemWeapon[i]];
+      if (!mesh) continue;
+      if (!begun) r.begin(viewProj);
+      begun = true;
+      r.draw(mesh, this.itemOf[i], IDENTITY_SKIN, this.itemLightOf[i]);
     }
     const b = this.bomb;
     if (b.show) {

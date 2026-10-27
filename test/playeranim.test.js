@@ -32,6 +32,20 @@ Deno.test('player models: closed, under budget, team looks differ', () => {
   assert.equal(holdOf(WEAPON_ID.c4), HOLD_C4);
 });
 
+Deno.test('player models: every leg part rides the bone whose span it covers', () => {
+  const { MESH_STRIDE } = { MESH_STRIDE: 20 };
+  for (const [team, helmet] of [['T', false], ['CT', true]]) {
+    const m = buildPlayer(team, helmet), u8 = new Uint8Array(m.data);
+    for (let v = 0; v < m.count; v++) {
+      const name = S.names[u8[v * MESH_STRIDE + 15]], z = m.positions[v * 3 + 2];
+      const top = { leg_upper_L: 39, leg_upper_R: 39, leg_lower_L: 22.6, leg_lower_R: 22.6, ankle_L: 7, ankle_R: 7 }[name];
+      const bottom = { leg_upper_L: 17, leg_upper_R: 17, leg_lower_L: 0.5, leg_lower_R: 0.5, ankle_L: -0.1, ankle_R: -0.1 }[name];
+      if (top === undefined) continue;
+      assert.ok(z <= top && z >= bottom, `${team}: a ${name} vertex at z ${z.toFixed(1)} is outside its span`);
+    }
+  }
+});
+
 Deno.test('player animation: same inputs, same matrices', () => {
   const walk = (t) => [t * 200, t * 50, 0];
   const a = run(new PlayerAnimator(), 90, walk, { pitch: 12, shots: 3 });

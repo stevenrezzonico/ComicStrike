@@ -220,7 +220,7 @@ export const WEV_MELEE = 32;
 export const WEV_MELEE2 = 64;
 export const WEV_PLANTED = 128;
 export const WEV_DEFUSED = 256;
-export const WEV_DROP = 512; // dropped the C4
+export const WEV_DROP = 512; // dropped the weapon in hand (G)
 
 export const ACTION_PLANT = 1;
 export const ACTION_DEFUSE = 2;
@@ -405,9 +405,11 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
   if (select >= 0 && select < NUM_SLOTS && select !== f[WS_ACTIVE] && f[WS_SLOTS + select * 3] > 0) {
     deploy(ws, select, time);
   }
-  // Drop (G): only the C4 for now.
-  if ((buttons & IN_DROP) && !(f[WS_OLD_BUTTONS] & IN_DROP) && activeWeapon(ws)?.c4) {
-    removeWeapon(ws, SLOT_C4, time);
+  // Drop (G): the weapon in hand, except the knife. The server puts it on the ground
+  // (or, for the C4, drops the bomb) from WEV_DROP.
+  const held = activeWeapon(ws);
+  if ((buttons & IN_DROP) && !(f[WS_OLD_BUTTONS] & IN_DROP) && held && !held.melee) {
+    removeWeapon(ws, f[WS_ACTIVE], time);
     f[WS_EVENTS] |= WEV_DROP;
   }
 

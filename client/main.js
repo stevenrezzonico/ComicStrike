@@ -96,6 +96,7 @@ let tickCount = 1;
 let lastButtons = 0;
 let world = null;
 const lightSample = new Float32Array(3), lightTarget = new Float32Array(3);
+let itemsVersion = -1; // last weapons-on-the-ground list handed to the models
 let breakables = null;
 let breakableColors = null; // rgb per breakable slot, for debris
 const spawns = { [TEAM_T]: [], [TEAM_CT]: [] }; // offline spawn points [x, y, z, yaw]
@@ -608,6 +609,10 @@ function draw(now, alpha, dt) {
     const boxes = cv.cl_showhitboxes.bool;
     players.update(interp, 0, selfId, boxes);
     models.update(interp, 0, selfId, dt, world && world.surfaces, !boxes);
+    if (net.itemsVersion !== itemsVersion) {
+      itemsVersion = net.itemsVersion;
+      models.setItems(net.items, world && world.surfaces);
+    }
     const b = net.own.bomb;
     models.setBomb(b.state === BOMB_DROPPED || b.state === BOMB_PLANTED || b.state === BOMB_DEFUSED, b.x, b.y, b.z, 0,
       b.state === BOMB_PLANTED && now - lastBeep < 120, world && world.surfaces);
