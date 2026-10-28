@@ -243,7 +243,8 @@ export class Sounds {
     if (name === 'pin') this.tone(v.out, v.t, 1800, 1750, 0.12, 0.25, delay);
   }
 
-  // A footstep on a surface kind: 'soft' (sand, dirt), 'metal', 'wood', else hard. Heard
+  // A footstep on a surface kind: 'soft' (sand, dirt), 'metal', 'wood', 'water' (a
+  // splash), 'wade' (a bigger one), else hard. Heard
   // all game long, so it is quiet, dark and never quite the same twice: a heel and a toe
   // scuff (two low noise puffs 30-50 ms apart, each swelling in over ~20 ms; a sharp start
   // sounds like a hammer) and no repeated note, which is what tires the ear. Wood adds a
@@ -252,6 +253,7 @@ export class Sounds {
     const v = this.voice(x, y, z, volume * this.stepVolume * 0.45, 220, 1300);
     if (!v) return;
     const r = 0.85 + Math.random() * 0.3;
+    if (kind === 'water' || kind === 'wade') return this.splash(v.out, v.t, kind === 'wade' ? 1 : 0.4, r);
     const lp = (kind === 'soft' ? 300 : kind === 'wood' ? 420 : kind === 'metal' ? 520 : 380) * r;
     this.burst(v.out, v.t, 60, lp, 0.5, 0.06, 0, 0.02);
     this.burst(v.out, v.t, 90, lp * 1.25, 0.3, 0.05, 0.03 + Math.random() * 0.02, 0.018);
@@ -259,10 +261,41 @@ export class Sounds {
     if (kind === 'metal') this.tone(v.out, v.t, 480 * r, 470 * r, 0.03, 0.2, 0, 'sine', 0.015);
   }
 
-  // Landing from a jump or fall.
-  land(volume = 1) {
+  // A cartoon splash into `out`, `size` 0.4 (a step in shallow water: "splish") to 1
+  // (wading: "sploosh") or more (landing): noise through a band-pass sweeping down from
+  // bright to dull, swelling in like every step, and two or three bubbles, quick rising
+  // sine "plips", at random moments in it. `r` varies the pitch from step to step.
+  splash(out, t, size, r) {
+    const ctx = this.ctx, src = ctx.createBufferSource(), bp = ctx.createBiquadFilter(), g = ctx.createGain();
+    const len = 0.1 + 0.15 * size;
+    src.buffer = this.noise;
+    src.loop = true;
+    bp.type = 'bandpass';
+    bp.Q.value = 1.2;
+    bp.frequency.setValueAtTime(1500 * r, t);
+    bp.frequency.exponentialRampToValueAtTime(450 * r, t + len);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.3 + 0.25 * size, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.02 + len);
+    src.connect(bp).connect(g).connect(out);
+    src.start(t, Math.random() * 0.5);
+    src.stop(t + len + 0.05);
+    const n = 2 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < n; i++) {
+      const f = (500 + Math.random() * 400) * (1 - 0.25 * Math.min(size, 1.4));
+      this.tone(out, t, f, f * 1.6, 0.04 + 0.03 * size, 0.035, 0.03 + Math.random() * len, 'sine', 0.006);
+    }
+  }
+
+  // Landing from a jump or fall; in water (`kind` 'water' / 'wade') a big splash.
+  land(volume = 1, kind = 'hard') {
     const v = this.voice(null, 0, 0, volume * 0.5);
     if (!v) return;
+    if (kind === 'water' || kind === 'wade') {
+      this.splash(v.out, v.t, 1.4, 0.9 + Math.random() * 0.2);
+      this.tone(v.out, v.t, 220, 120, 0.25, 0.12, 0, 'sine', 0.015); // "bloop"
+      return;
+    }
     this.burst(v.out, v.t, 40, 400, 0.8, 0.14, 0, 0.02);
     this.tone(v.out, v.t, 100, 55, 0.6, 0.14, 0, 'sine', 0.018);
   }

@@ -38,7 +38,8 @@ export function gunProfile(w, silencedOn) {
 const pitchOf = (id) => 0.92 + (id % 5) * 0.04;
 
 export class SoundScape {
-  // sounds: Sounds; surfaceKind(x, y, z): 'soft' | 'metal' | 'wood' | 'hard' under a point.
+  // sounds: Sounds; surfaceKind(x, y, z): 'soft' | 'metal' | 'wood' | 'hard' under a point,
+  // 'water' | 'wade' in water at the feet / above the knees.
   constructor(sounds, surfaceKind) {
     this.s = sounds;
     this.surfaceKind = surfaceKind;
@@ -71,7 +72,7 @@ export class SoundScape {
   // Our movement this tick: footsteps while running on the ground, the landing thud.
   ownMove(ps, buttonsWalk, x, y, feetZ) {
     const flags = ps.i[PS_FLAGS];
-    if (ps.i[PS_EVENTS] & EV_LAND) this.s.land(Math.min(1, ps.f[PS_LAND_SPEED] / 500 + 0.3));
+    if (ps.i[PS_EVENTS] & EV_LAND) this.s.land(Math.min(1, ps.f[PS_LAND_SPEED] / 500 + 0.3), this.surfaceKind(x, y, feetZ));
     const speed = Math.hypot(ps.f[PS_VEL], ps.f[PS_VEL + 1]);
     if (!(flags & FL_ONGROUND) || (flags & FL_DUCKING) || buttonsWalk || speed < STEP_SPEED) return;
     this.ownStep += speed / 64;

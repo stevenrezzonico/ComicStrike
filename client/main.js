@@ -17,7 +17,7 @@ import {
   TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED, IN_SCORE,
   IN_ATTACK, IN_ATTACK2, IN_USE, IN_RELOAD, IN_DROP,
 } from '../shared/constants.js';
-import { CollisionWorld, Trace, traceHull, HULL_POINT } from '../shared/trace.js';
+import { CollisionWorld, Trace, traceHull, pointContents, HULL_POINT } from '../shared/trace.js';
 import {
   eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_SIZE, FL_ONGROUND, FL_DUCKING, touched, touchedCount,
 } from '../shared/pmove.js';
@@ -128,9 +128,16 @@ const soundTrace = new Trace();
 // A wall between the listener and a sound muffles it.
 sounds.occluded = (x, y, z) => world !== null &&
   traceHull(world, HULL_POINT, sounds.lx, sounds.ly, sounds.lz, x, y, z, soundTrace).fraction < 0.97;
-// Footstep surfaces from the texture under the feet (CS:GO material letters).
+// Footstep surfaces: water (or slime, lava) at the feet splashes, deeper than the knees
+// wades (de_aztec's river); else the texture under the feet (CS:GO material letters).
+const liquid = (x, y, z) => {
+  const c = pointContents(world, x, y, z);
+  return c <= -3 && c >= -5;
+};
 const scape = new SoundScape(sounds, (x, y, z) => {
-  if (!world || !world.surfaces) return 'hard';
+  if (!world) return 'hard';
+  if (liquid(x, y, z + 2)) return liquid(x, y, z + 24) ? 'wade' : 'water';
+  if (!world.surfaces) return 'hard';
   const gm = world.surfaces.surfaceAt(world, 0, x, y, z, 0, 0, -1)[1];
   if (gm === 77 || gm === 71) return 'metal'; // M, G (grates)
   if (gm === 87) return 'wood';
