@@ -25,6 +25,8 @@ export class Radar {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.cv = cv;
+    this.fontPx = 0; // bomb site letters' font, rebuilt when the size changes
+    this.font = '';
     this.overview = null;
     this.image = null; // canvas holding the overview pixels
     this.sites = []; // [x, y, letter]
@@ -95,10 +97,16 @@ export class Radar {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
     const r = 3.4 * dpr * Math.max(1, css / 200);
-    ctx.font = `700 ${Math.round(r * 3.2)}px Verdana, Tahoma, sans-serif`;
+    const px = Math.round(r * 3.2);
+    if (px !== this.fontPx) { // (a new string and a font parse only when the size changes)
+      this.fontPx = px;
+      this.font = `700 ${px}px Verdana, Tahoma, sans-serif`;
+    }
+    ctx.font = this.font;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    for (const [x, y, letter] of this.sites) {
+    for (let i = 0; i < this.sites.length; i++) {
+      const site = this.sites[i], x = site[0], y = site[1], letter = site[2];
       if (!this.place(x, y, false)) continue;
       ctx.lineWidth = dpr * 2;
       ctx.strokeStyle = 'rgba(0,0,0,0.7)';

@@ -54,7 +54,7 @@ export function fromEuler(out, oo, pitch, yaw, roll) {
 }
 
 export function normalize(q, o) {
-  const l = Math.hypot(q[o], q[o + 1], q[o + 2], q[o + 3]) || 1;
+  const l = Math.sqrt(q[o] * q[o] + q[o + 1] * q[o + 1] + q[o + 2] * q[o + 2] + q[o + 3] * q[o + 3]) || 1; // (hypot allocates)
   q[o] /= l;
   q[o + 1] /= l;
   q[o + 2] /= l;

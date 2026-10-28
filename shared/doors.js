@@ -265,7 +265,11 @@ export class Doors {
     }
     const e = world.ents[this.ent[k]], ent = this.ent[k];
     const ox = e.ox, oy = e.oy, oz = e.oz;
-    const R0 = e.rot ? Float64Array.from(e.rot) : null;
+    let R0 = null;
+    if (e.rot) {
+      oldRot.set(e.rot);
+      R0 = oldRot;
+    }
     this.place(world, k, f);
     if (e.kind === ENT_NONE) return; // passable
     const R1 = e.rot;
@@ -450,6 +454,7 @@ export class Doors {
 }
 
 const MAX_PUSHED = 32;
+const oldRot = new Float64Array(9); // a turning door's rotation before this tick's move
 const pushBuf = new Float64Array(MAX_PUSHED * 4);
 const pushPs = new Array(MAX_PUSHED);
 

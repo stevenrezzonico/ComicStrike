@@ -69,6 +69,10 @@ function holdOf(w) {
   return w.slot === SLOT_SECONDARY ? 'pistol' : 'rifle';
 }
 
+// Default hand points in the gun frame (constants: no array per frame).
+const HAND_KNIFE = [0.4, 0, 0], HAND_C4_R = [3, -2.3, 0], HAND_C4_L = [3, 2.3, 0], HAND_GRENADE = [0, 0, -0.3];
+const HAND_GUN = [-0.75, 0, -1.6];
+
 // 0..1 between a and b, eased.
 export function ramp(t, a, b) {
   const x = Math.max(0, Math.min(1, (t - a) / (b - a)));
@@ -171,12 +175,12 @@ export class ViewAnimator {
     this.dual = holdName === 'elite';
 
     // Default hands.
-    if (holdName === 'knife') this.setHand(R, [0.4, 0, 0], ROT.knife, HAND_GRIP_IN);
-    else if (holdName === 'c4') this.setHand(R, [3, -2.3, 0], ROT.side, 0.55);
-    else if (holdName === 'grenade') this.setHand(R, [0, 0, -0.3], ROT.side, HAND_GRIP_IN);
-    else this.setHand(R, [-0.75, 0, -1.6], ROT.grip, HAND_GRIP_IN);
-    if (holdName === 'c4') this.setHand(L, [3, 2.3, 0], ROT.side, 0.55);
-    else if (holdName === 'elite') this.setHand(L, [-0.75, 0, -1.6], ROT.grip, HAND_GRIP_IN);
+    if (holdName === 'knife') this.setHand(R, HAND_KNIFE, ROT.knife, HAND_GRIP_IN);
+    else if (holdName === 'c4') this.setHand(R, HAND_C4_R, ROT.side, 0.55);
+    else if (holdName === 'grenade') this.setHand(R, HAND_GRENADE, ROT.side, HAND_GRIP_IN);
+    else this.setHand(R, HAND_GUN, ROT.grip, HAND_GRIP_IN);
+    if (holdName === 'c4') this.setHand(L, HAND_C4_L, ROT.side, 0.55);
+    else if (holdName === 'elite') this.setHand(L, HAND_GUN, ROT.grip, HAND_GRIP_IN);
     else if (pts.support && holdName === 'pistol') this.setHand(L, pts.support, ROT.cup, 0.7);
     else if (pts.support) this.setHand(L, pts.support, ROT.support, 0.6);
     else {
@@ -417,7 +421,7 @@ export class ViewAnimator {
         y = gm[1] * px + gm[5] * py + gm[9] * pz + gm[13];
         z = gm[2] * px + gm[6] * py + gm[10] * pz + gm[14];
         Q.mul(tq, 0, second ? this.qGun2 : this.qGun, 0, this.hq, s * 4);
-      } else tq.set(this.hq.subarray(s * 4, s * 4 + 4));
+      } else for (let c = 0; c < 4; c++) tq[c] = this.hq[s * 4 + c];
       x += this.ho[o];
       y += this.ho[o + 1];
       z += this.ho[o + 2];

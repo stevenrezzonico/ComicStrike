@@ -95,7 +95,7 @@ const deathNotice = document.getElementById('death');
 const spectator = new Spectator();
 const specAngles = new Float32Array(2);
 const specTrace = new Trace();
-let deadAt = 0, wasDead = false, specShown = '';
+let deadAt = 0, wasDead = false;
 let wasSpecTeam = false, specFollowing = false; // last frame: on the spectator team / following someone
 const lastCam = new Float32Array(5); // last spectator camera: x, y, z, pitch, yaw
 
@@ -392,6 +392,14 @@ function replayFrom(from) {
 const gameMode = () => (net ? net.own.round.mode : 0);
 
 // The top scorer (deathmatch): { name, score, self, tied } or null.
+// Per-frame arguments and callbacks, made once (no garbage per frame).
+const graphInfo = { fps: 0, rtt: 0, compared: 0, corrected: 0, interpTicks: 0 };
+const leaderInfo = { name: '', score: 0, self: false, tied: false };
+const rowFeet = (rows, r) => rows[r + E_Z] - feetOffset(rows[r + E_FLAGS]);
+const rowAlive = (id) => id === selfId ? player.health > 0 : interp[id * E_FIELDS + E_HEALTH] > 0;
+const specSight = (x0, y0, z0, x1, y1, z1) => traceHull(world, HULL_POINT, x0, y0, z0, x1, y1, z1, specTrace).fraction;
+let specKey = -3; // what the spectator notice says (-2 nothing, -1 roaming, else target and HP)
+
 function leader() {
   if (!net) return null;
   let best = -1, tied = false;
@@ -403,7 +411,13 @@ function leader() {
       tied = false;
     }
   }
-  return best < 0 ? null : { name: net.names[best], score: net.scores[best], self: best === selfId, tied };
+  if (best < 0) return null;
+  const L = leaderInfo;
+  L.name = net.names[best];
+  L.score = net.scores[best];
+  L.self = best === selfId;
+  L.tied = tied;
+  return L;
 }
 
 function buy(item) {
@@ -841,10 +855,13 @@ function frame(now) {
     fpsTime = now;
     frameMsMax = 0;
   }
-  netGraph.update(cv.net_graph.bool, now, net, {
-    fps, rtt: netStats.rtt, compared: netStats.compared, corrected: netStats.corrected,
-    interpTicks: cv.cl_interp_ratio.number,
-  });
+  const gi = graphInfo;
+  gi.fps = fps;
+  gi.rtt = netStats.rtt;
+  gi.compared = netStats.compared;
+  gi.corrected = netStats.corrected;
+  gi.interpTicks = cv.cl_interp_ratio.number;
+  netGraph.update(cv.net_graph.bool, now, net, gi);
   requestAnimationFrame(frame);
 }
 
@@ -888,8 +905,7 @@ function draw(now, alpha, dt) {
   const inEyes = spectating && spectator.mode === SPEC_EYES;
   if (spectating) {
     if (roaming) spectator.fly(buttons, angles[0], angles[1], dt);
-    spectator.camera(interp, eye, specAngles, (x0, y0, z0, x1, y1, z1) =>
-      traceHull(world, HULL_POINT, x0, y0, z0, x1, y1, z1, specTrace).fraction);
+    spectator.camera(interp, eye, specAngles, specSight);
     pitch = roaming ? angles[0] : specAngles[0];
     yaw = roaming ? angles[1] : specAngles[1];
     lastCam[0] = eye[0];
@@ -931,7 +947,7 @@ function draw(now, alpha, dt) {
   sounds.listen(eye[0], eye[1], eye[2], yaw);
   scape.effects(fx.cur, now / 1000, dt);
   if (net && synced) {
-    scape.others(interp, selfId, dt, (rows, r) => rows[r + E_Z] - feetOffset(rows[r + E_FLAGS]));
+    scape.others(interp, selfId, dt, rowFeet);
   }
   renderer.render(viewProj, invViewProj, eye, now / 1000, overlays);
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
@@ -954,8 +970,7 @@ function draw(now, alpha, dt) {
     : picking > 0 ? 'Picking up the hostage' : '',
     picking > 0 ? picking : 1 - (ws.f[WS_ACTION_END] - simTime) / actionTime);
   hud.refreshMenu(player, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, (gameMode() & GAME_DM) !== 0);
-  hud.scoreboard((input.buttons & IN_SCORE) !== 0 && input.locked, net, selfId,
-    (id) => id === selfId ? player.health > 0 : interp[id * E_FIELDS + E_HEALTH] > 0);
+  hud.scoreboard((input.buttons & IN_SCORE) !== 0 && input.locked, net, selfId, rowAlive);
 
   weaponView.hidden = dead && !inEyes;
   const target = spectator.target * E_FIELDS;
@@ -969,12 +984,15 @@ function draw(now, alpha, dt) {
     for (let c = 0; c < 3; c++) weaponView.light[c] += (lightTarget[c] - weaponView.light[c]) * k;
   }
   deathNotice.style.display = dead && net ? 'block' : 'none';
-  const modes = specTeam ? 'Jump: eyes / chase / free roam' : 'Jump: eyes / chase';
-  const spec = !spectating ? '' : roaming ? `Free roam\nMouse1 / Mouse2: follow a player · ${modes}`
-    : `Spectating ${net.names[spectator.target] || 'player'} · ${interp[target + E_HEALTH]} HP\n` +
-      `Mouse1 / Mouse2: next / previous · ${modes}`;
-  if (spec !== specShown) {
-    specShown = spec;
+  // The spectator notice, rebuilt only when what it says changes.
+  const key = (!spectating ? -2 : roaming ? -1 : spectator.target * 1024 + interp[target + E_HEALTH]) * 2 +
+    (specTeam ? 1 : 0);
+  if (key !== specKey) {
+    specKey = key;
+    const modes = specTeam ? 'Jump: eyes / chase / free roam' : 'Jump: eyes / chase';
+    const spec = !spectating ? '' : roaming ? `Free roam\nMouse1 / Mouse2: follow a player · ${modes}`
+      : `Spectating ${net.names[spectator.target] || 'player'} · ${interp[target + E_HEALTH]} HP\n` +
+        `Mouse1 / Mouse2: next / previous · ${modes}`;
     deathNotice.style.whiteSpace = 'pre';
     if (spec) deathNotice.textContent = spec;
   }

@@ -218,32 +218,51 @@ function hullPointContents(num, x, y, z) {
   return num;
 }
 
-function recursiveHullCheck(num, p1f, p2f, x1, y1, z1, x2, y2, z2) {
-  if (num < 0) {
-    if (num !== CONTENTS_SOLID) {
-      T.allsolid = false;
-      if (num === CONTENTS_EMPTY) T.inopen = true;
-      else T.inwater = true;
-    } else {
-      T.startsolid = true;
+// The recursion's arguments per depth (p1f, p2f, x1, y1, z1, x2, y2, z2): doubles passed
+// as call arguments would be boxed (a heap allocation) on every call. Depth only grows
+// where a trace crosses a plane, so the tree depth bounds it.
+const MAX_DEPTH = 512;
+const ARGS = new Float64Array(MAX_DEPTH * 8);
+
+function hullCheck(head, x1, y1, z1, x2, y2, z2) {
+  ARGS[0] = 0;
+  ARGS[1] = 1;
+  ARGS[2] = x1; ARGS[3] = y1; ARGS[4] = z1;
+  ARGS[5] = x2; ARGS[6] = y2; ARGS[7] = z2;
+  recursiveHullCheck(head, 0);
+}
+
+function recursiveHullCheck(num, depth) {
+  const o = depth * 8;
+  const p1f = ARGS[o], p2f = ARGS[o + 1];
+  const x1 = ARGS[o + 2], y1 = ARGS[o + 3], z1 = ARGS[o + 4], x2 = ARGS[o + 5], y2 = ARGS[o + 6], z2 = ARGS[o + 7];
+  // Down the tree while both ends are on the same side of the node's plane.
+  let nx = 0, ny = 0, nz = 0, dist = 0, t1 = 0, t2 = 0;
+  for (;;) {
+    if (num < 0) {
+      if (num !== CONTENTS_SOLID) {
+        T.allsolid = false;
+        if (num === CONTENTS_EMPTY) T.inopen = true;
+        else T.inwater = true;
+      } else {
+        T.startsolid = true;
+      }
+      return true;
     }
-    return true;
+    const p = CP[num];
+    const type = PT[p];
+    nx = P[p * 4]; ny = P[p * 4 + 1]; nz = P[p * 4 + 2]; dist = P[p * 4 + 3];
+    if (type < 3) {
+      t1 = (type === 0 ? x1 : type === 1 ? y1 : z1) - dist;
+      t2 = (type === 0 ? x2 : type === 1 ? y2 : z2) - dist;
+    } else {
+      t1 = nx * x1 + ny * y1 + nz * z1 - dist;
+      t2 = nx * x2 + ny * y2 + nz * z2 - dist;
+    }
+    if (t1 >= 0 && t2 >= 0) num = CC[num * 2];
+    else if (t1 < 0 && t2 < 0) num = CC[num * 2 + 1];
+    else break;
   }
-
-  const p = CP[num];
-  const type = PT[p];
-  const nx = P[p * 4], ny = P[p * 4 + 1], nz = P[p * 4 + 2], dist = P[p * 4 + 3];
-  let t1, t2;
-  if (type < 3) {
-    t1 = (type === 0 ? x1 : type === 1 ? y1 : z1) - dist;
-    t2 = (type === 0 ? x2 : type === 1 ? y2 : z2) - dist;
-  } else {
-    t1 = nx * x1 + ny * y1 + nz * z1 - dist;
-    t2 = nx * x2 + ny * y2 + nz * z2 - dist;
-  }
-
-  if (t1 >= 0 && t2 >= 0) return recursiveHullCheck(CC[num * 2], p1f, p2f, x1, y1, z1, x2, y2, z2);
-  if (t1 < 0 && t2 < 0) return recursiveHullCheck(CC[num * 2 + 1], p1f, p2f, x1, y1, z1, x2, y2, z2);
 
   // Put the crosspoint DIST_EPSILON units on the near side.
   let frac = t1 < 0 ? (t1 + DIST_EPSILON) / (t1 - t2) : (t1 - DIST_EPSILON) / (t1 - t2);
@@ -254,10 +273,17 @@ function recursiveHullCheck(num, p1f, p2f, x1, y1, z1, x2, y2, z2) {
   let mx = x1 + frac * (x2 - x1), my = y1 + frac * (y2 - y1), mz = z1 + frac * (z2 - z1);
   const side = t1 < 0 ? 1 : 0;
 
-  if (!recursiveHullCheck(CC[num * 2 + side], p1f, midf, x1, y1, z1, mx, my, mz)) return false;
+  const c = o + 8; // the child's arguments
+  ARGS[c] = p1f; ARGS[c + 1] = midf;
+  ARGS[c + 2] = x1; ARGS[c + 3] = y1; ARGS[c + 4] = z1;
+  ARGS[c + 5] = mx; ARGS[c + 6] = my; ARGS[c + 7] = mz;
+  if (!recursiveHullCheck(CC[num * 2 + side], depth + 1)) return false;
 
   if (hullPointContents(CC[num * 2 + (side ^ 1)], mx, my, mz) !== CONTENTS_SOLID) {
-    return recursiveHullCheck(CC[num * 2 + (side ^ 1)], midf, p2f, mx, my, mz, x2, y2, z2);
+    ARGS[c] = midf; ARGS[c + 1] = p2f;
+    ARGS[c + 2] = mx; ARGS[c + 3] = my; ARGS[c + 4] = mz;
+    ARGS[c + 5] = x2; ARGS[c + 6] = y2; ARGS[c + 7] = z2;
+    return recursiveHullCheck(CC[num * 2 + (side ^ 1)], depth + 1);
   }
 
   if (T.allsolid) return false; // never got out of the solid area
@@ -338,7 +364,7 @@ export function traceEntity(world, entIndex, hull, sx, sy, sz, ex, ey, ez, out) 
   out.nx = out.ny = out.nz = out.dist = 0;
   out.ent = -1;
   out.head = e.heads[hull];
-  recursiveHullCheck(out.head, 0, 1, sx - e.ox, sy - e.oy, sz - e.oz, ex - e.ox, ey - e.oy, ez - e.oz);
+  hullCheck(out.head, sx - e.ox, sy - e.oy, sz - e.oz, ex - e.ox, ey - e.oy, ez - e.oz);
   if (out.fraction === 1) {
     out.endx = ex; out.endy = ey; out.endz = ez;
   } else {
@@ -365,7 +391,7 @@ function traceRotated(world, e, entIndex, hull, sx, sy, sz, ex, ey, ez, out) {
   out.nx = out.ny = out.nz = out.dist = 0;
   out.ent = -1;
   out.head = e.heads[hull];
-  recursiveHullCheck(out.head, 0, 1, ls[0], ls[1], ls[2], le[0], le[1], le[2]);
+  hullCheck(out.head, ls[0], ls[1], ls[2], le[0], le[1], le[2]);
   if (out.fraction === 1) {
     out.endx = ex; out.endy = ey; out.endz = ez;
     return out;

@@ -1310,12 +1310,14 @@ export class Game {
   // team to share sight with: only firing shows (approx. of CS:GO's deathmatch radar).
   updateSpotting() {
     if (this.tick % SPOT_TICKS !== 0) return;
-    const ffa = this.rules.teammatesAreEnemies;
-    for (const c of this.clients) {
+    const ffa = this.rules.teammatesAreEnemies, all = this.clients;
+    for (let i = 0; i < all.length; i++) {
+      const c = all[i];
       if (!c || !c.joined) continue;
       let bits = c.alive && this.tick < c.revealUntil ? ANIM_SPOTTED_T | ANIM_SPOTTED_CT : 0;
       if (c.alive && !ffa) {
-        for (const o of this.clients) {
+        for (let j = 0; j < all.length; j++) {
+          const o = all[j];
           if (!o || !o.joined || !o.alive || !o.playing || o.team === c.team) continue;
           const bit = o.team === TEAM_T ? ANIM_SPOTTED_T : ANIM_SPOTTED_CT;
           if (!(bits & bit) && this.sees(o, c)) bits |= bit;
@@ -1336,8 +1338,8 @@ export class Game {
     const cp = Math.cos(o.pitch * DEG), vx = cp * Math.cos(o.yaw * DEG), vy = cp * Math.sin(o.yaw * DEG);
     const vz = -Math.sin(o.pitch * DEG);
     const g = c.player.ps.f, tr = this.spotTrace;
-    for (const dz of [eyeOffset(c.player.ps), 0]) {
-      const x = g[PS_ORIGIN], y = g[PS_ORIGIN + 1], z = g[PS_ORIGIN + 2] + dz;
+    for (let k = 0; k < 2; k++) { // head, then chest
+      const x = g[PS_ORIGIN], y = g[PS_ORIGIN + 1], z = g[PS_ORIGIN + 2] + (k ? 0 : eyeOffset(c.player.ps));
       const dx = x - ex, dy = y - ey, dzz = z - ez, d = Math.hypot(dx, dy, dzz);
       if (d > 0 && (dx * vx + dy * vy + dzz * vz) / d < cone) continue; // outside their view
       traceHull(this.world, HULL_POINT, ex, ey, ez, x, y, z, tr);

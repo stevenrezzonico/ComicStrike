@@ -17,6 +17,7 @@ const JOIN_TIMEOUT_MS = 5000;
 const QUEUE = 256; // datagrams buffered between polls (4 s: hidden tabs poll at 1 Hz)
 const SEND_BUFFERS = 8;
 let localSessions = 0; // connections made to the practice worker
+const ignore = () => {}; // lost datagram writes (one handler, not a closure per send)
 
 export class NetClient {
   constructor() {
@@ -193,7 +194,7 @@ export class NetClient {
       this.local.postMessage({ type: 'dgram', id: this.localId, bytes: copy.buffer }, [copy.buffer]);
       return;
     }
-    this.writer.write(bytes).catch(() => {});
+    this.writer.write(bytes).catch(ignore);
   }
 
   nextWriter() {
@@ -283,7 +284,9 @@ export class NetClient {
       } else if (type === S2C_GRENADES) {
         const tick = readGrenades(r, this.grenadeScratch);
         if (tick > this.grenadeTick) { // datagrams may arrive out of order
-          [this.grenades, this.grenadeScratch] = [this.grenadeScratch, this.grenades];
+          const g = this.grenades;
+          this.grenades = this.grenadeScratch;
+          this.grenadeScratch = g;
           this.grenadeTick = tick;
           this.grenadesVersion++;
         }

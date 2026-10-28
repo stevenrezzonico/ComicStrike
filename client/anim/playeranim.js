@@ -109,7 +109,8 @@ export class PlayerAnimator {
   update(dt, x, y, z, yaw, pitch, duck, onGround, hold, anim, shots, alive, pts = null, weapon = 0) {
     this.time += dt;
     // Velocity from positions, smoothed; teleports (spawns) start over.
-    if (Number.isNaN(this.px) || Math.hypot(x - this.px, y - this.py, z - this.pz) > 96) {
+    const jx = x - this.px, jy = y - this.py, jz = z - this.pz;
+    if (Number.isNaN(this.px) || jx * jx + jy * jy + jz * jz > 96 * 96) {
       this.vx = this.vy = 0;
     } else if (dt > 0) {
       const k = 1 - Math.exp(-dt * 12);
@@ -129,7 +130,7 @@ export class PlayerAnimator {
     // Velocity in the player's frame, and the stride cycle.
     const yr = yaw * Math.PI / 180, cy = Math.cos(yr), sy = Math.sin(yr);
     const fwd = this.vx * cy + this.vy * sy, left = -this.vx * sy + this.vy * cy;
-    const speed = Math.hypot(fwd, left);
+    const speed = Math.sqrt(fwd * fwd + left * left);
     this.stride = Math.min(20, 5 + speed * 0.06) * (1 - 0.35 * duck);
     if (onGround) this.phase = (this.phase + speed * dt / (4 * this.stride * STEP_SCALE)) % 1;
     const walk = smoothstep(10, 70, speed) * (1 - this.air);
@@ -179,11 +180,12 @@ export class PlayerAnimator {
     const handP = grip.aimed ? aimP : 25;
     const hr = handP * Math.PI / 180, ch = Math.cos(hr), sh = Math.sin(hr);
     for (let s = 1; s >= 0; s--) { // the gun hand first: the off hand follows the gun
-      let [ox, oy, oz] = grip.hands[s];
+      const hand = grip.hands[s];
+      let ox = hand[0], oy = hand[1], oz = hand[2];
       if (s === 0 && grip.aimed && (support || reload.take > 0)) {
         // Off hand on a point of the gun (its support, or what the reload reaches for):
         // the right wrist plus the point turned by the gun's reload roll (aim frame).
-        const [rx, ry, rz] = grip.hands[1];
+        const rh = grip.hands[1], rx = rh[0], ry = rh[1], rz = rh[2];
         const k = reload.take, sx = support ? support[0] : ox - rx, sy = support ? support[1] : oy - ry;
         const sz = support ? support[2] : oz - rz;
         const gx = sx + (reload.x - sx) * k, gy = sy + (reload.y - sy) * k, gz = sz + (reload.z - sz) * k;
@@ -192,7 +194,10 @@ export class PlayerAnimator {
         oy = ry + gy * cr - gz * sr;
         oz = rz + gy * sr + gz * cr + reload.drop;
       } else if (s === 0 && anim & ANIM_RELOAD && RELOAD_HAND[hold]) {
-        [ox, oy, oz] = RELOAD_HAND[hold];
+        const rl = RELOAD_HAND[hold];
+        ox = rl[0];
+        oy = rl[1];
+        oz = rl[2];
         oz += Math.sin(this.time * 7) * 1.2;
       }
       ox -= this.kick * 2;
@@ -236,7 +241,7 @@ export class PlayerAnimator {
     if (w.shellTime && pts.port) { // tip the gun, the hand fetches each shell into the port
       const tilt = ramp(t, 0, w.reloadStart);
       R.roll = -25 * tilt;
-      [R.x, R.y, R.z] = pts.port;
+      setPoint(R, pts.port);
       R.take = tilt;
       if (t > w.reloadStart) R.drop = -7 * bump(((t - w.reloadStart) / w.shellTime) % 1, 0.05, 0.38, 0.5, 0.9);
       return R;
@@ -253,14 +258,14 @@ export class PlayerAnimator {
       R.take = bump(r, 0.08, 0.2, 0.62, 0.7);
       R.drop = -5 * bump(r, 0.4, 0.46, 0.46, 0.55); // down for the new one
     } else if (pts.cylinder) { // revolver: rounds into the swung-out cylinder
-      [R.x, R.y, R.z] = pts.cylinder;
+      setPoint(R, pts.cylinder);
       R.take = bump(r, 0.08, 0.2, 0.62, 0.7);
       R.drop = -10 * bump(r, 0.28, 0.38, 0.48, 0.58);
     }
     if (pts.bolt) { // bolt / slide release
       const b = bump(r, 0.68, 0.74, 0.82, 0.9);
       if (b > R.take) {
-        [R.x, R.y, R.z] = pts.bolt;
+        setPoint(R, pts.bolt);
         R.take = b;
         R.drop = 0;
       }
@@ -278,12 +283,19 @@ export class PlayerAnimator {
     p.pos[PELVIS * 3] = Math.sin(a) * pz;
     p.pos[PELVIS * 3 + 2] = Math.cos(a) * pz + 3 * f;
     Q.fromEuler(tv, 0, -88 * f, 0, 0);
-    p.rot.set(tv.subarray(0, 4), PELVIS * 4);
+    for (let k = 0; k < 4; k++) p.rot[PELVIS * 4 + k] = tv[k];
     for (let s = 0; s < 2; s++) p.turn(ARM[s], 0, 0, SIDE[s] * 30 * f);
     p.solve();
     p.skinMatrices();
     return p;
   }
+}
+
+// R.x / y / z = v (no destructuring: an iterator per call in unoptimized code).
+function setPoint(R, v) {
+  R.x = v[0];
+  R.y = v[1];
+  R.z = v[2];
 }
 
 function smoothstep(a, b, x) {

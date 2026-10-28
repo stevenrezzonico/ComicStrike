@@ -25,6 +25,12 @@ export class Hud {
     this.elProgressBar = this.elProgress.firstElementChild;
     this.elProgressLabel = this.elProgress.lastElementChild;
     this.shown = { money: '', round: '', banner: '', bomb: '', progress: '' };
+    // What the round bar and banner were built from: rebuilt only when one changes.
+    this.key = { money: -1, secs: -1, phase: -1, planted: false, ct: -1, t: -1, mode: -1, info: -1, notice: '',
+      lName: '', lScore: -1, lSelf: false, lTied: false };
+    this.bombSite = false;
+    this.progressShown = false;
+    this.progressPct = -1;
     this.notice = '';
     this.noticeUntil = 0;
     this.menuOpen = false;
@@ -47,22 +53,44 @@ export class Hud {
   // rs: RoundState and bomb: BombState (null offline); now: ms; leader: the top scorer
   // { name, score, self, tied } (deathmatch) or null.
   update(rs, bomb, money, now, leader = null) {
-    this.set(this.elMoney, 'money', `$${money}`);
+    const K = this.key;
+    if (money !== K.money) {
+      K.money = money;
+      this.set(this.elMoney, 'money', `$${money}`);
+    }
     if (!rs) {
       this.set(this.elRound, 'round', 'OFFLINE');
       this.set(this.elBanner, 'banner', '');
       return;
     }
-    const secs = Math.max(0, Math.ceil(rs.ticksLeft / TICK_RATE));
-    const clock = rs.ticksLeft > 0 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : '';
+    const secs = rs.ticksLeft > 0 ? Math.ceil(rs.ticksLeft / TICK_RATE) : 0;
     // CS:GO hides the clock once the bomb is down: the beeps tell the time.
     const planted = bomb.state === BOMB_PLANTED;
+    const notice = now < this.noticeUntil ? this.notice : '';
+    const lName = leader ? leader.name : '', lScore = leader ? leader.score : -1, lSelf = !!leader && leader.self;
+    const lTied = !!leader && leader.tied;
+    if (secs === K.secs && rs.phase === K.phase && planted === K.planted && rs.scoreCT === K.ct && rs.scoreT === K.t &&
+      rs.mode === K.mode && rs.info === K.info && notice === K.notice && lName === K.lName && lScore === K.lScore &&
+      lSelf === K.lSelf && lTied === K.lTied) return; // nothing to rebuild (the usual frame)
+    K.secs = secs;
+    K.phase = rs.phase;
+    K.planted = planted;
+    K.ct = rs.scoreCT;
+    K.t = rs.scoreT;
+    K.mode = rs.mode;
+    K.info = rs.info;
+    K.notice = notice;
+    K.lName = lName;
+    K.lScore = lScore;
+    K.lSelf = lSelf;
+    K.lTied = lTied;
+    this.elRound.classList.toggle('planted', planted && rs.phase !== PHASE_OVER);
+    const clock = rs.ticksLeft > 0 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : '';
     const mid = rs.phase === PHASE_WARMUP ? 'WARMUP' : rs.phase === PHASE_FREEZE ? `buy ${clock}` : planted ? ' C4 ' : clock;
     const dm = (rs.mode & GAME_DM) !== 0;
     const lead = leader && leader.score > 0 && !leader.tied
       ? `   lead: ${leader.self ? 'you' : leader.name} ${leader.score}` : '';
     this.set(this.elRound, 'round', dm ? `DEATHMATCH   ${mid}${lead}` : `CT ${rs.scoreCT}   ${mid}   ${rs.scoreT} T`);
-    this.elRound.classList.toggle('planted', planted && rs.phase !== PHASE_OVER);
     let banner = '';
     if (rs.phase === PHASE_OVER && rs.info >> 2 === END_MATCH) {
       banner = !leader || leader.tied ? 'Match over: a draw'
@@ -76,8 +104,8 @@ export class Hud {
       else if (reason === END_RESCUE) banner = 'Hostage Rescued: ' + banner;
     } else if (rs.phase === PHASE_WARMUP) {
       banner = rs.mode & GAME_FFA ? 'Warmup: waiting for players' : 'Warmup: waiting for both teams';
-    } else if (now < this.noticeUntil) {
-      banner = this.notice;
+    } else if (notice) {
+      banner = notice;
     }
     this.set(this.elBanner, 'banner', banner);
   }
@@ -86,11 +114,21 @@ export class Hud {
   // progress bar (`label` '' hides it; `frac` 0..1).
   bombStatus(carrying, inSite, label, frac) {
     this.set(this.elBomb, 'bomb', carrying ? 'C4' : '');
-    this.elBomb.classList.toggle('site', carrying && inSite);
-    this.elProgress.style.display = label ? 'block' : 'none';
+    if ((carrying && inSite) !== this.bombSite) {
+      this.bombSite = carrying && inSite;
+      this.elBomb.classList.toggle('site', this.bombSite);
+    }
+    if (!!label !== this.progressShown) {
+      this.progressShown = !!label;
+      this.elProgress.style.display = label ? 'block' : 'none';
+    }
     if (!label) return;
     this.set(this.elProgressLabel, 'progress', label);
-    this.elProgressBar.style.width = `${Math.round(Math.min(Math.max(frac, 0), 1) * 100)}%`;
+    const pct = Math.round(Math.min(Math.max(frac, 0), 1) * 100);
+    if (pct !== this.progressPct) {
+      this.progressPct = pct;
+      this.elProgressBar.style.width = `${pct}%`;
+    }
   }
 
   // --- Scoreboard (hold Tab) -----------------------------------------------------

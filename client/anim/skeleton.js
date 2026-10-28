@@ -128,8 +128,8 @@ export class Pose {
     for (let i = 0; i < count; i++) {
       const p = parent[i];
       if (p < 0) {
-        this.wrot.set(this.rot.subarray(i * 4, i * 4 + 4), i * 4);
-        this.wpos.set(this.pos.subarray(i * 3, i * 3 + 3), i * 3);
+        for (let c = 0; c < 4; c++) this.wrot[i * 4 + c] = this.rot[i * 4 + c]; // (subarray would allocate)
+        for (let c = 0; c < 3; c++) this.wpos[i * 3 + c] = this.pos[i * 3 + c];
         continue;
       }
       Q.mul(this.wrot, i * 4, this.wrot, p * 4, this.rot, i * 4);
@@ -177,24 +177,30 @@ export class Pose {
     const ax = W[a * 3], ay = W[a * 3 + 1], az = W[a * 3 + 2];
     const bx = W[b * 3], by = W[b * 3 + 1], bz = W[b * 3 + 2];
     const cx = W[c * 3], cy = W[c * 3 + 1], cz = W[c * 3 + 2];
-    const lab = Math.hypot(bx - ax, by - ay, bz - az), lcb = Math.hypot(cx - bx, cy - by, cz - bz);
+    // (Math.sqrt, not Math.hypot: hypot is a builtin call that allocates its result.)
+    const abx = bx - ax, aby = by - ay, abz = bz - az, cbx = cx - bx, cby = cy - by, cbz = cz - bz;
+    const acx = cx - ax, acy = cy - ay, acz = cz - az, atx = tx - ax, aty = ty - ay, atz = tz - az;
+    const lab = Math.sqrt(abx * abx + aby * aby + abz * abz), lcb = Math.sqrt(cbx * cbx + cby * cby + cbz * cbz);
     const eps = 1e-3;
-    const lat = Math.min(Math.max(Math.hypot(tx - ax, ty - ay, tz - az), eps), lab + lcb - eps);
+    const lat = Math.min(Math.max(Math.sqrt(atx * atx + aty * aty + atz * atz), eps), lab + lcb - eps);
 
-    // Current and wanted inner angles (law of cosines).
-    const acab0 = angle(cx - ax, cy - ay, cz - az, bx - ax, by - ay, bz - az);
-    const babc0 = angle(ax - bx, ay - by, az - bz, cx - bx, cy - by, cz - bz);
-    const acat0 = angle(cx - ax, cy - ay, cz - az, tx - ax, ty - ay, tz - az);
+    // Current and wanted inner angles (law of cosines). Written out: calls taking
+    // floating-point arguments box them when not inlined, which this long function
+    // often is not.
+    const lac = Math.sqrt(acx * acx + acy * acy + acz * acz), lat0 = Math.sqrt(atx * atx + aty * aty + atz * atz);
+    const acab0 = clampAcos((acx * abx + acy * aby + acz * abz) / (lac * lab || 1));
+    const babc0 = clampAcos(-(abx * cbx + aby * cby + abz * cbz) / (lab * lcb || 1));
+    const acat0 = clampAcos((acx * atx + acy * aty + acz * atz) / (lac * lat0 || 1));
     const acab1 = clampAcos((lcb * lcb - lab * lab - lat * lat) / (-2 * lab * lat));
     const babc1 = clampAcos((lat * lat - lab * lab - lcb * lcb) / (-2 * lab * lcb));
 
     // Bend axis: perpendicular to the limb and the pole; aim axis: limb to target.
     const V = tmpV;
-    cross(V, 0, cx - ax, cy - ay, cz - az, px, py, pz);
-    if (Math.hypot(V[0], V[1], V[2]) < eps) cross(V, 0, cx - ax, cy - ay, cz - az, bx - ax, by - ay, bz - az);
+    cross(V, 0, acx, acy, acz, px, py, pz);
+    if (V[0] * V[0] + V[1] * V[1] + V[2] * V[2] < eps * eps) cross(V, 0, acx, acy, acz, abx, aby, abz);
     unit(V, 0);
-    cross(V, 3, cx - ax, cy - ay, cz - az, tx - ax, ty - ay, tz - az);
-    if (Math.hypot(V[3], V[4], V[5]) < eps) V.copyWithin(3, 0, 3);
+    cross(V, 3, acx, acy, acz, atx, aty, atz);
+    if (V[3] * V[3] + V[4] * V[4] + V[5] * V[5] < eps * eps) V.copyWithin(3, 0, 3);
     unit(V, 3);
     const nx = V[0], ny = V[1], nz = V[2], mx = V[3], my = V[4], mz = V[5];
 
@@ -213,7 +219,7 @@ export class Pose {
   // transforms must be current and are updated again.
   setWorldRotation(i, q, qo) {
     const p = this.skel.parent[i];
-    if (p < 0) this.rot.set(q.subarray(qo, qo + 4), i * 4);
+    if (p < 0) for (let c = 0; c < 4; c++) this.rot[i * 4 + c] = q[qo + c];
     else {
       Q.conj(tmpQ, 0, this.wrot, p * 4);
       Q.mul(this.rot, i * 4, tmpQ, 0, q, qo);
@@ -225,7 +231,7 @@ export class Pose {
   applyWorld(i, r, ro) {
     const p = this.skel.parent[i];
     Q.mul(tmpQ, 0, r, ro, this.wrot, i * 4); // new world rotation
-    if (p < 0) this.rot.set(tmpQ.subarray(0, 4), i * 4);
+    if (p < 0) for (let c = 0; c < 4; c++) this.rot[i * 4 + c] = tmpQ[c];
     else {
       Q.conj(tmpQ, 4, this.wrot, p * 4);
       Q.mul(this.rot, i * 4, tmpQ, 4, tmpQ, 0);
@@ -243,11 +249,6 @@ function clampAcos(v) {
   return Math.acos(Math.max(-1, Math.min(1, v)));
 }
 
-// Angle between vectors u and v.
-function angle(ux, uy, uz, vx, vy, vz) {
-  return clampAcos((ux * vx + uy * vy + uz * vz) / ((Math.hypot(ux, uy, uz) * Math.hypot(vx, vy, vz)) || 1));
-}
-
 function cross(out, o, ax, ay, az, bx, by, bz) {
   out[o] = ay * bz - az * by;
   out[o + 1] = az * bx - ax * bz;
@@ -255,7 +256,7 @@ function cross(out, o, ax, ay, az, bx, by, bz) {
 }
 
 function unit(v, o) {
-  const l = Math.hypot(v[o], v[o + 1], v[o + 2]) || 1;
+  const l = Math.sqrt(v[o] * v[o] + v[o + 1] * v[o + 1] + v[o + 2] * v[o + 2]) || 1;
   v[o] /= l;
   v[o + 1] /= l;
   v[o + 2] /= l;

@@ -156,7 +156,8 @@ export class Reader {
   f64v() { const v = this.dv.getFloat64(this.pos, true); this.pos += 8; return v; }
 
   bytesInto(dst) {
-    dst.set(this.u8.subarray(this.pos, this.pos + dst.length));
+    const src = this.u8, p = this.pos; // (a subarray would allocate a view per snapshot)
+    for (let i = 0; i < dst.length; i++) dst[i] = src[p + i];
     this.pos += dst.length;
   }
 
