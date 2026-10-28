@@ -1,7 +1,8 @@
 // Third-person player animation, generated in code from what snapshots say about a
 // player: position, view angles, duck amount, ground contact, weapon, ANIM_* bits and
 // the shot counter. Feet follow a stride cycle whose phase advances with the distance
-// travelled (no sliding); hips drop and the torso leans to fit the crouch hit boxes;
+// travelled (a step every 2 x STEP_SCALE half-strides: a little foot slide buys a calmer
+// cadence than the short legs allow); hips drop and the torso leans to fit the crouch hit boxes;
 // the aim pitch bends spine and neck; hands reach per-hold grip points in the aim frame
 // (two-bone solves) and the gun hand takes the aim rotation. Nothing allocates per frame.
 
@@ -22,6 +23,8 @@ const SIDE = [1, -1]; // +y is the left side
 const PELVIS_Z = S.bind[PELVIS * 3 + 2];
 const CROUCH_DROP = 22; // full duck: hips 16 units above the feet, head near the squashed head box
 const CROUCH_LEAN = 55; // degrees forward at full duck
+const LEG = 32.4; // hip to ankle when reaching, a little short of the 33 of the bones
+const STEP_SCALE = 1.5; // distance per step over the swing: 60 units a step when running (~4/s)
 const RIFLE_TWIST = 12; // per spine bone: left shoulder forward for a rifle stance
 
 // Hand targets per hold, relative to the shoulder-line center (spine_3), in the aim frame
@@ -100,8 +103,8 @@ export class PlayerAnimator {
     const yr = yaw * Math.PI / 180, cy = Math.cos(yr), sy = Math.sin(yr);
     const fwd = this.vx * cy + this.vy * sy, left = -this.vx * sy + this.vy * cy;
     const speed = Math.hypot(fwd, left);
-    this.stride = Math.min(15, 4 + speed * 0.045) * (1 - 0.35 * duck);
-    if (onGround) this.phase = (this.phase + speed * dt / (4 * this.stride)) % 1;
+    this.stride = Math.min(20, 5 + speed * 0.06) * (1 - 0.35 * duck);
+    if (onGround) this.phase = (this.phase + speed * dt / (4 * this.stride * STEP_SCALE)) % 1;
     const walk = smoothstep(10, 70, speed) * (1 - this.air);
     const dirF = speed > 1 ? fwd / speed : 1, dirL = speed > 1 ? left / speed : 0;
 
@@ -110,8 +113,10 @@ export class PlayerAnimator {
     const p = this.pose.reset();
     if (this.dead > 0) return this.deathPose(c);
 
-    // Hips: crouch drop, a little bob in the stride.
-    const bob = Math.abs(Math.sin(this.phase * 2 * Math.PI)) * 1.2 * walk;
+    // Hips: crouch drop; standing, they sink when the feet are apart so both reach the
+    // ground (lowest with both feet down, highest passing over the planted foot).
+    const sw = this.stride * walk, spread = Math.cos(this.phase * 2 * Math.PI);
+    const bob = (33 - Math.sqrt(LEG * LEG - sw * sw)) * spread * spread * (1 - c);
     p.pos[PELVIS * 3] = -5 * c;
     p.pos[PELVIS * 3 + 2] = PELVIS_Z - CROUCH_DROP * c - bob;
 
