@@ -219,3 +219,46 @@ Deno.test({ name: 'bots: free-for-all deathmatch bots roam and kill each other',
   assert.ok(kills >= 2, `${kills} kills in a minute`);
   assert.equal(g.bombCarrier, null);
 } });
+
+Deno.test({ name: 'bots: a dead player takes control of a teammate bot until the next round', ignore: !dust2, fn: async () => {
+  const { E_ACTIVE } = await import('../shared/protocol.js');
+  const { g, host, join, run } = setup('de_dust2');
+  host.con.exec('bot_stop 1; bot_add_t');
+  const h = join('human', TEAM_T), ct = join('enemy', TEAM_CT);
+  run(8, () => g.phase === PHASE_LIVE);
+  assert.equal(g.phase, PHASE_LIVE);
+  const bot = g.clients.find((c) => c && c.bot);
+  giveWeapon(bot.player.ws, WEAPON_ID.ak47);
+  bot.player.health = 64;
+  bot.player.armor = 50;
+  teleport(bot, -400, 800, 100);
+  bot.yaw = 37;
+  const row = () => { // the bot's row in the newest snapshot
+    const ring = g.snapshots, k = ring.seq.indexOf(Math.max(...ring.seq));
+    return ring.ents[ring.row(k, bot.id) + E_ACTIVE];
+  };
+  assert.equal(g.takeOver(h, bot.id), 'only the dead can take control of a bot', 'not while alive');
+  assert.equal(g.takeOver(ct, bot.id).length > 0, true);
+  g.kill(h, h, 0, false);
+  assert.match(g.takeOver(ct, bot.id), /only the dead|not a living bot/);
+  const deaths = bot.player.deaths, spawns = h.player.spawnCount;
+  g.clientCommand(h, `takeover ${bot.id}`);
+  assert.ok(h.alive, 'the human lives again');
+  assert.equal(h.player.health, 64);
+  assert.equal(h.player.armor, 50);
+  assert.equal(h.player.ws.f[17], WEAPON_ID.ak47, 'with the bot\'s rifle');
+  assert.equal(Math.round(h.player.ps.f[PS_ORIGIN]), -400, 'where the bot was');
+  assert.equal(h.spawnYaw, 37, 'looking where it looked');
+  assert.notEqual(h.player.spawnCount, spawns, 'the client adopts it like a respawn');
+  assert.ok(!bot.alive && bot.controlled, 'the bot is out of play');
+  assert.equal(bot.player.deaths, deaths, 'without a death');
+  run(2);
+  assert.equal(row(), 0, 'and drawn nowhere');
+  assert.ok(h.alive);
+  assert.notEqual(g.takeOver(h, bot.id), '', 'nor taken twice');
+  // Next round: the bot plays again.
+  g.startRound(false);
+  run(2);
+  assert.ok(bot.alive && !bot.controlled);
+  assert.equal(row(), 1);
+} });

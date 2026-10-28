@@ -73,7 +73,7 @@ import { NetGraph } from './netgraph.js';
 import { createConsole, watch } from './settings.js';
 import { releaseOf, quote } from '../shared/cvars.js';
 import {
-  PHASE_FREEZE, GAME_FFA, GAME_DM, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
+  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_DM, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
 } from '../shared/economy.js';
 
 const DEG = Math.PI / 180;
@@ -421,6 +421,13 @@ function storePrediction(t) {
 
 // Freeze time (from the newest snapshot): the same input mask the server applies.
 const frozen = () => net !== null && net.own.round.phase === PHASE_FREEZE;
+// Can we take control of player `id` (a living bot of our team, mid-round, not deathmatch)?
+function canTakeOver(id) {
+  if (!net || id < 0 || (gameMode() & GAME_DM)) return false;
+  const phase = net.own.round.phase, r = id * E_FIELDS;
+  return (phase === PHASE_FREEZE || phase === PHASE_LIVE) && interp[r + E_HEALTH] > 0 &&
+    interp[r + E_TEAM] === player.team && (net.names[id] || '').startsWith('BOT ');
+}
 // The bomb as of the newest snapshot (defusing is predicted against it).
 const simBomb = () => (net ? net.own.bomb : null);
 
@@ -968,6 +975,9 @@ function draw(now, alpha, dt) {
     angles[1] = lastCam[4];
   }
   const inEyes = spectating && spectator.mode === SPEC_EYES;
+  // CS:GO's bot takeover: E while watching a living bot of our team (the server checks).
+  const takeable = spectating && !roaming && !specTeam && canTakeOver(spectator.target);
+  if (takeable && spectator.use) net.command(`takeover ${spectator.target}`);
   if (spectating) {
     if (roaming) spectator.fly(buttons, angles[0], angles[1], dt);
     spectator.camera(interp, eye, specAngles, specSight);
@@ -1059,13 +1069,14 @@ function draw(now, alpha, dt) {
   }
   deathNotice.style.display = dead && net ? 'block' : 'none';
   // The spectator notice, rebuilt only when what it says changes.
-  const key = (!spectating ? -2 : roaming ? -1 : spectator.target * 1024 + interp[target + E_HEALTH]) * 2 +
-    (specTeam ? 1 : 0);
+  const key = ((!spectating ? -2 : roaming ? -1 : spectator.target * 1024 + interp[target + E_HEALTH]) * 2 +
+    (specTeam ? 1 : 0)) * 2 + (takeable ? 1 : 0);
   if (key !== specKey) {
     specKey = key;
     const modes = specTeam ? 'Jump: eyes / chase / free roam' : 'Jump: eyes / chase';
     const spec = !spectating ? '' : roaming ? `Free roam\nMouse1 / Mouse2: follow a player · ${modes}`
       : `Spectating ${net.names[spectator.target] || 'player'} · ${interp[target + E_HEALTH]} HP\n` +
+        (takeable ? `E: take control of ${net.names[spectator.target]}\n` : '') +
         `Mouse1 / Mouse2: next / previous · ${modes}`;
     deathNotice.style.whiteSpace = 'pre';
     if (spec) deathNotice.textContent = spec;

@@ -104,6 +104,7 @@ class Client {
     this.lastCommand = -1; // newest COMMAND id handled
     this.shots = 0; // shots fired mod 256 (E_SHOTS: third-person fire kicks)
     this.useHeld = false; // +use was down last command (E picks up on the press)
+    this.controlled = false; // a bot a dead teammate took control of: out of play until it respawns
     this.flashLeft = 0; // seconds of flashbang blindness left (sent in the own block)
     this.flashTotal = 0;
     this.picking = -1; // hostage being picked up (use held), or -1
@@ -437,7 +438,47 @@ export class Game {
     c.spawnTick = this.tick;
     c.immuneUntil = this.tick + Math.round(this.rules.immunityTime * TICK_RATE);
     c.placed = true;
+    c.controlled = false;
     c.life++;
+  }
+
+  // CS:GO's bot takeover: dead `c`, watching a living bot of its team, takes its place
+  // (position, view, health, armor, weapons and ammo, the bomb, a carried hostage; c keeps
+  // its own money and score). The bot leaves play until it next respawns, with no death
+  // and no body. Not in warmup or deathmatch (they respawn), nor once the round is over.
+  // Returns '' or why not.
+  takeOver(c, id) {
+    const o = this.clients[id];
+    if (!c.playing || c.alive) return 'only the dead can take control of a bot';
+    if (this.respawns(c) || (this.phase !== PHASE_FREEZE && this.phase !== PHASE_LIVE)) return 'not now';
+    if (!o || !o.bot || !o.joined || !o.alive || o.team !== c.team) return 'not a living bot of your team';
+    const p = c.player, b = o.player;
+    p.psBytes.set(b.psBytes);
+    p.wsBytes.set(b.wsBytes);
+    p.health = b.health;
+    p.armor = b.armor;
+    p.helmet = b.helmet;
+    p.defuser = b.defuser;
+    p.carrying = b.carrying;
+    p.spawnCount = (p.spawnCount + 1) & 255; // the client adopts the new state like a respawn
+    c.spawnYaw = c.yaw = o.yaw;
+    c.pitch = 0;
+    c.respawnTick = Infinity;
+    c.immuneUntil = 0;
+    c.placed = true;
+    c.life++;
+    if (this.bombCarrier === o) this.bombCarrier = c;
+    const h = this.hostages, k = h.carriedBy(o.id);
+    if (k >= 0) {
+      h.carrier[k] = c.id;
+      this.hostagesDirty = true;
+    }
+    b.health = 0;
+    b.carrying = false;
+    o.controlled = true;
+    this.printAll(`${c.name} took control of ${o.name}`);
+    this.rosterDirty = true;
+    return '';
   }
 
   // Is spawn point `s` free for `c` (nobody standing on it, room to stand)?
@@ -886,6 +927,9 @@ export class Game {
       this.joinTeam(c, +args[1]);
     } else if (name === 'kill') {
       if (c.alive) this.kill(c, c, 0, false);
+    } else if (name === 'takeover') { // E while watching a teammate bot
+      const err = this.takeOver(c, +args[1]);
+      if (err) this.print(c, `takeover: ${err}`);
     } else if (name === 'setpos') { // CS:GO: setpos x y z puts the feet there (sv_cheats)
       if (!this.rules.cheats) {
         this.print(c, `Can't use cheat command setpos in multiplayer, unless the server has sv_cheats set to 1.`);
@@ -1422,7 +1466,7 @@ export class Game {
     for (let id = 0; id < MAX_PLAYERS; id++) {
       const c = this.clients[id];
       const row = ring.row(k, id);
-      if (!c || !c.joined || !c.playing) { // spectators are nowhere
+      if (!c || !c.joined || !c.playing || c.controlled) { // spectators and taken-over bots are nowhere
         E.fill(0, row, row + E_FIELDS);
         continue;
       }

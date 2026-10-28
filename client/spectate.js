@@ -20,7 +20,7 @@ import {
   E_FIELDS, ANIM_RELOAD, ANIM_PLANT, ANIM_DEFUSE, ANIM_SILENCED, dequantizePitch, dequantizeYaw,
 } from '../shared/protocol.js';
 import {
-  IN_ATTACK, IN_ATTACK2, IN_JUMP, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_DUCK, IN_SPEED,
+  IN_ATTACK, IN_ATTACK2, IN_USE, IN_JUMP, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_DUCK, IN_SPEED,
 } from '../shared/constants.js';
 
 export const SPEC_DELAY = 2; // seconds on our own death before following someone (approx.)
@@ -36,6 +36,7 @@ export class Spectator {
     this.target = -1;
     this.mode = SPEC_EYES;
     this.oldButtons = 0;
+    this.use = false; // E pressed this frame (take control of a watched teammate bot)
     this.ws = createWeaponState(); // the target's weapon, as far as snapshots tell
     this.ps = createPlayerState();
     this.weapon = -1;
@@ -73,6 +74,7 @@ export class Spectator {
   update(rows, selfId, selfTeam, deadFor, buttons, free = false) {
     const pressed = buttons & ~this.oldButtons;
     this.oldButtons = buttons;
+    this.use = (pressed & IN_USE) !== 0;
     if (!free && this.mode === SPEC_ROAM) this.mode = SPEC_EYES; // joined a team
     if (deadFor < SPEC_DELAY && !free) {
       this.target = -1;
