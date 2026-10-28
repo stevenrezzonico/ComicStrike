@@ -92,6 +92,9 @@ export class Pose {
     this.wrot = new Float32Array(skel.count * 4); // world rotation
     this.wpos = new Float32Array(skel.count * 3); // world position
     this.skin = new Float32Array(MAX_BONES * 16);
+    // reachGoal's target (0-2) and pole (3-5): hot callers write them here, as floating-point
+    // arguments to a call that is not inlined are boxed (reach's six were ~3 KB a frame).
+    this.goal = new Float64Array(6);
     this.reset();
   }
 
@@ -173,6 +176,19 @@ export class Pose {
   // when out of reach. The joint bends toward the pole direction (px, py, pz). World
   // transforms must be current (solve()); they are updated again on return.
   reach(a, b, c, tx, ty, tz, px, py, pz) {
+    const g = this.goal;
+    g[0] = tx;
+    g[1] = ty;
+    g[2] = tz;
+    g[3] = px;
+    g[4] = py;
+    g[5] = pz;
+    return this.reachGoal(a, b, c);
+  }
+
+  // reach() toward this.goal (target, then pole).
+  reachGoal(a, b, c) {
+    const g = this.goal, tx = g[0], ty = g[1], tz = g[2], px = g[3], py = g[4], pz = g[5];
     const W = this.wpos;
     const ax = W[a * 3], ay = W[a * 3 + 1], az = W[a * 3 + 2];
     const bx = W[b * 3], by = W[b * 3 + 1], bz = W[b * 3 + 2];

@@ -178,10 +178,14 @@ export class PlayerAnimator {
       const ph = (this.phase + s * 0.5) * 2 * Math.PI;
       const swing = -Math.cos(ph) * this.stride * walk;
       const lift = Math.max(0, Math.sin(ph)) * (2 + this.stride * 0.35) * walk;
-      const tx = 2 * c + dirF * swing + (s ? -3 : 4) * this.air;
-      const ty = SIDE[s] * (4.5 + c) + dirL * swing;
-      const tz = 3.5 + lift + 9 * this.air;
-      p.reach(HIP[s], KNEE[s], ANKLE[s], tx, ty, tz, 1, SIDE[s] * 0.25, 0);
+      const goal = p.goal;
+      goal[0] = 2 * c + dirF * swing + (s ? -3 : 4) * this.air;
+      goal[1] = SIDE[s] * (4.5 + c) + dirL * swing;
+      goal[2] = 3.5 + lift + 9 * this.air;
+      goal[3] = 1;
+      goal[4] = SIDE[s] * 0.25;
+      goal[5] = 0;
+      p.reachGoal(HIP[s], KNEE[s], ANKLE[s]);
       p.setWorldRotation(ANKLE[s], Q.identity(tq), 0); // soles flat
     }
 
@@ -230,7 +234,14 @@ export class PlayerAnimator {
         ty = cyy + oy;
         tz = cz + oz;
       }
-      p.reach(ARM[s], ELBOW[s], HAND[s], tx, ty, tz, -0.2, SIDE[s] * 0.6, -1);
+      const goal = p.goal;
+      goal[0] = tx;
+      goal[1] = ty;
+      goal[2] = tz;
+      goal[3] = -0.2;
+      goal[4] = SIDE[s] * 0.6;
+      goal[5] = -1;
+      p.reachGoal(ARM[s], ELBOW[s], HAND[s]);
       Q.fromEuler(tv, 0, grip.aimed || kneel ? handP : 0, 0, s === 1 && grip.aimed ? reload.roll : 0);
       Q.mul(tq, 0, tv, 0, handTurn[s], 0);
       p.setWorldRotation(HAND[s], tq, 0);

@@ -58,6 +58,16 @@ export class Renderer {
     // soft: soft shade dots (r_halftone_style 1).
     this.style = { comic: true, ink: 1, dots: 1, bands: 0, boil: true, lift: 0.3, calm: 0, soft: false };
     this.zoom = 1; // 90 / fov
+    // The canvas's size on the page, kept by a ResizeObserver: reading clientWidth every
+    // frame forces a layout whenever the DOM changed since the last one (a kill notice, a
+    // console line written while the ticks ran).
+    this.cssWidth = canvas.clientWidth;
+    this.cssHeight = canvas.clientHeight;
+    new ResizeObserver((entries) => {
+      const r = entries[entries.length - 1].contentRect;
+      this.cssWidth = r.width;
+      this.cssHeight = r.height;
+    }).observe(canvas);
 
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
@@ -131,8 +141,8 @@ export class Renderer {
   // scale: render resolution relative to the page (mat_viewportscale).
   resize(scale = 1) {
     const c = this.canvas;
-    const w = Math.max(1, Math.round(c.clientWidth * scale));
-    const h = Math.max(1, Math.round(c.clientHeight * scale));
+    const w = Math.max(1, Math.round(this.cssWidth * scale));
+    const h = Math.max(1, Math.round(this.cssHeight * scale));
     if (c.width !== w || c.height !== h) {
       c.width = w;
       c.height = h;

@@ -55,6 +55,7 @@ export function createConsole(print) {
   add('cl_crosshairalpha', 200, 'Crosshair opacity', 0, 255);
   // HUD and diagnostics.
   add('cl_showfps', 0, '1: frame rate, 2: plus the slowest frame, 3: plus CPU and GPU time per pass', 0, 3);
+  add('r_drawrepeat', 1, 'Draws each frame this many times (a GPU benchmark for cl_showfps 3: keeps the GPU busy, also on a hidden page)', 1, 50, 0);
   add('cl_showpos', 0, 'Position, angles and speed', 0, 1);
   add('net_graph', 0, 'Network graph: ping, loss, rates, prediction', 0, 1);
   add('cl_drawhud', 1, 'Draw the HUD', 0, 1);

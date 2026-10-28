@@ -97,6 +97,7 @@ const status = document.getElementById('status');
 const debug = document.getElementById('debug');
 const killfeed = document.getElementById('killfeed');
 const deathNotice = document.getElementById('death');
+let deathShown = ''; // its display, set only when it changes
 const spectator = new Spectator();
 const specAngles = new Float32Array(2);
 const specTrace = new Trace();
@@ -925,6 +926,11 @@ function frame(now) {
   renderer.timer.on = cv.cl_showfps.number >= 3;
   draw(now, accumulator / TICK_DT, Math.min(elapsed, 0.1));
   renderer.timer.endFrame();
+  // r_drawrepeat: the same frame again (no time passing), for the GPU readout.
+  for (let i = 1; i < cv.r_drawrepeat.number; i++) {
+    draw(now, accumulator / TICK_DT, 0);
+    renderer.timer.endFrame();
+  }
   cpuSim += t1 - t0;
   cpuDraw += performance.now() - t1;
 
@@ -1099,7 +1105,8 @@ function draw(now, alpha, dt) {
     const k = 1 - Math.exp(-dt * 8);
     for (let c = 0; c < 3; c++) weaponView.light[c] += (lightTarget[c] - weaponView.light[c]) * k;
   }
-  deathNotice.style.display = dead && net ? 'block' : 'none';
+  const deathDisplay = dead && net ? 'block' : 'none';
+  if (deathDisplay !== deathShown) deathNotice.style.display = deathShown = deathDisplay;
   // The spectator notice, rebuilt only when what it says changes.
   const key = ((!spectating ? -2 : roaming ? -1 : spectator.target * 1024 + interp[target + E_HEALTH]) * 2 +
     (specTeam ? 1 : 0)) * 2 + (takeable ? 1 : 0);

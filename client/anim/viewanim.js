@@ -475,7 +475,14 @@ export class ViewAnimator {
       tv[1] = SIDE[s] * -this.hc[s];
       tv[2] = 0;
       Q.rotate(tv, 3, tq, 0, tv, 0);
-      p.reach(UPPER[s], LOWER[s], HAND[s], x - tv[3], y - tv[4], z - tv[5], 0, SIDE[s] * 0.7, -1);
+      const goal = p.goal;
+      goal[0] = x - tv[3];
+      goal[1] = y - tv[4];
+      goal[2] = z - tv[5];
+      goal[3] = 0;
+      goal[4] = SIDE[s] * 0.7;
+      goal[5] = -1;
+      p.reachGoal(UPPER[s], LOWER[s], HAND[s]);
       p.setWorldRotation(HAND[s], tq, 0);
     }
     p.skinMatrices();

@@ -590,6 +590,18 @@ out vec4 o_color;
 ${GBUFFER_CONSTS}
 ${NOISE}
 
+// Two value noises from one set of corner hashes (the line boil's x and y; two vnoise
+// calls cost a tenth of this pass).
+vec2 hh(vec2 p) {
+  float h = h21(p);
+  return vec2(h, fract(h * 47.13 + 0.37));
+}
+vec2 vnoise2(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hh(i), hh(i + vec2(1, 0)), f.x), mix(hh(i + vec2(0, 1)), hh(i + 1.0), f.x), f.y);
+}
+
 ivec2 cl(ivec2 p) { return clamp(p, ivec2(0), ivec2(u_res) - 1); }
 uvec4 dtex(ivec2 p) { return uvec4(texelFetch(u_depth, cl(p), 0) * 255.0 + 0.5); }
 float depthOf(uvec4 t) { return float((t.r << 16u) | (t.g << 8u) | t.b) * (DEPTH_FAR / 16777215.0); }
@@ -642,7 +654,7 @@ void main() {
   float edge = 0.0;
   if (u_line > 0.0) {
     float t = floor(u_time * 7.0);
-    vec2 wob = (vec2(vnoise(frag * 0.035 + t * 3.1), vnoise(frag * 0.035 + 17.3 + t * 2.3)) - 0.5) * 1.6;
+    vec2 wob = (vnoise2(frag * 0.035 + t * 3.1) - 0.5) * 1.6;
     ivec2 pc = p + ivec2(round(wob));
     uvec4 Dc = dtex(pc);
     fc = Dc.a;
