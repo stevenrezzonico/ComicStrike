@@ -877,6 +877,7 @@ function frame(now) {
   input.mPitch = cv.m_pitch.number;
   input.rawInput = cv.m_rawinput.bool;
   if (sounds.volume !== cv.volume.number) sounds.setVolume(cv.volume.number);
+  sounds.stepVolume = cv.snd_footstep_volume.number;
   input.applyMouse(angles);
   accumulator += elapsed;
   if (serverClock >= 0) serverClock += Math.min(elapsed, 0.25) * TICK_RATE;

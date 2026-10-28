@@ -63,6 +63,7 @@ const TABS = [
   ]],
   ['Audio', [
     ['slider', 'volume', 'Master volume', 0, 1, 0.01],
+    ['slider', 'snd_footstep_volume', 'Footsteps', 0, 2, 0.01],
   ]],
   ['Controls', null],
 ];

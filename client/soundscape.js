@@ -77,7 +77,7 @@ export class SoundScape {
     this.ownStep += speed / 64;
     if (this.ownStep < STEP_LENGTH) return;
     this.ownStep = 0;
-    this.s.step(this.surfaceKind(x, y, feetZ), null, 0, 0, 0.7);
+    this.s.step(this.surfaceKind(x, y, feetZ), null, 0, 0, 0.35);
   }
 
   // Other players from interpolated rows (E_* layout): shots, reloads, footsteps.

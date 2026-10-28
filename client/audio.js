@@ -3,26 +3,39 @@
 // from the listener (the eye), muffled by a low-pass behind walls or far away; a bus
 // filter muffles everything while flashed. Browsers start an AudioContext suspended
 // until a user gesture; resume() is called on the first click.
+//
+// The voice is a cartoon's, not a war film's. Nothing starts with a crack: every sound
+// swells in over 8-20 ms (a hard edge is what makes a step sound like a hammer), noise is
+// a low "puff" (mostly under 1 kHz), and the character comes from round sine voices: a
+// gunshot is a "POW" (a sine gliding down an octave or two, like a pop gun), a step a
+// padded "pum". Everything also goes into a small generated room echo (wetter far away),
+// a treble shelf and a gentle compressor, so loud moments round off instead of slamming.
 
-// Gunshot voices per weapon class: crack (noise band, level, decay), thump (sine
-// frequency and decay), tail (low noise, seconds). Values are tuned by ear.
+// Gunshot voices per weapon class: pow (sine [from Hz, to Hz, seconds, level]), puff
+// (low noise [low-pass Hz, level, seconds]), boom (low sine [Hz, level, seconds] or null),
+// rise (s to swell in), tail (s of low rumble). Tuned by measuring rise time and spectral
+// centroid of offline renders, then by ear.
 export const GUN_SOUNDS = {
-  pistol: { hp: 600, lp: 7000, crack: 0.7, decay: 0.12, thump: 140, thumpDecay: 0.1, tail: 0.35 },
-  heavy: { hp: 300, lp: 5000, crack: 1, decay: 0.2, thump: 90, thumpDecay: 0.18, tail: 0.6 },
-  smg: { hp: 800, lp: 6500, crack: 0.6, decay: 0.09, thump: 160, thumpDecay: 0.08, tail: 0.3 },
-  rifle: { hp: 400, lp: 6000, crack: 0.9, decay: 0.14, thump: 110, thumpDecay: 0.14, tail: 0.5 },
-  sniper: { hp: 250, lp: 5000, crack: 1.1, decay: 0.3, thump: 70, thumpDecay: 0.3, tail: 1.0 },
-  shotgun: { hp: 150, lp: 3500, crack: 1, decay: 0.25, thump: 60, thumpDecay: 0.25, tail: 0.7 },
-  mg: { hp: 300, lp: 5500, crack: 0.95, decay: 0.16, thump: 95, thumpDecay: 0.15, tail: 0.6 },
-  silenced: { hp: 1200, lp: 2500, crack: 0.35, decay: 0.06, thump: 0, thumpDecay: 0, tail: 0.05 },
+  pistol: { pow: [520, 170, 0.09, 0.7], puff: [900, 0.4, 0.08], boom: [110, 0.3, 0.1], rise: 0.01, tail: 0.2 },
+  heavy: { pow: [380, 110, 0.13, 0.8], puff: [700, 0.55, 0.14], boom: [80, 0.55, 0.18], rise: 0.012, tail: 0.4 },
+  smg: { pow: [600, 210, 0.07, 0.6], puff: [1000, 0.35, 0.06], boom: [120, 0.25, 0.07], rise: 0.009, tail: 0.15 },
+  rifle: { pow: [440, 140, 0.1, 0.75], puff: [800, 0.45, 0.1], boom: [95, 0.4, 0.13], rise: 0.011, tail: 0.3 },
+  sniper: { pow: [320, 90, 0.16, 0.85], puff: [600, 0.55, 0.2], boom: [70, 0.65, 0.3], rise: 0.014, tail: 0.7 },
+  shotgun: { pow: [300, 85, 0.14, 0.8], puff: [500, 0.7, 0.2], boom: [65, 0.65, 0.25], rise: 0.014, tail: 0.5 },
+  mg: { pow: [420, 130, 0.1, 0.75], puff: [750, 0.5, 0.11], boom: [90, 0.45, 0.14], rise: 0.011, tail: 0.35 },
+  silenced: { pow: [700, 350, 0.05, 0.22], puff: [1000, 0.3, 0.07], boom: null, rise: 0.012, tail: 0 }, // "pfft"
 };
 
 // Mechanical clicks: band center (Hz), length (s), repeats.
 const CLICKS = {
-  dry: [4200, 0.025, 1], magout: [1800, 0.05, 1], magin: [2400, 0.04, 2], bolt: [3000, 0.035, 2],
-  deploy: [2600, 0.03, 3], zoom: [5200, 0.015, 1], shell: [2000, 0.04, 1], mode: [3600, 0.02, 2],
-  pin: [5600, 0.06, 1], defuse: [3200, 0.02, 1],
+  dry: [3000, 0.025, 1], magout: [1300, 0.05, 1], magin: [1700, 0.04, 2], bolt: [2100, 0.035, 2],
+  deploy: [1900, 0.03, 3], zoom: [3400, 0.015, 1], shell: [1500, 0.04, 1], mode: [2500, 0.02, 2],
+  pin: [3600, 0.06, 1], defuse: [2300, 0.02, 1],
 };
+
+const ATTACK = 0.008; // s a noise burst takes to swell to its level (tones: 3/4 of it)
+const ROOM = 0.18; // room echo send near the listener
+const ROOM_FAR = 0.35; // more of it far away
 
 export class Sounds {
   constructor() {
@@ -30,6 +43,8 @@ export class Sounds {
     this.noise = null; // 1 s of white noise, shared by every noisy sound
     this.master = null; // every sound goes through it (the volume cvar)
     this.bus = null; // low-pass before the master: flashbangs muffle the world
+    this.room = null; // the room echo (a convolver), fed by every voice
+    this.stepVolume = 1; // footsteps, ours and others' (snd_footstep_volume)
     this.volume = 1;
     // Listener: eye position and view axes (world space), set every frame.
     this.lx = 0;
@@ -52,20 +67,52 @@ export class Sounds {
     if (!this.ctx) {
       const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
       if (!AC) return;
-      this.ctx = new AC();
-      this.master = this.ctx.createGain();
-      this.master.gain.value = this.volume;
-      this.master.connect(this.ctx.destination);
-      this.bus = this.ctx.createBiquadFilter();
-      this.bus.type = 'lowpass';
-      this.bus.frequency.value = 20000;
-      this.bus.connect(this.master);
-      const n = this.ctx.sampleRate;
-      this.noise = this.ctx.createBuffer(1, n, n);
-      const d = this.noise.getChannelData(0);
-      for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+      this.attach(new AC());
     }
     if (this.ctx.state === 'suspended') this.ctx.resume();
+  }
+
+  // Builds the output chain on an audio context (an OfflineAudioContext renders sounds
+  // for measuring): bus (flash muffle) -> treble shelf -> compressor -> master.
+  attach(ctx) {
+    this.ctx = ctx;
+    this.master = ctx.createGain();
+    this.master.gain.value = this.volume;
+    this.master.connect(ctx.destination);
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -22;
+    comp.knee.value = 12;
+    comp.ratio.value = 4;
+    comp.attack.value = 0.004;
+    comp.release.value = 0.25;
+    comp.connect(this.master);
+    const shelf = ctx.createBiquadFilter();
+    shelf.type = 'highshelf';
+    shelf.frequency.value = 4500;
+    shelf.gain.value = -6;
+    shelf.connect(comp);
+    this.bus = ctx.createBiquadFilter();
+    this.bus.type = 'lowpass';
+    this.bus.frequency.value = 20000;
+    this.bus.connect(shelf);
+    const n = ctx.sampleRate;
+    this.noise = ctx.createBuffer(1, n, n);
+    const d = this.noise.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    // The room: a convolver over a generated impulse (0.7 s of dark noise dying away,
+    // each ear its own), fed by every voice's send, back into the bus.
+    const len = Math.round(n * 0.7), ir = ctx.createBuffer(2, len, n), k = 1 - Math.exp(-2 * Math.PI * 2200 / n);
+    for (let c = 0; c < 2; c++) {
+      const ch = ir.getChannelData(c);
+      let lo = 0;
+      for (let i = 0; i < len; i++) {
+        lo += k * (Math.random() * 2 - 1 - lo);
+        ch[i] = lo * Math.exp(-i / (n * 0.16)) * Math.min(1, i / (n * 0.006));
+      }
+    }
+    this.room = ctx.createConvolver();
+    this.room.buffer = ir;
+    this.room.connect(this.bus);
   }
 
   get ready() {
@@ -95,11 +142,12 @@ export class Sounds {
   voice(x, y, z, volume, ref = 600, maxDist = 6000) {
     if (!this.ready) return null;
     const ctx = this.ctx;
-    let gain = volume, pan = 0, cutoff = 20000;
+    let gain = volume, pan = 0, cutoff = 20000, wet = ROOM;
     if (x !== null) {
       const dx = x - this.lx, dy = y - this.ly, dz = z - this.lz, dist = Math.hypot(dx, dy, dz);
       if (dist > maxDist) return null;
       gain *= Sounds.falloff(dist, ref);
+      wet += ROOM_FAR * dist / (dist + 1500);
       const flat = Math.hypot(dx, dy) || 1;
       pan = Math.max(-1, Math.min(1, (dx * this.rightX + dy * this.rightY) / flat)) * Math.min(1, dist / 60) * 0.8;
       if ((dx * this.fwdX + dy * this.fwdY) / flat < -0.3) cutoff = 7000; // behind: a little duller
@@ -127,11 +175,17 @@ export class Sounds {
       head = p;
     }
     head.connect(this.bus);
+    if (this.room) {
+      const send = ctx.createGain();
+      send.gain.value = wet;
+      head.connect(send).connect(this.room);
+    }
     return { out: g, t: ctx.currentTime };
   }
 
-  // Filtered noise burst into `out`: band hp..lp, level, attack to decay.
-  burst(out, t, hp, lp, level, decay, delay = 0) {
+  // Filtered noise burst into `out`: band hp..lp, swelling to `level` over `attack`,
+  // then dying away over `decay`.
+  burst(out, t, hp, lp, level, decay, delay = 0, attack = ATTACK) {
     const ctx = this.ctx, src = ctx.createBufferSource();
     src.buffer = this.noise;
     src.loop = true;
@@ -141,36 +195,40 @@ export class Sounds {
     h.frequency.value = hp;
     l.type = 'lowpass';
     l.frequency.value = lp;
-    const t0 = t + delay;
-    g.gain.setValueAtTime(level, t0);
-    g.gain.exponentialRampToValueAtTime(0.001, t0 + decay);
+    const t0 = t + delay, end = t0 + attack + decay;
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(level, t0 + attack);
+    g.gain.exponentialRampToValueAtTime(0.001, end);
     src.connect(h).connect(l).connect(g).connect(out);
     src.start(t0, Math.random() * 0.5);
-    src.stop(t0 + decay + 0.02);
+    src.stop(end + 0.02);
   }
 
-  // Sine sweep into `out`: f0 -> f1 over the decay.
-  tone(out, t, f0, f1, level, decay, delay = 0, type = 'sine') {
+  // Sine sweep into `out`: f0 -> f1, swelling over `attack`, dying over `decay`.
+  tone(out, t, f0, f1, level, decay, delay = 0, type = 'sine', attack = ATTACK * 0.75) {
     const ctx = this.ctx, osc = ctx.createOscillator(), g = ctx.createGain();
     osc.type = type;
-    const t0 = t + delay;
+    const t0 = t + delay, end = t0 + attack + decay;
     osc.frequency.setValueAtTime(f0, t0);
-    osc.frequency.exponentialRampToValueAtTime(Math.max(f1, 1), t0 + decay);
-    g.gain.setValueAtTime(level, t0);
-    g.gain.exponentialRampToValueAtTime(0.001, t0 + decay);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(f1, 1), end);
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(level, t0 + attack);
+    g.gain.exponentialRampToValueAtTime(0.001, end);
     osc.connect(g).connect(out);
     osc.start(t0);
-    osc.stop(t0 + decay + 0.02);
+    osc.stop(end + 0.02);
   }
 
   // A gunshot of profile `p` (GUN_SOUNDS) at (x, y, z) (null: our own gun). `pitch`
   // varies weapons of a class.
   gun(p, x, y, z, volume = 1, pitch = 1) {
-    const v = this.voice(x, y, z, volume * 0.55, 900, 8000);
+    const v = this.voice(x, y, z, volume * 0.6, 900, 8000);
     if (!v) return;
-    this.burst(v.out, v.t, p.hp * pitch, p.lp * pitch, p.crack, p.decay);
-    if (p.thump) this.tone(v.out, v.t, p.thump * pitch, p.thump * 0.4, p.crack * 0.9, p.thumpDecay);
-    if (p.tail > 0.1) this.burst(v.out, v.t, 80, 900, p.crack * 0.18, p.tail, 0.02);
+    const [f0, f1, powTime, powLevel] = p.pow, [lp, puffLevel, puffTime] = p.puff;
+    this.tone(v.out, v.t, f0 * pitch, f1 * pitch, powLevel, powTime, 0, 'sine', p.rise);
+    this.burst(v.out, v.t, 50, lp * pitch, puffLevel, puffTime, 0, p.rise * 1.4);
+    if (p.boom) this.tone(v.out, v.t, p.boom[0], p.boom[0] * 0.6, p.boom[1], p.boom[2], 0, 'sine', p.rise * 1.6);
+    if (p.tail) this.burst(v.out, v.t, 50, 450, puffLevel * 0.2, p.tail, 0.01, 0.04);
   }
 
   // Mechanical click `name` (CLICKS) at (x, y, z) (null: ours), after `delay` seconds.
@@ -178,26 +236,35 @@ export class Sounds {
     const v = this.voice(x, y, z, volume * 0.35, 250, 1200);
     if (!v) return;
     const [f, len, n] = CLICKS[name];
-    for (let i = 0; i < n; i++) this.burst(v.out, v.t, f * 0.6, f * 1.6, 0.8, len, delay + i * 0.06);
-    if (name === 'pin') this.tone(v.out, v.t, 2400, 2300, 0.15, 0.25, delay);
+    for (let i = 0; i < n; i++) { // a wooden "clok" more than a metal click
+      this.burst(v.out, v.t, f * 0.4, f, 0.3, len, delay + i * 0.06, 0.005);
+      this.tone(v.out, v.t, f * 0.45, f * 0.38, 0.35, len * 1.5, delay + i * 0.06, 'sine', 0.004);
+    }
+    if (name === 'pin') this.tone(v.out, v.t, 1800, 1750, 0.12, 0.25, delay);
   }
 
-  // A footstep on a surface kind: 'soft' (sand, dirt), 'metal', 'wood', else hard.
+  // A footstep on a surface kind: 'soft' (sand, dirt), 'metal', 'wood', else hard. Heard
+  // all game long, so it is quiet, dark and never quite the same twice: a heel and a toe
+  // scuff (two low noise puffs 30-50 ms apart, each swelling in over ~20 ms; a sharp start
+  // sounds like a hammer) and no repeated note, which is what tires the ear. Wood adds a
+  // faint hollow knock, metal a faint ring. `stepVolume` is the snd_footstep_volume cvar.
   step(kind, x = null, y = 0, z = 0, volume = 1) {
-    const v = this.voice(x, y, z, volume * 0.5, 220, 1300);
+    const v = this.voice(x, y, z, volume * this.stepVolume * 0.45, 220, 1300);
     if (!v) return;
-    const lp = kind === 'soft' ? 500 : kind === 'wood' ? 900 : 1300;
-    this.burst(v.out, v.t, 60, lp * (0.85 + Math.random() * 0.3), 0.9, kind === 'soft' ? 0.09 : 0.06);
-    if (kind === 'metal') this.tone(v.out, v.t, 900 + Math.random() * 300, 700, 0.12, 0.15);
-    if (kind === 'wood') this.tone(v.out, v.t, 180, 120, 0.3, 0.08);
+    const r = 0.85 + Math.random() * 0.3;
+    const lp = (kind === 'soft' ? 300 : kind === 'wood' ? 420 : kind === 'metal' ? 520 : 380) * r;
+    this.burst(v.out, v.t, 60, lp, 0.5, 0.06, 0, 0.02);
+    this.burst(v.out, v.t, 90, lp * 1.25, 0.3, 0.05, 0.03 + Math.random() * 0.02, 0.018);
+    if (kind === 'wood') this.tone(v.out, v.t, 210 * r, 190 * r, 0.05, 0.07, 0, 'sine', 0.015);
+    if (kind === 'metal') this.tone(v.out, v.t, 480 * r, 470 * r, 0.03, 0.2, 0, 'sine', 0.015);
   }
 
   // Landing from a jump or fall.
   land(volume = 1) {
-    const v = this.voice(null, 0, 0, volume * 0.6);
+    const v = this.voice(null, 0, 0, volume * 0.5);
     if (!v) return;
-    this.burst(v.out, v.t, 40, 600, 1, 0.12);
-    this.tone(v.out, v.t, 90, 50, 0.6, 0.12);
+    this.burst(v.out, v.t, 40, 400, 0.8, 0.14, 0, 0.02);
+    this.tone(v.out, v.t, 100, 55, 0.6, 0.14, 0, 'sine', 0.018);
   }
 
   // Knife or throw through the air.
@@ -210,7 +277,7 @@ export class Sounds {
     bp.type = 'bandpass';
     bp.Q.value = 2;
     bp.frequency.setValueAtTime(700, v.t);
-    bp.frequency.exponentialRampToValueAtTime(2600, v.t + 0.18);
+    bp.frequency.exponentialRampToValueAtTime(1800, v.t + 0.18);
     g.gain.setValueAtTime(0.001, v.t);
     g.gain.exponentialRampToValueAtTime(0.9, v.t + 0.06);
     g.gain.exponentialRampToValueAtTime(0.001, v.t + 0.22);
@@ -223,12 +290,12 @@ export class Sounds {
   hit(helmet, volume = 1) {
     const v = this.voice(null, 0, 0, volume * 0.45);
     if (!v) return;
-    if (helmet) {
-      this.tone(v.out, v.t, 4200, 4000, 0.35, 0.35);
-      this.tone(v.out, v.t, 6400, 6200, 0.2, 0.25);
-    } else {
-      this.burst(v.out, v.t, 80, 900, 1, 0.1);
-      this.tone(v.out, v.t, 140, 80, 0.5, 0.1);
+    if (helmet) { // a cartoon "ding"
+      this.tone(v.out, v.t, 2600, 2500, 0.3, 0.4);
+      this.tone(v.out, v.t, 3900, 3800, 0.1, 0.25);
+    } else { // a padded "thup"
+      this.burst(v.out, v.t, 80, 600, 0.75, 0.1, 0, 0.012);
+      this.tone(v.out, v.t, 180, 90, 0.55, 0.12, 0, 'sine', 0.01);
     }
   }
 
@@ -236,37 +303,39 @@ export class Sounds {
   impact(x, y, z) {
     const v = this.voice(x, y, z, 0.25, 150, 700);
     if (!v) return;
-    this.burst(v.out, v.t, 1500, 6000, 0.7, 0.05);
+    this.burst(v.out, v.t, 600, 2000, 0.35, 0.05, 0, 0.008);
+    this.tone(v.out, v.t, 420, 300, 0.25, 0.06, 0, 'sine', 0.007); // "tok"
   }
 
   // A grenade bouncing.
   bounce(x, y, z) {
     const v = this.voice(x, y, z, 0.45, 200, 1200);
     if (!v) return;
-    this.tone(v.out, v.t, 1400 + Math.random() * 400, 900, 0.5, 0.12, 0, 'triangle');
-    this.burst(v.out, v.t, 600, 3000, 0.4, 0.05);
+    const f = 850 + Math.random() * 250; // "bonk"
+    this.tone(v.out, v.t, f, f * 0.75, 0.4, 0.12);
+    this.burst(v.out, v.t, 300, 1200, 0.2, 0.05, 0, 0.008);
   }
 
   // A flashbang going off.
   bang(x, y, z) {
-    const v = this.voice(x, y, z, 1.2, 600, 6000);
+    const v = this.voice(x, y, z, 0.9, 600, 6000);
     if (!v) return;
-    this.burst(v.out, v.t, 900, 9000, 1, 0.3);
-    this.tone(v.out, v.t, 1300, 900, 0.4, 0.4);
+    this.burst(v.out, v.t, 250, 2000, 0.8, 0.35, 0, 0.025); // "POOF"
+    this.tone(v.out, v.t, 700, 280, 0.45, 0.35, 0, 'sine', 0.02);
   }
 
   // A smoke grenade's hiss.
   hiss(x, y, z) {
     const v = this.voice(x, y, z, 0.6, 300, 2000);
     if (!v) return;
-    this.burst(v.out, v.t, 2500, 9000, 0.5, 2.5);
+    this.burst(v.out, v.t, 1500, 5000, 0.35, 2.4, 0, 0.15);
   }
 
   // One crackle of a fire.
   crackle(x, y, z) {
     const v = this.voice(x, y, z, 0.35, 200, 1500);
     if (!v) return;
-    this.burst(v.out, v.t, 900 + Math.random() * 1500, 5000, 0.6 + Math.random() * 0.4, 0.04 + Math.random() * 0.05);
+    this.burst(v.out, v.t, 500 + Math.random() * 600, 1800, 0.4 + Math.random() * 0.3, 0.04 + Math.random() * 0.05, 0, 0.007);
   }
 
   // A door moving for `seconds`: a sliding door rumbles, a swinging one creaks (pitch
@@ -309,7 +378,7 @@ export class Sounds {
   doorStop(x, y, z) {
     const v = this.voice(x, y, z, 0.7, 300, 2500);
     if (!v) return;
-    this.burst(v.out, v.t, 60, 700, 0.8, 0.18);
+    this.burst(v.out, v.t, 60, 600, 0.7, 0.18, 0, 0.01);
     this.tone(v.out, v.t, 140, 60, 0.5, 0.15);
   }
 
@@ -322,8 +391,8 @@ export class Sounds {
       this.ring = null;
     }
     const osc = ctx.createOscillator(), g = ctx.createGain();
-    osc.frequency.value = 3500;
-    g.gain.setValueAtTime(0.06 * Math.min(1, seconds / 3), t);
+    osc.frequency.value = 2800;
+    g.gain.setValueAtTime(0.04 * Math.min(1, seconds / 3), t);
     g.gain.exponentialRampToValueAtTime(0.001, t + seconds + 0.5);
     osc.connect(g).connect(this.master);
     osc.start(t);
@@ -338,22 +407,24 @@ export class Sounds {
     f.exponentialRampToValueAtTime(20000, t + seconds + 0.5);
   }
 
-  // The C4's beep: a short square-wave chirp.
+  // The C4's beep: a short triangle-wave chirp.
   beep(volume = 1) {
     if (!this.ready) return;
     const t = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
-    osc.type = 'square';
-    osc.frequency.value = 2100;
-    gain.gain.setValueAtTime(0.12 * volume, t);
+    osc.type = 'triangle';
+    osc.frequency.value = 1700;
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.16 * volume, t + 0.008);
     gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
     osc.connect(gain).connect(this.bus);
     osc.start(t);
     osc.stop(t + 0.13);
   }
 
-  // Explosion: low-passed noise with a long tail, plus a thump.
+  // Explosion: a round "BOOM": low-passed noise swelling in with a long tail, plus a
+  // falling sine.
   explosion(volume = 1) {
     if (!this.ready) return;
     const ctx = this.ctx, t = ctx.currentTime;
@@ -362,19 +433,21 @@ export class Sounds {
     src.loop = true;
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
-    lp.frequency.setValueAtTime(2400, t);
-    lp.frequency.exponentialRampToValueAtTime(120, t + 2.5);
+    lp.frequency.setValueAtTime(900, t);
+    lp.frequency.exponentialRampToValueAtTime(90, t + 2.5);
     const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.9 * volume, t);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.7 * volume, t + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.001, t + 3);
     src.connect(lp).connect(gain).connect(this.bus);
     src.start(t);
     src.stop(t + 3);
     const osc = ctx.createOscillator();
     const og = ctx.createGain();
-    osc.frequency.setValueAtTime(90, t);
-    osc.frequency.exponentialRampToValueAtTime(30, t + 0.8);
-    og.gain.setValueAtTime(0.8 * volume, t);
+    osc.frequency.setValueAtTime(75, t);
+    osc.frequency.exponentialRampToValueAtTime(28, t + 0.8);
+    og.gain.setValueAtTime(0, t);
+    og.gain.linearRampToValueAtTime(0.7 * volume, t + 0.015);
     og.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
     osc.connect(og).connect(this.bus);
     osc.start(t);
