@@ -7,7 +7,7 @@
 // magazine, so reloads can drop it) and GUN_BOLT (slide, bolt, pump). Each model also
 // reports the points hands and effects need (see buildGun).
 
-import { MeshBuilder } from '../gl/meshkit.js';
+import { MeshBuilder, FINISH, finish } from '../gl/meshkit.js';
 import { WEAPONS } from '../../shared/weapons.js';
 
 export const GUN_ROOT = 0;
@@ -15,16 +15,18 @@ export const GUN_MAG = 1;
 export const GUN_BOLT = 2;
 export const GUN_BONES = 3;
 
-// Finishes.
-const BLACK = [0.1, 0.1, 0.11];
-const DARK = [0.18, 0.18, 0.19]; // gunmetal
-const STEEL = [0.55, 0.57, 0.6];
-const SILVER = [0.72, 0.73, 0.75];
-const WOOD = [0.5, 0.28, 0.13];
-const WOOD_DARK = [0.34, 0.19, 0.1];
+// Finishes (other colors print as polymer).
+const BLACK = finish([0.1, 0.1, 0.11], FINISH.METAL);
+const DARK = finish([0.18, 0.18, 0.19], FINISH.METAL); // gunmetal
+const STEEL = finish([0.55, 0.57, 0.6], FINISH.METAL);
+const SILVER = finish([0.72, 0.73, 0.75], FINISH.METAL);
+const WOOD = finish([0.5, 0.28, 0.13], FINISH.WOOD);
+const WOOD_DARK = finish([0.34, 0.19, 0.1], FINISH.WOOD);
 const POLY = [0.15, 0.15, 0.15]; // black polymer
 const OLIVE = [0.33, 0.37, 0.25]; // AWP / AUG green
 const SAND = [0.55, 0.49, 0.36];
+const BEVEL = 0.12; // edge rounding of boxes and outlines (in)
+const SEG = 12; // sides of round parts
 const C4_TAN = [0.52, 0.47, 0.3];
 const LED = [0.95, 0.12, 0.08];
 
@@ -38,7 +40,7 @@ function receiver(b, x0, x1, z0, h, w, color) {
 
 // Round part along x (barrel, tube, silencer, scope body): radius r from x0 to x1 at
 // height z (and side y).
-function tube(b, x0, x1, r, z, color, seg = 6, y = 0) {
+function tube(b, x0, x1, r, z, color, seg = SEG, y = 0) {
   b.color(color).push().translate(x0, y, z).rotate(90).lathe([[r, 0], [r, x1 - x0]], seg).pop();
 }
 
@@ -69,7 +71,7 @@ function magazine(b, x, z0, len, depth, w, color, curve = 0, rake = 0) {
 // Drum or pan magazine: a disc of radius r and thickness t, centered at (x, z), axis
 // along y.
 function drum(b, x, z, r, t, color) {
-  b.bone(GUN_MAG).color(color).push().translate(x, -t / 2, z).rotate(0, 0, -90).lathe([[r, 0], [r, t]], 10).pop()
+  b.bone(GUN_MAG).color(color).push().translate(x, -t / 2, z).rotate(0, 0, -90).lathe([[r, 0], [r, t]], 16).pop()
     .bone(GUN_ROOT);
 }
 
@@ -91,9 +93,9 @@ function stock(b, type, x0, top, len, h, drop, color) {
 // Telescopic sight along x centered on (x, z): a tube with wider bells and two mounts
 // down to z0.
 function scope(b, x, z, len, r, z0, color) {
-  tube(b, x - len / 2, x - len / 2 + len * 0.22, r * 1.45, z, color, 8);
-  tube(b, x - len / 2 + len * 0.22, x + len / 2 - len * 0.25, r, z, color, 8);
-  tube(b, x + len / 2 - len * 0.25, x + len / 2, r * 1.6, z, color, 8);
+  tube(b, x - len / 2, x - len / 2 + len * 0.22, r * 1.45, z, color);
+  tube(b, x - len / 2 + len * 0.22, x + len / 2 - len * 0.25, r, z, color);
+  tube(b, x + len / 2 - len * 0.25, x + len / 2, r * 1.6, z, color);
   b.color(BLACK).box(0.8, 0.9, z - z0, x - len * 0.18, 0, (z + z0) / 2).box(0.8, 0.9, z - z0, x + len * 0.15, 0, (z + z0) / 2);
 }
 
@@ -143,7 +145,7 @@ function longGun(b, s) {
   if (s.gasTube) tube(b, rx1, rx1 + s.gasTube, 0.32, bore + 0.75, metal);
   let muzzle = rx1 + bl;
   if (s.silencer) {
-    tube(b, muzzle, muzzle + s.silencer, 0.75, bore, BLACK, 8);
+    tube(b, muzzle, muzzle + s.silencer, 0.75, bore, BLACK);
     muzzle += s.silencer;
   } else if (s.brake) {
     tube(b, muzzle, muzzle + s.brake, 0.55, bore, metal);
@@ -158,7 +160,7 @@ function longGun(b, s) {
   let mag = null, magDir = null;
   if (m) {
     const curve = m.curve || 0, lean = Math.tan((m.rake || 0) * Math.PI / 180);
-    mag = m.drum ? [m.x, 0, z0 - m.drum * 1.6] : [m.x - (m.depth || 1.4) / 2 + (curve * 0.5 + lean) * m.len * 0.6, 0, z0 - m.len * 0.6];
+    mag = m.drum ? [m.x, 0, z0 - m.drum * 1.75] : [m.x - (m.depth || 1.4) / 2 + (curve * 0.5 + lean) * m.len * 0.6, 0, z0 - m.len * 0.6];
     magDir = norm([m.drum ? 0 : curve + lean, 0, -1]);
 
     if (m.drum) drum(b, m.x, z0 - m.drum, m.drum, m.t || 2.2, m.color || metal);
@@ -231,7 +233,7 @@ const GUNS = {
 
 function buildRevolver(b) {
   b.bone(GUN_ROOT).color(SILVER).box(4.6, 1.1, 1.6, 0.4, 0, 0.8); // frame
-  tube(b, -1.2, 1.8, 0.85, 0.85, SILVER, 6); // cylinder (on the slide bone for the reload swing)
+  tube(b, -1.2, 1.8, 0.85, 0.85, SILVER, 8); // cylinder (on the slide bone for the reload swing)
   tube(b, 2.7, 9, 0.38, 1.1, SILVER);
   b.color(SILVER).box(6.4, 0.6, 0.45, 5.7, 0, 1.6); // top strap / rib
   sights(b, -1, 8.6, 1.8);
@@ -260,14 +262,14 @@ const GRENADES = {
 
 function buildGrenade(b, name) {
   if (name === 'molotov') {
-    b.color([0.36, 0.42, 0.22]).lathe([[1.05, -2.6], [1.05, 0.6], [0.45, 1.6], [0.4, 2.6]], 8); // bottle
+    b.color([0.36, 0.42, 0.22]).lathe([[1.0, -2.6], [1.0, 0.6], [0.45, 1.6], [0.4, 2.6]], SEG); // bottle
     b.color([0.75, 0.68, 0.55]).box(0.7, 0.9, 1.4, 0, 0, 3.1); // rag in the neck
     b.color([0.75, 0.68, 0.55]).box(1.6, 0.4, 0.4, 0.6, 0, 3.6); // its loose end
     return { muzzle: [0, 0, 3.8], support: null };
   }
   const g = GRENADES[name], top = g.body[g.body.length - 1][1];
-  b.color(g.color).lathe(g.body, 8);
-  if (g.band) b.color(g.band).lathe([[g.body[0][0] + 0.06, -0.5], [g.body[0][0] + 0.06, 0.1]], 8);
+  b.color(g.color).lathe(g.body, SEG);
+  if (g.band) b.color(g.band).lathe([[g.body[0][0] + 0.06, -0.5], [g.body[0][0] + 0.06, 0.1]], SEG);
   b.color(STEEL).box(0.9, 0.7, 0.7, 0, 0, top + 0.3); // fuse head
   b.box(0.35, 0.5, 2.4, -0.55, 0, top - 0.6).box(0.7, 0.5, 0.3, -0.25, 0, top + 0.6); // spoon
   b.box(0.15, 0.9, 0.9, 0.55, 0, top + 0.5); // pin ring
@@ -284,7 +286,7 @@ function buildC4(b, ledColor = LED) {
 
 // The defuse kit (dropped kits, CT belts): a small yellow tool case.
 export function buildDefuser() {
-  const b = new MeshBuilder();
+  const b = new MeshBuilder().defaultFinish(FINISH.POLYMER).bevel(BEVEL);
   b.color([0.75, 0.62, 0.15]).box(5, 1.6, 3, 0, 0, 1.5);
   b.color(BLACK).box(4, 1.7, 0.6, 0, 0, 3.3).box(1, 0.4, 1.4, -1.2, 0, 3.9).box(1, 0.4, 1.4, 1.2, 0, 3.9);
   return b.build();
@@ -297,7 +299,7 @@ export function buildDefuser() {
 // out (null: no magazine); the bolt handle, slide rear or pump (pump: the bolt bone is a
 // pump); a shotgun's loading port; the revolver's cylinder.
 export function buildGun(name, opts = {}) {
-  const b = new MeshBuilder().bone(GUN_ROOT);
+  const b = new MeshBuilder().bone(GUN_ROOT).defaultFinish(FINISH.POLYMER).bevel(BEVEL);
   let pts;
   const g = GUNS[name];
   if (name === 'knife') pts = buildKnife(b);
@@ -308,7 +310,7 @@ export function buildGun(name, opts = {}) {
   else if (g.pistol) {
     pts = pistol(b, g.pistol);
     if (g.silencer && !opts.noSilencer) {
-      tube(b, pts.muzzle[0], pts.muzzle[0] + g.silencer, 0.55, pts.muzzle[2], BLACK, 8);
+      tube(b, pts.muzzle[0], pts.muzzle[0] + g.silencer, 0.55, pts.muzzle[2], BLACK);
       pts.muzzle[0] += g.silencer;
     }
   } else {
@@ -320,7 +322,7 @@ export function buildGun(name, opts = {}) {
       pts.magDir = norm([-0.4, 0, 1]);
     }
     if (g.long.helical) { // PP-Bizon: the helical magazine under the barrel
-      b.bone(GUN_MAG).color(DARK).push().translate(5, 0, -1.4).rotate(90).lathe([[1.15, 0], [1.15, 8], [0.9, 8.6]], 8).pop()
+      b.bone(GUN_MAG).color(DARK).push().translate(5, 0, -1.4).rotate(90).lathe([[1.15, 0], [1.15, 8], [0.9, 8.6]], SEG).pop()
         .bone(GUN_ROOT);
       pts.mag = [8, 0, -2.5];
       pts.magDir = norm([0.3, 0, -1]);

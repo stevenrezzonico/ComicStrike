@@ -961,6 +961,7 @@ function draw(now, alpha, dt) {
   style.ink = cv.r_inkwidth.number;
   style.dots = cv.r_halftone.number;
   style.bands = cv.r_shadebands.number;
+  style.lift = cv.r_shadowlift.number;
   style.boil = cv.r_lineboil.bool && !reducedMotion.matches;
   renderer.zoom = 90 / fov;
   renderer.begin();

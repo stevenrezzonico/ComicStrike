@@ -44,6 +44,7 @@ const TABS = [
     ['slider', 'r_inkwidth', 'Ink line width', 0, 3, 0.25],
     ['slider', 'r_halftone', 'Halftone dot size', 0, 3, 0.1],
     ['slider', 'r_shadebands', 'Shadow bands (0: smooth)', 0, 6, 1],
+    ['slider', 'r_shadowlift', 'Shadow brightness', 0, 1, 0.05],
     ['toggle', 'r_lineboil', 'Hand-drawn line wobble'],
     ['slider', 'mat_viewportscale', 'Render resolution', 0.5, 1, 0.05],
     ['slider', 'viewmodel_fov', 'Weapon field of view', 54, 68, 1],

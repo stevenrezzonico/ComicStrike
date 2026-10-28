@@ -44,7 +44,7 @@ const bind = (name) => {
 // team: 'T', 'CT' or 'H' (hostage); helmet: CTs show a helmet only when they own one.
 export function buildPlayer(team, helmet = false) {
   const L = LOOKS[team] || T_LOOK;
-  const b = new MeshBuilder();
+  const b = new MeshBuilder().bevel(0.4);
   const at = (name) => b.bone(S.bone(name));
 
   // Hips, belly, chest, shoulders.
@@ -62,30 +62,30 @@ export function buildPlayer(team, helmet = false) {
   }
 
   // Neck and head.
-  at('neck_0').color(L.head).push().translate(0, 0, 58).lathe([[2.1, 0], [2.1, 3]], 6).pop();
+  at('neck_0').color(L.head).push().translate(0, 0, 58).lathe([[2.1, 0], [2.1, 3]], 10).pop();
   at('head_0').push().translate(1, 0, 0)
-    .lathe([[0, 59.6], [3.2, 60.4], [4.1, 62.8], [4.1, 66.3], [2.8, 68.6], [0, 69.3]], 8).pop();
+    .lathe([[0, 59.6], [3.2, 60.4], [4.1, 62.8], [4.1, 66.3], [2.8, 68.6], [0, 69.3]], 14).pop();
   if (team === 'T') {
     b.color(SKIN).push().translate(4.7, 0, 64.8).box(1, 5.4, 1.7).pop(); // the balaclava's eye slit
   } else if (helmet) {
     b.color(L.helmet).push().translate(1, 0, 0)
-      .lathe([[4.7, 64.4], [4.8, 66.4], [3.9, 68.7], [2.2, 69.8], [0, 70.3]], 8).pop();
+      .lathe([[4.7, 64.4], [4.8, 66.4], [3.9, 68.7], [2.2, 69.8], [0, 70.3]], 14).pop();
     b.color(BLACK).push().translate(4.9, 0, 64.9).box(1, 6.6, 1.6).pop(); // goggles
   } else {
-    b.color(L.cap).push().translate(1, 0, 0).lathe([[4.3, 65.8], [3.6, 68.6], [2, 69.6], [0, 69.9]], 8).pop();
+    b.color(L.cap).push().translate(1, 0, 0).lathe([[4.3, 65.8], [3.6, 68.6], [2, 69.6], [0, 69.9]], 14).pop();
   }
 
   b.mirror((m) => {
     // Arms (T-pose along +y).
     const [, sy, sz] = bind('arm_upper_L'), [, ey] = bind('arm_lower_L'), [, hy] = bind('hand_L');
     m.color(L.jacket).bone(S.bone('arm_upper_L')).push().translate(0, sy - 1.5, sz).rotate(0, 0, -90)
-      .capsule(2.6, ey - sy + 2.5, 6, 1).pop();
-    m.bone(S.bone('arm_lower_L')).push().translate(0, ey - 1, sz).rotate(0, 0, -90).capsule(2.2, hy - ey + 1, 6, 1).pop();
-    m.color(L.gloves).bone(S.bone('hand_L')).push().translate(0, hy + 1.6, sz).box(3, 3.4, 3.2).pop();
+      .capsule(2.6, ey - sy + 2.5, 12, 2).pop();
+    m.bone(S.bone('arm_lower_L')).push().translate(0, ey - 1, sz).rotate(0, 0, -90).capsule(2.2, hy - ey + 1, 12, 2).pop();
+    m.color(L.gloves).bone(S.bone('hand_L')).push().translate(0, hy + 1.6, sz).rbox(3, 3.4, 3.2, 1.1).pop();
     // Legs.
     const [, ly, lz] = bind('leg_upper_L'), [, , kz] = bind('leg_lower_L'), [, , az] = bind('ankle_L');
-    m.color(L.pants).bone(S.bone('leg_upper_L')).push().translate(0, ly, kz - 1).capsule(3.5, lz - kz + 2.5, 6, 1).pop();
-    m.bone(S.bone('leg_lower_L')).push().translate(0, ly, az + 1).capsule(2.9, kz - az + 0.5, 6, 1).pop();
+    m.color(L.pants).bone(S.bone('leg_upper_L')).push().translate(0, ly, kz - 1).capsule(3.5, lz - kz + 2.5, 12, 2).pop();
+    m.bone(S.bone('leg_lower_L')).push().translate(0, ly, az + 1).capsule(2.9, kz - az + 0.5, 12, 2).pop();
     if (team === 'CT') m.color(L.pads).push().translate(2.6, ly, kz).box(1.6, 4.4, 4.4).pop();
     if (team === 'T') { // cargo pocket, on the thigh
       m.color(L.pants).bone(S.bone('leg_upper_L')).push().translate(0, ly + 3.4, 27).box(4, 1.6, 5).pop();

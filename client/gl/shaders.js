@@ -434,28 +434,38 @@ void main() {
 }`;
 
 // Skinned models (client/gl/skinned.js): every vertex follows one bone. Two flat tones
-// split by a crisp terminator, times the map's light at the model. Ids differ per draw
-// and per color, so the ink outlines every part of a model (jacket, trousers, gloves).
+// split by a crisp terminator, times the map's light at the model (never below
+// MODEL_FLOOR: characters stay readable in dark corners), a pale rim along the shadow
+// side's outline, and per finish (vertex alpha, FINISH in client/gl/meshkit.js) a shine
+// streak on metal and polymer and grain strokes on wood. Ids differ per draw and per
+// color, so the ink outlines every part of a model (jacket, trousers, gloves).
 export const SKINNED_VS = `#version 300 es
 layout(location=0) in vec3 a_pos;
 layout(location=1) in vec3 a_nrm;
 layout(location=2) in uint a_bone;
-layout(location=3) in vec3 a_col;
+layout(location=3) in vec4 a_col; // rgb, finish / 255
 uniform mat4 u_viewProj;
 uniform mat4 u_model;
 uniform mat4 u_bones[24];
 uniform uint u_id;
 out vec3 v_nrm;
 out vec3 v_col;
+out vec3 v_pos; // world
+out vec3 v_obj; // model space (grain)
 out float v_w;
 flat out uint v_id;
+flat out uint v_fin;
 void main() {
   mat4 m = u_model * u_bones[a_bone];
   v_nrm = mat3(m) * a_nrm;
-  v_col = a_col;
-  uvec3 c = uvec3(a_col * 255.0 + 0.5);
+  v_col = a_col.rgb;
+  v_fin = uint(a_col.a * 255.0 + 0.5);
+  v_obj = a_pos;
+  uvec3 c = uvec3(a_col.rgb * 255.0 + 0.5);
   v_id = (u_id * 37u + c.r * 7u + c.g * 13u + c.b * 29u) % 127u + 128u;
-  gl_Position = u_viewProj * m * vec4(a_pos, 1.0);
+  vec4 w = m * vec4(a_pos, 1.0);
+  v_pos = w.xyz;
+  gl_Position = u_viewProj * w;
   v_w = gl_Position.w;
 }`;
 
@@ -464,13 +474,20 @@ precision highp float;
 precision highp int;
 in vec3 v_nrm;
 in vec3 v_col;
+in vec3 v_pos;
+in vec3 v_obj;
 in float v_w;
 flat in uint v_id;
+flat in uint v_fin;
 uniform vec3 u_light; // map light at the model, lifted like the world's
 uniform vec3 u_lightDir;
+uniform vec3 u_eye;   // camera position in the draw's space
 uniform float u_emissive; // 1: unlit glow (muzzle flash, LEDs, flames)
 uniform float u_white;    // 0..1 toward white (spawn protection's pulse)
 uniform float u_lightFull; // lifted light that prints fully lit (per map, Renderer.loadMap)
+const float MODEL_FLOOR = 0.55; // models print at least this lit
+const uint FIN_METAL = 2u, FIN_POLYMER = 3u, FIN_WOOD = 4u;
+${NOISE}
 ${GBUFFER}
 void main() {
   vec3 n = normalize(v_nrm);
@@ -478,11 +495,38 @@ void main() {
     gbuffer(min(v_col * 1.25, vec3(1.0)), 1.0, n, v_id, v_w, G_FLAT);
     return;
   }
+  if (!gl_FrontFacing) n = -n;
+  vec3 V = normalize(u_eye - v_pos);
   float lum = dot(u_light, vec3(0.3, 0.59, 0.11));
   vec3 albedo = clamp(v_col * mix(vec3(1.0), clamp(u_light / max(lum, 0.05), 0.0, 2.0), 0.5), 0.0, 1.0);
-  float tone = dot(n, u_lightDir) > 0.0 ? 1.0 : 0.6;
-  gbuffer(mix(albedo, vec3(1.0), u_white), clamp(mix(tone * lum / u_lightFull, 1.0, u_white), 0.0, 1.0), n, v_id,
-    v_w, 0u);
+  float lit = clamp(max(lum / u_lightFull, MODEL_FLOOR), 0.0, 1.0);
+  float ndl = dot(n, u_lightDir);
+  float light = ndl > 0.0 ? lit : 0.6 * lit;
+  // Rim: a pale band along the outline on the shadow side.
+  float rim = smoothstep(0.68, 0.76, 1.0 - max(dot(n, V), 0.0)) * step(ndl, 0.0);
+  light = mix(light, lit, rim);
+  albedo = mix(albedo, min(albedo * 1.35 + 0.08, vec3(1.0)), rim);
+  if (v_fin == FIN_METAL || v_fin == FIN_POLYMER) {
+    // Shine: a blue-grey sheen toward the light, a hard white streak at its peak. A flat
+    // face (its normal does not bend) would turn white all over: it gets two diagonal
+    // bars instead.
+    float h = dot(n, normalize(u_lightDir + V));
+    float sheen = smoothstep(0.8, 0.84, h) * (v_fin == FIN_METAL ? 0.45 : 0.3);
+    albedo = mix(albedo, vec3(0.45, 0.5, 0.58), sheen);
+    float b = fract((v_obj.x + v_obj.z + v_obj.y * 0.5) / 7.0);
+    float bars = step(0.12, b) * step(b, 0.24) + step(0.31, b) * step(b, 0.35);
+    float curved = smoothstep(0.004, 0.03, length(fwidth(n)));
+    float streak = smoothstep(0.955, 0.965, h) * (v_fin == FIN_METAL ? 0.9 : 0.6) * mix(bars, 1.0, curved);
+    albedo = mix(albedo, vec3(0.95, 0.96, 0.98), streak);
+    light = mix(light, 1.0, max(streak, sheen));
+  } else if (v_fin == FIN_WOOD) {
+    // Grain: broken wavy strokes along the part.
+    float g = v_obj.z * 2.2 + v_obj.y * 1.3 + sin(v_obj.x * 0.9 + v_obj.z) * 0.35;
+    float d = abs(fract(g) - 0.5) / max(fwidth(g), 1e-4);
+    float stroke = (1.0 - smoothstep(0.8, 1.6, d)) * step(0.45, vnoise(vec2(v_obj.x * 0.8, floor(g) * 3.7)));
+    albedo = mix(albedo, albedo * 0.3, stroke * 0.9);
+  }
+  gbuffer(mix(albedo, vec3(1.0), u_white), clamp(mix(light, 1.0, u_white), 0.0, 1.0), n, v_id, v_w, 0u);
 }`;
 
 // The comic print, one fullscreen pass over the G-buffer.
@@ -505,6 +549,7 @@ uniform float u_dot;   // halftone cell (px); 0: flat tones
 uniform float u_time;  // line boil clock (s); constant when r_lineboil is 0
 uniform float u_zoom;  // 90 / fov: distance fades follow the scope
 uniform float u_bands; // light posterized into this many bands (0: smooth)
+uniform float u_lift;  // share of the darkness taken away (r_shadowlift): dark corners stay readable
 uniform int u_style;   // 0: plain lit colors (r_comic 0)
 out vec4 o_color;
 ${GBUFFER_CONSTS}
@@ -523,19 +568,20 @@ float invd(uvec4 t) { return across(t) ? wc : 1.0 / max(depthOf(t), 1.0); }
 // Crease between the line sample's normal c and a neighbor's normal texel n.
 float crease(vec3 c, vec4 n) { return 1.0 - dot(c, n.xyz * 2.0 - 1.0); }
 
-// Halftone: round dots on a screen at angle 'ang', area growing with 'dark'.
+// Halftone: round dots on a screen at angle 'ang', area growing with 'dark' (they touch
+// at full dark: the paper always shows between them).
 float dots(vec2 frag, float dark, float size, float ang) {
   if (dark < 0.02) return 0.0;
   float c = cos(ang), s = sin(ang);
   vec2 q = mat2(c, -s, s, c) * frag / size;
   float d = length(fract(q) - 0.5);
-  float r = sqrt(clamp(dark, 0.0, 1.0)) * 0.74;
+  float r = sqrt(clamp(dark, 0.0, 1.0)) * 0.6;
   float aa = 0.9 / size;
   return 1.0 - smoothstep(r - aa, r + aa, d);
 }
 // ... turning into its own average (flat) tone with distance.
 float tone(vec2 frag, float dark, float size, float ang, float far) {
-  float cov = min(1.0, 1.72 * clamp(dark, 0.0, 1.0));
+  float cov = 1.13 * clamp(dark, 0.0, 1.0);
   return mix(dots(frag, dark, size, ang), cov, far);
 }
 
@@ -546,6 +592,7 @@ void main() {
   vec3 alb = C.rgb;
   float light = C.a;
   if (u_bands > 0.5) light = floor(light * u_bands + 0.5) / u_bands;
+  light = 1.0 - (1.0 - light) * (1.0 - u_lift);
   uvec4 Dp = dtex(p);
   uint fl = Dp.a;
   float dP = depthOf(Dp);
@@ -598,7 +645,9 @@ void main() {
     float dark = 1.0 - light;
     float m = tone(frag, dark, size, 0.785, far);
     vec3 base = alb * (0.84 + 0.16 * light);
-    col = mix(base, mix(alb * 0.45, INK, 0.2 + 0.5 * smoothstep(0.6, 1.0, dark)), m);
+    // Shade dots: a cool, darker print of the color, only a little ink even at full dark.
+    vec3 shade = alb * vec3(0.52, 0.53, 0.62);
+    col = mix(base, mix(shade, INK, 0.12 + 0.28 * smoothstep(0.5, 0.9, dark)), m);
   }
   col *= 0.965 + 0.035 * h21(frag); // paper grain
   vec2 uv = frag / u_res - 0.5;

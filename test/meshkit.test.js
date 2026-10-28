@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { MeshBuilder, MESH_STRIDE } from '../client/gl/meshkit.js';
+import { MeshBuilder, MESH_STRIDE, FINISH, finish } from '../client/gl/meshkit.js';
+import { eyeOf } from '../client/gl/skinned.js';
 import { PLAYER_SKELETON, Pose } from '../client/anim/skeleton.js';
 import * as Q from '../client/anim/quat.js';
 
@@ -38,6 +39,11 @@ Deno.test('meshkit: every primitive is closed with outward normals and the expec
     ['lathe cone', (m) => m.lathe([[0, 0], [1, 0.0001], [1, 2], [0, 3]], 12), null],
     ['lathe tube', (m) => m.lathe([[1, 0], [0.5, 2]], 6), null],
     ['capsule', (m) => m.capsule(1, 6, 8, 3), null],
+    ['rounded box', (m) => m.rbox(2, 3, 4, 0.5), null],
+    ['chamfered box', (m) => m.bevel(0.2).box(2, 1, 1, 3, 0, 0), null],
+    ['flat rounded box', (m) => m.rbox(2, 2, 0.4, 0.5, 0, 0, 0, 3), null], // the radius is clamped
+    ['bevelled extrude', (m) => m.bevel(0.2).extrude([[0, 0], [4, 0], [4, 1], [1, 1], [1, 3], [0, 3]], 2), null],
+    ['sphere', (m) => m.sphere(1.5, 12, 6), null],
     ['loft', (m) => m.loft([{ z: 0, pts: [[1, 1], [-1, 1], [-1, -1], [1, -1]] }, { z: 2, pts: [[2, 0], [0, 2], [-2, 0], [0, -2]] }]), null],
   ];
   for (const [what, make, volume] of cases) {
@@ -50,16 +56,77 @@ Deno.test('meshkit: every primitive is closed with outward normals and the expec
   const c = new MeshBuilder().capsule(1, 6, 16, 4).build();
   const v = checkClosed(c, 'fine capsule');
   assert.ok(v > 14 && v < 16.8, `capsule volume ${v}`);
+  // Rounding takes volume off the edges, never more than the box.
+  const rb = checkClosed(new MeshBuilder().rbox(2, 3, 4, 0.5, 0, 0, 0, 3).build(), 'rbox');
+  assert.ok(rb < 24 && rb > 22, `rounded box volume ${rb}`);
+  const ex = checkClosed(new MeshBuilder().bevel(0.2).extrude([[0, 0], [4, 0], [4, 1], [1, 1], [1, 3], [0, 3]], 2).build(), 'L');
+  assert.ok(ex < 12 && ex > 11, `bevelled L volume ${ex}`);
 });
 
-Deno.test('meshkit: vertices carry flat normals, color and bone; budgets stay low', () => {
+// Unit normal of vertex v of a built mesh.
+const normalOf = (b, v) => [0, 1, 2].map((c) => b.normals[v * 3 + c]);
+const near = (a, b, eps = 1e-5) => a.every((x, i) => Math.abs(x - b[i]) < eps);
+
+Deno.test('meshkit: round shapes get smooth normals, corners and caps stay sharp', () => {
+  const b = new MeshBuilder().lathe([[1, 0], [1, 2]], 12).build();
+  const sides = new Map(); // position -> the normals given to it on the side wall
+  for (let v = 0; v < b.count; v++) {
+    const n = normalOf(b, v);
+    if (Math.abs(n[2]) > 0.99) continue; // caps: flat
+    assert.ok(Math.abs(n[2]) < 1e-6, 'side normals are horizontal');
+    const p = [0, 1, 2].map((c) => b.positions[v * 3 + c]);
+    assert.ok(near(n, [p[0], p[1], 0], 1e-5), 'side normal points straight out from the axis');
+    const k = p.map((x) => x.toFixed(3)).join();
+    if (sides.has(k)) assert.ok(near(sides.get(k), n), 'one normal per side point');
+    sides.set(k, n);
+  }
+  const box = new MeshBuilder().box(1, 1, 1).build();
+  for (let v = 0; v < box.count; v++) assert.equal(normalOf(box, v).filter((x) => Math.abs(x) > 0.999).length, 1);
+  // smooth(0): faceted, every corner of a triangle shares its face normal.
+  const flat = new MeshBuilder().smooth(0).lathe([[1, 0], [1, 2]], 8).build();
+  for (let v = 0; v < flat.count; v += 3) {
+    assert.ok(near(normalOf(flat, v), normalOf(flat, v + 1)) && near(normalOf(flat, v), normalOf(flat, v + 2)));
+  }
+  // Separate primitives never smooth into each other.
+  const two = new MeshBuilder().box(1, 1, 1).box(1, 1, 1, 1, 0, 0).build();
+  for (let v = 0; v < two.count; v++) assert.equal(normalOf(two, v).filter((x) => Math.abs(x) > 0.999).length, 1);
+});
+
+Deno.test('meshkit: finishes ride in the color alpha', () => {
+  const metal = finish([0.2, 0.2, 0.2], FINISH.METAL);
+  const b = new MeshBuilder().color(metal).box(1, 1, 1).color(1, 1, 1).box(1, 1, 1, 3).defaultFinish(FINISH.WOOD)
+    .color([0.5, 0.3, 0.1]).box(1, 1, 1, 6).build();
+  const u8 = new Uint8Array(b.data), fin = (v) => u8[v * MESH_STRIDE + 19];
+  assert.equal(fin(0), FINISH.METAL);
+  assert.equal(fin(36), FINISH.CLOTH, 'plain colors are cloth');
+  assert.equal(fin(72), FINISH.WOOD, 'the default finish');
+  assert.deepEqual(metal.slice(), [0.2, 0.2, 0.2]);
+});
+
+Deno.test('skinned: the camera position comes back out of a view-projection matrix', () => {
+  const eye = [120, -45, 64], f = 1 / Math.tan(0.6), n = 4, fa = 4096;
+  const P = [f / 1.6, 0, 0, 0, 0, f, 0, 0, 0, 0, (n + fa) / (n - fa), -1, 0, 0, 2 * n * fa / (n - fa), 0];
+  const c = Math.cos(0.7), s = Math.sin(0.7); // the view turned about two axes, then moved to the eye
+  const R = [c, 0, -s, 0, s * s, c, c * s, 0, s * c, -s, c * c, 0, 0, 0, 0, 1];
+  const mul = (a, b) => Array.from({ length: 16 }, (_, i) => {
+    const col = (i / 4) | 0, row = i % 4;
+    let x = 0;
+    for (let k = 0; k < 4; k++) x += a[k * 4 + row] * b[col * 4 + k];
+    return x;
+  });
+  const T = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -eye[0], -eye[1], -eye[2], 1];
+  const got = eyeOf(new Float32Array(3), Float32Array.from(mul(P, mul(R, T))));
+  assert.ok(near(Array.from(got), eye, 1e-2), `eye ${Array.from(got)}`);
+});
+
+Deno.test('meshkit: vertices carry normals, color, finish and bone; budgets stay low', () => {
   const m = new MeshBuilder().color(1, 0.5, 0).bone(7).box(1, 1, 1);
   const b = m.build();
   assert.equal(b.tris, 12);
   assert.equal(b.data.byteLength, b.count * MESH_STRIDE);
   const i8 = new Int8Array(b.data), u8 = new Uint8Array(b.data);
   assert.deepEqual([i8[12], i8[13], i8[14]], [127, 0, 0], 'first face is +x');
-  assert.deepEqual([u8[15], u8[16], u8[17], u8[18]], [7, 255, 128, 0]);
+  assert.deepEqual([u8[15], u8[16], u8[17], u8[18], u8[19]], [7, 255, 128, 0, FINISH.CLOTH]);
   assert.equal(new MeshBuilder().capsule(1, 6, 6, 1).build().tris, 6 * 2 + 6 * 2 * 1, 'a 6-sided capsule');
 });
 

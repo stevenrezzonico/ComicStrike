@@ -34,7 +34,7 @@ const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 Deno.test('first-person arms: closed, low-poly, both teams', () => {
   for (const team of ['T', 'CT']) {
     const m = buildArms(team);
-    assert.ok(m.tris > 50 && m.tris <= 600, `${team}: ${m.tris} triangles`);
+    assert.ok(m.tris > 50 && m.tris <= 1500, `${team}: ${m.tris} triangles`);
     const bones = new Set();
     const u8 = new Uint8Array(m.data);
     for (let v = 0; v < m.count; v++) bones.add(u8[v * 20 + 15]);

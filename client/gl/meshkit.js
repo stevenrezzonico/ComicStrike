@@ -1,12 +1,26 @@
-// Procedural low-poly mesh builder for player and weapon models (zero assets): boxes,
-// rounded slabs, lathes, extrusions, lofts and capsules under a transform stack, with
-// flat normals (one per triangle: the flat cartoon look), one color and one skeleton
-// bone per vertex. Every primitive is closed, wound counter-clockwise seen from outside.
-// Runs once at load; the result is one interleaved buffer for client/gl/skinned.js.
+// Procedural mesh builder for player and weapon models (zero assets): boxes, rounded
+// boxes, rounded slabs, spheres, lathes, extrusions (optionally bevelled), lofts and
+// capsules under a transform stack, one color, finish and skeleton bone per vertex.
+// Normals are smooth within each primitive across edges flatter than its crease angle
+// (smooth(): round shapes shade round and get no crease ink, box corners stay sharp).
+// Every primitive is closed, wound counter-clockwise seen from outside. Runs once at
+// load; the result is one interleaved buffer for client/gl/skinned.js.
 //
-// Vertex (20 bytes): pos f32x3 | normal i8x3 norm, bone u8 | color u8x4 norm (rgb, 255).
+// Vertex (20 bytes): pos f32x3 | normal i8x3 norm, bone u8 | color u8x4 norm (rgb, finish).
 
 export const MESH_STRIDE = 20;
+
+// Surface finishes (the vertex color's alpha byte): how SKINNED_FS prints a part.
+export const FINISH = { CLOTH: 0, SKIN: 1, METAL: 2, POLYMER: 3, WOOD: 4 };
+
+// A color that carries its finish: color(finish([r, g, b], FINISH.METAL)).
+export function finish(rgb, fin) {
+  const c = rgb.slice();
+  c.finish = fin;
+  return c;
+}
+
+const DEFAULT_CREASE = 50; // degrees: flatter edges are smoothed
 
 // Affine transform as a 3x4 row-major array [r00 r01 r02 tx, r10 r11 r12 ty, r20 r21 r22 tz].
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
@@ -24,14 +38,23 @@ function compose(a, b) { // a * b
 export class MeshBuilder {
   constructor() {
     this.pos = [];
-    this.nrm = [];
+    this.nrm = []; // face normals, per vertex (smoothed in build)
     this.col = [];
+    this.fins = [];
     this.bones = [];
+    this.groups = []; // per triangle: the primitive it belongs to
+    this.creases = []; // per triangle: cos of its crease angle
     this.m = IDENTITY.slice();
     this.stack = [];
     this.rgb = [0.5, 0.5, 0.5];
+    this.fin = FINISH.CLOTH;
+    this.baseFin = FINISH.CLOTH; // for colors without their own finish
     this.boneIndex = 0;
     this.boneMap = null;
+    this.crease = Math.cos(DEFAULT_CREASE * Math.PI / 180);
+    this.bev = 0;
+    this.group = 0;
+    this.depth = 0; // primitive nesting: one group per outermost primitive
   }
 
   get tris() {
@@ -40,8 +63,30 @@ export class MeshBuilder {
 
   // --- state -------------------------------------------------------------------------
 
+  // Color for the next vertices; a color made by finish() also sets the finish (else the
+  // default finish).
   color(r, g, b) {
     this.rgb = Array.isArray(r) ? r : [r, g, b];
+    this.fin = Array.isArray(r) && r.finish !== undefined ? r.finish : this.baseFin;
+    return this;
+  }
+
+  // Finish of the colors that carry none (cloth unless set).
+  defaultFinish(fin) {
+    this.baseFin = fin;
+    return this;
+  }
+
+  // Crease angle (degrees) of the next primitives: edges flatter than it are smoothed
+  // (0: flat facets).
+  smooth(deg = DEFAULT_CREASE) {
+    this.crease = deg > 0 ? Math.cos(deg * Math.PI / 180) : 2;
+    return this;
+  }
+
+  // Edge rounding radius of the next boxes and extrusions (0: sharp).
+  bevel(r = 0) {
+    this.bev = r;
     return this;
   }
 
@@ -100,10 +145,22 @@ export class MeshBuilder {
     return this;
   }
 
+  // Brackets a primitive: its triangles smooth together, not with other primitives'.
+  open() {
+    if (this.depth++ === 0) this.group++;
+    return this;
+  }
+
+  close() {
+    this.depth--;
+    return this;
+  }
+
   // --- triangles -----------------------------------------------------------------------
 
   // Triangle a, b, c (local points [x, y, z]), counter-clockwise from the front. Mirroring
-  // transforms keep the winding outward.
+  // transforms keep the winding outward. A loose triangle (outside a primitive) stands
+  // alone: flat.
   tri(a, b, c) {
     const m = this.m;
     const p = [a, b, c].map(([x, y, z]) => [
@@ -123,8 +180,11 @@ export class MeshBuilder {
       this.pos.push(q[0], q[1], q[2]);
       this.nrm.push(nx / l, ny / l, nz / l);
       this.col.push(...this.rgb);
+      this.fins.push(this.fin);
       this.bones.push(this.boneIndex);
     }
+    this.groups.push(this.depth ? this.group : ++this.group);
+    this.creases.push(this.crease);
     return this;
   }
 
@@ -136,45 +196,116 @@ export class MeshBuilder {
   // ([x, y, z]); pts are 3D and coplanar.
   polygon(pts, normal) {
     const idx = triangulate(pts, normal);
+    this.open();
     for (let i = 0; i < idx.length; i += 3) this.tri(pts[idx[i]], pts[idx[i + 1]], pts[idx[i + 2]]);
-    return this;
+    return this.close();
   }
 
   // --- primitives ----------------------------------------------------------------------
 
-  // Box of size (sx, sy, sz) centered on (cx, cy, cz).
+  // Box of size (sx, sy, sz) centered on (cx, cy, cz); rounded by bevel().
   box(sx, sy, sz, cx = 0, cy = 0, cz = 0) {
+    if (this.bev > 0) return this.rbox(sx, sy, sz, this.bev, cx, cy, cz, 1);
     const x0 = cx - sx / 2, x1 = cx + sx / 2, y0 = cy - sy / 2, y1 = cy + sy / 2, z0 = cz - sz / 2, z1 = cz + sz / 2;
+    this.open();
     this.quad([x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]); // +x
     this.quad([x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]); // -x
     this.quad([x1, y1, z0], [x0, y1, z0], [x0, y1, z1], [x1, y1, z1]); // +y
     this.quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]); // -y
     this.quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]); // +z
     this.quad([x0, y1, z0], [x1, y1, z0], [x1, y0, z0], [x0, y0, z0]); // -z
-    return this;
+    return this.close();
+  }
+
+  // Box with every edge and corner rounded by radius r, centered on (cx, cy, cz): a grid
+  // on the box's faces (seg steps across each half of a rounded edge; 1 is a chamfer that
+  // smooth normals print round) pushed onto the rounded surface.
+  rbox(sx, sy, sz, r, cx = 0, cy = 0, cz = 0, seg = 2) {
+    const h = [sx / 2, sy / 2, sz / 2], c = [cx, cy, cz];
+    r = Math.min(r, h[0] * 0.95, h[1] * 0.95, h[2] * 0.95);
+    if (!(r > 0)) {
+      const bev = this.bev;
+      return this.bevel(0).box(sx, sy, sz, cx, cy, cz).bevel(bev);
+    }
+    const core = h.map((v) => v - r);
+    const grid = h.map((v) => {
+      const out = [];
+      for (let k = 0; k <= seg; k++) out.push(-v + r * k / seg);
+      for (let k = seg; k >= 0; k--) out.push(v - r * k / seg);
+      return out;
+    });
+    const place = (p) => {
+      const q = [0, 0, 0], d = [0, 0, 0];
+      for (let a = 0; a < 3; a++) {
+        q[a] = Math.max(-core[a], Math.min(core[a], p[a]));
+        d[a] = p[a] - q[a];
+      }
+      const l = Math.hypot(d[0], d[1], d[2]);
+      return [0, 1, 2].map((a) => (l > 1e-9 ? q[a] + d[a] / l * r : p[a]) + c[a]);
+    };
+    this.open();
+    for (let a = 0; a < 3; a++) {
+      const u = (a + 1) % 3, v = (a + 2) % 3;
+      for (const s of [-1, 1]) {
+        const at = (gi, gj) => {
+          const p = [0, 0, 0];
+          p[a] = s * h[a];
+          p[u] = grid[u][gi];
+          p[v] = grid[v][gj];
+          return place(p);
+        };
+        for (let i = 0; i + 1 < grid[u].length; i++) {
+          for (let j = 0; j + 1 < grid[v].length; j++) {
+            // (u, v, a) is right-handed: counter-clockwise from +a; flipped on the -a side.
+            if (s > 0) this.quad(at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
+            else this.quad(at(i, j), at(i, j + 1), at(i + 1, j + 1), at(i + 1, j));
+          }
+        }
+      }
+    }
+    return this.close();
+  }
+
+  // Sphere of radius r about the origin, `seg` sides and `rings` bands (scale it for an
+  // ellipsoid).
+  sphere(r, seg = 12, rings = 6) {
+    const profile = [];
+    for (let k = 0; k <= rings; k++) {
+      const a = Math.PI * k / rings;
+      profile.push([k === 0 || k === rings ? 0 : r * Math.sin(a), -r * Math.cos(a)]);
+    }
+    return this.lathe(profile, seg);
   }
 
   // Outline [[x, z], ...] (a side view: x forward, z up) extruded `depth` along y,
-  // centered on y = 0: receivers, magazines, blades, stocks.
+  // centered on y = 0: receivers, magazines, blades, stocks. With bevel() the edges
+  // around both side faces are cut at 45 degrees (the outline inset on the faces).
   extrude(outline, depth) {
     const h = depth / 2;
     const n = outline.length;
     const ccw = area2(outline) > 0; // counter-clockwise in (x, z) = facing -y
-    const ring = (y) => outline.map(([x, z]) => [x, y, z]);
-    const front = ring(-h), back = ring(h);
-    this.polygon(front, [0, -1, 0]);
-    this.polygon(back, [0, 1, 0]);
-    for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n;
-      if (ccw) this.quad(front[i], back[i], back[j], front[j]);
-      else this.quad(front[j], back[j], back[i], front[i]);
+    const bv = Math.min(this.bev, h * 0.45);
+    const ring = (pts, y) => pts.map(([x, z]) => [x, y, z]);
+    const rings = bv > 0 ?
+      [ring(inset(outline, bv, ccw), -h), ring(outline, -h + bv), ring(outline, h - bv), ring(inset(outline, bv, ccw), h)] :
+      [ring(outline, -h), ring(outline, h)];
+    this.open();
+    this.polygon(rings[0], [0, -1, 0]);
+    this.polygon(rings.at(-1), [0, 1, 0]);
+    for (let r = 0; r + 1 < rings.length; r++) {
+      const front = rings[r], back = rings[r + 1];
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        if (ccw) this.quad(front[i], back[i], back[j], front[j]);
+        else this.quad(front[j], back[j], back[i], front[i]);
+      }
     }
-    return this;
+    return this.close();
   }
 
   // Box with its four vertical edges rounded (radius r, seg steps per corner), centered:
   // padded torsos, pouches, grips.
-  slab(sx, sy, sz, r, seg = 2) {
+  slab(sx, sy, sz, r, seg = 3) {
     r = Math.min(r, sx / 2, sy / 2);
     const pts = [];
     const corners = [[sx / 2 - r, sy / 2 - r, 0], [-sx / 2 + r, sy / 2 - r, 90], [-sx / 2 + r, -sy / 2 + r, 180],
@@ -191,7 +322,7 @@ export class MeshBuilder {
   // Surface of revolution about z: profile [[radius, z], ...] from bottom to top, `seg`
   // sides. Ends with radius 0 close to a point, others get a flat cap. (Rotate the
   // builder for other axes: barrels along x are rotate(90).)
-  lathe(profile, seg = 8) {
+  lathe(profile, seg = 12) {
     const ring = (r, z) => {
       const out = [];
       for (let k = 0; k < seg; k++) {
@@ -201,6 +332,7 @@ export class MeshBuilder {
       return out;
     };
     const rings = profile.map(([r, z]) => (r > 0 ? ring(r, z) : null));
+    this.open();
     for (let i = 0; i + 1 < profile.length; i++) {
       const a = rings[i], b = rings[i + 1];
       for (let k = 0; k < seg; k++) {
@@ -213,11 +345,11 @@ export class MeshBuilder {
     if (rings[0]) this.polygon(rings[0].slice().reverse(), [0, 0, -1]);
     const last = rings.at(-1);
     if (last) this.polygon(last, [0, 0, 1]);
-    return this;
+    return this.close();
   }
 
   // Capsule along z from z = 0 to z = len (the caps included), radius r: limbs.
-  capsule(r, len, seg = 8, capSteps = 2) {
+  capsule(r, len, seg = 12, capSteps = 3) {
     const profile = [[0, 0]];
     for (let k = 1; k <= capSteps; k++) {
       const a = (Math.PI / 2) * (1 - k / capSteps);
@@ -240,6 +372,7 @@ export class MeshBuilder {
       const r = pts.map(([x, y]) => [x, y, z]);
       return area2(pts) > 0 ? r : r.reverse();
     });
+    this.open();
     for (let i = 0; i + 1 < P.length; i++) {
       for (let k = 0; k < n; k++) {
         const j = (k + 1) % n;
@@ -248,13 +381,14 @@ export class MeshBuilder {
     }
     this.polygon(P[0].slice().reverse(), [0, 0, -1]);
     this.polygon(P.at(-1), [0, 0, 1]);
-    return this;
+    return this.close();
   }
 
   // --- output --------------------------------------------------------------------------
 
   build() {
     const count = this.pos.length / 3;
+    const nrm = smoothNormals(this.pos, this.nrm, this.groups, this.creases);
     const data = new ArrayBuffer(count * MESH_STRIDE);
     const f = new Float32Array(data), i8 = new Int8Array(data), u8 = new Uint8Array(data);
     for (let v = 0; v < count; v++) {
@@ -262,13 +396,73 @@ export class MeshBuilder {
       f[o / 4] = this.pos[v * 3];
       f[o / 4 + 1] = this.pos[v * 3 + 1];
       f[o / 4 + 2] = this.pos[v * 3 + 2];
-      for (let c = 0; c < 3; c++) i8[o + 12 + c] = Math.round(this.nrm[v * 3 + c] * 127);
+      for (let c = 0; c < 3; c++) i8[o + 12 + c] = Math.round(nrm[v * 3 + c] * 127);
       u8[o + 15] = this.bones[v];
       for (let c = 0; c < 3; c++) u8[o + 16 + c] = Math.max(0, Math.min(255, Math.round(this.col[v * 3 + c] * 255)));
-      u8[o + 19] = 255;
+      u8[o + 19] = this.fins[v];
     }
-    return { data, count, tris: count / 3, positions: new Float32Array(this.pos) };
+    return { data, count, tris: count / 3, positions: new Float32Array(this.pos), normals: nrm };
   }
+}
+
+// Smooth vertex normals: each corner of a triangle averages the face normals of the
+// triangles of its primitive meeting at that point whose normal is within the triangle's
+// crease angle of its own, weighted by their corner angles there (so how a quad is split
+// into triangles does not tilt the result).
+function smoothNormals(pos, faceNrm, groups, creases) {
+  const tris = groups.length;
+  const angle = new Float64Array(tris * 3);
+  for (let v = 0; v < tris * 3; v++) {
+    const t = (v / 3) | 0, a = v * 3, b = (t * 3 + (v + 1) % 3) * 3, c = (t * 3 + (v + 2) % 3) * 3;
+    const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+    const wx = pos[c] - pos[a], wy = pos[c + 1] - pos[a + 1], wz = pos[c + 2] - pos[a + 2];
+    const cos = (ux * wx + uy * wy + uz * wz) / ((Math.hypot(ux, uy, uz) * Math.hypot(wx, wy, wz)) || 1);
+    angle[v] = Math.acos(Math.max(-1, Math.min(1, cos)));
+  }
+  const key = (v) => `${groups[(v / 3) | 0]}:${Math.round(pos[v * 3] * 1e3)},${Math.round(pos[v * 3 + 1] * 1e3)},` +
+    `${Math.round(pos[v * 3 + 2] * 1e3)}`;
+  const at = new Map(); // key -> the triangle corners there
+  for (let v = 0; v < tris * 3; v++) {
+    const k = key(v);
+    if (!at.has(k)) at.set(k, []);
+    at.get(k).push(v);
+  }
+  const out = new Float32Array(faceNrm.length);
+  for (let v = 0; v < tris * 3; v++) {
+    const t = (v / 3) | 0, f = t * 9;
+    let x = 0, y = 0, z = 0;
+    for (const w of at.get(key(v))) {
+      const u = (w / 3) | 0, g = u * 9;
+      const d = faceNrm[f] * faceNrm[g] + faceNrm[f + 1] * faceNrm[g + 1] + faceNrm[f + 2] * faceNrm[g + 2];
+      if (u !== t && d < creases[t]) continue;
+      x += faceNrm[g] * angle[w];
+      y += faceNrm[g + 1] * angle[w];
+      z += faceNrm[g + 2] * angle[w];
+    }
+    const l = Math.hypot(x, y, z) || 1;
+    out[v * 3] = x / l;
+    out[v * 3 + 1] = y / l;
+    out[v * 3 + 2] = z / l;
+  }
+  return out;
+}
+
+// Outline [[x, z], ...] moved `d` inward (mitred corners, spikes capped): bevelled faces.
+function inset(pts, d, ccw) {
+  const n = pts.length, s = ccw ? 1 : -1;
+  return pts.map(([x, z], i) => {
+    const [px, pz] = pts[(i + n - 1) % n], [qx, qz] = pts[(i + 1) % n];
+    let ax = x - px, az = z - pz, bx = qx - x, bz = qz - z;
+    const la = Math.hypot(ax, az) || 1, lb = Math.hypot(bx, bz) || 1;
+    ax /= la;
+    az /= la;
+    bx /= lb;
+    bz /= lb;
+    // Left normals of both edges (inward on a counter-clockwise outline), mitred.
+    const nx = -az - bz, nz = ax + bx;
+    const k = Math.min(d / Math.max(1 + ax * bx + az * bz, 1e-3), d * 2.5);
+    return [x + s * nx * k, z + s * nz * k];
+  });
 }
 
 // Twice the signed area of a 2D polygon (> 0: counter-clockwise).

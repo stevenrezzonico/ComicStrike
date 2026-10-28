@@ -22,15 +22,15 @@ const bind = (name) => {
 export function buildArms(team) {
   const L = LOOKS[team];
   const fingers = team === 'T' ? SKIN : L.gloves;
-  const b = new MeshBuilder();
+  const b = new MeshBuilder().bevel(0.3);
   b.mirror((m) => {
     // The right arm (y < 0); the mirror makes the left.
     const [sx, sy, sz] = bind('arm_upper_R'), [ex] = bind('arm_lower_R'), [hx] = bind('hand_R');
     m.color(L.jacket).bone(A.bone('arm_upper_R')).push().translate(sx - 2, sy, sz).rotate(90)
-      .capsule(2.6, ex - sx + 3, 6, 1).pop();
+      .capsule(2.6, ex - sx + 3, 12, 2).pop();
     m.bone(A.bone('arm_lower_R')).push().translate(ex - 0.5, sy, sz).rotate(90)
-      .lathe([[2.3, 0], [1.85, hx - ex - 1.4]], 7).pop();
-    m.color(L.gloves).push().translate(hx - 2.1, sy, sz).rotate(90).lathe([[1.9, 0], [1.75, 2.6]], 7).pop(); // cuff
+      .lathe([[2.3, 0], [1.85, hx - ex - 1.4]], 12).pop();
+    m.color(L.gloves).push().translate(hx - 2.1, sy, sz).rotate(90).lathe([[1.9, 0], [1.75, 2.6]], 12).pop(); // cuff
     // Hand, palm toward +y.
     m.bone(A.bone('hand_R')).push().translate(hx, sy, sz);
     m.box(3.6, 1.1, 3.1, 1.8, 0, 0); // palm and back

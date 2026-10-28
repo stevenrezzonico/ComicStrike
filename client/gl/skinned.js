@@ -19,6 +19,21 @@ const LIGHT_DIR = (() => {
 // lightmap (Renderer.loadMap), shared by every model.
 export const mapLight = { full: 1.25 };
 
+// Camera position of a view-projection matrix (column-major): the point every row but
+// depth maps to zero (clip x = y = w = 0). Rim and shine need it; no allocation.
+export function eyeOf(out, m) {
+  // Rows x, y, w: a . (p, 1) = 0, three equations in p, by Cramer's rule.
+  const a0 = m[0], a1 = m[4], a2 = m[8], a3 = m[12];
+  const b0 = m[1], b1 = m[5], b2 = m[9], b3 = m[13];
+  const c0 = m[3], c1 = m[7], c2 = m[11], c3 = m[15];
+  const det = a0 * (b1 * c2 - b2 * c1) - a1 * (b0 * c2 - b2 * c0) + a2 * (b0 * c1 - b1 * c0);
+  if (Math.abs(det) < 1e-12) return out.fill(0);
+  out[0] = -(a3 * (b1 * c2 - b2 * c1) - a1 * (b3 * c2 - b2 * c3) + a2 * (b3 * c1 - b1 * c3)) / det;
+  out[1] = -(a0 * (b3 * c2 - b2 * c3) - a3 * (b0 * c2 - b2 * c0) + a2 * (b0 * c3 - b3 * c0)) / det;
+  out[2] = -(a0 * (b1 * c3 - b3 * c1) - a1 * (b0 * c3 - b3 * c0) + a3 * (b0 * c1 - b1 * c0)) / det;
+  return out;
+}
+
 // Skin for meshes drawn rigidly (guns, props): every bone at its bind pose.
 export const IDENTITY_SKIN = new Float32Array(MAX_BONES * 16);
 for (let i = 0; i < MAX_BONES; i++) for (let k = 0; k < 4; k++) IDENTITY_SKIN[i * 16 + k * 5] = 1;
@@ -37,7 +52,7 @@ export class SkinnedMesh {
     gl.enableVertexAttribArray(2);
     gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_BYTE, MESH_STRIDE, 15);
     gl.enableVertexAttribArray(3);
-    gl.vertexAttribPointer(3, 3, gl.UNSIGNED_BYTE, true, MESH_STRIDE, 16);
+    gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, true, MESH_STRIDE, 16); // rgb, finish
     gl.bindVertexArray(null);
   }
 }
@@ -51,14 +66,16 @@ export class SkinnedRenderer {
     this.gl = gl;
     this.emissive = 0;
     this.white = 0;
+    this.eye = new Float32Array(3);
     this.prog = program(gl, SKINNED_VS, SKINNED_FS, ['u_viewProj', 'u_model', 'u_bones', 'u_light', 'u_lightDir',
-      'u_emissive', 'u_white', 'u_id', 'u_lightFull']);
+      'u_emissive', 'u_white', 'u_id', 'u_lightFull', 'u_eye']);
   }
 
   begin(viewProj) {
     const gl = this.gl;
     gl.useProgram(this.prog.p);
     gl.uniformMatrix4fv(this.prog.loc.u_viewProj, false, viewProj);
+    gl.uniform3fv(this.prog.loc.u_eye, eyeOf(this.eye, viewProj));
     gl.uniform3fv(this.prog.loc.u_lightDir, LIGHT_DIR);
     gl.uniform1f(this.prog.loc.u_emissive, (this.emissive = 0));
     gl.uniform1f(this.prog.loc.u_white, (this.white = 0));
