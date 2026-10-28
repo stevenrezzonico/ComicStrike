@@ -25,6 +25,7 @@ export class WeaponView {
     this.cv = cv;
     this.fovY = fovY;
     this.flashUntil = 0;
+    this.blind = 0; // 0..1 flashbang white-out (main): the off hand shields the eyes
     this.bobPhase = 0;
     this.anim = { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0, flash: false };
     this.hidden = false; // dead: no viewmodel or crosshair, HUD only
@@ -73,6 +74,7 @@ export class WeaponView {
       this.viewmodel.fovY = 2 * Math.atan(VM_TAN * Math.tan(cv.viewmodel_fov.number * Math.PI / 360));
 
       a.flash = time < this.flashUntil && !silenced(ws, ws.f[WS_ACTIVE]);
+      this.animator.blind = this.blind;
       const va = this.animator.update(id, ws, time, this.guns.points[id]);
       this.viewmodel.draw(id, aspect, va, a, this.light, this.team, silenced(ws, ws.f[WS_ACTIVE]));
     }

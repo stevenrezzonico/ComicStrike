@@ -3,7 +3,7 @@
 // newest lists; smoke clouds as a billowing cluster of smooth puffs around a core (they
 // bulge out as it pops, churn and swell slowly, drop away one by one at the end), fires
 // as a patch of flickering comic flame tongues facing the camera with rising embers,
-// flashbang pops as glowing balls (HE blasts are client/gl/blast.js). Opaque and
+// flashbang pops as white-yellow starbursts (HE blasts are client/gl/blast.js). Opaque and
 // depth-tested, so a smoke cloud hides what is behind it. One draw call per grenade,
 // effect, puff or flame layer; nothing allocates per frame.
 
@@ -98,7 +98,9 @@ export class GrenadeFx {
     this.columnPuffs = COLUMN_SMOKE.map((c) => new SkinnedMesh(gl, buildSmokePuff(c)));
     this.crackled = new Map(); // fire id -> the last CRACKLE! beat
     this.onCrackle = null; // (x, y, z) now and then while a fire burns
-    this.pop = new SkinnedMesh(gl, buildBall([0.62, 0.62, 0.6]));
+    // A flashbang's pop: a yellow starburst with a white core, facing the camera.
+    this.popStars = [new SkinnedMesh(gl, buildBurst([0.82, 0.74, 0.3], 5)),
+      new SkinnedMesh(gl, buildBurst([0.8, 0.8, 0.78], 9))];
     this.fizzle = new SkinnedMesh(gl, buildBall([0.5, 0.5, 0.48]));
     this.cur = new Grenades(); // newest list
     this.prev = new Grenades(); // the one before, for interpolation
@@ -190,17 +192,28 @@ export class GrenadeFx {
     for (let k = 0; k < c.fxCount; k++) {
       const kind = c.fxKind[k], age = c.fxAge[k] + ahead;
       const x = c.fxPos[k * 3], y = c.fxPos[k * 3 + 1], z = c.fxPos[k * 3 + 2];
-      let mesh = null, sx = 1, sz = 1, glow = 0;
+      let mesh = null, sx = 1, sz = 1;
       if (kind === FX_SMOKE) {
         n = this.smoke(n, c.fxId[k], age, x, y, z, this.lightAt(c.fxId[k], x, y, z, surfaces));
         continue;
       } else if (kind === FX_FIRE) {
         n = this.fire(n, c.fxId[k], age, x, y, z, this.lightAt(c.fxId[k], x, y, z, surfaces));
         continue;
-      } else if (kind === FX_FLASH) {
-        mesh = this.pop;
-        sx = sz = 40 * Math.max(0, 1 - age / 0.2);
-        glow = 1;
+      } else if (kind === FX_FLASH) { // grows in 60 ms, gone 0.3 s later
+        const s = 75 * (age < 0.06 ? age / 0.06 : Math.max(0, 1 - (age - 0.06) / 0.3));
+        if (s < 1) continue;
+        for (let l = 0; l < 2; l++) {
+          this.mesh[n] = this.popStars[l];
+          this.emissive[n] = 1;
+          this.face[n] = 1;
+          this.faceSize[n * 3] = this.faceSize[n * 3 + 1] = s * (l ? 0.55 : 1);
+          this.faceSize[n * 3 + 2] = l * s * 0.1;
+          this.faceBase[n * 3] = x;
+          this.faceBase[n * 3 + 1] = y;
+          this.faceBase[n * 3 + 2] = z + 8;
+          n++;
+        }
+        continue;
       } else if (kind === FX_FIZZLE) {
         mesh = this.fizzle;
         sx = sz = 30 * Math.max(0, 1 - age / 0.6);
@@ -208,7 +221,7 @@ export class GrenadeFx {
       if (!mesh || sx <= 0.5) continue;
       place(this.model[n], x, y, z, k * 1.7, sx, sx, sz);
       this.mesh[n] = mesh;
-      this.emissive[n] = glow;
+      this.emissive[n] = 0;
       this.light[n].set(this.lightAt(c.fxId[k], x, y, z, surfaces));
       n++;
     }

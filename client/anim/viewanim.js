@@ -40,6 +40,7 @@ const ROT = {
   side: euler(0, 0, 0), // palm flat on a side (C4)
   tap: euler(35, 0, -95), // right hand over the C4 keypad
   rest: euler(-40, 0, -60), // the hidden left hand
+  shield: euler(-90, 90, 0), // left hand up before the face, palm out, fingers up (flashed)
 };
 
 // Per hold: where the gun's grip sits in the rig frame and the gun's base angles; the
@@ -54,6 +55,7 @@ const HOLDS = {
 };
 const ELITE_LEFT = 11; // the second pistol, left of the first
 const REST_L = [6, 6, -30]; // the left hand out of sight (knife)
+const SHIELD_L = [15, 2.5, -2.6]; // the left hand before the eyes (flashed)
 
 const INSPECT_TIME = 3.2;
 const SLASH_TIME = 0.35;
@@ -138,6 +140,8 @@ export class ViewAnimator {
     this.hc = new Float32Array(2);
     this.ho = new Float32Array(6);
     this.onGun = [true, true]; // false: the hand's target is in the rig frame
+    this.blind = 0; // 0..1: how flashed we are (the off hand shields the eyes)
+    this.qTmp = new Float32Array(4);
     this.id = -1;
     this.inspectStart = -1;
     this.swingStart = -1;
@@ -420,8 +424,27 @@ export class ViewAnimator {
     s[GUN_BOLT * 16 + 12] = -boltOff;
     if (pumpGun && this.onGun[L] && pts.support && holdName === 'rifle') this.hp[L * 3] -= boltOff * (1 - tip);
 
+    // Flashed: the off hand comes up before the face (not while it holds a second pistol).
+    if (this.blind > 0.01 && !this.dual) this.shield(this.blind);
+
     this.solveArms(hold);
     return this;
+  }
+
+  // Moves the off hand toward shielding the eyes by `amount` (0..1, eased): its target goes
+  // to the rig frame where it is now, then blends to the shield pose.
+  shield(amount) {
+    const o = L * 3, t = amount * amount * (3 - 2 * amount);
+    if (this.onGun[L]) {
+      const g = this.gun, x = this.hp[o], y = this.hp[o + 1], z = this.hp[o + 2];
+      this.hp[o] = g[0] * x + g[4] * y + g[8] * z + g[12];
+      this.hp[o + 1] = g[1] * x + g[5] * y + g[9] * z + g[13];
+      this.hp[o + 2] = g[2] * x + g[6] * y + g[10] * z + g[14];
+      Q.mul(this.qTmp, 0, this.qGun, 0, this.hq, L * 4);
+      this.hq.set(this.qTmp, L * 4);
+      this.onGun[L] = false;
+    }
+    this.mixHand(L, SHIELD_L[0], SHIELD_L[1], SHIELD_L[2], ROT.shield, 0, t);
   }
 
   // Both arms to their hand targets.

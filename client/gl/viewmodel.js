@@ -9,7 +9,7 @@
 import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN } from './skinned.js';
 import { G_FLAGS } from './shaders.js';
 import { perspective, multiply } from './mat4.js';
-import { buildArms, buildHand } from '../models/arms.js';
+import { buildArms, buildHand, FLAT_CURL } from '../models/arms.js';
 import { TEAM_CT } from '../../shared/player.js';
 
 // Rig frame (x forward, y left, z up) -> eye space (right, up, back).
@@ -31,6 +31,7 @@ export class Viewmodel {
     this.arms = { T: new SkinnedMesh(gl, buildArms('T')), CT: new SkinnedMesh(gl, buildArms('CT')) };
     this.handMeshes = new Map(); // 'T L 1.9 1.5' -> SkinnedMesh
     this.handsOf = { T: [], CT: [] }; // per weapon id: [left, right] SkinnedMesh
+    this.openLeft = {}; // team -> the open left hand (shielding the eyes from a flashbang)
   }
 
   // The two hand meshes for weapon `id`, fitted to what they hold (built once).
@@ -62,7 +63,10 @@ export class Viewmodel {
     r.begin(this.proj);
     const look = team === TEAM_CT ? 'CT' : 'T', hands = this.hands(look, weaponId);
     r.draw(this.arms[look], this.rig, va.pose.skin, light);
-    r.draw(hands[0], this.rig, va.pose.skin, light);
+    if (va.blind > 0.45) { // shielding the eyes: an open hand
+      this.openLeft[look] ??= new SkinnedMesh(this.gl, buildHand(look, FLAT_CURL, true));
+      r.draw(this.openLeft[look], this.rig, va.pose.skin, light);
+    } else r.draw(hands[0], this.rig, va.pose.skin, light);
     r.draw(hands[1], this.rig, va.pose.skin, light);
     r.draw(gun, multiply(this.tmp, this.rig, va.gun), va.gunSkin, light);
     if (va.dual) {

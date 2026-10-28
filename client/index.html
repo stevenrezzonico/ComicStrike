@@ -53,7 +53,18 @@
   #scope.cross, #scope.dot { display: block; }
   /* Flashbangs: white over the frozen frame of the moment. */
   #afterimage, #flash { position: fixed; inset: 0; width: 100%; height: 100%; opacity: 0; pointer-events: none; }
-  #flash { background: #fff; }
+  /* Flashbang white-out: paper over the print, a starburst where it went off, FLASH! */
+  #flash { background: var(--paper-hi); overflow: hidden; }
+  #flash .burst { position: absolute; left: var(--x, 50%); top: var(--y, 50%); width: 72vmin; height: 72vmin;
+    transform: translate(-50%, -50%) scale(var(--k, 1)); }
+  #flash .burst i { position: absolute; inset: 0; }
+  #flash .star { background: var(--yellow); }
+  #flash .core { inset: 24% !important; background: #fffdf4; }
+  #flash .ring { inset: -10% !important; border-radius: 50%; border: 0.7vmin solid rgba(255, 200, 70, 0.55); }
+  #flash .ring.r2 { inset: -26% !important; border-color: rgba(255, 200, 70, 0.3); }
+  #flash b { position: absolute; left: 50%; top: 44%; transform: translate(-50%, -50%) rotate(var(--r, -6deg));
+    font: 16vmin/1 var(--display); color: var(--red); -webkit-text-stroke: 0.45vmin var(--ink);
+    text-shadow: 0.9vmin 0.9vmin 0 var(--ink); white-space: nowrap; }
   #scope::before, #scope::after { content: ''; position: absolute; background: var(--ink); }
   #scope.cross::before { left: 0; right: 0; top: 50%; height: 2px; box-shadow: 0 0 0 1px rgba(246, 238, 219, 0.45); }
   #scope.cross::after { top: 0; bottom: 0; left: 50%; width: 2px; box-shadow: 0 0 0 1px rgba(246, 238, 219, 0.45); }
@@ -258,7 +269,7 @@
 <div id="status">loading...</div>
 <div id="scope"></div>
 <canvas id="afterimage"></canvas>
-<div id="flash"></div>
+<div id="flash"><div class="burst"><i class="ring r2"></i><i class="ring"></i><i class="star"></i><i class="core"></i></div><b>FLASH!</b></div>
 <canvas id="radar"></canvas>
 <pre id="debug"></pre>
 <div id="killfeed"></div>

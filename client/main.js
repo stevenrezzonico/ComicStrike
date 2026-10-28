@@ -178,24 +178,47 @@ function selfPoint(out, dz) {
   out[2] = ps.f[PS_ORIGIN + 2] + dz;
 }
 
-// Flashbangs: white, then the frozen afterimage of the moment fading with it.
+// Flashbangs: a comic white-out (paper over the print, a starburst where it went off, FLASH!),
+// then the frozen afterimage of the moment fading with it; the off hand shields the eyes.
 const flashEl = document.getElementById('flash');
+const flashBurst = flashEl.querySelector('.burst');
 const afterimage = document.getElementById('afterimage');
+const starPolygon = (n, inner) => `polygon(${Array.from({ length: n * 2 }, (_, i) => {
+  const a = i / (n * 2) * Math.PI * 2, r = i % 2 ? inner : 50 - (i % 4 ? 0 : 6);
+  return `${(50 + Math.cos(a) * r).toFixed(1)}% ${(50 + Math.sin(a) * r).toFixed(1)}%`;
+}).join(',')})`;
+flashEl.querySelector('.star').style.clipPath = starPolygon(14, 24);
+flashEl.querySelector('.core').style.clipPath = starPolygon(10, 30);
+const lastFlashPop = new Float64Array(4); // x, y, z, time (ms) of the newest flashbang pop
 let flashShown = -1, lastFlashLeft = 0;
 function showFlash(left, total) {
-  if (left > lastFlashLeft + 0.05) { // a new flash: keep this frame; ears ring
+  if (left > lastFlashLeft + 0.05) { // a new flash: keep this frame; ears ring; the burst goes where it popped
     sounds.earRing(left);
     afterimage.width = canvas.width >> 1;
     afterimage.height = canvas.height >> 1;
     afterimage.getContext('2d').drawImage(canvas, 0, 0, afterimage.width, afterimage.height);
+    let sx = 0, sy = 0;
+    if (performance.now() - lastFlashPop[3] < 1000) {
+      const m = viewProj, [x, y, z] = lastFlashPop;
+      const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+      if (w > 1) {
+        sx = Math.max(-0.8, Math.min(0.8, (m[0] * x + m[4] * y + m[8] * z + m[12]) / w));
+        sy = Math.max(-0.8, Math.min(0.8, (m[1] * x + m[5] * y + m[9] * z + m[13]) / w));
+      }
+    }
+    flashBurst.style.setProperty('--x', `${(50 + sx * 50).toFixed(1)}%`);
+    flashBurst.style.setProperty('--y', `${(50 - sy * 50).toFixed(1)}%`);
+    flashEl.style.setProperty('--r', `${(Math.random() * 10 - 8).toFixed(1)}deg`);
   }
   lastFlashLeft = left;
   // Fully white for the first part (approx. of CS:GO's hold), then fading.
   const hold = total * 0.35, a = left <= 0 ? 0 : left > total - hold ? 1 : left / (total - hold);
   const shown = Math.round(a * 100) / 100;
+  weaponView.blind = Math.min(1, shown * 1.4);
   if (shown === flashShown) return;
   flashShown = shown;
   flashEl.style.opacity = Math.min(1, shown * 1.15);
+  flashBurst.style.setProperty('--k', (0.75 + 0.35 * shown).toFixed(2));
   afterimage.style.opacity = shown * 0.6;
 }
 
@@ -206,7 +229,13 @@ fx.onEffect = (kind, _weapon, x, y, z) => {
     sounds.hiss(x, y, z);
   } else if (kind === FX_FLASH || kind === FX_SMOKE || kind === FX_FIRE) {
     debris.puff(x, y, z + 4, 0.8, 0.8, 0.8, 12);
-    if (kind === FX_FLASH) sounds.bang(x, y, z);
+    if (kind === FX_FLASH) {
+      sounds.bang(x, y, z);
+      lastFlashPop[0] = x;
+      lastFlashPop[1] = y;
+      lastFlashPop[2] = z;
+      lastFlashPop[3] = performance.now();
+    }
     else if (kind === FX_SMOKE) {
       sounds.hiss(x, y, z);
       words.smoke(viewProj, x, y, z);
