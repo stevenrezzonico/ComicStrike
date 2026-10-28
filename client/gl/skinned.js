@@ -15,6 +15,10 @@ const LIGHT_DIR = (() => {
   return new Float32Array(v.map((x) => x / l));
 })();
 
+// Lifted map light that prints fully lit (no halftone dots): set per map from its
+// lightmap (Renderer.loadMap), shared by every model.
+export const mapLight = { full: 1.25 };
+
 // Skin for meshes drawn rigidly (guns, props): every bone at its bind pose.
 export const IDENTITY_SKIN = new Float32Array(MAX_BONES * 16);
 for (let i = 0; i < MAX_BONES; i++) for (let k = 0; k < 4; k++) IDENTITY_SKIN[i * 16 + k * 5] = 1;
@@ -38,11 +42,17 @@ export class SkinnedMesh {
   }
 }
 
+// Every draw gets the next object id (the shader mixes in each vertex color), so the ink
+// outlines each model and each part. Shared by all renderers: ids differ across them too.
+let nextId = 0;
+
 export class SkinnedRenderer {
   constructor(gl) {
     this.gl = gl;
     this.emissive = 0;
-    this.prog = program(gl, SKINNED_VS, SKINNED_FS, ['u_viewProj', 'u_model', 'u_bones', 'u_light', 'u_lightDir', 'u_emissive']);
+    this.white = 0;
+    this.prog = program(gl, SKINNED_VS, SKINNED_FS, ['u_viewProj', 'u_model', 'u_bones', 'u_light', 'u_lightDir',
+      'u_emissive', 'u_white', 'u_id', 'u_lightFull']);
   }
 
   begin(viewProj) {
@@ -51,14 +61,18 @@ export class SkinnedRenderer {
     gl.uniformMatrix4fv(this.prog.loc.u_viewProj, false, viewProj);
     gl.uniform3fv(this.prog.loc.u_lightDir, LIGHT_DIR);
     gl.uniform1f(this.prog.loc.u_emissive, (this.emissive = 0));
+    gl.uniform1f(this.prog.loc.u_white, (this.white = 0));
+    gl.uniform1f(this.prog.loc.u_lightFull, mapLight.full);
     gl.frontFace(gl.CCW);
   }
 
   // model: mat4 (model space -> world); skin: Pose.skin (or IDENTITY_SKIN); light: rgb
-  // multiplier; emissive: 1 glows unlit.
-  draw(mesh, model, skin, light, emissive = 0) {
+  // multiplier; emissive: 1 glows unlit; white: 0..1 toward white (spawn protection).
+  draw(mesh, model, skin, light, emissive = 0, white = 0) {
     const gl = this.gl;
     if (emissive !== this.emissive) gl.uniform1f(this.prog.loc.u_emissive, (this.emissive = emissive));
+    if (white !== this.white) gl.uniform1f(this.prog.loc.u_white, (this.white = white));
+    gl.uniform1ui(this.prog.loc.u_id, (nextId = (nextId + 1) & 1023));
     gl.uniformMatrix4fv(this.prog.loc.u_model, false, model);
     gl.uniformMatrix4fv(this.prog.loc.u_bones, false, skin, 0, MAX_BONES * 16);
     gl.uniform3fv(this.prog.loc.u_light, light);

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { buildGun, buildAllGuns, buildDefuser, GUN_ROOT, GUN_MAG, GUN_BOLT } from '../client/models/guns.js';
 import { WEAPONS } from '../shared/weapons.js';
 import { MESH_STRIDE } from '../client/gl/meshkit.js';
+import { buildFlash } from '../client/gl/gunmeshes.js';
 
 // Closed (every directed edge matched by its reverse) and outward (positive volume).
 function closed(m, what) {
@@ -79,6 +80,7 @@ Deno.test('guns: every weapon has a closed, low-poly model with its muzzle at th
     assert.ok(nearest(g.mesh, [0, 0, 0]) < 1, `${w.name}: the grip is at the origin`);
   });
   closed(buildDefuser(), 'defuser');
+  closed(buildFlash(20, 0, 3), 'muzzle flash');
 });
 
 Deno.test('guns: magazines and bolts are separate bones; sizes follow the real guns', () => {

@@ -10,10 +10,10 @@ import { FloorGrid, floorFaces, faceBounds } from './floorgrid.js';
 const STEP = 40; // a height change bigger than a stair step draws a line (approx.)
 const MARGIN = 8; // pixels of empty border
 
-// Floor tones (low -> high) and the outline (CS:GO's overviews: grey-beige floors).
-const LOW = [86, 84, 76];
-const HIGH = [196, 190, 172];
-const LINE = [30, 31, 32];
+// Floor tones (low -> high) and the outline: printed paper tones and ink, like the game.
+const LOW = [138, 124, 100];
+const HIGH = [246, 238, 219];
+const LINE = [23, 19, 15];
 
 export class Overview {
   // size: pixels along the longer side.

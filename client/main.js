@@ -24,7 +24,7 @@ import {
 import {
   WEAPONS, WEAPON_ID, ShotList, giveWeapon, weaponTick, viewPunchPitch, viewPunchYaw, hash32, WS_LAST_SLOT,
   WS_EVENTS, WS_SIZE, WS_SLOTS, WS_ACTIVE, WS_ACTION, WS_ACTION_END, SLOT_C4, NUM_SLOTS, ACTION_PLANT, ACTION_DEFUSE,
-  WS_ZOOM, WS_THROWN, WEV_THROW, activeWeapon, silenced,
+  WS_ZOOM, WS_THROWN, WEV_THROW, WEV_FIRE, activeWeapon, silenced,
 } from '../shared/weapons.js';
 import {
   BombSites, PLANT_TIME, DEFUSE_TIME, DEFUSE_TIME_KIT, C4_TIMER, BOMB_DROPPED, BOMB_PLANTED, BOMB_DEFUSED,
@@ -59,7 +59,8 @@ import { WeaponView } from './weaponview.js';
 import { NetClient } from './net.js';
 import { Hud } from './hud.js';
 import { Sounds } from './audio.js';
-import { SoundScape } from './soundscape.js';
+import { SoundScape, gunProfile } from './soundscape.js';
+import { InkWords } from './inkwords.js';
 import { Spectator, SPEC_EYES, SPEC_ROAM } from './spectate.js';
 import { ConsoleWindow } from './console.js';
 import { Menu } from './menu.js';
@@ -77,6 +78,7 @@ import {
 const DEG = Math.PI / 180;
 const FOV_Y = 73.74 * DEG; // CS:GO fov 90 at 4:3, kept vertical (Hor+)
 const ZOOM_RATE = 30; // per second: how fast the view zooms in or out (approximation)
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)'); // no line boil
 let fov = 90; // current CS:GO-style fov (horizontal at 4:3), eased toward the scope's
 const scopeEl = document.getElementById('scope');
 let scopeShown = '';
@@ -113,6 +115,7 @@ const guns = new GunMeshes(renderer.gl); // every gun model, shared by first and
 const models = new PlayerModels(renderer.gl, guns);
 const fx = new GrenadeFx(renderer.gl, guns);
 const overlays = [decals, debris, players, models, fx];
+const words = new InkWords(document.getElementById('fx'));
 const weaponView = new WeaponView(renderer.gl, FOV_Y, cv, guns);
 const input = new Input(canvas);
 const hud = new Hud((item) => buy(item));
@@ -343,6 +346,7 @@ function showImpacts() {
     const p = impacts.pos, n = impacts.normal;
     decals.add(p[i * 3], p[i * 3 + 1], p[i * 3 + 2], n[i * 3], n[i * 3 + 1], n[i * 3 + 2], melee ? 1.2 : 1.6,
       (hash32(tickCount * 7 + i) & 0xffff) / 65536, impacts.owner[i]);
+    if (!melee) words.wall(viewProj, p[i * 3], p[i * 3 + 1], p[i * 3 + 2]);
   }
 }
 
@@ -583,7 +587,10 @@ function applyEvents() {
     const x = ev.pos[k * 3], y = ev.pos[k * 3 + 1], z = ev.pos[k * 3 + 2];
     if (ev.kind[k] === SHOT_BLOOD) {
       debris.puff(x, y, z, 0.55, 0.05, 0.04, 6);
-      if (ev.shooter[k] === selfId) sounds.hit(false); // we hit someone
+      if (ev.shooter[k] === selfId) { // we hit someone
+        sounds.hit(false);
+        words.hit(viewProj, x, y, z);
+      }
     } else if (!breakables.broken[ev.breakable[k]] || !ev.breakable[k]) {
       sounds.impact(x, y, z);
       decals.add(x, y, z, ev.normal[k * 3], ev.normal[k * 3 + 1], ev.normal[k * 3 + 2], 1.6,
@@ -597,6 +604,7 @@ function applyEvents() {
     seenKillNext = (seenKillNext + 1) % seenKills.length;
     addKill(ev.killer[k], ev.victim[k], ev.weapon[k], (ev.killFlags[k] & KILL_HEADSHOT) !== 0);
     if (ev.killer[k] === selfId && (ev.killFlags[k] & KILL_HEADSHOT)) sounds.hit(true);
+    if (ev.killer[k] === selfId && ev.victim[k] !== selfId) words.kill((ev.killFlags[k] & KILL_HEADSHOT) !== 0);
   }
 }
 
@@ -604,6 +612,7 @@ function explosion(x, y, z, size = 1) {
   debris.puff(x, y, z + 24 * size, 1.0, 0.55, 0.12, Math.round(70 * size));
   debris.puff(x, y, z + 40 * size, 0.25, 0.23, 0.2, Math.round(60 * size));
   sounds.explosion(Math.min(1, size * Sounds.falloff(Math.hypot(x - eye[0], y - eye[1], z - eye[2]), 1500)));
+  words.explosion(viewProj, x, y, z + 24 * size);
 }
 
 // While planted: beep, faster and faster (approximation of CS:GO's 1.4 s down to
@@ -780,6 +789,10 @@ function tick() {
   weaponView.onTick(ws.f[WS_EVENTS], t * TICK_DT);
   if (alive) {
     scape.ownEvents(ws.f[WS_EVENTS], activeWeapon(ws), silenced(ws, ws.f[WS_ACTIVE]));
+    const w = activeWeapon(ws);
+    if ((ws.f[WS_EVENTS] & WEV_FIRE) && w && w.gun) {
+      words.shot(gunProfile(w, silenced(ws, ws.f[WS_ACTIVE])), performance.now());
+    }
     scape.ownMove(ps, buttons & IN_SPEED, ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1],
       ps.f[PS_ORIGIN + 2] - feetOffset(ps.i[PS_FLAGS]));
   }
@@ -935,7 +948,15 @@ function draw(now, alpha, dt) {
   }
   if (net && synced) bombBeeps(now);
 
-  const aspect = renderer.resize(1);
+  const aspect = renderer.resize(cv.mat_viewportscale.number);
+  const style = renderer.style;
+  style.comic = cv.r_comic.bool;
+  style.ink = cv.r_inkwidth.number;
+  style.dots = cv.r_halftone.number;
+  style.bands = cv.r_shadebands.number;
+  style.boil = cv.r_lineboil.bool && !reducedMotion.matches;
+  renderer.zoom = 90 / fov;
+  renderer.begin();
   const fovY = 2 * Math.atan(Math.tan(fov / 2 * DEG) * 0.75);
   weaponView.fovY = fovY; // the crosshair's spread circle
   perspective(proj, fovY, aspect, 4, 16384);
@@ -950,8 +971,6 @@ function draw(now, alpha, dt) {
     scape.others(interp, selfId, dt, rowFeet);
   }
   renderer.render(viewProj, invViewProj, eye, now / 1000, overlays);
-  if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
-  else showFlash(flash.left, flash.total);
 
   // The radar centers on whoever we see the game through.
   const watched = spectating && !roaming ? spectator.target : -1, w = watched * E_FIELDS;
@@ -998,12 +1017,19 @@ function draw(now, alpha, dt) {
   }
   if (inEyes) {
     spectator.syncWeapon(interp, now / 1000, dt, weaponView);
-    weaponView.draw(canvas.width, canvas.height, aspect, spectator.ws, spectator.ps, 0, now / 1000, dt,
+    weaponView.draw(canvas.height, aspect, spectator.ws, spectator.ps, 0, now / 1000, dt,
       interp[target + E_HEALTH], player.armor);
   } else {
-    weaponView.draw(canvas.width, canvas.height, aspect, ws, ps, lastButtons, simTime, dt, Math.max(player.health, 0),
+    weaponView.draw(canvas.height, aspect, ws, ps, lastButtons, simTime, dt, Math.max(player.health, 0),
       player.armor);
   }
+  // Print the frame, then what goes over it; the flashbang's afterimage is taken from it.
+  renderer.composite(now / 1000);
+  words.enabled = cv.cl_comicwords.bool && cv.cl_drawhud.bool;
+  words.update(now);
+  if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
+  else showFlash(flash.left, flash.total);
+  weaponView.drawCrosshair(canvas.width, canvas.height);
 }
 
 // Hidden tabs get no animation frames (and timers at most once a second): keep
@@ -1232,6 +1258,7 @@ const NO_ITEMS = new Items(), NO_HOSTAGES = new Hostages();
 // Forgets everything from the last game (server state, other players, effects).
 function resetSession() {
   synced = false;
+  words.clear();
   serverClock = -1;
   predictedTick.fill(-1);
   serverBroken.fill(0);
@@ -1394,7 +1421,7 @@ start().catch((err) => {
 });
 
 // Dev hook for inspecting the scene from the console.
-globalThis.webcs = {
+globalThis.comicstrike = {
   player,
   ps,
   ws,
@@ -1431,9 +1458,9 @@ globalThis.webcs = {
   get doors() {
     return doors;
   },
-  overlays, // objects drawn with draw(viewProj) after the opaque world
+  overlays, // objects drawn with draw(viewProj, gbuffer) after the opaque world
   models, // other players' animated models
-  // Offline only: equip any weapon by name, e.g. webcs.give('negev').
+  // Offline only: equip any weapon by name, e.g. comicstrike.give('negev').
   give: (name) => {
     const id = WEAPON_ID[name];
     if (!id || net) return net ? 'online: the server owns your weapons' : Object.keys(WEAPON_ID).filter((n) => n !== 'none');

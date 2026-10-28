@@ -28,7 +28,7 @@ export class Host {
     const apply = () => this.applyRules();
     const num = (name, value, help, min, max) => con.cvar(name, value, { help, min, max, onChange: apply });
 
-    this.hostname = con.cvar('hostname', 'WebCS', { help: 'Server name' });
+    this.hostname = con.cvar('hostname', 'ComicStrike', { help: 'Server name' });
     this.password = con.cvar('rcon_password', '', { flags: FCVAR_PROTECTED, help: 'Remote console password (empty: rcon off)' });
     num('mp_freezetime', DEFAULT_RULES.freezeTime, 'Freeze time at round start (s)', 0, 60);
     num('mp_roundtime', 1.92, 'Round time (min)', 1, 60);

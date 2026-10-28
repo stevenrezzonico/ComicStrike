@@ -61,7 +61,6 @@ export class PlayerModels {
     this.tmpLight = new Float32Array(3);
     this.immune = new Uint8Array(MAX_PLAYERS); // spawn protection: drawn pulsing toward white
     this.time = 0;
-    this.drawLight = new Float32Array(3);
     // Hostages.
     this.bodyH = new SkinnedMesh(gl, buildPlayer('H'));
     this.hostageAnim = Array.from({ length: MAX_HOSTAGES }, () => new PlayerAnimator());
@@ -207,16 +206,14 @@ export class PlayerModels {
         begun = true;
       }
       const model = this.modelOf[id];
-      let light = this.lightOf[id];
-      if (this.immune[id]) { // spawn protection: a fast pulse toward white (approx. of CS:GO's)
-        const a = 0.3 + 0.3 * Math.sin(this.time * Math.PI * 6);
-        for (let ch = 0; ch < 3; ch++) this.drawLight[ch] = light[ch] + (1.6 - light[ch]) * a;
-        light = this.drawLight;
-      }
+      const light = this.lightOf[id];
+      // Spawn protection: a fast pulse toward white (approx. of CS:GO's).
+      const white = this.immune[id] ? 0.3 + 0.3 * Math.sin(this.time * Math.PI * 6) : 0;
       const skin = this.anim[id].pose.skin;
-      r.draw(this.body[id], model, skin, light);
+      r.draw(this.body[id], model, skin, light, 0, white);
       if (this.weapon[id]) {
-        r.draw(this.guns.meshOf(this.weapon[id], this.silenced[id]), this.gunOf[id], this.gunSkinOf[id], light);
+        r.draw(this.guns.meshOf(this.weapon[id], this.silenced[id]), this.gunOf[id], this.gunSkinOf[id], light, 0,
+          white);
       }
     }
     for (let k = 0; k < MAX_HOSTAGES; k++) {

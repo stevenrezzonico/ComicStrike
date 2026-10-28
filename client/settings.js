@@ -4,7 +4,8 @@
 import { Console, FCVAR_ARCHIVE, FCVAR_PROTECTED } from '../shared/cvars.js';
 import { Binds } from './binds.js';
 
-const CONFIG_KEY = 'webcs.config.cfg';
+const CONFIG_KEY = 'comicstrike.config.cfg';
+const OLD_CONFIG_KEY = 'webcs.config.cfg'; // saved before the rename to ComicStrike: read once
 const SAVE_DELAY_MS = 500;
 
 export function createConsole(print) {
@@ -18,7 +19,7 @@ export function createConsole(print) {
   };
   const writeConfig = () => {
     try {
-      localStorage.setItem(CONFIG_KEY, ['// WebCS config (host_writeconfig)', ...con.archive(), ...binds.archive()].join('\n'));
+      localStorage.setItem(CONFIG_KEY, ['// ComicStrike config (host_writeconfig)', ...con.archive(), ...binds.archive()].join('\n'));
       return true;
     } catch {
       return false; // storage blocked (private window): settings last for this page only
@@ -57,12 +58,20 @@ export function createConsole(print) {
   add('cl_showpos', 0, 'Position, angles and speed', 0, 1);
   add('net_graph', 0, 'Network graph: ping, loss, rates, prediction', 0, 1);
   add('cl_drawhud', 1, 'Draw the HUD', 0, 1);
+  add('cl_comicwords', 1, 'Comic sound words: BAM! on hits, BLAM! on your shots, KA-BOOM! on explosions', 0, 1);
   add('cl_showhitboxes', 0, 'Draw other players as their hit boxes instead of their models', 0, 1);
   // Radar (client/radar.js).
   add('cl_radar_scale', 0.7, 'Radar zoom (smaller: more of the map)', 0.25, 1);
   add('cl_radar_rotate', 1, 'The radar turns with the view', 0, 1);
   add('cl_radar_always_centered', 1, '0: the radar stops at the map edges (when it does not turn)', 0, 1);
   add('cl_hud_radar_scale', 1, 'Radar size', 0.8, 1.3);
+  // The comic print (client/gl/renderer.js).
+  add('r_comic', 1, '1: ink lines and halftone dots, 0: plain lit colors', 0, 1);
+  add('r_inkwidth', 1, 'Ink line width, relative to the screen height (0: no lines)', 0, 4);
+  add('r_halftone', 1, 'Halftone dot size, relative to the screen height (0: flat tones)', 0, 4);
+  add('r_shadebands', 0, 'Light printed in this many flat bands (0: smooth)', 0, 8);
+  add('r_lineboil', 1, 'Hand-drawn wobble of the ink lines (off with reduced motion)', 0, 1);
+  add('mat_viewportscale', 1, 'Render resolution, relative to the window', 0.25, 1);
   // View.
   add('viewmodel_fov', 60, 'Weapon model field of view', 54, 68);
   add('viewmodel_offset_x', 1, 'Weapon model offset: right', -2.5, 2.5);
@@ -83,7 +92,7 @@ export function createConsole(print) {
   // Saved settings over the defaults.
   let saved = null;
   try {
-    saved = localStorage.getItem(CONFIG_KEY);
+    saved = localStorage.getItem(CONFIG_KEY) ?? localStorage.getItem(OLD_CONFIG_KEY);
   } catch { /* storage blocked */ }
   if (saved) {
     loading = true;

@@ -18,7 +18,9 @@ const RANGE = 4096; // world units across the radar at cl_radar_scale 1 (approx.
 const SIZE = 0.27; // of the screen height at cl_hud_radar_scale 1 (approx.)
 const LEVEL = 128; // higher or lower than this: an up / down mark
 const DEG = Math.PI / 180;
-const COLOR = { [TEAM_T]: '#e8c46a', [TEAM_CT]: '#8cb4f0', enemy: '#e8443a', bomb: '#ff9a3c', site: 'rgba(232,196,106,0.85)' };
+const COLOR = {
+  [TEAM_T]: '#ffb84a', [TEAM_CT]: '#7db8ff', enemy: '#e2402a', bomb: '#ff9a3c', site: 'rgba(226,64,42,0.9)',
+};
 
 export class Radar {
   constructor(canvas, cv) {
@@ -84,7 +86,7 @@ export class Radar {
     ctx.save();
     ctx.beginPath();
     ctx.arc(R, R, R - dpr, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(12, 14, 17, 0.7)';
+    ctx.fillStyle = 'rgba(23, 19, 15, 0.8)';
     ctx.fill();
     ctx.clip();
     // The overview: pixel (u, v) -> world (minX + s u, maxY - s v) -> radar.
@@ -157,8 +159,13 @@ export class Radar {
     ctx.restore();
     ctx.beginPath();
     ctx.arc(R, R, R - dpr, 0, Math.PI * 2);
-    ctx.lineWidth = dpr * 1.5;
-    ctx.strokeStyle = 'rgba(200, 196, 180, 0.55)';
+    ctx.lineWidth = dpr * 3; // an ink rim with a paper edge, like the HUD's panels
+    ctx.strokeStyle = '#17130f';
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(R, R, R - dpr * 3.5, 0, Math.PI * 2);
+    ctx.lineWidth = dpr;
+    ctx.strokeStyle = 'rgba(246, 238, 219, 0.7)';
     ctx.stroke();
   }
 

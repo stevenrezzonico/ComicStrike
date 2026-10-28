@@ -1,16 +1,25 @@
-// WebGL2 renderer: one VBO + one index buffer for the whole map.
-// Draw order: opaque world, sky brushes, sky fill, overlays (decals, debris, players), translucent world.
+// WebGL2 renderer: one VBO + one index buffer for the whole map, drawn comic style.
+// A frame: begin() binds the G-buffer (client/gl/gbuffer.js); render() draws the opaque
+// world, sky brushes, sky fill, overlays (decals, debris, players) and see-through faces
+// (as a dot screen) into it; the first-person view goes in after a depth clear; then
+// composite() prints the whole frame to the canvas in one pass (ink lines, halftone).
 
-import { WORLD_VS, WORLD_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS } from './shaders.js';
+import { WORLD_VS, WORLD_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS, COMPOSITE_VS, COMPOSITE_FS } from './shaders.js';
 import { VERTEX_STRIDE } from '../mapmesh.js';
 import { program } from './program.js';
+import { GBuffer } from './gbuffer.js';
+import { mapLight } from './skinned.js';
+
+// The light that prints fully lit: this share of the map's lit lightmap texels is at or
+// below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
+const LIGHT_FULL_SHARE = 0.75;
 
 export class Renderer {
   constructor(canvas) {
     const gl = canvas.getContext('webgl2', {
       antialias: false,
       alpha: false,
-      depth: true,
+      depth: false, // the G-buffer has its own; the canvas only gets the composite
       stencil: false,
       powerPreference: 'high-performance',
       // No desynchronized: it lets the display scan out half-drawn frames, so late
@@ -20,26 +29,31 @@ export class Renderer {
     if (!gl) throw new Error('WebGL2 is not available');
     this.gl = gl;
     this.canvas = canvas;
-    this.world = program(gl, WORLD_VS, WORLD_FS, ['u_viewProj', 'u_lightmap', 'u_eye', 'u_time', 'u_fogColor', 'u_broken',
-      'u_moverBase', 'u_movers']);
+    this.world = program(gl, WORLD_VS, WORLD_FS, ['u_viewProj', 'u_lightmap', 'u_time', 'u_zoom', 'u_dot', 'u_lightFull',
+      'u_broken', 'u_moverBase', 'u_movers']);
     this.broken = new Uint32Array(8); // bit per breakable slot
     this.movers = null; // shared/doors.js Doors: slots above slotBase are drawn moved
-    const skyUniforms = ['u_eye', 'u_horizon', 'u_zenith', 'u_time'];
+    const skyUniforms = ['u_eye', 'u_horizon', 'u_time'];
     this.skyMesh = program(gl, SKY_MESH_VS, SKY_FS, ['u_viewProj', ...skyUniforms]);
     this.skyFill = program(gl, SKY_FILL_VS, SKY_FS, ['u_invViewProj', ...skyUniforms]);
+    this.comp = program(gl, COMPOSITE_VS, COMPOSITE_FS, ['u_albedo', 'u_normal', 'u_depth', 'u_res', 'u_line',
+      'u_dot', 'u_time', 'u_zoom', 'u_bands', 'u_style']);
+    this.gbuf = new GBuffer(gl);
     this.emptyVao = gl.createVertexArray();
     this.vao = null;
     this.opaqueCount = 0;
     this.skyCount = 0;
     this.transCount = 0;
-    this.horizon = new Float32Array([0.78, 0.74, 0.66]);
-    this.zenith = new Float32Array([0.36, 0.52, 0.74]);
+    this.horizon = new Float32Array([0.76, 0.89, 0.93]);
+    // The print (client/settings.js r_* cvars): comic or plain, ink line width and dot
+    // size relative to the screen height, light bands, line boil.
+    this.style = { comic: true, ink: 1, dots: 1, bands: 0, boil: true };
+    this.zoom = 1; // 90 / fov
 
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
     gl.cullFace(gl.BACK);
     gl.frontFace(gl.CW); // GoldSrc faces wind clockwise seen from the front
-    gl.clearColor(0, 0, 0, 1);
   }
 
   loadMap(mesh) {
@@ -85,6 +99,7 @@ export class Renderer {
     this.opaqueCount = mesh.opaqueCount;
     this.skyCount = mesh.skyCount;
     this.transCount = mesh.transCount;
+    mapLight.full = fullLight(lm.data);
   }
 
   // Hides (or restores) a breakable's faces without touching the vertex buffer.
@@ -103,6 +118,7 @@ export class Renderer {
     this.movers = doors && doors.count ? doors : null;
   }
 
+  // scale: render resolution relative to the page (mat_viewportscale).
   resize(scale = 1) {
     const c = this.canvas;
     const w = Math.max(1, Math.round(c.clientWidth * scale));
@@ -111,8 +127,13 @@ export class Renderer {
       c.width = w;
       c.height = h;
     }
-    this.gl.viewport(0, 0, w, h);
+    this.gbuf.resize(w, h);
     return w / h;
+  }
+
+  // Halftone cell in pixels (0: flat tones), from the screen height like the ink.
+  dotSize() {
+    return this.style.dots > 0 ? Math.max(3, this.canvas.height / 165) * this.style.dots : 0;
   }
 
   setSkyUniforms(s, eye, time) {
@@ -120,23 +141,26 @@ export class Renderer {
     gl.useProgram(s.p);
     gl.uniform3fv(s.loc.u_eye, eye);
     gl.uniform3fv(s.loc.u_horizon, this.horizon);
-    gl.uniform3fv(s.loc.u_zenith, this.zenith);
     gl.uniform1f(s.loc.u_time, time);
   }
 
+  // Starts a frame in the G-buffer.
+  begin() {
+    this.gbuf.begin();
+  }
+
   // overlays: objects with draw(viewProj) (decals, debris, players), drawn after the
-  // sky and before translucent surfaces.
+  // sky and before see-through surfaces.
   render(viewProj, invViewProj, eye, time, overlays = null) {
     const gl = this.gl;
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
     const w = this.world;
     if (this.vao) {
       gl.useProgram(w.p);
       gl.uniformMatrix4fv(w.loc.u_viewProj, false, viewProj);
-      gl.uniform3fv(w.loc.u_eye, eye);
       gl.uniform1f(w.loc.u_time, time);
-      gl.uniform3fv(w.loc.u_fogColor, this.horizon);
+      gl.uniform1f(w.loc.u_zoom, this.zoom);
+      gl.uniform1f(w.loc.u_dot, this.dotSize());
+      gl.uniform1f(w.loc.u_lightFull, mapLight.full);
       gl.uniform1i(w.loc.u_lightmap, 0);
       gl.uniform4uiv(w.loc.u_broken, this.broken);
       gl.uniform1ui(w.loc.u_moverBase, this.movers ? this.movers.slotBase : 255);
@@ -166,21 +190,63 @@ export class Renderer {
     gl.depthMask(true);
     gl.depthFunc(gl.LESS);
 
-    if (overlays) for (let i = 0; i < overlays.length; i++) overlays[i].draw(viewProj);
+    if (overlays) for (let i = 0; i < overlays.length; i++) overlays[i].draw(viewProj, this.gbuf);
 
-    // Translucent last so glass and water blend over the sky behind them.
+    // Glass and water: opaque dots of a screen (WORLD_FS), so no sorting or blending.
     if (this.vao && this.transCount > 0) {
       gl.useProgram(w.p);
       gl.bindVertexArray(this.vao);
-      gl.enable(gl.BLEND);
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-      gl.depthMask(false);
       gl.disable(gl.CULL_FACE);
       gl.drawElements(gl.TRIANGLES, this.transCount, gl.UNSIGNED_INT, (this.opaqueCount + this.skyCount) * 4);
       gl.enable(gl.CULL_FACE);
-      gl.depthMask(true);
-      gl.disable(gl.BLEND);
     }
     gl.bindVertexArray(null);
   }
+
+  // Prints the G-buffer to the canvas. Leaves the canvas bound (crosshair after it).
+  composite(time) {
+    const gl = this.gl, c = this.comp.loc, st = this.style;
+    const h = this.canvas.height;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.canvas.width, h);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.useProgram(this.comp.p);
+    this.gbuf.bindTextures();
+    gl.uniform1i(c.u_albedo, 0);
+    gl.uniform1i(c.u_normal, 1);
+    gl.uniform1i(c.u_depth, 2);
+    gl.uniform2f(c.u_res, this.canvas.width, h);
+    gl.uniform1f(c.u_line, st.ink > 0 ? Math.max(1, Math.round(h / 540 * st.ink)) : 0);
+    gl.uniform1f(c.u_dot, this.dotSize());
+    gl.uniform1f(c.u_time, st.boil ? time : 0);
+    gl.uniform1f(c.u_zoom, this.zoom);
+    gl.uniform1f(c.u_bands, st.bands);
+    gl.uniform1i(c.u_style, st.comic ? 1 : 0);
+    gl.bindVertexArray(this.emptyVao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+    gl.enable(gl.CULL_FACE);
+    gl.enable(gl.DEPTH_TEST);
+  }
+}
+
+// The lifted light (WORLD_FS: pow(lm, 0.6) * 1.45) below which LIGHT_FULL_SHARE of the
+// lightmap's lit texels fall, from a histogram of their brightness.
+export function fullLight(rgba) {
+  const hist = new Uint32Array(256);
+  let n = 0;
+  for (let i = 0; i < rgba.length; i += 4) {
+    if (rgba[i + 3] !== 255) continue; // atlas gaps
+    const l = Math.round(0.3 * rgba[i] + 0.59 * rgba[i + 1] + 0.11 * rgba[i + 2]);
+    if (l === 0) continue;
+    hist[l]++;
+    n++;
+  }
+  let b = 1;
+  for (let seen = 0; b < 255; b++) {
+    seen += hist[b];
+    if (seen >= n * LIGHT_FULL_SHARE) break;
+  }
+  return n ? Math.max(0.5, Math.pow(b / 255, 0.6) * 1.45) : 1.25;
 }

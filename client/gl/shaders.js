@@ -1,4 +1,49 @@
 // GLSL sources. Material ids must match shared/materials.js (MAT).
+//
+// Comic rendering: every scene shader writes the G-buffer (client/gl/gbuffer.js) through
+// GBUFFER's gbuffer(): flat albedo and how lit it is, the normal and an object id, linear
+// depth and flags. COMPOSITE_FS then prints the frame from it in one pass: ink lines on
+// silhouettes, creases and object boundaries, a halftone dot screen for shade, the sky's
+// dots, paper grain.
+
+// Value noise, shared by the surfaces, the sky and the composite.
+const NOISE = `
+float h21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + 1.0), f.x), f.y);
+}`;
+
+// G-buffer flags (alpha of target 2), as GBUFFER_CONSTS declares them.
+export const G_FLAGS = { FLAT: 1, SKY: 2, SCREEN: 4 };
+
+const GBUFFER_CONSTS = `
+const float DEPTH_FAR = 16384.0; // linear depth range (units), stored in 24 bits
+const uint G_FLAT = 1u;   // unshaded (lights, flames, flashes): no dots, a bolder line
+const uint G_SKY = 2u;
+const uint G_SCREEN = 4u; // see-through, printed as a dot screen: no ink against what lies behind
+const vec3 INK = vec3(0.09, 0.075, 0.06);`;
+
+// Fragment outputs of every scene shader.
+const GBUFFER = `
+layout(location = 0) out vec4 o_albedo; // rgb albedo, a: light 0..1
+layout(location = 1) out vec4 o_normal; // normal * 0.5 + 0.5, a: object id / 255
+layout(location = 2) out vec4 o_depth;  // rgb: linear depth / DEPTH_FAR in 24 bits, a: G_ flags / 255
+${GBUFFER_CONSTS}
+void gbuffer(vec3 albedo, float light, vec3 n, uint id, float depth, uint flags) {
+  o_albedo = vec4(albedo, light);
+  o_normal = vec4(normalize(n) * 0.5 + 0.5, float(id) / 255.0);
+  float x = floor(clamp(depth / DEPTH_FAR, 0.0, 1.0) * 16777215.0);
+  float hi = floor(x / 65536.0);
+  x -= hi * 65536.0;
+  float mid = floor(x / 256.0);
+  o_depth = vec4(hi, mid, x - mid * 256.0, float(flags)) / 255.0;
+}`;
 
 export const WORLD_VS = `#version 300 es
 layout(location=0) in vec3 a_pos;
@@ -18,7 +63,8 @@ out vec2 v_uv;
 out vec2 v_lm;
 out vec3 v_nrm;
 out vec4 v_col;
-flat out uvec3 v_mat;
+out float v_w;
+flat out uvec4 v_mat; // material, flags, seed, object id
 
 void main() {
   uint slot = a_mat.w;
@@ -39,161 +85,205 @@ void main() {
   v_lm = a_lm;
   v_nrm = nrm;
   v_col = a_col;
-  v_mat = a_mat.xyz;
+  // Ids 1..127 by texture and entity: ink where the texture changes, not along the
+  // BSP's splits of one surface.
+  v_mat = uvec4(a_mat.xyz, (a_mat.z * 7u + slot * 13u) % 127u + 1u);
   gl_Position = u_viewProj * vec4(pos, 1.0);
+  v_w = gl_Position.w;
 }`;
 
 export const WORLD_FS = `#version 300 es
 precision highp float;
+precision highp int;
 
 in vec3 v_pos;
 in vec2 v_uv;
 in vec2 v_lm;
 in vec3 v_nrm;
 in vec4 v_col;
-flat in uvec3 v_mat;
+in float v_w;
+flat in uvec4 v_mat;
 
 uniform sampler2D u_lightmap;
-uniform vec3 u_eye;
 uniform float u_time;
-uniform vec3 u_fogColor;
+uniform float u_zoom; // 90 / fov: the ink fade follows the scope
+uniform float u_dot;  // halftone cell (px): see-through surfaces use a finer screen
+uniform float u_lightFull; // lifted map light that prints fully lit (no dots), per map
 
-out vec4 o_color;
+${GBUFFER}
 
 const uint FLAG_ALPHATEST = 1u;
 const uint FLAG_FULLBRIGHT = 2u;
 
-float h21(vec2 p) {
-  p = fract(p * vec2(123.34, 456.21));
-  p += dot(p, p + 45.32);
-  return fract(p.x * p.y);
-}
-
-// Smooth value noise: reads like a heavily mip-biased texture (LodAdj=5).
-float vnoise(vec2 p) {
-  vec2 i = floor(p), f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  float a = h21(i), b = h21(i + vec2(1, 0)), c = h21(i + vec2(0, 1)), d = h21(i + 1.0);
-  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
+${NOISE}
 
 // Distance to the nearest edge of the unit cell.
 float edge(vec2 f) { return min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y)); }
 
-vec3 surface(uint mat, vec2 uv, vec3 base, float seed, uint flags) {
+// Ink on the cell borders of b: half width w in cells per axis (0: none on that axis),
+// fw = fwidth(b). Lines thin out where cells get small on screen, so far walls stay calm.
+float grid(vec2 b, vec2 w, vec2 fw) {
+  vec2 d = abs(fract(b) - 0.5);
+  vec2 l = smoothstep(0.5 - w - fw, 0.5 - w, d) * step(0.0001, w);
+  return max(l.x, l.y) * (1.0 - smoothstep(0.1, 0.25, max(fw.x, fw.y)));
+}
+
+// Ink where v is within w of c (fw = fwidth(v)).
+float line(float v, float c, float w, float fw) {
+  return 1.0 - smoothstep(w, w + fw, abs(v - c));
+}
+
+// A see-through surface as a 15 degree dot screen covering 'cover' of the area.
+float screenAt(vec2 frag, float cover, float size) {
+  vec2 q = mat2(0.966, -0.259, 0.259, 0.966) * frag / size;
+  if (cover > 0.5) return step(sqrt((1.0 - cover) / 3.14159), length(fract(q + 0.5) - 0.5));
+  return step(length(fract(q) - 0.5), sqrt(cover / 3.14159));
+}
+
+// Comic background art: a flat color with a few ink marks per class (some bricks outlined,
+// plank seams, tile grout) and, on floors (up = 1), weathering blotches printed as dots
+// ('dark' takes light away).
+vec3 surface(uint mat, vec2 uv, vec2 fw, vec3 base, float seed, uint flags, float up, inout float ink,
+  inout float dark) {
   vec2 s = uv + seed * 7.13;
+  float fwm = max(fw.x, fw.y);
   if (mat == 0u) { // PLASTER
-    return base * (0.92 + 0.14 * vnoise(s * 3.0));
+    if (vnoise(s * 3.0) > 0.74) dark = 0.22 * up;
+    return base;
   } else if (mat == 1u) { // CONCRETE
-    return base * (0.82 + 0.16 * vnoise(s * 4.0) + 0.06 * vnoise(s * 15.0));
-  } else if (mat == 2u) { // BRICK
+    if (vnoise(s * 3.0) > 0.72) dark = 0.22 * up;
+    ink = grid(uv, vec2(0.008), fw) * step(0.55, h21(floor(uv) + seed));
+    return base;
+  } else if (mat == 2u) { // BRICK: only some bricks drawn
     vec2 b = uv * vec2(2.0, 4.0);
     b.x += 0.5 * mod(floor(b.y), 2.0);
-    vec2 f = fract(b);
-    float m = smoothstep(0.03, 0.11, min(min(f.x, 1.0 - f.x) * 0.5, min(f.y, 1.0 - f.y)));
-    vec3 brick = base * (0.8 + 0.3 * h21(floor(b) + seed));
-    return mix(vec3(0.62, 0.6, 0.56) * 255.0 * 0.75, brick, m);
+    float show = step(0.62, vnoise(floor(b) * 0.45 + seed * 5.0));
+    ink = show * grid(b, vec2(0.035, 0.07), fw * vec2(2.0, 4.0));
+    if (show > 0.5 && h21(floor(b) + seed) > 0.72) dark = 0.3;
+    else if (vnoise(s * 3.0 + 11.0) > 0.74) dark = 0.22 * up;
+    return base;
   } else if (mat == 3u) { // STONE
     vec2 b = uv * vec2(2.0, 3.0);
-    b.x += h21(vec2(floor(b.y), seed)) ;
-    vec2 f = fract(b);
-    float m = smoothstep(0.02, 0.09, edge(f));
-    float v = 0.75 + 0.35 * h21(floor(b) + seed) + 0.1 * vnoise(s * 9.0);
-    return base * v * mix(0.55, 1.0, m);
+    b.x += h21(vec2(floor(b.y), seed));
+    float show = step(0.5, vnoise(floor(b) * 0.5 + seed * 3.0));
+    ink = show * grid(b, vec2(0.04), fw * vec2(2.0, 3.0));
+    if (h21(floor(b) + seed + 0.5) > 0.75) dark = 0.3;
+    return base * (0.94 + 0.12 * h21(floor(b) + seed));
   } else if (mat == 4u) { // GROUND
-    return base * (0.78 + 0.3 * vnoise(s * 3.0) + 0.12 * vnoise(s * 11.0));
+    if (vnoise(s * 2.5) > 0.7) dark = 0.22 * up;
+    return base;
   } else if (mat == 5u) { // FOLIAGE
     float n = vnoise(s * 6.0);
     if ((flags & FLAG_ALPHATEST) != 0u && n < 0.42) discard;
-    return base * (0.65 + 0.6 * n);
-  } else if (mat == 6u) { // WOOD
+    if (vnoise(s * 14.0) < 0.3) dark = 0.3;
+    return base * (0.9 + 0.3 * step(0.7, n));
+  } else if (mat == 6u) { // WOOD: plank seams
     float p = uv.y * 4.0;
-    float f = fract(p);
-    float seam = smoothstep(0.0, 0.07, f) * smoothstep(1.0, 0.93, f);
-    float grain = vnoise(vec2(uv.x * 3.0, uv.y * 36.0) + seed);
-    return base * (0.8 + 0.25 * h21(vec2(floor(p), seed))) * (0.85 + 0.2 * grain) * mix(0.6, 1.0, seam);
-  } else if (mat == 7u) { // CRATE
+    ink = grid(vec2(0.5, p), vec2(0.0, 0.04), vec2(0.0, fw.y * 4.0));
+    return base * (0.92 + 0.14 * h21(vec2(floor(p), seed)));
+  } else if (mat == 7u) { // CRATE: frame, brace, planks
     vec2 f = fract(uv);
-    float frame = smoothstep(0.07, 0.11, edge(f));
-    float brace = smoothstep(0.035, 0.07, abs(f.x - f.y));
-    float plank = mix(0.75, 1.0, smoothstep(0.0, 0.06, fract(f.y * 4.0)));
-    vec3 inner = base * plank * (0.9 + 0.15 * vnoise(s * 8.0));
-    return mix(base * 0.62, inner, frame * brace);
-  } else if (mat == 8u) { // METAL
-    vec2 f = fract(uv * vec2(1.0, 2.0));
-    float seam = smoothstep(0.0, 0.04, edge(f));
-    float streak = vnoise(vec2(uv.x * 10.0, uv.y * 1.5) + seed);
-    return base * (0.8 + 0.25 * streak) * mix(0.6, 1.0, seam);
+    float e = edge(f);
+    float frame = step(e, 0.1);
+    ink = max(line(e, 0.1, 0.008, fwm), grid(uv, vec2(0.012), fw));
+    if (frame < 0.5) {
+      ink = max(ink, line(abs(f.x - f.y), 0.035, 0.006, fwm)); // the diagonal brace's two edges
+      ink = max(ink, 0.6 * grid(vec2(0.5, f.y * 4.0), vec2(0.0, 0.02), vec2(0.0, fw.y * 4.0)));
+    }
+    return base * (frame > 0.5 ? 0.82 : 1.0);
+  } else if (mat == 8u) { // METAL: panel seams, streaks
+    ink = grid(uv * vec2(1.0, 2.0), vec2(0.012), fw * vec2(1.0, 2.0));
+    if (vnoise(vec2(uv.x * 6.0, uv.y * 1.2) + seed) > 0.72) dark = 0.22 * up;
+    return base;
   } else if (mat == 9u) { // GRATE
     vec2 g = fract(uv * 8.0);
     bool bar = min(g.x, g.y) < 0.28;
     if (!bar && (flags & FLAG_ALPHATEST) != 0u) discard;
-    return base * (bar ? 1.0 : 0.45);
-  } else if (mat == 10u) { // WINDOW
+    if (!bar) dark = 0.6;
+    return base * (bar ? 1.0 : 0.4);
+  } else if (mat == 10u) { // WINDOW: dark pane, frame, two glints
     vec2 g = fract(uv * 2.0);
-    if (edge(g) < 0.07) return base * 1.1;
-    float sheen = 0.6 + 0.4 * smoothstep(0.2, 0.9, g.y + 0.3 * g.x);
-    return vec3(38.0, 50.0, 66.0) * sheen;
-  } else if (mat == 11u) { // WATER
-    float n = vnoise(v_pos.xy * 0.02 + u_time * vec2(0.3, 0.2)) + vnoise(v_pos.yx * 0.035 - u_time * 0.25);
-    return base * (0.75 + 0.35 * n);
-  } else if (mat == 12u) { // TILE
+    float e = edge(g);
+    if (e < 0.07) return base * 1.1;
+    ink = line(e, 0.07, 0.01, fwm * 2.0);
+    float d = g.x + g.y;
+    if (abs(d - 0.9) < 0.07 || abs(d - 1.12) < 0.03) return vec3(0.86, 0.9, 0.94);
+    return vec3(0.2, 0.22, 0.28);
+  } else if (mat == 11u) { // WATER: drifting contour lines
+    float n = vnoise(v_pos.xy * 0.012 + u_time * vec2(0.15, 0.1)) + 0.5 * vnoise(v_pos.yx * 0.03 - u_time * 0.2);
+    float c = fract(n * 4.0);
+    ink = 0.8 * line(c, 0.5, 0.04, fwidth(n * 4.0));
+    dark = -1.0; // printed light: lightmaps under water are dark
+    return mix(base, vec3(0.55, 0.78, 0.84), 0.45);
+  } else if (mat == 12u) { // TILE: grout
     vec2 b = uv * 4.0;
-    vec2 f = fract(b);
-    float m = smoothstep(0.02, 0.06, edge(f));
-    float c = mod(floor(b.x) + floor(b.y), 2.0);
-    return base * mix(0.6, 0.9 + 0.12 * c, m);
-  } else if (mat == 13u) { // FABRIC
-    vec2 f = fract(uv);
-    float border = step(0.08, edge(f));
-    return base * (0.85 + 0.2 * vnoise(s * 12.0)) * mix(1.35, 1.0, border);
+    ink = grid(b, vec2(0.03), fw * 4.0);
+    return base * (0.94 + 0.08 * mod(floor(b.x) + floor(b.y), 2.0));
+  } else if (mat == 13u) { // FABRIC: hem
+    ink = line(edge(fract(uv)), 0.08, 0.008, fwm);
+    if (vnoise(s * 4.0) > 0.7) dark = 0.3 * up;
+    return base;
   } else if (mat == 14u) { // LIGHT
-    vec2 f = fract(uv);
-    return base * (0.85 + 0.25 * smoothstep(0.0, 0.4, edge(f)));
-  } else if (mat == 15u) { // DOOR
+    return min(base * 1.15, vec3(1.0));
+  } else if (mat == 15u) { // DOOR: two inset panels
     vec2 f = fract(uv);
     vec2 p = vec2(f.x, fract(f.y * 2.0));
-    float inset = smoothstep(0.12, 0.16, edge(p)) - smoothstep(0.16, 0.2, edge(p)) * 0.5;
-    return base * (0.85 + 0.15 * vnoise(s * 6.0)) * (1.0 - 0.3 * inset);
-  } else if (mat == 16u) { // DECAL (signs, posters, books)
+    ink = max(line(edge(p), 0.14, 0.01, fwm * 2.0), grid(uv, vec2(0.01), fw));
+    if (edge(p) > 0.14 && p.y < 0.3) dark = 0.3;
+    return base;
+  } else if (mat == 16u) { // DECAL (signs, posters, books): color blocks in a frame
     vec2 c = floor(uv * 4.0);
     vec3 tint = vec3(h21(c + seed), h21(c + seed + 3.1), h21(c + seed + 7.7));
-    vec3 col = mix(base, tint * 220.0, 0.45);
-    return edge(fract(uv)) < 0.06 ? base * 0.5 : col;
-  } else if (mat == 17u) { // TECH
+    ink = line(edge(fract(uv)), 0.06, 0.01, fwm);
+    return edge(fract(uv)) < 0.06 ? base * 0.6 : mix(base, tint, 0.45);
+  } else if (mat == 17u) { // TECH: panel lines and lit cells
     vec2 c = floor(uv * 6.0);
-    float on = step(0.72, h21(c + seed + floor(u_time * 1.5 * h21(c))));
-    vec3 led = mix(vec3(60, 220, 90), vec3(240, 160, 40), h21(c + 9.0));
-    return mix(base * (0.85 + 0.15 * vnoise(s * 5.0)), led, on * step(0.15, edge(fract(uv * 6.0))));
-  } else if (mat == 18u) { // ROOF
+    ink = grid(uv * 2.0, vec2(0.015), fw * 2.0);
+    float on = step(0.72, h21(c + seed + floor(u_time * 1.5 * h21(c)))) * step(0.15, edge(fract(uv * 6.0)));
+    vec3 led = mix(vec3(0.25, 0.86, 0.35), vec3(0.95, 0.63, 0.16), h21(c + 9.0));
+    return mix(base, led, on);
+  } else if (mat == 18u) { // ROOF: shingle rows, shadowed under each row
     float p = uv.y * 6.0;
-    float off = floor(uv.x * 4.0 + 0.5 * mod(floor(p), 2.0));
-    return base * (0.65 + 0.4 * fract(p)) * (0.9 + 0.2 * h21(vec2(off, floor(p))));
+    ink = grid(vec2(0.5, p), vec2(0.0, 0.05), vec2(0.0, fw.y * 6.0));
+    if (fract(p) < 0.3) dark = 0.3;
+    return base;
   }
   // SNOW
-  return base * (0.94 + 0.06 * vnoise(s * 4.0));
+  if (vnoise(s * 1.5) > 0.7) dark = 0.2 * up;
+  return base;
 }
 
 void main() {
   uint mat = v_mat.x, flags = v_mat.y;
   float seed = float(v_mat.z) / 255.0;
-  vec3 base = v_col.rgb * 255.0;
+  float ink = 0.0, dark = 0.0;
+  float up = step(0.7, normalize(v_nrm).z);
+  vec3 albedo = surface(mat, v_uv, fwidth(v_uv), v_col.rgb, seed, flags, up, ink, dark);
+  // Printed colors: lighter and a little more saturated than the originals' averages.
+  albedo = pow(albedo, vec3(0.8));
+  albedo = clamp(mix(vec3(dot(albedo, vec3(0.3, 0.59, 0.11))), albedo, 1.25), 0.0, 1.0);
 
-  vec3 albedo = surface(mat, v_uv, base, seed, flags) / 255.0;
-
-  vec3 light;
+  uint g = 0u;
+  float light = 1.0;
   if ((flags & FLAG_FULLBRIGHT) != 0u) {
-    light = vec3(1.25);
+    g = G_FLAT;
   } else {
     // GoldSrc lightmaps are stored dark; lift them roughly like lightgamma/brightness.
-    vec3 lm = texture(u_lightmap, v_lm).rgb;
-    light = pow(lm, vec3(0.6)) * 1.45;
+    // Colored light tints the albedo; how bright it is becomes the dot screen.
+    vec3 lm = pow(texture(u_lightmap, v_lm).rgb, vec3(0.6)) * 1.45;
+    float lum = dot(lm, vec3(0.3, 0.59, 0.11));
+    albedo = clamp(albedo * mix(vec3(1.0), clamp(lm / max(lum, 0.05), 0.0, 2.0), 0.5), 0.0, 1.0);
+    light = dark < 0.0 ? 0.8 : pow(clamp(lum / u_lightFull, 0.0, 1.0), 0.8) * (1.0 - dark);
   }
+  ink *= 1.0 - smoothstep(720.0 * u_zoom, 1600.0 * u_zoom, v_w);
+  albedo = mix(albedo, INK, ink);
+  light = mix(light, 1.0, ink);
 
-  vec3 col = albedo * light;
-  float dist = length(v_pos - u_eye);
-  col = mix(col, u_fogColor, smoothstep(1500.0, 9000.0, dist) * 0.45);
-  o_color = vec4(col, v_col.a);
+  if (v_col.a < 0.999) { // glass, water: a dot screen over what lies behind
+    if (screenAt(gl_FragCoord.xy, v_col.a, max(u_dot * 0.6, 2.0)) < 0.5) discard;
+    g |= G_SCREEN;
+  }
+  gbuffer(albedo, light, v_nrm, v_mat.w, v_w, g);
 }`;
 
 // Sky. Two vertex shaders feed one fragment shader with a world-space view ray:
@@ -223,41 +313,31 @@ void main() {
   gl_Position = vec4(p, 0.99999, 1.0); // just inside the far plane: fills only empty pixels
 }`;
 
+// A pale sky the composite screens with blue dots, thicker toward the zenith, and flat
+// white clouds (their own id, so they get an ink outline).
 export const SKY_FS = `#version 300 es
 precision highp float;
+precision highp int;
 in vec3 v_dir;
 uniform vec3 u_horizon;
-uniform vec3 u_zenith;
 uniform float u_time;
-out vec4 o_color;
-
-float h21(vec2 p) {
-  p = fract(p * vec2(123.34, 456.21));
-  p += dot(p, p + 45.32);
-  return fract(p.x * p.y);
-}
-float vnoise(vec2 p) {
-  vec2 i = floor(p), f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + 1.0), f.x), f.y);
-}
+${GBUFFER}
+${NOISE}
 
 void main() {
   vec3 dir = normalize(v_dir);
-  vec3 col = mix(u_horizon, u_zenith, pow(clamp(dir.z, 0.0, 1.0), 0.6));
-
   // Clouds on a dome rather than a plane: the lookup stays bounded at the horizon.
   vec2 p = dir.xy / max(dir.z + 0.3, 0.05) * 1.6 + u_time * 0.01;
-  float c = smoothstep(0.45, 0.8, vnoise(p) * 0.65 + vnoise(p * 2.7) * 0.35);
-  // Where one pixel spans a whole noise cell the pattern would alias and shimmer
-  // with camera motion; blend toward average coverage instead.
+  float n = vnoise(p) * 0.65 + vnoise(p * 2.7) * 0.35;
+  // Where one pixel spans a whole noise cell the shapes would alias and shimmer.
   float footprint = length(fwidth(p)) * 2.7;
-  c = mix(c, 0.18, smoothstep(0.3, 0.8, footprint));
-  col = mix(col, vec3(0.95), c * 0.7 * smoothstep(-0.02, 0.2, dir.z));
-  o_color = vec4(col, 1.0);
+  bool cloud = n > 0.66 && footprint < 0.5 && dir.z > 0.02;
+  float dark = cloud ? 0.0 : clamp(0.06 + dir.z * 0.55, 0.03, 0.42);
+  gbuffer(cloud ? vec3(0.98, 0.97, 0.93) : u_horizon, 1.0 - dark, vec3(0.0, 0.0, 1.0), cloud ? 1u : 0u,
+    DEPTH_FAR, G_SKY);
 }`;
 
-// Bullet holes: world-space quads, procedural scorch disc.
+// Bullet holes: world-space quads, an ink star written into the albedo only (decals.js).
 export const DECAL_VS = `#version 300 es
 layout(location=0) in vec3 a_pos;
 layout(location=1) in vec3 a_uvs; // uv in [-1, 1], seed
@@ -271,17 +351,17 @@ void main() {
 export const DECAL_FS = `#version 300 es
 precision mediump float;
 in vec3 v_uvs;
-out vec4 o_color;
+layout(location = 0) out vec4 o_color;
 void main() {
   float r = length(v_uvs.xy);
   float a = atan(v_uvs.y, v_uvs.x);
-  float edge = 0.75 + 0.25 * sin(a * 5.0 + v_uvs.z * 40.0);
-  if (r > edge) discard;
-  float core = 1.0 - smoothstep(0.25, 0.35, r);
-  o_color = vec4(vec3(0.05 + 0.08 * (1.0 - core)), mix(0.55, 0.95, core));
+  float spike = pow(abs(sin(a * 3.0 + v_uvs.z * 40.0)), 6.0);
+  if (r > 0.38 + 0.55 * spike) discard;
+  o_color = vec4(0.09, 0.075, 0.06, 1.0);
 }`;
 
-// Breakable debris: one unit cube, instanced (position, scale, euler rotation, color).
+// Breakable debris and hit boxes: one unit cube, instanced (position, scale, euler
+// rotation, color).
 export const DEBRIS_VS = `#version 300 es
 layout(location=0) in vec3 a_pos;
 layout(location=1) in vec3 a_nrm;
@@ -292,6 +372,8 @@ layout(location=5) in vec3 i_col;
 uniform mat4 u_viewProj;
 out vec3 v_col;
 out vec3 v_nrm;
+out float v_w;
+flat out uint v_id;
 void main() {
   vec3 c = cos(i_rot), s = sin(i_rot);
   mat3 rx = mat3(1.0, 0.0, 0.0, 0.0, c.x, s.x, 0.0, -s.x, c.x);
@@ -300,17 +382,23 @@ void main() {
   mat3 r = rz * ry * rx;
   v_col = i_col;
   v_nrm = r * a_nrm;
+  v_id = 128u + uint(gl_InstanceID % 127);
   gl_Position = u_viewProj * vec4(i_pos + r * (a_pos * i_scale), 1.0);
+  v_w = gl_Position.w;
 }`;
 
 export const DEBRIS_FS = `#version 300 es
-precision mediump float;
+precision highp float;
+precision highp int;
 in vec3 v_col;
 in vec3 v_nrm;
-out vec4 o_color;
+in float v_w;
+flat in uint v_id;
+${GBUFFER}
 void main() {
-  float diff = max(dot(normalize(v_nrm), normalize(vec3(0.35, 0.25, 0.9))), 0.0);
-  o_color = vec4(v_col * (0.45 + 0.6 * diff), 1.0);
+  vec3 n = normalize(v_nrm);
+  float d = dot(n, normalize(vec3(0.35, 0.25, 0.9)));
+  gbuffer(v_col, d > 0.2 ? 1.0 : d > -0.3 ? 0.6 : 0.35, n, v_id, v_w, 0u);
 }`;
 
 // Crosshair: four arms and a dot generated from gl_VertexID (6 vertices each), in
@@ -345,8 +433,9 @@ void main() {
   o_color = u_color;
 }`;
 
-// Skinned models (client/gl/skinned.js): every vertex follows one bone. Cartoon shading:
-// two flat tones split by a crisp terminator, times the map's light at the model.
+// Skinned models (client/gl/skinned.js): every vertex follows one bone. Two flat tones
+// split by a crisp terminator, times the map's light at the model. Ids differ per draw
+// and per color, so the ink outlines every part of a model (jacket, trousers, gloves).
 export const SKINNED_VS = `#version 300 es
 layout(location=0) in vec3 a_pos;
 layout(location=1) in vec3 a_nrm;
@@ -355,25 +444,167 @@ layout(location=3) in vec3 a_col;
 uniform mat4 u_viewProj;
 uniform mat4 u_model;
 uniform mat4 u_bones[24];
+uniform uint u_id;
 out vec3 v_nrm;
 out vec3 v_col;
+out float v_w;
+flat out uint v_id;
 void main() {
   mat4 m = u_model * u_bones[a_bone];
   v_nrm = mat3(m) * a_nrm;
   v_col = a_col;
+  uvec3 c = uvec3(a_col * 255.0 + 0.5);
+  v_id = (u_id * 37u + c.r * 7u + c.g * 13u + c.b * 29u) % 127u + 128u;
   gl_Position = u_viewProj * m * vec4(a_pos, 1.0);
+  v_w = gl_Position.w;
 }`;
 
 export const SKINNED_FS = `#version 300 es
-precision mediump float;
+precision highp float;
+precision highp int;
 in vec3 v_nrm;
 in vec3 v_col;
+in float v_w;
+flat in uint v_id;
 uniform vec3 u_light; // map light at the model, lifted like the world's
 uniform vec3 u_lightDir;
-uniform float u_emissive; // 1: unlit glow (muzzle flash, LEDs)
-out vec4 o_color;
+uniform float u_emissive; // 1: unlit glow (muzzle flash, LEDs, flames)
+uniform float u_white;    // 0..1 toward white (spawn protection's pulse)
+uniform float u_lightFull; // lifted light that prints fully lit (per map, Renderer.loadMap)
+${GBUFFER}
 void main() {
-  float d = dot(normalize(v_nrm), u_lightDir);
-  float tone = mix(0.62, 1.0, smoothstep(-0.05, 0.05, d));
-  o_color = vec4(mix(v_col * tone * u_light, v_col * 1.6, u_emissive), 1.0);
+  vec3 n = normalize(v_nrm);
+  if (u_emissive > 0.5) {
+    gbuffer(min(v_col * 1.25, vec3(1.0)), 1.0, n, v_id, v_w, G_FLAT);
+    return;
+  }
+  float lum = dot(u_light, vec3(0.3, 0.59, 0.11));
+  vec3 albedo = clamp(v_col * mix(vec3(1.0), clamp(u_light / max(lum, 0.05), 0.0, 2.0), 0.5), 0.0, 1.0);
+  float tone = dot(n, u_lightDir) > 0.0 ? 1.0 : 0.6;
+  gbuffer(mix(albedo, vec3(1.0), u_white), clamp(mix(tone * lum / u_lightFull, 1.0, u_white), 0.0, 1.0), n, v_id,
+    v_w, 0u);
 }`;
+
+// The comic print, one fullscreen pass over the G-buffer.
+export const COMPOSITE_VS = `#version 300 es
+void main() {
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+export const COMPOSITE_FS = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform sampler2D u_albedo;
+uniform sampler2D u_normal;
+uniform sampler2D u_depth;
+uniform vec2 u_res;
+uniform float u_line;  // ink line spacing (px); 0: no lines
+uniform float u_dot;   // halftone cell (px); 0: flat tones
+uniform float u_time;  // line boil clock (s); constant when r_lineboil is 0
+uniform float u_zoom;  // 90 / fov: distance fades follow the scope
+uniform float u_bands; // light posterized into this many bands (0: smooth)
+uniform int u_style;   // 0: plain lit colors (r_comic 0)
+out vec4 o_color;
+${GBUFFER_CONSTS}
+${NOISE}
+
+ivec2 cl(ivec2 p) { return clamp(p, ivec2(0), ivec2(u_res) - 1); }
+uvec4 dtex(ivec2 p) { return uvec4(texelFetch(u_depth, cl(p), 0) * 255.0 + 0.5); }
+float depthOf(uvec4 t) { return float((t.r << 16u) | (t.g << 8u) | t.b) * (DEPTH_FAR / 16777215.0); }
+vec4 ntex(ivec2 p) { return texelFetch(u_normal, cl(p), 0); }
+
+uint fc;  // flags at the line sample
+float wc; // 1 / depth there
+// A see-through screen and what lies behind it count as one surface: no ink between them.
+bool across(uvec4 t) { return ((t.a ^ fc) & G_SCREEN) != 0u; }
+float invd(uvec4 t) { return across(t) ? wc : 1.0 / max(depthOf(t), 1.0); }
+// Crease between the line sample's normal c and a neighbor's normal texel n.
+float crease(vec3 c, vec4 n) { return 1.0 - dot(c, n.xyz * 2.0 - 1.0); }
+
+// Halftone: round dots on a screen at angle 'ang', area growing with 'dark'.
+float dots(vec2 frag, float dark, float size, float ang) {
+  if (dark < 0.02) return 0.0;
+  float c = cos(ang), s = sin(ang);
+  vec2 q = mat2(c, -s, s, c) * frag / size;
+  float d = length(fract(q) - 0.5);
+  float r = sqrt(clamp(dark, 0.0, 1.0)) * 0.74;
+  float aa = 0.9 / size;
+  return 1.0 - smoothstep(r - aa, r + aa, d);
+}
+// ... turning into its own average (flat) tone with distance.
+float tone(vec2 frag, float dark, float size, float ang, float far) {
+  float cov = min(1.0, 1.72 * clamp(dark, 0.0, 1.0));
+  return mix(dots(frag, dark, size, ang), cov, far);
+}
+
+void main() {
+  vec2 frag = gl_FragCoord.xy;
+  ivec2 p = ivec2(frag);
+  vec4 C = texelFetch(u_albedo, cl(p + ivec2(1, 0)), 0); // color plate printed 1 px off the ink plate
+  vec3 alb = C.rgb;
+  float light = C.a;
+  if (u_bands > 0.5) light = floor(light * u_bands + 0.5) / u_bands;
+  uvec4 Dp = dtex(p);
+  uint fl = Dp.a;
+  float dP = depthOf(Dp);
+  if (u_style == 0) {
+    o_color = vec4(alb * mix(0.3, 1.15, light), 1.0);
+    return;
+  }
+
+  // Ink. The sample point jitters a little, re-rolled 7 times a second: hand-drawn boil.
+  float edge = 0.0;
+  if (u_line > 0.0) {
+    float t = floor(u_time * 7.0);
+    vec2 wob = (vec2(vnoise(frag * 0.035 + t * 3.1), vnoise(frag * 0.035 + 17.3 + t * 2.3)) - 0.5) * 1.6;
+    ivec2 pc = p + ivec2(round(wob));
+    uvec4 Dc = dtex(pc);
+    fc = Dc.a;
+    int s = max(1, int(u_line + 0.5)) + ((fc & G_FLAT) != 0u ? 1 : 0);
+    float dC = depthOf(Dc);
+    wc = 1.0 / max(dC, 1.0);
+    // Silhouettes: 2nd derivative of 1 / depth (zero on any plane), both sides: a bold line.
+    // Each neighbor is fetched once (an integrated GPU feels every fetch here).
+    uvec4 tL = dtex(pc + ivec2(-s, 0)), tR = dtex(pc + ivec2(s, 0)), tD = dtex(pc + ivec2(0, -s));
+    uvec4 tU = dtex(pc + ivec2(0, s)), tDL = dtex(pc + ivec2(-s, -s)), tUR = dtex(pc + ivec2(s, s));
+    uvec4 tUL = dtex(pc + ivec2(-s, s)), tDR = dtex(pc + ivec2(s, -s));
+    float lap = abs(invd(tL) + invd(tR) - 2.0 * wc) + abs(invd(tD) + invd(tU) - 2.0 * wc)
+      + 0.5 * (abs(invd(tDL) + invd(tUR) - 2.0 * wc) + abs(invd(tUL) + invd(tDR) - 2.0 * wc));
+    float eD = smoothstep(0.05, 0.16, lap / wc);
+    // Creases and object boundaries: one side only, a thinner line.
+    bool ax = across(tR), ay = across(tU), ad = across(tUR);
+    vec4 nc = ntex(pc), nx = ntex(pc + ivec2(s, 0)), ny = ntex(pc + ivec2(0, s)), nxy = ntex(pc + ivec2(s, s));
+    vec3 c = nc.xyz * 2.0 - 1.0;
+    float nd = 0.0;
+    if (!ax) nd = max(nd, crease(c, nx));
+    if (!ay) nd = max(nd, crease(c, ny));
+    if (!ad) nd = max(nd, crease(c, nxy));
+    float eN = smoothstep(0.22, 0.45, nd);
+    float eI = (!ax && abs(nx.w - nc.w) > 0.002) || (!ay && abs(ny.w - nc.w) > 0.002) ? 1.0 : 0.0;
+    float fade = 1.0 - 0.65 * smoothstep(1000.0 * u_zoom, 3400.0 * u_zoom, dC);
+    edge = max(eD, max(eN, eI) * fade);
+  }
+
+  vec3 col;
+  float size = max(u_dot, 1.0);
+  float far = u_dot < 1.0 ? 1.0 : smoothstep(500.0 * u_zoom, 1300.0 * u_zoom, dP);
+  if ((fl & G_SKY) != 0u) {
+    col = mix(alb, alb * vec3(0.43, 0.71, 0.89), tone(frag, 1.0 - light, size * 1.15, 0.26, u_dot < 1.0 ? 1.0 : 0.0));
+  } else if ((fl & G_FLAT) != 0u) {
+    col = alb * (0.62 + 0.38 * light);
+  } else {
+    float dark = 1.0 - light;
+    float m = tone(frag, dark, size, 0.785, far);
+    vec3 base = alb * (0.84 + 0.16 * light);
+    col = mix(base, mix(alb * 0.45, INK, 0.2 + 0.5 * smoothstep(0.6, 1.0, dark)), m);
+  }
+  col *= 0.965 + 0.035 * h21(frag); // paper grain
+  vec2 uv = frag / u_res - 0.5;
+  col *= 1.0 - dot(uv, uv) * 0.3;
+  o_color = vec4(mix(col, INK, edge), 1.0);
+}`;
+
+// The G-buffer shaders, for test/comic.test.js.
+export const GBUFFER_SHADERS = { WORLD_FS, SKY_FS, DEBRIS_FS, SKINNED_FS };

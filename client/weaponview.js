@@ -28,6 +28,7 @@ export class WeaponView {
     this.bobPhase = 0;
     this.anim = { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0, flash: false };
     this.hidden = false; // dead: no viewmodel or crosshair, HUD only
+    this.spread = -1; // crosshair spread gap (px) for drawCrosshair, -1: none
     this.scoped = false; // looking through a scope: its overlay replaces both
 
     this.elHealth = document.getElementById('hud-health');
@@ -48,8 +49,9 @@ export class WeaponView {
     this.animator.inspect(time);
   }
 
-  // time: interpolated simulation time; dt: frame time.
-  draw(width, height, aspect, ws, ps, buttons, time, dt, health, armor) {
+  // The first-person view into the G-buffer, and the HUD numbers. time: interpolated
+  // simulation time; dt: frame time.
+  draw(height, aspect, ws, ps, buttons, time, dt, health, armor) {
     const w = activeWeapon(ws);
     const id = ws.f[WS_SLOTS + ws.f[WS_ACTIVE] * 3];
     const a = this.anim;
@@ -83,9 +85,14 @@ export class WeaponView {
     }
     // Sniper rifles show no crosshair unscoped, like CS:GO.
     const sniper = w && w.altKind === 'scope' && w.name !== 'aug' && w.name !== 'sg556';
-    if (!this.hidden && !this.scoped && !sniper) this.crosshair.draw(width, height, spread);
+    this.spread = !this.hidden && !this.scoped && !sniper ? spread : -1;
 
     this.updateHud(w, ws, id, health, armor);
+  }
+
+  // The crosshair, on the printed frame (after Renderer.composite), as draw() left it.
+  drawCrosshair(width, height) {
+    if (this.spread >= 0) this.crosshair.draw(width, height, this.spread);
   }
 
   updateHud(w, ws, id, health, armor) {

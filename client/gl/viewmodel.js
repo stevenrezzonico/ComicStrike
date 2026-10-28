@@ -1,8 +1,8 @@
 // First-person view: the team's arms (client/models/arms.js) holding the gun model
 // (client/gl/gunmeshes.js), posed by client/anim/viewanim.js, drawn in eye space with
-// their own projection after the world, cartoon-shaded and lit by the map like
-// everything else. Three or four draws: arms, gun (a second pistol for the Dual
-// Berettas), muzzle flash.
+// their own projection into the G-buffer after the world (a depth clear first), so they
+// get the same ink and dots, lit by the map like everything else. Three or four draws:
+// arms, gun (a second pistol for the Dual Berettas), muzzle flash.
 
 import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN } from './skinned.js';
 import { perspective, multiply } from './mat4.js';
@@ -47,14 +47,7 @@ export class Viewmodel {
       if (va.flash2) this.tmp.set(this.tmp2);
     }
     const flash = this.guns.flashOf(weaponId, silencerOn);
-    if (anim.flash && flash) {
-      gl.enable(gl.BLEND);
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-      gl.depthMask(false);
-      r.draw(flash, this.tmp, IDENTITY_SKIN, light, 1);
-      gl.depthMask(true);
-      gl.disable(gl.BLEND);
-    }
+    if (anim.flash && flash) r.draw(flash, this.tmp, IDENTITY_SKIN, light, 1); // a flat comic burst
     r.end();
   }
 

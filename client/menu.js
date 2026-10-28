@@ -40,11 +40,18 @@ const TABS = [
     ['slider', 'cl_crosshairalpha', 'Alpha', 0, 255, 1],
   ]],
   ['Video', [
+    ['toggle', 'r_comic', 'Comic print'],
+    ['slider', 'r_inkwidth', 'Ink line width', 0, 3, 0.25],
+    ['slider', 'r_halftone', 'Halftone dot size', 0, 3, 0.1],
+    ['slider', 'r_shadebands', 'Shadow bands (0: smooth)', 0, 6, 1],
+    ['toggle', 'r_lineboil', 'Hand-drawn line wobble'],
+    ['slider', 'mat_viewportscale', 'Render resolution', 0.5, 1, 0.05],
     ['slider', 'viewmodel_fov', 'Weapon field of view', 54, 68, 1],
     ['slider', 'viewmodel_offset_x', 'Weapon offset right', -2.5, 2.5, 0.1],
     ['slider', 'viewmodel_offset_y', 'Weapon offset forward', -2, 2, 0.1],
     ['slider', 'viewmodel_offset_z', 'Weapon offset up', -2, 2, 0.1],
     ['toggle', 'cl_drawhud', 'Show HUD'],
+    ['toggle', 'cl_comicwords', 'Comic sound words'],
     ['slider', 'cl_hud_radar_scale', 'Radar size', 0.8, 1.3, 0.05],
     ['slider', 'cl_radar_scale', 'Radar zoom', 0.25, 1, 0.05],
     ['toggle', 'cl_radar_rotate', 'Rotate the radar'],
@@ -116,7 +123,7 @@ export class Menu {
 
     root.innerHTML = '';
     this.side = el('div', 'menu-side');
-    this.side.append(el('h1', '', 'WebCS'));
+    this.side.append(el('h1', '', 'ComicStrike'));
     this.nav = el('nav', 'menu-nav');
     this.side.append(this.nav);
     this.note = el('div', 'menu-note');

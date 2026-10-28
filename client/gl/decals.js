@@ -1,4 +1,4 @@
-// Bullet-hole decals: a fixed ring of world-space quads in one dynamic VBO.
+// Bullet-hole decals (ink stars): a fixed ring of world-space quads in one dynamic VBO.
 // Adding a decal rewrites only its own slot; drawing is one call.
 
 import { program } from './program.js';
@@ -99,14 +99,15 @@ export class Decals {
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.data, 0, this.count * FLOATS_PER_DECAL);
   }
 
-  draw(viewProj) {
+  // Ink stars painted into the G-buffer's albedo only: the wall keeps its normal, id and
+  // depth, so a hole draws no outline of its own.
+  draw(viewProj, gbuf) {
     if (this.count === 0) return;
     const gl = this.gl;
     gl.useProgram(this.prog.p);
     gl.uniformMatrix4fv(this.prog.loc.u_viewProj, false, viewProj);
     gl.bindVertexArray(this.vao);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gbuf.albedo(true);
     gl.enable(gl.POLYGON_OFFSET_FILL);
     gl.polygonOffset(-1, -2);
     gl.depthMask(false);
@@ -115,7 +116,7 @@ export class Decals {
     gl.enable(gl.CULL_FACE);
     gl.depthMask(true);
     gl.disable(gl.POLYGON_OFFSET_FILL);
-    gl.disable(gl.BLEND);
+    gbuf.albedo(false);
     gl.bindVertexArray(null);
   }
 }
