@@ -13,6 +13,7 @@ import { multiply } from './mat4.js';
 import { TEAM_CT } from '../../shared/player.js';
 import { WEAPON_ID } from '../../shared/weapons.js';
 import { MAX_ITEMS } from '../../shared/items.js';
+import { TICK_RATE } from '../../shared/constants.js';
 import { FL_ONGROUND } from '../../shared/pmove.js';
 import { feetOffset } from '../../shared/hitgroups.js';
 import {
@@ -22,6 +23,8 @@ import {
 
 const SPINE3 = S.bone('spine_3');
 const C4_ID = WEAPON_ID.c4;
+const ITEM_SPIN = 720; // degrees/s a flying weapon turns end over end
+const OWN_TOSS_TICKS = 16; // our own thrown weapon stays hidden this long (first person shows it)
 
 export class PlayerModels {
   // guns: GunMeshes (client/gl/gunmeshes.js).
@@ -44,8 +47,20 @@ export class PlayerModels {
     this.handM = new Float32Array(16);
     this.qGun = new Float32Array(8);
     this.bomb = { show: false, led: false, model: new Float32Array(16), light: new Float32Array([1, 1, 1]) };
-    this.itemCount = 0; // weapons on the ground
+    this.itemCount = 0; // weapons on the ground (and flying ones)
     this.itemWeapon = new Uint8Array(MAX_ITEMS);
+    // Flying weapons: drawn between the previous and the newest list (they come every tick
+    // while any flies), tumbling end over end; per item its id, the two positions, yaw,
+    // ticks in the air (-1: lying still), thrower. Two sets, swapped per list.
+    this.itemSets = [0, 1].map(() => ({ id: new Uint16Array(MAX_ITEMS), x: new Float32Array(MAX_ITEMS),
+      y: new Float32Array(MAX_ITEMS), z: new Float32Array(MAX_ITEMS), count: 0 }));
+    this.itemFrom = new Float32Array(MAX_ITEMS * 3);
+    this.itemYaw = new Float32Array(MAX_ITEMS);
+    this.itemAge = new Int16Array(MAX_ITEMS);
+    this.itemOwner = new Int8Array(MAX_ITEMS);
+    this.itemHidden = new Uint8Array(MAX_ITEMS);
+    this.itemsAt = 0; // ms the newest list arrived
+    this.itemsFlying = false;
     this.itemOf = Array.from({ length: MAX_ITEMS }, () => new Float32Array(16));
     this.itemLightOf = Array.from({ length: MAX_ITEMS }, () => new Float32Array([1, 1, 1]));
     this.anim = Array.from({ length: MAX_PLAYERS }, () => new PlayerAnimator());
@@ -166,21 +181,79 @@ export class PlayerModels {
 
   // Weapons on the ground (shared/items.js): lying on their side, turned by their yaw,
   // lit by the map under them. Call when the list changes.
-  setItems(items, surfaces = null) {
+  // A new ground list (shared/items.js) arrived at `now` (ms). A weapon that just started
+  // flying swings its thrower's arm.
+  setItems(items, surfaces = null, now = 0) {
     const n = Math.min(items.count, MAX_ITEMS);
+    const prev = this.itemSets[0], next = this.itemSets[1]; // [0] is always the newest
+    this.itemSets[0] = next;
+    this.itemSets[1] = prev;
+    this.itemsFlying = false;
     for (let i = 0; i < n; i++) {
-      const yr = items.yaw[i] * Math.PI / 180, c = Math.cos(yr), s = Math.sin(yr), m = this.itemOf[i];
-      // Yaw about z, then a quarter roll about the barrel: the gun's right side down.
-      m[0] = c; m[1] = s; m[2] = 0; m[3] = 0;
-      m[4] = 0; m[5] = 0; m[6] = 1; m[7] = 0;
-      m[8] = s; m[9] = -c; m[10] = 0; m[11] = 0;
-      m[12] = items.x[i]; m[13] = items.y[i]; m[14] = items.z[i] + 0.8; m[15] = 1;
+      const id = items.id[i];
+      let j = 0;
+      while (j < prev.count && prev.id[j] !== id) j++;
+      const fresh = j === prev.count, f = this.itemFrom;
+      f[i * 3] = fresh ? items.x[i] : prev.x[j];
+      f[i * 3 + 1] = fresh ? items.y[i] : prev.y[j];
+      f[i * 3 + 2] = fresh ? items.z[i] : prev.z[j];
+      next.id[i] = id;
+      next.x[i] = items.x[i];
+      next.y[i] = items.y[i];
+      next.z[i] = items.z[i];
       this.itemWeapon[i] = items.weapon[i];
+      this.itemYaw[i] = items.yaw[i];
+      this.itemAge[i] = items.flying[i] ? items.age[i] : -1;
+      this.itemOwner[i] = items.owner[i];
+      this.itemHidden[i] = 0;
+      if (items.flying[i]) {
+        this.itemsFlying = true;
+        if (fresh && items.age[i] < 8 && items.owner[i] >= 0 && items.owner[i] < MAX_PLAYERS) {
+          this.anim[items.owner[i]].throwArm();
+        }
+      } else this.placeItem(i, items.x[i], items.y[i], items.z[i], 0, false);
       const light = this.itemLightOf[i];
       if (surfaces && surfaces.lightAt(this.lm, items.x[i], items.y[i], items.z[i] + 8)) modelLight(light, this.lm);
       else light.fill(1);
     }
+    next.count = n;
     this.itemCount = n;
+    this.itemsAt = now;
+    this.updateItems(now, -1);
+  }
+
+  // Flying weapons each frame: between the last two lists, turning end over end; our
+  // own (self) stays hidden for its first quarter second (the first-person toss shows it).
+  updateItems(now, self) {
+    if (!this.itemsFlying) return;
+    const a = Math.min(1, Math.max(0, (now - this.itemsAt) * TICK_RATE / 1000)), cur = this.itemSets[0];
+    for (let i = 0; i < this.itemCount; i++) {
+      const age = this.itemAge[i];
+      this.itemHidden[i] = age >= 0 && this.itemOwner[i] === self && age + a < OWN_TOSS_TICKS ? 1 : 0;
+      if (age < 0) continue;
+      const f = this.itemFrom, o = i * 3;
+      this.placeItem(i, f[o] + (cur.x[i] - f[o]) * a, f[o + 1] + (cur.y[i] - f[o + 1]) * a,
+        f[o + 2] + (cur.z[i] - f[o + 2]) * a, (age + a) / TICK_RATE * ITEM_SPIN, true);
+    }
+  }
+
+  // Item i's model matrix at (x, y, z): lying still, yaw about z then a quarter roll
+  // about the barrel (the gun's right side down, just above the floor); flying, yaw then
+  // `spin` degrees end over end (about the gun's y).
+  placeItem(i, x, y, z, spin, flying) {
+    const yr = this.itemYaw[i] * Math.PI / 180, c = Math.cos(yr), s = Math.sin(yr), m = this.itemOf[i];
+    if (flying) {
+      const sr = spin * Math.PI / 180, cp = Math.cos(sr), sp = Math.sin(sr);
+      m[0] = c * cp; m[1] = s * cp; m[2] = -sp; m[3] = 0;
+      m[4] = -s; m[5] = c; m[6] = 0; m[7] = 0;
+      m[8] = c * sp; m[9] = s * sp; m[10] = cp; m[11] = 0;
+      m[12] = x; m[13] = y; m[14] = z; m[15] = 1;
+      return;
+    }
+    m[0] = c; m[1] = s; m[2] = 0; m[3] = 0;
+    m[4] = 0; m[5] = 0; m[6] = 1; m[7] = 0;
+    m[8] = s; m[9] = -c; m[10] = 0; m[11] = 0;
+    m[12] = x; m[13] = y; m[14] = z + 0.8; m[15] = 1;
   }
 
   // The bomb lying at (x, y, z = floor), turned by yaw (radians); show = false hides it.
@@ -224,7 +297,7 @@ export class PlayerModels {
     }
     for (let i = 0; i < this.itemCount; i++) {
       const mesh = this.guns.mesh[this.itemWeapon[i]];
-      if (!mesh) continue;
+      if (!mesh || this.itemHidden[i]) continue;
       if (!begun) r.begin(viewProj);
       begun = true;
       r.draw(mesh, this.itemOf[i], IDENTITY_SKIN, this.itemLightOf[i]);

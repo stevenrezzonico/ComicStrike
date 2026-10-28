@@ -30,6 +30,7 @@ const CROUCH_DROP = 22; // full duck: hips 16 units above the feet, head near th
 const CROUCH_LEAN = 55; // degrees forward at full duck
 const LEG = 32.4; // hip to ankle when reaching, a little short of the 33 of the bones
 const STEP_SCALE = 1.5; // distance per step over the swing: 60 units a step when running (~4/s)
+const TOSS_RATE = 2.5; // a throw's arm swing lasts 1 / this seconds
 const RIFLE_TWIST = 12; // per spine bone: left shoulder forward for a rifle stance
 
 // Hand targets per hold, relative to the shoulder-line center (spine_3), in the aim frame
@@ -94,12 +95,18 @@ export class PlayerAnimator {
     this.stride = 4; // current half-stride length
     this.air = 0; // 0 grounded .. 1 airborne
     this.kick = 0; // fire kick, 1 at a shot
+    this.toss = 0; // a weapon throw (G), 1 when it leaves the hand, down to 0
     this.shots = -1;
     this.dead = 0; // seconds since death (0 = alive)
     this.time = 0;
     this.reloadStart = -1; // time the reload bit came on (-1: not reloading)
     this.magOff = 0; // the gun's bones this frame: magazine out along magDir, bolt back
     this.boltOff = 0;
+  }
+
+  // A weapon left this player's hand (G): the arm swings it forward.
+  throwArm() {
+    this.toss = 1;
   }
 
   // Advances by dt seconds and rebuilds the pose. (x, y, z): feet; yaw / pitch in degrees
@@ -125,6 +132,7 @@ export class PlayerAnimator {
     if (this.shots >= 0 && shots !== this.shots) this.kick = 1;
     this.shots = shots;
     this.kick = Math.max(0, this.kick - dt * 7);
+    this.toss = Math.max(0, this.toss - dt * TOSS_RATE);
     this.air += ((onGround ? 0 : 1) - this.air) * (1 - Math.exp(-dt * 10));
 
     // Velocity in the player's frame, and the stride cycle.
@@ -157,7 +165,8 @@ export class PlayerAnimator {
     const twist = hold === HOLD_RIFLE ? -RIFLE_TWIST : 0;
     p.turn(SPINE1, lean * 0.5 + aimP * 0.15, twist, 0);
     p.turn(SPINE2, lean * 0.3 + aimP * 0.15, twist, 0);
-    p.turn(SPINE3, lean * 0.2 + aimP * 0.15 - this.kick * 5, 0, 0);
+    const swing = this.toss > 0 ? Math.sin(Math.PI * this.toss) : 0; // the throw's arm swing, out and back
+    p.turn(SPINE3, lean * 0.2 + aimP * 0.15 - this.kick * 5 + swing * 6, swing * 10, 0);
     p.turn(NECK, -lean * 0.4 + aimP * 0.2, -twist, 0);
     p.turn(HEAD, -lean * 0.6 + aimP * 0.35 + this.kick * 5, -twist, 0);
     p.solve();
@@ -201,6 +210,10 @@ export class PlayerAnimator {
         oz += Math.sin(this.time * 7) * 1.2;
       }
       ox -= this.kick * 2;
+      if (s === 1) { // throwing: the gun hand swings forward and up
+        ox += swing * 9;
+        oz += swing * 7;
+      }
       let tx, ty, tz;
       if (kneel) { // planting / defusing: hands down in front of the knees
         tx = 15;

@@ -112,6 +112,20 @@ Deno.test('player animation: a shot kicks, then settles', () => {
   assert.equal(a.kick, 0);
 });
 
+Deno.test('player animation: a weapon throw swings the gun hand forward and back', () => {
+  const a = run(new PlayerAnimator(), 32, () => [0, 0, 0], { hold: HOLD_PISTOL });
+  const rest = bone(a, 'hand_R')[0];
+  a.throwArm();
+  let reach = rest;
+  for (let i = 0; i < 32; i++) {
+    run(a, 1, () => [0, 0, 0], { hold: HOLD_PISTOL });
+    reach = Math.max(reach, bone(a, 'hand_R')[0]);
+  }
+  assert.ok(reach > rest + 5, `the hand swings forward (${(reach - rest).toFixed(1)} units)`);
+  assert.equal(a.toss, 0);
+  assert.ok(Math.abs(bone(a, 'hand_R')[0] - rest) < 0.01, 'and comes back');
+});
+
 Deno.test('player animation: the off hand holds the gun at its support point', async () => {
   const { buildGun } = await import('../client/models/guns.js');
   for (const name of ['ak47', 'awp', 'deagle', 'p90']) {

@@ -132,3 +132,42 @@ Deno.test({ name: 'weapons on the ground: the dead drop their primary; E swaps a
   run(5, [a, b]);
   assert.equal(slot(b, SLOT_SECONDARY), WEAPON_ID.deagle);
 } });
+
+Deno.test({ name: 'weapons on the ground: G throws the gun in an arc; it lands ahead and only then can be taken', ignore: !bsp, fn: () => {
+  const { game, join, run, slot } = setup();
+  const a = join('alpha', TEAM_T), b = join('bravo', TEAM_CT);
+  run(2, [a, b]);
+  a.buy(WEAPON_ID.ak47);
+  run(70, [a, b]);
+  a.player.ws.f[WS_ACTIVE] = SLOT_PRIMARY;
+  const f = a.player.ps.f, x0 = f[PS_ORIGIN], y0 = f[PS_ORIGIN + 1], feet = f[PS_ORIGIN + 2] - 36;
+  a.next.buttons = IN_DROP;
+  run(1, [a, b]);
+  a.next.buttons = 0;
+  const it = game.items;
+  assert.equal(it.count, 1);
+  assert.equal(it.flying[0], 1, 'in the air');
+  const sent = a.items();
+  assert.equal(sent.flying[0], 1, 'clients are told it flies');
+  assert.equal(sent.owner[0], a.id, 'and who threw it');
+  // Bravo (no primary) stands in its path: nothing is caught in the air.
+  b.player.ws.f.fill(0, WS_SLOTS + SLOT_PRIMARY * 3, WS_SLOTS + SLOT_PRIMARY * 3 + 3);
+  const heights = [];
+  const bf = b.player.ps.f;
+  for (let t = 0; t < 3 * 64 && it.flying[0]; t++) {
+    bf[PS_ORIGIN] = it.x[0];
+    bf[PS_ORIGIN + 1] = it.y[0];
+    bf[PS_ORIGIN + 2] = feet + 36;
+    run(1, [a, b]);
+    if (it.flying[0]) assert.equal(slot(b, SLOT_PRIMARY), 0, 'not taken in the air');
+    heights.push(it.z[0]);
+  }
+  assert.equal(it.flying[0], 0, 'it came to rest');
+  const top = Math.max(...heights);
+  assert.ok(top > heights[0], 'it rose first');
+  assert.ok(Math.abs(it.z[0] - feet) < 2, `on the floor (${it.z[0]} vs feet ${feet})`);
+  const d = Math.hypot(it.x[0] - x0, it.y[0] - y0);
+  assert.ok(d > 80 && d < 400, `well ahead (${d.toFixed(0)} units)`);
+  run(2, [a, b]);
+  assert.equal(a.items().flying[0], 0, 'clients are told it lies still');
+} });

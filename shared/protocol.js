@@ -48,7 +48,7 @@ import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 import { MAX_MOVERS } from './doors.js';
 
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -257,8 +257,10 @@ export function readInfo(r, names, teams, kills, deaths, scores) {
   }
 }
 
-// Weapons on the ground (shared/items.js): count, then per item id, weapon, position
-// and yaw (16 bytes each; MAX_ITEMS fits a datagram).
+// Weapons on the ground (shared/items.js): count, then per item id, weapon, position,
+// yaw and its flight: 255 lying still, else the ticks since it was thrown (at most 254)
+// and the thrower (17-18 bytes each; MAX_ITEMS fits a datagram). Sent every tick while
+// any flies.
 export function writeItems(w, items) {
   w.reset();
   w.u8v(S2C_ITEMS);
@@ -270,6 +272,11 @@ export function writeItems(w, items) {
     w.f32v(items.y[i]);
     w.f32v(items.z[i]);
     w.u8v(Math.round(items.yaw[i] / 360 * 256) & 255);
+    if (!items.flying[i]) w.u8v(255);
+    else {
+      w.u8v(Math.min(items.age[i], 254));
+      w.i8v(items.owner[i]);
+    }
   }
   return w.view();
 }
@@ -282,6 +289,12 @@ export function readItems(r, items) {
     const id = r.u16v(), weapon = r.u8v(), x = r.f32v(), y = r.f32v(), z = r.f32v(), yaw = r.u8v() / 256 * 360;
     const k = items.add(weapon, 0, 0, x, y, z, yaw);
     items.id[k] = id;
+    const age = r.u8v();
+    if (age !== 255) {
+      items.flying[k] = 1;
+      items.age[k] = age;
+      items.owner[k] = r.i8v();
+    }
   }
 }
 

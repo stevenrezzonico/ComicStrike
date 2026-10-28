@@ -30,7 +30,7 @@ import {
   Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT, TEAM_SPECTATOR, TEAM_NAMES,
 } from '../shared/player.js';
 import { SurfaceMap } from '../shared/surfaces.js';
-import { Items } from '../shared/items.js';
+import { Items, THROW_SPEED, LET_GO_SPEED } from '../shared/items.js';
 import { IN_USE } from '../shared/constants.js';
 import { parse } from '../shared/cvars.js';
 import { Bots } from './bots.js';
@@ -58,7 +58,7 @@ const TIMEOUT_TICKS = 30 * TICK_RATE; // clients in hidden tabs send a 1 Hz keep
 const INFO_INTERVAL = TICK_RATE; // roster resent every second (datagrams can be lost)
 const SEND_BUFFERS = 8; // rotating send buffers: a datagram may still be queued when the next is written
 const WARMUP_MONEY = 16000; // CS:GO warmup: buy anything
-const THROW_DISTANCE = 64; // a dropped (G) bomb or weapon lands this far ahead
+const THROW_DISTANCE = 64; // a dropped (G) bomb lands this far ahead (weapons fly: shared/items.js)
 const PICKUP_DELAY = TICK_RATE; // ticks before a thrown bomb or weapon can be picked up
 const USE_RANGE = 96; // E picks up a weapon on the ground this close to the eyes
 const USE_CONE = 0.8; // cos of the largest angle off the view it may be at
@@ -1000,12 +1000,15 @@ export class Game {
 
   // --- Weapons on the ground -----------------------------------------------------------
 
-  // Puts a weapon down where c lets go of it (thrown ahead, or at the feet).
+  // c lets go of a weapon: thrown from the eye along the view (G, buying over it), or
+  // let go of at chest height (dying, swapping with E); it flies and lands (Items.update).
   spawnItem(c, weapon, clip, reserve, thrown) {
     const w = WEAPONS[weapon];
     if (!w || w.melee || w.c4) return;
-    const spot = this.landingSpot(c, thrown);
-    this.items.add(weapon, clip, reserve, spot[0], spot[1], spot[2], c.yaw + 90,
+    const p = c.player, f = p.ps.f;
+    const ez = f[PS_ORIGIN + 2] + (thrown ? eyeOffset(p.ps) - 6 : 10);
+    this.items.throw(this.world, weapon, clip, reserve, c.id, f[PS_ORIGIN], f[PS_ORIGIN + 1], ez, thrown ? c.pitch : 0,
+      c.yaw, thrown ? THROW_SPEED : LET_GO_SPEED, f[PS_VEL], f[PS_VEL + 1], f[PS_VEL + 2],
       this.tick + (thrown ? PICKUP_DELAY : 0));
     this.itemsDirty = true;
   }
@@ -1041,13 +1044,14 @@ export class Game {
   // Each tick: the living take weapons they walk over when that slot is free.
   updateItems() {
     const it = this.items;
+    if (it.update(this.world)) this.itemsDirty = true; // flying ones go out every tick
     for (const c of this.clients) {
       if (!c || !c.joined || !c.alive) continue;
       const f = c.player.ps.f, ws = c.player.ws.f;
       const feet = f[PS_ORIGIN + 2] - feetOffset(c.player.ps.i[PS_FLAGS]);
       for (let i = 0; i < it.count; i++) {
         const w = WEAPONS[it.weapon[i]];
-        if (this.tick < it.pickupTick[i]) continue;
+        if (this.tick < it.pickupTick[i] || it.flying[i]) continue;
         if (w.grenade ? !canCarryGrenade(c.player.ws, it.weapon[i]) : ws[WS_SLOTS + w.slot * 3]) continue;
         if (Math.hypot(f[PS_ORIGIN] - it.x[i], f[PS_ORIGIN + 1] - it.y[i]) > PICKUP_RANGE) continue;
         if (Math.abs(feet - it.z[i]) > 40) continue;
@@ -1067,7 +1071,7 @@ export class Game {
     const dz = -Math.sin(c.pitch * Math.PI / 180);
     let best = -1, bestD = USE_RANGE;
     for (let i = 0; i < it.count; i++) {
-      if (WEAPONS[it.weapon[i]].grenade) continue; // grenades are walked over
+      if (WEAPONS[it.weapon[i]].grenade || it.flying[i]) continue; // grenades are walked over
       const vx = it.x[i] - ex, vy = it.y[i] - ey, vz = it.z[i] + 2 - ez, d = Math.hypot(vx, vy, vz);
       if (d >= bestD || (vx * dx + vy * dy + vz * dz) / d < USE_CONE) continue;
       best = i;

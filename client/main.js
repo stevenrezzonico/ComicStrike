@@ -991,8 +991,9 @@ function draw(now, alpha, dt) {
     models.update(interp, 0, hidden, dt, world && world.surfaces, !boxes);
     if (net.itemsVersion !== itemsVersion) {
       itemsVersion = net.itemsVersion;
-      models.setItems(net.items, world && world.surfaces);
+      models.setItems(net.items, world && world.surfaces, now);
     }
+    models.updateItems(now, selfId);
     models.updateHostages(net.hostages, dt, world && world.surfaces);
     const b = net.own.bomb;
     models.setBomb(b.state === BOMB_DROPPED || b.state === BOMB_PLANTED || b.state === BOMB_DEFUSED, b.x, b.y, b.z, 0,

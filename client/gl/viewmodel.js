@@ -28,6 +28,7 @@ export class Viewmodel {
     this.rig = new Float32Array(16);
     this.tmp = new Float32Array(16);
     this.tmp2 = new Float32Array(16);
+    this.tmp3 = new Float32Array(16);
     this.arms = { T: new SkinnedMesh(gl, buildArms('T')), CT: new SkinnedMesh(gl, buildArms('CT')) };
     this.handMeshes = new Map(); // 'T L 1.9 1.5' -> SkinnedMesh
     this.handsOf = { T: [], CT: [] }; // per weapon id: [left, right] SkinnedMesh
@@ -49,7 +50,8 @@ export class Viewmodel {
   }
 
   // va: the ViewAnimator, updated for this frame; anim: { x, y, z (eye-space offset),
-  // pitch, yaw, roll (degrees, about the hands), flash }; light: rgb from the map at the
+  // pitch, yaw, roll (degrees, about the hands), flash, tossId / toss: a dropped weapon
+  // flying out of the hand and its rig-frame matrix }; light: rgb from the map at the
   // player; team: the player's team; silencerOn: the M4A1-S / USP-S wear theirs.
   draw(weaponId, aspect, va, anim, light, team, silencerOn = true) {
     const gun = this.guns.meshOf(weaponId, silencerOn);
@@ -73,6 +75,8 @@ export class Viewmodel {
       r.draw(gun, multiply(this.tmp2, this.rig, va.gun2), va.gunSkin, light);
       if (va.flash2) this.tmp.set(this.tmp2);
     }
+    const tossed = anim.tossId ? this.guns.meshOf(anim.tossId, true) : null;
+    if (tossed) r.draw(tossed, multiply(this.tmp3, this.rig, anim.toss), IDENTITY_SKIN, light);
     const flash = this.guns.flashOf(weaponId, silencerOn);
     if (anim.flash && flash) r.draw(flash, this.tmp, IDENTITY_SKIN, light, 1); // a flat comic burst
     r.end();

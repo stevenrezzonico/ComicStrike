@@ -5,12 +5,20 @@
 import { PS_VEL, PS_FLAGS, FL_ONGROUND } from '../shared/pmove.js';
 import {
   activeWeapon, getInaccuracy, weaponStats, modeOf, silenced, grenadeCount, WS_ACTIVE, WS_SLOTS, WS_MODE_END, WEV_FIRE,
+  WEV_DROP,
 } from '../shared/weapons.js';
+import { multiply } from './gl/mat4.js';
 import { Viewmodel } from './gl/viewmodel.js';
 import { Crosshair } from './gl/crosshair.js';
 import { ViewAnimator } from './anim/viewanim.js';
 
 const FLASH_TIME = 0.035;
+// A dropped weapon (G) leaves the hand where it was held: thrown forward and up in the rig
+// frame (x forward, y left, z up; units/s), falling, tumbling forward, gone after TOSS_TIME.
+const TOSS_TIME = 0.35;
+const TOSS_VEL = [170, -14, 30];
+const TOSS_GRAVITY = 300;
+const TOSS_SPIN = 300; // degrees/s, nose down, about the gun's middle
 const VM_TAN = Math.tan(27 * Math.PI / 180) / Math.tan(30 * Math.PI / 180);
 
 export class WeaponView {
@@ -26,8 +34,15 @@ export class WeaponView {
     this.fovY = fovY;
     this.flashUntil = 0;
     this.blind = 0; // 0..1 flashbang white-out (main): the off hand shields the eyes
+    this.lastId = 0; // the weapon drawn last frame, and its matrix in the rig frame
+    this.lastGun = new Float32Array(16);
+    this.tossId = 0; // a weapon flying out of the hand (G) since tossStart
+    this.tossStart = 0;
+    this.tossFrom = new Float32Array(16);
+    this.tossMid = 0; // the gun's middle along its barrel (the spin's pivot)
+    this.spin = new Float32Array(16);
     this.bobPhase = 0;
-    this.anim = { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0, flash: false };
+    this.anim = { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0, flash: false, tossId: 0, toss: new Float32Array(16) };
     this.hidden = false; // dead: no viewmodel or crosshair, HUD only
     this.spread = -1; // crosshair spread gap (px) for drawCrosshair, -1: none
     this.scoped = false; // looking through a scope: its overlay replaces both
@@ -42,6 +57,13 @@ export class WeaponView {
   // Called once per simulation tick with that tick's weapon events.
   onTick(events, time) {
     if (events & WEV_FIRE) this.flashUntil = time + FLASH_TIME;
+    if ((events & WEV_DROP) && this.lastId) {
+      this.tossId = this.lastId;
+      this.tossStart = time;
+      this.tossFrom.set(this.lastGun);
+      const muzzle = this.guns.muzzle[this.lastId];
+      this.tossMid = muzzle ? muzzle[0] * 0.4 : 0;
+    }
     this.animator.onEvents(events, time);
   }
 
@@ -76,6 +98,9 @@ export class WeaponView {
       a.flash = time < this.flashUntil && !silenced(ws, ws.f[WS_ACTIVE]);
       this.animator.blind = this.blind;
       const va = this.animator.update(id, ws, time, this.guns.points[id]);
+      a.tossId = this.tossPose(time, a.toss);
+      this.lastId = id;
+      this.lastGun.set(va.gun);
       this.viewmodel.draw(id, aspect, va, a, this.light, this.team, silenced(ws, ws.f[WS_ACTIVE]));
     }
 
@@ -90,6 +115,25 @@ export class WeaponView {
     this.spread = !this.hidden && !this.scoped && !sniper ? spread : -1;
 
     this.updateHud(w, ws, id, health, armor);
+  }
+
+  // The weapon flying out of the hand at `time`, its matrix into `out` (rig frame); returns
+  // its id, 0 when none.
+  tossPose(time, out) {
+    const t = time - this.tossStart;
+    if (!this.tossId || t < 0 || t >= TOSS_TIME) return (this.tossId = 0);
+    const r = t * TOSS_SPIN * Math.PI / 180, c = Math.cos(r), s = Math.sin(r), m = this.spin;
+    m.fill(0);
+    // Nose down, a forward tumble about the gun's y through its middle (x = tossMid).
+    const k = this.tossMid;
+    m[0] = c; m[2] = -s; m[5] = 1; m[8] = s; m[10] = c; m[15] = 1;
+    m[12] = k - c * k;
+    m[14] = s * k;
+    multiply(out, this.tossFrom, m);
+    out[12] += TOSS_VEL[0] * t;
+    out[13] += TOSS_VEL[1] * t;
+    out[14] += TOSS_VEL[2] * t - 0.5 * TOSS_GRAVITY * t * t;
+    return this.tossId;
   }
 
   // The crosshair, on the printed frame (after Renderer.composite), as draw() left it.
