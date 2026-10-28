@@ -10,7 +10,8 @@ import {
   PS_VELMOD, EV_LAND, FL_ONGROUND, FL_DUCKING,
 } from './pmove.js';
 import {
-  createWeaponState, copyWeaponState, giveWeapon, weaponTick, activeWeapon, weaponStats, removeWeapon, WEAPON_ID, SLOT_PRIMARY,
+  createWeaponState, copyWeaponState, giveWeapon, weaponTick, infiniteAmmo, activeWeapon, weaponStats, removeWeapon, WEAPON_ID,
+  SLOT_PRIMARY,
   SLOT_SECONDARY, SLOT_C4, NUM_SLOTS, WS_ACTIVE, WS_SLOTS, WS_EVENTS, WS_ACTION, WS_ACTION_END, WEV_PLANTED, WEV_DEFUSED,
   ACTION_PLANT, ACTION_DEFUSE, WS_ALT, WS_GRENADES, GRENADE_IDS,
 } from './weapons.js';
@@ -95,7 +96,8 @@ const MOVE_BUTTONS = IN_FORWARD | IN_BACK | IN_MOVELEFT | IN_MOVERIGHT | IN_JUMP
 
 // Runs one user command (`frozen`: freeze time; `bomb`: the BombState, for
 // defusing). Returns true if the player died (fall damage).
-export function runCommand(world, p, buttons, select, pitch, yaw, tick, shots, frozen = false, bomb = null) {
+// `demo`: the demo mode's rules (infinite ammo, anyone defuses; GAME_DEMO).
+export function runCommand(world, p, buttons, select, pitch, yaw, tick, shots, frozen = false, bomb = null, demo = false) {
   if (frozen) buttons &= FREEZE_BUTTONS;
   const action = p.ws.f[WS_ACTION];
   let moveButtons = buttons;
@@ -105,8 +107,10 @@ export function runCommand(world, p, buttons, select, pitch, yaw, tick, shots, f
   const maxSpeed = w ? w.maxSpeed : 250;
   playerMove(world, p.ps, moveButtons, pitch, yaw, TICK_DT, p.carrying ? Math.min(maxSpeed, CARRY_SPEED) : maxSpeed);
   if (p.ps.i[PS_EVENTS] & EV_LAND) p.health -= Math.round(fallDamage(p.ps.f[PS_LAND_SPEED]));
+  const slot = p.ws.f[WS_ACTIVE], clip = p.ws.f[WS_SLOTS + slot * 3 + 1];
   weaponTick(p.ws, p.ps, buttons, select, pitch, yaw, tick, shots);
-  bombAction(world, p, buttons, pitch, yaw, tick, bomb);
+  if (demo) infiniteAmmo(p.ws, slot, clip, tick * TICK_DT);
+  bombAction(world, p, buttons, pitch, yaw, tick, bomb, demo);
   return p.health <= 0;
 }
 
@@ -129,10 +133,10 @@ export function canReachBomb(world, ps, pitch, yaw, bomb) {
 
 // CS:GO C4 arming and defusing. Planting: C4 in hand, attack held, on the ground,
 // touching a bomb site, for PLANT_TIME; then the C4 leaves the inventory (WEV_PLANTED,
-// the server places the bomb). Defusing: a CT holding use, on the ground, who
-// started next to the planted bomb looking at it, for 10 s (5 s with a kit);
+// the server places the bomb). Defusing: a CT (in the demo anyone) holding use, on the
+// ground, who started next to the planted bomb looking at it, for 10 s (5 s with a kit);
 // WEV_DEFUSED tells the server. Letting go, leaving the site or the ground cancels.
-function bombAction(world, p, buttons, pitch, yaw, tick, bomb) {
+function bombAction(world, p, buttons, pitch, yaw, tick, bomb, demo) {
   const f = p.ws.f, ps = p.ps, time = tick * TICK_DT;
   const onGround = (ps.i[PS_FLAGS] & FL_ONGROUND) !== 0;
   const w = activeWeapon(p.ws);
@@ -142,7 +146,7 @@ function bombAction(world, p, buttons, pitch, yaw, tick, bomb) {
     if (world.bombSites.touches(ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1], ps.f[PS_ORIGIN + 2], 16, 16, hz)) {
       want = ACTION_PLANT;
     }
-  } else if (p.team === TEAM_CT && (buttons & IN_USE) && onGround && bomb && bomb.state === BOMB_PLANTED &&
+  } else if ((p.team === TEAM_CT || demo) && (buttons & IN_USE) && onGround && bomb && bomb.state === BOMB_PLANTED &&
     (f[WS_ACTION] === ACTION_DEFUSE || canReachBomb(world, ps, pitch, yaw, bomb))) {
     want = ACTION_DEFUSE;
   }

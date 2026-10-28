@@ -28,7 +28,7 @@ const STATIC_DIRS = ['client/', 'shared/', 'maps/'];
 // The game server code and mode cfgs, for Practice: the browser runs them in a Web Worker
 // (client/localserver.js). Not main.js, the transport, the certificate or server.cfg.
 const STATIC_FILES = new Set(['server/host.js', 'server/game.js', 'server/bots.js', 'cfg/gamemode_competitive.cfg',
-  'cfg/gamemode_deathmatch.cfg']);
+  'cfg/gamemode_deathmatch.cfg', 'cfg/gamemode_demo.cfg']);
 const MIME = {
   html: 'text/html; charset=utf-8',
   js: 'text/javascript; charset=utf-8',

@@ -50,6 +50,7 @@ export const END_MATCH = 7; // deathmatch: the time limit ended the match (winne
 // mode convars).
 export const GAME_FFA = 1; // mp_teammates_are_enemies: everyone is an enemy
 export const GAME_DM = 2; // deathmatch: respawns, free weapons, points instead of money
+export const GAME_DEMO = 4; // demo: free buying anywhere, infinite ammo, no dying, anyone plants and defuses
 export const DM_KILL_POINTS = 10; // per enemy killed (approx.: CS:GO adds weapon bonuses)
 export const DM_RESPAWN = 2; // seconds dead before respawning (approx.)
 

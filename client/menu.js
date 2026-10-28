@@ -105,8 +105,9 @@ export class Menu {
     this.server = false; // in game: server rules (online or practice), so spectating works
     this.practiceMode = 'competitive';
     this.practicePlayers = 10; // bot_quota fill: bots make up the rest
+    this.demoPlayers = 0; // the demo: no bots unless asked for (targets)
     this.practiceDifficulty = 1;
-    this.panel = ''; // open panel: '', 'play', 'practice', 'team', 'settings'
+    this.panel = ''; // open panel: '', 'play', 'practice', 'demo', 'team', 'settings'
     this.tab = 0;
     this.shownAt = 0;
     this.server = null; // connect.json, once fetched
@@ -247,6 +248,7 @@ export class Menu {
     } else {
       item('Play', 'play');
       item('Practice', 'practice');
+      item('Demo', 'demo');
       item('Settings', 'settings');
     }
     this.note.textContent = this.message;
@@ -257,6 +259,7 @@ export class Menu {
     body.classList.toggle('empty', !this.panel && this.inGame);
     if (this.panel === 'play') this.renderPlay(body);
     else if (this.panel === 'practice') this.renderPractice(body);
+    else if (this.panel === 'demo') this.renderPractice(body, true);
     else if (this.panel === 'team') this.renderTeam(body, (team) => this.onTeam(team));
     else if (this.panel === 'settings') this.renderSettings(body);
     else if (!this.inGame) this.renderWelcome(body);
@@ -302,8 +305,14 @@ export class Menu {
     body.append(row);
   }
 
-  renderPractice(body) {
-    body.append(el('h2', '', 'Practice'));
+  // Practice, or (demo) the demo mode: the same panel without the mode choice, bots
+  // optional (targets).
+  renderPractice(body, demo = false) {
+    body.append(el('h2', '', demo ? 'Demo' : 'Practice'));
+    if (demo) {
+      body.append(el('p', 'menu-hint', 'Try everything out: buy anything for free, anywhere, infinite ammo and ' +
+        'grenades, you cannot die, plant and defuse the bomb yourself.'));
+    }
     const maps = this.maps || [];
     if (!maps.length) {
       body.append(el('p', 'menu-hint', this.maps ? 'No maps found in maps/.' : 'Loading maps...'));
@@ -344,17 +353,21 @@ export class Menu {
       }
       body.append(row);
     };
-    choice('Mode', [['competitive', 'Competitive'], ['deathmatch', 'Deathmatch']], this.practiceMode, (v) => {
-      this.practiceMode = v;
-    });
-    choice('Bots', [[0, 'None'], [2, '1 vs 1'], [6, '3 vs 3'], [10, '5 vs 5']], this.practicePlayers, (v) => {
-      this.practicePlayers = v;
+    if (!demo) {
+      choice('Mode', [['competitive', 'Competitive'], ['deathmatch', 'Deathmatch']], this.practiceMode, (v) => {
+        this.practiceMode = v;
+      });
+    }
+    const players = demo ? this.demoPlayers : this.practicePlayers;
+    choice('Bots', [[0, 'None'], [2, '1 vs 1'], [6, '3 vs 3'], [10, '5 vs 5']], players, (v) => {
+      if (demo) this.demoPlayers = v;
+      else this.practicePlayers = v;
     });
     choice('Difficulty', [[0, 'Easy'], [1, 'Normal'], [2, 'Hard'], [3, 'Expert']], this.practiceDifficulty, (v) => {
       this.practiceDifficulty = v;
     });
     body.append(button('Start', () => this.onPractice(this.practiceMap, this.practiceTeam, {
-      mode: this.practiceMode, players: this.practicePlayers, difficulty: this.practiceDifficulty,
+      mode: demo ? 'demo' : this.practiceMode, players, difficulty: this.practiceDifficulty,
     }), 'menu-go'));
   }
 

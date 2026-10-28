@@ -39,7 +39,7 @@ import {
   MAX_ROUNDS, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD,
   PLANT_LOSS_BONUS, LOSS_STREAK_MAX, TEAMKILL_PENALTY, END_ELIMINATION, END_TIME, END_DRAW, END_BOMB, END_DEFUSE,
   END_RESCUE, RESCUE_WIN_REWARD, RESCUE_REWARD, HOSTAGE_TOUCH_REWARD, HOSTAGE_HIT_PENALTY, HOSTAGE_KILL_PENALTY,
-  END_MATCH, GAME_FFA, GAME_DM, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
+  END_MATCH, GAME_FFA, GAME_DM, GAME_DEMO, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
@@ -60,6 +60,8 @@ const SEND_BUFFERS = 8; // rotating send buffers: a datagram may still be queued
 const WARMUP_MONEY = 16000; // CS:GO warmup: buy anything
 const THROW_DISTANCE = 64; // a dropped (G) bomb lands this far ahead (weapons fly: shared/items.js)
 const PICKUP_DELAY = TICK_RATE; // ticks before a thrown bomb or weapon can be picked up
+const DEMO_RESTOCK = 2; // the demo: seconds from a bomb going off or being defused to the next one
+const DEMO_HEAL = 2; // the demo: seconds from the last hurt to full health
 const USE_RANGE = 96; // E picks up a weapon on the ground this close to the eyes
 const USE_CONE = 0.8; // cos of the largest angle off the view it may be at
 
@@ -105,6 +107,8 @@ class Client {
     this.shots = 0; // shots fired mod 256 (E_SHOTS: third-person fire kicks)
     this.useHeld = false; // +use was down last command (E picks up on the press)
     this.controlled = false; // a bot a dead teammate took control of: out of play until it respawns
+    this.lastHealth = 100; // the demo: health last tick, and when it heals back
+    this.healAt = 0;
     this.flashLeft = 0; // seconds of flashbang blindness left (sent in the own block)
     this.flashTotal = 0;
     this.picking = -1; // hostage being picked up (use held), or -1
@@ -169,6 +173,8 @@ export const DEFAULT_RULES = {
   cheats: false, // sv_cheats: setpos for testing
   // Game mode (server/host.js: game_type / game_mode and the mode convars).
   deathmatch: false, // free weapons (kept for the next life), points instead of money
+  demo: false, // the demo: free buying anywhere and anytime, infinite ammo, humans cannot die, anyone
+  // plants and defuses, the bomb comes back after each explosion or defuse (cfg/gamemode_demo.cfg)
   teammatesAreEnemies: false, // mp_teammates_are_enemies: free for all
   respawnT: false, // mp_respawn_on_death_t
   respawnCT: false, // mp_respawn_on_death_ct
@@ -255,6 +261,8 @@ export class Game {
     this.bomb = new BombState();
     this.bombCarrier = null; // Client
     this.explodeTick = 0;
+    this.lastPlanter = null; // the demo hands them the next bomb
+    this.restockTick = 0; // the demo: the next bomb is handed out from this tick
     this.pickupTick = 0; // a dropped bomb can be picked up from this tick on
     this.planted = false; // this round: the Ts' plant bonus
     this.bombTrace = new Trace();
@@ -328,6 +336,7 @@ export class Game {
 
   // The match can be played: free for all needs two players, else both teams.
   ready(t, ct) {
+    if (this.rules.demo) return t + ct > 0; // the demo plays alone
     return this.rules.teammatesAreEnemies ? t + ct >= 2 : t > 0 && ct > 0;
   }
 
@@ -527,7 +536,7 @@ export class Game {
 
   // Buys `item` for `c` if he may (BUY messages, bots).
   buyItem(c, item) {
-    const free = this.rules.deathmatch;
+    const free = this.rules.deathmatch || this.rules.demo;
     if (buyError(c.player, item, this.canBuy(c), free)) return false;
     // A weapon bought into a taken slot throws the old one down (CS:GO; deathmatch: it is
     // gone, and the new one is handed out again at every respawn).
@@ -542,6 +551,7 @@ export class Game {
   // In a buy zone (or mp_buy_anywhere) in buy time; deathmatch: mp_buytime from each spawn.
   canBuy(c) {
     const ph = this.phase, r = this.rules;
+    if (r.demo) return c.alive && ph !== PHASE_OVER; // anywhere, anytime
     const inTime = r.deathmatch ? ph !== PHASE_OVER && this.tick < c.spawnTick + r.buyTime * TICK_RATE
       : ph === PHASE_WARMUP || ph === PHASE_FREEZE || (ph === PHASE_LIVE && this.tick < this.buyEnd);
     const f = c.player.ps.f;
@@ -571,6 +581,7 @@ export class Game {
       if (!c.joined) continue;
       if (!c.alive && this.tick >= c.respawnTick && this.phase !== PHASE_OVER) this.respawn(c, false, true);
       this.runCommands(c);
+      if (this.rules.demo) this.demoHeal(c);
     }
     this.updateBomb();
     this.updateHostages();
@@ -619,7 +630,8 @@ export class Game {
     const p = c.player;
     const wf = p.ws.f, held = WS_SLOTS + wf[WS_ACTIVE] * 3;
     const heldId = wf[held], heldClip = wf[held + 1], heldReserve = wf[held + 2]; // what G may drop
-    const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots, frozen, this.bomb);
+    const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots, frozen, this.bomb,
+      this.rules.demo);
     const events = p.ws.f[WS_EVENTS];
     if (events & (WEV_FIRE | WEV_MELEE | WEV_THROW)) {
       c.shots = (c.shots + 1) & 255;
@@ -684,6 +696,10 @@ export class Game {
 
   kill(killer, victim, weapon, headshot) {
     const k = killer.player, v = victim.player;
+    if (this.rules.demo && !victim.bot && v.health <= 0) { // the demo: humans take the hit, not the death
+      v.health = 1;
+      return;
+    }
     v.health = 0;
     v.deaths++;
     if (this.bombCarrier === victim) this.dropBomb(victim, false);
@@ -733,7 +749,7 @@ export class Game {
       else this.startWarmup(false);
     }
     const ready = this.ready(t, ct), r = this.rules;
-    rs.mode = (r.teammatesAreEnemies ? GAME_FFA : 0) | (r.deathmatch ? GAME_DM : 0);
+    rs.mode = (r.teammatesAreEnemies ? GAME_FFA : 0) | (r.deathmatch ? GAME_DM : 0) | (r.demo ? GAME_DEMO : 0);
     if (rs.phase === PHASE_WARMUP) {
       if (!ready) this.warmupReady = -1;
       else if (this.warmupReady < 0) this.warmupReady = this.tick;
@@ -1281,6 +1297,7 @@ export class Game {
     b.ticksLeft = this.explodeTick - this.tick;
     this.bombCarrier = null;
     this.planted = true;
+    this.lastPlanter = c;
     p.money = Math.min(this.rules.maxMoney, p.money + PLANT_REWARD);
     console.log(`bomb planted by player ${c.id}`);
   }
@@ -1290,7 +1307,8 @@ export class Game {
     this.bomb.state = BOMB_DEFUSED;
     c.player.money = Math.min(this.rules.maxMoney, c.player.money + DEFUSE_REWARD);
     console.log(`bomb defused by player ${c.id}`);
-    this.endRound(TEAM_CT, END_DEFUSE);
+    this.restockTick = this.tick + DEMO_RESTOCK * TICK_RATE;
+    if (!this.rules.ignoreWinConditions) this.endRound(TEAM_CT, END_DEFUSE);
   }
 
   // Each tick: Ts walking over a dropped bomb pick it up; a planted one counts down.
@@ -1298,7 +1316,7 @@ export class Game {
     const b = this.bomb;
     if (b.state === BOMB_DROPPED && this.tick >= this.pickupTick) {
       for (const c of this.clients) {
-        if (!c || !c.joined || !c.alive || c.team !== TEAM_T) continue;
+        if (!c || !c.joined || !c.alive || (c.team !== TEAM_T && !this.rules.demo)) continue;
         const f = c.player.ps.f;
         const feet = f[PS_ORIGIN + 2] - feetOffset(c.player.ps.i[PS_FLAGS]);
         if (Math.hypot(f[PS_ORIGIN] - b.x, f[PS_ORIGIN + 1] - b.y) > PICKUP_RANGE || Math.abs(feet - b.z) > 40) continue;
@@ -1312,6 +1330,34 @@ export class Game {
       b.ticksLeft = this.explodeTick - this.tick;
       if (b.ticksLeft <= 0) this.explodeBomb();
     }
+    if (this.rules.demo) this.demoBomb();
+  }
+
+  // The demo: with no bomb in play (none yet, or DEMO_RESTOCK s after one went off or was
+  // defused), the last planter (else the first human) gets a new one, whatever the team.
+  demoBomb() {
+    const b = this.bomb;
+    if (!this.bombSites.count || this.phase !== PHASE_LIVE || this.tick < this.restockTick) return;
+    if (b.state === BOMB_CARRIED || b.state === BOMB_DROPPED || b.state === BOMB_PLANTED) return;
+    let c = this.demoHuman(this.lastPlanter) ? this.lastPlanter : null;
+    for (let i = 0; !c && i < this.clients.length; i++) if (this.demoHuman(this.clients[i])) c = this.clients[i];
+    if (!c) return;
+    giveWeapon(c.player.ws, WEAPON_ID.c4);
+    b.state = BOMB_CARRIED;
+    this.bombCarrier = c;
+  }
+
+  demoHuman(c) {
+    return c && c.joined && c.alive && c.playing && !c.bot;
+  }
+
+  // The demo: a human's health comes back DEMO_HEAL s after the last hurt.
+  demoHeal(c) {
+    const p = c.player;
+    if (c.bot || !c.alive) return;
+    if (p.health < c.lastHealth) c.healAt = this.tick + DEMO_HEAL * TICK_RATE;
+    else if (p.health < 100 && this.tick >= c.healAt) p.health = 100;
+    c.lastHealth = p.health;
   }
 
   // Everyone in range takes the blast (through walls) as a chest hit; armor helps.
@@ -1333,7 +1379,8 @@ export class Game {
     const site = this.bombSites.siteAt(b.x, b.y, b.z, 16, 16, 16);
     if (site >= 0 && this.bombSites.targets[site]) this.fireTarget(this.bombSites.targets[site], null);
     console.log('bomb exploded');
-    if (this.phase === PHASE_LIVE) this.endRound(TEAM_T, END_BOMB);
+    this.restockTick = this.tick + DEMO_RESTOCK * TICK_RATE;
+    if (this.phase === PHASE_LIVE && !this.rules.ignoreWinConditions) this.endRound(TEAM_T, END_BOMB);
   }
 
   // After round 15: teams swap sides, scores follow them, money restarts.

@@ -73,7 +73,7 @@ import { NetGraph } from './netgraph.js';
 import { createConsole, watch } from './settings.js';
 import { releaseOf, quote } from '../shared/cvars.js';
 import {
-  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_DM, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
+  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_DM, GAME_DEMO, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
 } from '../shared/economy.js';
 
 const DEG = Math.PI / 180;
@@ -423,7 +423,7 @@ function storePrediction(t) {
 const frozen = () => net !== null && net.own.round.phase === PHASE_FREEZE;
 // Can we take control of player `id` (a living bot of our team, mid-round, not deathmatch)?
 function canTakeOver(id) {
-  if (!net || id < 0 || (gameMode() & GAME_DM)) return false;
+  if (!net || id < 0 || (gameMode() & (GAME_DM | GAME_DEMO))) return false;
   const phase = net.own.round.phase, r = id * E_FIELDS;
   return (phase === PHASE_FREEZE || phase === PHASE_LIVE) && interp[r + E_HEALTH] > 0 &&
     interp[r + E_TEAM] === player.team && (net.names[id] || '').startsWith('BOT ');
@@ -439,7 +439,7 @@ function replayFrom(from) {
     if (player.health > 0) {
       doors.apply(world, t + cmdOffset);
       runCommand(world, player, cmds.buttons[k], cmds.select[k], cmds.pitch[k], cmds.yaw[k], t, replayShots, frozen(),
-        simBomb());
+        simBomb(), demo());
     }
     storePrediction(t);
   }
@@ -448,6 +448,8 @@ function replayFrom(from) {
 // Buy menu: the server decides online; offline it is instant (anywhere, $16000).
 // The server's game mode (GAME_* bits; offline: none).
 const gameMode = () => (net ? net.own.round.mode : 0);
+const demo = () => (gameMode() & GAME_DEMO) !== 0;
+const freeBuys = () => (gameMode() & (GAME_DM | GAME_DEMO)) !== 0; // deathmatch and the demo: no money
 
 // The top scorer (deathmatch): { name, score, self, tied } or null.
 // Per-frame arguments and callbacks, made once (no garbage per frame).
@@ -480,7 +482,7 @@ function leader() {
 
 function buy(item) {
   if (net) {
-    if (!buyError(player, item, (net.own.flags & OWN_CAN_BUY) !== 0, (gameMode() & GAME_DM) !== 0)) net.buy(item);
+    if (!buyError(player, item, (net.own.flags & OWN_CAN_BUY) !== 0, freeBuys())) net.buy(item);
   } else if (!buyError(player, item, true)) {
     applyBuy(player, item);
   }
@@ -811,7 +813,7 @@ function tick() {
     noclipTick(buttons);
     weaponTick(ws, ps, buttons, select, angles[0], angles[1], t, shots);
   } else if (alive) {
-    const died = runCommand(world, player, buttons, select, angles[0], angles[1], t, shots, frozen(), simBomb());
+    const died = runCommand(world, player, buttons, select, angles[0], angles[1], t, shots, frozen(), simBomb(), demo());
     if (!net) sandboxTouches(t, buttons);
     if (died && !net) offlineRespawn();
   }
@@ -1043,7 +1045,7 @@ function draw(now, alpha, dt) {
     watched >= 0 ? interp[w + E_Z] : eye[2], yaw, interpolated ? interp : null, selfId, watched, player.team,
     (gameMode() & GAME_FFA) !== 0, net ? net.own.bomb : null, net ? net.hostages : null, now);
   hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now, leader());
-  document.body.classList.toggle('dm', (gameMode() & GAME_DM) !== 0); // no money in deathmatch
+  document.body.classList.toggle('dm', freeBuys()); // no money in deathmatch and the demo
   const action = ws.f[WS_ACTION];
   const simTime = (tickCount - 1 + alpha) * TICK_DT;
   const actionTime = action === ACTION_PLANT ? PLANT_TIME : player.defuser ? DEFUSE_TIME_KIT : DEFUSE_TIME;
@@ -1053,7 +1055,7 @@ function draw(now, alpha, dt) {
     action === ACTION_PLANT ? 'Planting the bomb' : action === ACTION_DEFUSE ? 'Defusing the bomb'
     : picking > 0 ? 'Picking up the hostage' : '',
     picking > 0 ? picking : 1 - (ws.f[WS_ACTION_END] - simTime) / actionTime);
-  hud.refreshMenu(player, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, (gameMode() & GAME_DM) !== 0);
+  hud.refreshMenu(player, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, freeBuys());
   hud.scoreboard((input.buttons & IN_SCORE) !== 0 && input.locked, net, selfId, rowAlive);
 
   weaponView.hidden = dead && !inEyes;
@@ -1168,7 +1170,7 @@ const BUY_NAMES = { vest: ITEM_KEVLAR, vesthelm: ITEM_ASSAULTSUIT, defuser: ITEM
 con.command('buy', (a, ctx) => {
   const item = BUY_NAMES[a[1]] || WEAPON_ID[a[1]];
   if (!item) return con.out(ctx, 'buy <ak47 | m4a1 | m4a1_silencer | awp | deagle | ... | vest | vesthelm | defuser>');
-  const err = buyError(player, item, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, (gameMode() & GAME_DM) !== 0);
+  const err = buyError(player, item, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, freeBuys());
   if (err) return con.out(ctx, `${itemLabel(item)}: ${err}`);
   buy(item);
 }, 'buy <item>: buys a weapon or gear');

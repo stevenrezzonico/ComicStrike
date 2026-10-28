@@ -4,7 +4,7 @@
 // datagram per message. The worker fetches the map and the mode cfgs itself (the Host
 // reads them synchronously), and handles `map` / `changelevel` by fetching first.
 //
-// Messages in:  start { map, mode: 'competitive' | 'deathmatch', players, difficulty },
+// Messages in:  start { map, mode: 'competitive' | 'deathmatch' | 'demo', players, difficulty },
 //               open { id }, dgram { id, bytes }, close { id }
 // Messages out: ready { rcon } | failed { error }, dgram { id, bytes }, close { id, reason }
 
@@ -12,7 +12,7 @@ import { Host, GAME_MODES } from '../server/host.js';
 import { parseBSP } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
 
-const CFGS = ['gamemode_competitive.cfg', 'gamemode_deathmatch.cfg'];
+const CFGS = ['gamemode_competitive.cfg', 'gamemode_deathmatch.cfg', 'gamemode_demo.cfg'];
 const TICK_MS = 1000 / TICK_RATE;
 
 let host = null;

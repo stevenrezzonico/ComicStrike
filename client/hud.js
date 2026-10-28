@@ -5,6 +5,7 @@
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, END_MATCH, GAME_FFA, GAME_DM,
+  GAME_DEMO,
   BUY_MENU, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER, itemLabel, itemPrice,
 } from '../shared/economy.js';
 import { WEAPONS } from '../shared/weapons.js';
@@ -91,7 +92,8 @@ export class Hud {
     const dm = (rs.mode & GAME_DM) !== 0;
     const lead = leader && leader.score > 0 && !leader.tied
       ? `   lead: ${leader.self ? 'you' : leader.name} ${leader.score}` : '';
-    this.set(this.elRound, 'round', dm ? `DEATHMATCH   ${mid}${lead}` : `CT ${rs.scoreCT}   ${mid}   ${rs.scoreT} T`);
+    this.set(this.elRound, 'round', rs.mode & GAME_DEMO ? `DEMO   ${mid}`
+      : dm ? `DEATHMATCH   ${mid}${lead}` : `CT ${rs.scoreCT}   ${mid}   ${rs.scoreT} T`);
     let banner = '';
     if (rs.phase === PHASE_OVER && rs.info >> 2 === END_MATCH) {
       banner = !leader || leader.tied ? 'Match over: a draw'

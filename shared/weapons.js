@@ -515,6 +515,24 @@ function startReload(f, w, time, o) {
 
 const DEG = Math.PI / 180;
 
+// The demo's infinite ammo (CS:GO's sv_infinite_ammo 1, run after weaponTick in the
+// shared simulation, so clients predict it): a shot of the weapon that was in `slot` with
+// `clip` rounds before the tick takes none, and a thrown grenade comes back, up again.
+export function infiniteAmmo(ws, slot, clip, time) {
+  const f = ws.f;
+  if ((f[WS_EVENTS] & WEV_FIRE) && f[WS_ACTIVE] === slot) {
+    const o = WS_SLOTS + slot * 3 + 1;
+    if (f[o] < clip) f[o] = clip;
+  }
+  if (f[WS_EVENTS] & WEV_THROW) {
+    const id = Math.floor(f[WS_THROWN] / 4), last = f[WS_LAST_SLOT];
+    f[WS_GRENADES + kindOf(id)]++;
+    f[WS_SLOTS + SLOT_GRENADE * 3] = id;
+    deploy(ws, SLOT_GRENADE, time);
+    f[WS_LAST_SLOT] = last;
+  }
+}
+
 function deploy(ws, slot, time) {
   const f = ws.f;
   f[WS_LAST_SLOT] = f[WS_ACTIVE];

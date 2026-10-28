@@ -15,7 +15,7 @@ const CHANGELEVEL_CLOSE_MS = 500;
 // map loads (cfg/gamemode_<name>.cfg, then cfg/gamemode_<name>_server.cfg for the
 // server's own overrides, as in CS:GO); deathmatch also switches to free weapons and
 // points instead of money.
-export const GAME_MODES = { '0/1': 'competitive', '1/2': 'deathmatch' };
+export const GAME_MODES = { '0/1': 'competitive', '1/2': 'deathmatch', '2/0': 'demo' };
 
 export class Host {
   // opts: loadMap(name) -> parsed BSP (throws if missing), listMaps() -> names,
@@ -44,7 +44,7 @@ export class Host {
     num('sv_cheats', 0, 'Allow cheat commands (setpos)', 0, 1);
     // Game modes (cfg/gamemode_*.cfg set these).
     con.cvar('game_type', 0, { help: 'Game type (0 classic, 1 gun game family); applies on the next map', min: 0, max: 3 });
-    con.cvar('game_mode', 1, { help: 'Game mode (0/1 competitive, 1/2 deathmatch); applies on the next map', min: 0, max: 3 });
+    con.cvar('game_mode', 1, { help: 'Game mode (0/1 competitive, 1/2 deathmatch, 2/0 demo); applies on the next map', min: 0, max: 3 });
     num('mp_teammates_are_enemies', 0, 'Everyone is an enemy (free for all)', 0, 1);
     num('mp_respawn_on_death_t', 0, 'Terrorists respawn after dying', 0, 1);
     num('mp_respawn_on_death_ct', 0, 'Counter-Terrorists respawn after dying', 0, 1);
@@ -173,6 +173,7 @@ export class Host {
       warmupTime: v('mp_warmuptime'),
       cheats: v('sv_cheats') !== 0,
       deathmatch: this.modeName === 'deathmatch',
+      demo: this.modeName === 'demo',
       teammatesAreEnemies: v('mp_teammates_are_enemies') !== 0,
       respawnT: v('mp_respawn_on_death_t') !== 0,
       respawnCT: v('mp_respawn_on_death_ct') !== 0,
