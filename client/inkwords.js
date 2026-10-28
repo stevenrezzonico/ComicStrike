@@ -1,6 +1,7 @@
 // Comic sound words (cl_comicwords): BAM! on our hits, HEADSHOT! and KAPOW! on our kills,
 // BLAM! / RAT-TAT-TAT! for our own gunfire, PAK! on walls we hit, KA-BOOM! on explosions,
-// SMOKE! on smoke grenades, FIRE! and CRACKLE! on fires.
+// SMOKE! on smoke grenades, FIRE! and CRACKLE! on fires. Nothing covers the crosshair:
+// our own hits land under it, so their words go beside it (they hid the target in a fight).
 // A fixed pool of DOM elements, reused oldest first; the pop animation is CSS (#fx in
 // index.html). Spawning happens on events, never per frame; update() only hides the
 // expired ones and fades the gunfire ticker.
@@ -10,6 +11,7 @@ import { GUN_SOUNDS } from './audio.js';
 const POOL = 24;
 const TICKER_GAP_MS = 260; // no shot for this long ends a burst's word
 const TICKER_MAX = 4; // words in one burst line ("RAT-TAT-TAT-TAT!"), then a new line
+const CLEAR = 0.15; // radius round the crosshair, of the window height, kept free of words and sparks
 const pick = (a) => a[(Math.random() * a.length) | 0];
 const rnd = (a, b) => a + Math.random() * (b - a);
 
@@ -44,7 +46,8 @@ export class InkWords {
     this.enabled = true;
     this.items = [];
     this.next = 0;
-    this.q = new Float32Array(4);
+    this.sx = 0; // project()'s result: screen position (CSS px)
+    this.sy = 0;
     for (let i = 0; i < POOL; i++) {
       const el = document.createElement('div');
       el.className = 'pop';
@@ -90,30 +93,56 @@ export class InkWords {
     it.end = performance.now() + life;
   }
 
+  // World point (x, y, z) on the screen (this.sx, this.sy, CSS px) with viewProj; false
+  // behind the view or well off it.
+  project(viewProj, x, y, z) {
+    const m = viewProj, w = m[3] * x + m[7] * y + m[11] * z + m[15];
+    if (w <= 1) return false;
+    const sx = (m[0] * x + m[4] * y + m[8] * z + m[12]) / w, sy = (m[1] * x + m[5] * y + m[9] * z + m[13]) / w;
+    if (sx < -1.2 || sx > 1.2 || sy < -1.2 || sy > 1.2) return false;
+    this.sx = (sx * 0.5 + 0.5) * innerWidth;
+    this.sy = (0.5 - sy * 0.5) * innerHeight;
+    return true;
+  }
+
+  // Moves (this.sx, this.sy) out of the clear disc round the crosshair to its edge, up and
+  // to the side it was on (either, from the middle), where a comic puts the sound beside the
+  // action. False if it had to move.
+  aside() {
+    const cx = innerWidth / 2, cy = innerHeight / 2, r = CLEAR * innerHeight;
+    const dx = this.sx - cx, dy = this.sy - cy;
+    if (dx * dx + dy * dy >= r * r) return true;
+    const side = dx > 4 ? 1 : dx < -4 ? -1 : Math.random() < 0.5 ? -1 : 1;
+    const a = rnd(35, 60) * Math.PI / 180; // from straight up
+    this.sx = cx + side * Math.sin(a) * r;
+    this.sy = cy - Math.cos(a) * r;
+    return false;
+  }
+
   // At world point (x, y, z), projected with viewProj; nothing behind the view.
   at(viewProj, x, y, z, text, cls, size, life) {
-    const m = viewProj, w = m[3] * x + m[7] * y + m[11] * z + m[15];
-    if (w <= 1) return;
-    const sx = (m[0] * x + m[4] * y + m[8] * z + m[12]) / w, sy = (m[1] * x + m[5] * y + m[9] * z + m[13]) / w;
-    if (sx < -1.2 || sx > 1.2 || sy < -1.2 || sy > 1.2) return;
-    this.spawn(text, cls, (sx * 0.5 + 0.5) * innerWidth, (0.5 - sy * 0.5) * innerHeight, size, life);
+    if (this.project(viewProj, x, y, z)) this.spawn(text, cls, this.sx, this.sy, size, life);
   }
 
-  // Our bullet hit someone at (x, y, z).
+  // Our bullet hit someone at (x, y, z): the word beside them, not over them.
   hit(viewProj, x, y, z) {
-    this.at(viewProj, x, y, z, pick(HIT), 'hit', rnd(32, 40), 760);
+    if (!this.project(viewProj, x, y, z)) return;
+    this.aside();
+    this.spawn(pick(HIT), 'hit', this.sx, this.sy, rnd(32, 40), 760);
   }
 
-  // We killed someone.
+  // We killed someone: above the crosshair, clear of it.
   kill(headshot) {
     this.spawn(headshot ? 'HEADSHOT!' : pick(['KAPOW!', 'KRAK!', 'WHAMMO!']), 'big', innerWidth * rnd(0.46, 0.54),
-      innerHeight * 0.36, headshot ? 46 : 42, 900);
+      innerHeight * 0.29, headshot ? 46 : 42, 900);
   }
 
-  // Our bullet hit a wall at (x, y, z): a spark, now and then a word.
+  // Our bullet hit a wall at (x, y, z): a spark (none round the crosshair: the bullet hole
+  // marks it there), now and then a word, beside the crosshair.
   wall(viewProj, x, y, z) {
-    this.at(viewProj, x, y, z, '', 'spark', rnd(18, 26), 240);
-    if (Math.random() < 0.25) this.at(viewProj, x, y, z, pick(WALL), 'wall', rnd(18, 26), 620);
+    if (!this.project(viewProj, x, y, z)) return;
+    if (this.aside()) this.spawn('', 'spark', this.sx, this.sy, rnd(18, 26), 240);
+    if (Math.random() < 0.25) this.spawn(pick(WALL), 'wall', this.sx, this.sy, rnd(18, 26), 620);
   }
 
   // An explosion of the given size (1 = the C4) at (x, y, z): bare lettering, the fireball
