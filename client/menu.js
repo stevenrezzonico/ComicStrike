@@ -318,6 +318,10 @@ export class Menu {
       body.append(el('p', 'menu-hint', this.maps ? 'No maps found in maps/.' : 'Loading maps...'));
       return;
     }
+    if (demo && !this.demoMapPicked && maps.includes('de_playground')) { // the demo opens on its playground
+      this.practiceMap = 'de_playground';
+      this.demoMapPicked = true;
+    }
     if (!maps.includes(this.practiceMap)) this.practiceMap = maps.includes('de_dust2') ? 'de_dust2' : maps[0];
     const grid = el('div', 'menu-maps');
     for (const m of maps) {

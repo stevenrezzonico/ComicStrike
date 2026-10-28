@@ -1,4 +1,5 @@
-maps/
+maps/*
+!maps/de_playground.bsp
 certs/
 node_modules/
 .claude/
