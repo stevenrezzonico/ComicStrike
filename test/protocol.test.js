@@ -6,6 +6,7 @@ import {
   CmdRing, SnapshotRing, OwnState, writeHello, readHello, writeWelcome, readWelcome, writeCmds, readCmds,
   writeSnapshot, readSnapshot, quantizePitch, dequantizePitch, quantizeYaw, dequantizeYaw, E_ACTIVE, E_X, E_Y, E_Z,
   E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS, E_FIELDS, ANIM_RELOAD, ANIM_HELMET,
+  RoundState,
 } from '../shared/protocol.js';
 
 Deno.test('hello and welcome round-trip', () => {
@@ -76,13 +77,17 @@ Deno.test('snapshots: full, then small deltas, removals and the breakable mask',
   let k = server.claim(1);
   for (let id = 0; id < MAX_PLAYERS; id++) fillRow(server, k, id, id * 100);
   server.broken.fill(0xffffffff, k * 8, k * 8 + 8);
-  const full = writeSnapshot(w, server, k, -1, 0, ownInfo);
+  const rs = new RoundState();
+  rs.round = 1;
+  rs.serial = 201;
+  const full = writeSnapshot(w, server, k, -1, 0, ownInfo, null, rs);
   assert.ok(full.length <= MAX_DATAGRAM, `full snapshot is ${full.length} bytes`);
   r.set(full);
   assert.equal(r.u8v(), S2C_SNAPSHOT);
   const c1 = readSnapshot(r, client, own);
   assert.ok(c1 >= 0);
   assert.equal(own.lastCmd, 999);
+  assert.deepEqual([own.round.round, own.round.serial], [1, 201], 'the round and its start count');
   assert.equal(own.health, 87);
   assert.equal(own.team, TEAM_CT);
   assert.equal(own.psF[0], 123.25);
@@ -101,11 +106,11 @@ Deno.test('snapshots: full, then small deltas, removals and the breakable mask',
   server.ents[server.row(k, 3) + E_X] += 4;
   server.ents.fill(0, server.row(k, 7), server.row(k, 7) + E_FIELDS);
   const delta = writeSnapshot(w, server, k, base, 0, ownInfo);
-  // header 14 + round 10 + bomb 1 + movers 1 + own block (8 + money 3 + state) + 2 entries (moved: 2 + 12
+  // header 14 + round 11 + bomb 1 + movers 1 + own block (8 + money 3 + state) + 2 entries (moved: 2 + 12
   // bytes, removed: 2 bytes) + 2 empty event lists
   // (the weapon state: a field bitmask, then the fields that are not zero)
   const wsLength = Math.ceil(player.ws.f.length / 8) + 8 * player.ws.f.filter((v) => !Object.is(v, 0)).length;
-  assert.equal(delta.length, 14 + 10 + 1 + 1 + 8 + 6 + player.psBytes.length + wsLength + 1 + 14 + 2 + 2);
+  assert.equal(delta.length, 14 + 11 + 1 + 1 + 8 + 6 + player.psBytes.length + wsLength + 1 + 14 + 2 + 2);
   r.set(delta);
   r.u8v();
   const c2 = readSnapshot(r, client, own);

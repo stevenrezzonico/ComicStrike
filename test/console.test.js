@@ -133,9 +133,11 @@ Deno.test('round control: mp_warmup_end, mp_restartgame, mp_warmup_start', async
   assert.equal(host.game.phase, PHASE_FREEZE);
   assert.equal(a.player.money, 800);
   a.player.money = 5000;
+  const serial = host.game.round.serial;
   host.con.exec('mp_restartgame 1');
   run(65, [a, b]);
   assert.equal(host.game.round.round, 1);
+  assert.equal(host.game.round.serial, (serial + 1) & 255, 'round 1 again, but a new start: clients clear the marks');
   assert.equal(a.player.money, 800, 'a fresh match');
   host.con.exec('mp_warmup_start');
   run(200, [a, b]);

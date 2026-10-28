@@ -56,6 +56,8 @@ export class Bots {
     this.nav = null; // built with the first bot
     this.writer = new Writer();
     this.random = Math.random;
+    this.tSite = 0; // teamSite(): the Terrorists' site in round siteRound (RoundState.serial)
+    this.siteRound = -1;
   }
 
   ensureNav() {
@@ -114,6 +116,18 @@ export class Bots {
     let t = 0, ct = 0;
     for (const c of this.game.clients) if (c && c.joined && c.playing) c.team === TEAM_CT ? ct++ : t++;
     return ct > t ? TEAM_CT : TEAM_T;
+  }
+
+  // The bomb site the Terrorists go for this round: one for all of them, as CS:GO's bots
+  // pick one together (each picking its own sent the carrier in alone, and it died on the way).
+  teamSite() {
+    const g = this.game, n = g.bombSites.count;
+    if (!n) return 0;
+    if (this.siteRound !== g.round.serial) {
+      this.siteRound = g.round.serial;
+      this.tSite = Math.floor(this.random() * n);
+    }
+    return this.tSite;
   }
 
   // Each tick, before the server runs commands: every bot decides its command.
@@ -193,8 +207,7 @@ class Bot {
     this.yaw = this.c.spawnYaw;
     this.pitch = 0;
     this.stuck = 0;
-    const sites = this.game.bombSites.count;
-    this.site = sites ? Math.floor(this.bots.random() * sites) : 0;
+    this.site = this.bots.teamSite();
   }
 
   // Returns [buttons, weapon slot to select or -1].
@@ -233,8 +246,8 @@ class Bot {
       }
     }
 
-    // Where to go.
-    if (!fighting) {
+    // Where to go (bots told not to shoot keep to it, watching the enemy).
+    if (!fighting || g.rules.botDontShoot) {
       const goal = this.objective(x, y, feet);
       if (goal.node !== this.goal || goal.why !== this.goalWhy || (goal.moving && g.tick >= this.repathAt)) {
         this.goal = goal.node;
@@ -387,8 +400,10 @@ class Bot {
   objective(x, y, feet) {
     const c = this.c, g = this.game, nav = this.bots.nav, rnd = this.bots.random;
     const keep = (why) => (this.goalWhy === why && this.goal >= 0 ? this.goal : -1);
-    // Hunt the last place an enemy was seen or heard (not when told not to shoot).
-    if (g.tick - this.seenAt < MEMORY && this.lastX && !g.rules.botDontShoot) {
+    // Hunt the last place an enemy was seen or heard (not when told not to shoot, nor with
+    // the bomb: the carrier keeps going for the site).
+    const carrier = c.player.ws.f[WS_SLOTS + SLOT_C4 * 3] > 0;
+    if (g.tick - this.seenAt < MEMORY && this.lastX && !g.rules.botDontShoot && !carrier) {
       return { node: nav.nodeAt(this.lastX, this.lastY, this.lastZ - 36), why: `hunt${Math.round(this.lastX)}` };
     }
     if (g.phase !== PHASE_LIVE && g.phase !== PHASE_WARMUP) return { node: -1, why: 'wait' };
@@ -396,7 +411,7 @@ class Bot {
     if (!g.rules.deathmatch && g.bombSites.count && g.rules.giveC4) {
       const site = g.bombSites.boxes[this.site % g.bombSites.count];
       if (c.team === TEAM_T) {
-        if (c.player.ws.f[WS_SLOTS + SLOT_C4 * 3]) { // the bomb: to the site, then plant
+        if (carrier) { // the bomb: to the site, then plant
           if (g.bombSites.touches(x, y, f[PS_ORIGIN + 2], 16, 16, 36) && (c.player.ps.i[PS_FLAGS] & FL_ONGROUND)) {
             return { node: -1, why: 'plant', action: IN_ATTACK, select: SLOT_C4, look: [x, y, feet] };
           }

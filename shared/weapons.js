@@ -316,6 +316,16 @@ export function giveWeapon(ws, id) {
   return true;
 }
 
+// Every gun held back to a full magazine and reserve (a new round for survivors).
+export function refillAmmo(ws) {
+  for (let s = 0; s < NUM_SLOTS; s++) {
+    const o = WS_SLOTS + s * 3, w = WEAPONS[ws.f[o]];
+    if (!w || !w.gun) continue;
+    ws.f[o + 1] = w.clip;
+    ws.f[o + 2] = w.reserve;
+  }
+}
+
 export function activeWeapon(ws) {
   return WEAPONS[ws.f[WS_SLOTS + ws.f[WS_ACTIVE] * 3]] || null;
 }
@@ -655,7 +665,7 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
 
   // Eye position and view axes (with aim punch for guns).
   const eyeX = ps.f[PS_ORIGIN], eyeY = ps.f[PS_ORIGIN + 1], eyeZ = ps.f[PS_ORIGIN + 2] + eyeOffset(ps);
-  const idle = ready && f[WS_RELOAD_END] === 0 && f[WS_MODE_END] === 0;
+  let idle = ready && f[WS_RELOAD_END] === 0 && f[WS_MODE_END] === 0;
 
   if (w.melee) {
     const primary = (buttons & IN_ATTACK) && time >= f[WS_NEXT_ATTACK];
@@ -707,6 +717,12 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
     } else {
       f[WS_BURST_LEFT] = 0;
     }
+  }
+
+  // An empty magazine reloads by itself once the last shot's cycle is over, trigger held
+  // or not (CS:GO); with no reserve left the trigger dry-fires below.
+  if (f[o + 1] <= 0 && idle && time >= f[WS_NEXT_ATTACK] && !f[WS_BURST_LEFT] && startReload(f, w, time, o)) {
+    idle = false;
   }
 
   // The revolver fires a moment after the trigger: the hammer cocks while it is held.

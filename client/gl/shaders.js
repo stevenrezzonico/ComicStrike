@@ -612,6 +612,16 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
+// The flashbang's afterimage (client/gl/afterimage.js): the kept frame, pixel for pixel.
+export const AFTERIMAGE_FS = `#version 300 es
+precision mediump float;
+uniform sampler2D u_img;
+uniform float u_alpha;
+out vec4 o_color;
+void main() {
+  o_color = vec4(texelFetch(u_img, ivec2(gl_FragCoord.xy), 0).rgb, u_alpha);
+}`;
+
 export const COMPOSITE_FS = `#version 300 es
 precision highp float;
 precision highp int;

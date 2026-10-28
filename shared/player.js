@@ -10,7 +10,8 @@ import {
   PS_VELMOD, EV_LAND, FL_ONGROUND, FL_DUCKING,
 } from './pmove.js';
 import {
-  createWeaponState, copyWeaponState, giveWeapon, weaponTick, infiniteAmmo, activeWeapon, weaponStats, removeWeapon, WEAPON_ID,
+  createWeaponState, copyWeaponState, giveWeapon, weaponTick, infiniteAmmo, activeWeapon, weaponStats, removeWeapon, refillAmmo,
+  WEAPON_ID,
   SLOT_PRIMARY,
   SLOT_SECONDARY, SLOT_C4, NUM_SLOTS, WS_ACTIVE, WS_SLOTS, WS_EVENTS, WS_ACTION, WS_ACTION_END, WEV_PLANTED, WEV_DEFUSED,
   ACTION_PLANT, ACTION_DEFUSE, WS_ALT, WS_GRENADES, GRENADE_IDS,
@@ -58,7 +59,7 @@ const savedGrenades = new Float64Array(GRENADE_IDS.length);
 let savedAlt = 0;
 
 // Puts a player at a spawn point with full health.
-//  keepGear: a round survivor keeps weapons, ammo and armor (CS:GO).
+//  keepGear: a round survivor keeps weapons (reloaded, full reserve), grenades and armor.
 //  otherwise a new life: knife + team pistol, no armor; `withLoadout` (warmup and
 //  offline) also hands out the requested primary/secondary.
 export function spawnPlayer(p, x, y, z, keepGear = false, withLoadout = true) {
@@ -77,6 +78,7 @@ export function spawnPlayer(p, x, y, z, keepGear = false, withLoadout = true) {
     p.ws.f.set(savedSlots, WS_SLOTS);
     p.ws.f.set(savedGrenades, WS_GRENADES);
     p.ws.f[WS_ALT] = savedAlt;
+    refillAmmo(p.ws); // the guns come back loaded
   } else {
     giveWeapon(p.ws, WEAPON_ID.knife);
     giveWeapon(p.ws, (withLoadout && p.secondary) || (ct ? WEAPON_ID.usp_silencer : WEAPON_ID.glock));

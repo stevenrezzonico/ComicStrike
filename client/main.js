@@ -123,7 +123,10 @@ const overlays = [decals, debris, players, models, fx];
 const words = new InkWords(document.getElementById('fx'));
 const weaponView = new WeaponView(renderer.gl, FOV_Y, cv, guns);
 const input = new Input(canvas);
-const hud = new Hud((item) => buy(item));
+const hud = new Hud((item) => { // a buy from the menu closes it
+  buy(item);
+  closeBuyMenu();
+});
 const menu = new Menu(document.getElementById('menu'), con, cv, binds);
 const radar = new Radar(document.getElementById('radar'), cv);
 let playing = false; // in a game (online or practice); false: the start menu
@@ -197,10 +200,10 @@ function selfPoint(out, dz) {
 }
 
 // Flashbangs: a comic white-out (paper over the print, a starburst where it went off, FLASH!),
-// then the frozen afterimage of the moment fading with it; the off hand shields the eyes.
+// then the frozen afterimage of the moment fading with it (on the GPU: renderer.afterimage);
+// the off hand shields the eyes.
 const flashEl = document.getElementById('flash');
 const flashBurst = flashEl.querySelector('.burst');
-const afterimage = document.getElementById('afterimage');
 const starPolygon = (n, inner) => `polygon(${Array.from({ length: n * 2 }, (_, i) => {
   const a = i / (n * 2) * Math.PI * 2, r = i % 2 ? inner : 50 - (i % 4 ? 0 : 6);
   return `${(50 + Math.cos(a) * r).toFixed(1)}% ${(50 + Math.sin(a) * r).toFixed(1)}%`;
@@ -212,9 +215,7 @@ let flashShown = -1, lastFlashLeft = 0;
 function showFlash(left, total) {
   if (left > lastFlashLeft + 0.05) { // a new flash: keep this frame; ears ring; the burst goes where it popped
     sounds.earRing(left);
-    afterimage.width = canvas.width >> 1;
-    afterimage.height = canvas.height >> 1;
-    afterimage.getContext('2d').drawImage(canvas, 0, 0, afterimage.width, afterimage.height);
+    renderer.afterimage.capture(canvas.width, canvas.height);
     let sx = 0, sy = 0;
     if (performance.now() - lastFlashPop[3] < 1000) {
       const m = viewProj, [x, y, z] = lastFlashPop;
@@ -233,11 +234,11 @@ function showFlash(left, total) {
   const hold = total * 0.35, a = left <= 0 ? 0 : left > total - hold ? 1 : left / (total - hold);
   const shown = Math.round(a * 100) / 100;
   weaponView.blind = Math.min(1, shown * 1.4);
+  renderer.afterimage.draw(shown * 0.6, canvas.width, canvas.height); // every frame: it is drawn into the canvas
   if (shown === flashShown) return;
   flashShown = shown;
   flashEl.style.opacity = Math.min(1, shown * 1.15);
   flashBurst.style.setProperty('--k', (0.75 + 0.35 * shown).toFixed(2));
-  afterimage.style.opacity = shown * 0.6;
 }
 
 fx.onEffect = (kind, _weapon, x, y, z) => {
@@ -290,6 +291,7 @@ const predictedPs = new Uint8Array(HISTORY * PS_SIZE * 4); // our state after ea
 const predictedWs = new Uint8Array(HISTORY * WS_SIZE * 8);
 const predictedTick = new Int32Array(HISTORY).fill(-1);
 const serverBroken = new Uint32Array(8); // breakable mask of the last applied snapshot
+let roundSerial = -1; // the server's round starts (RoundState.serial) last seen
 const replayShots = new ShotList();
 const smooth = new Float32Array(3); // visual offset hiding prediction corrections
 const netStats = { rtt: 0, compared: 0, corrected: 0, lastErr: 0 };
@@ -362,13 +364,22 @@ function resetView(yaw) {
   smooth.fill(0);
 }
 
+// A new round wipes what the last one left on the map: bullet holes, scorches, shards
+// and chunks, explosions (breakables, doors, the ground and grenades come from the server).
+function clearRoundMarks() {
+  decals.clear();
+  debris.clear();
+  blasts.clear();
+  renderer.flashes.clear();
+}
+
 // Offline round restart: breakables come back, we spawn at our team's first spawn.
 function offlineRespawn() {
   breakables.reset(world);
   doors.reset(world);
   mapLogic.reset(tickCount);
   renderer.clearBroken();
-  debris.clear();
+  clearRoundMarks();
   localGrenades.clear();
   fx.clear();
   flash.left = 0;
@@ -581,6 +592,11 @@ function applySnapshot() {
       if (broken) breakVisual(slot);
       else renderer.setBroken(slot, false);
     }
+  }
+
+  if (own.round.serial !== roundSerial) {
+    if (roundSerial >= 0) clearRoundMarks();
+    roundSerial = own.round.serial;
   }
 
   // The bomb: announce the plant, blow up.
@@ -1164,7 +1180,10 @@ setInterval(() => {
 // --- Console commands and key binds ------------------------------------------------
 
 // Keys run their binds (the console window takes keys while it is open; the buy menu
-// takes Escape and its number keys). `+` binds only act while playing (mouse captured).
+// takes Escape and its number keys). `+` binds only act while playing (mouse captured),
+// or with the buy menu open, where we keep moving (not shooting: the mouse is the menu's).
+const MENU_HELD = new Set(['+attack', '+attack2']);
+input.keepKeys = () => hud.menuOpen;
 input.onKey = (key, down) => {
   if (conWin.isOpen) return false;
   if (hud.menuOpen && down && (key === 'escape' || /^[0-9]$/.test(key))) {
@@ -1176,7 +1195,7 @@ input.onKey = (key, down) => {
   if (b === undefined) return false;
   if (menu.visible && b !== 'toggleconsole') return false; // the menu takes the keys (typing a name)
   if (down) {
-    if (b[0] === '+' && !input.locked) return false;
+    if (b[0] === '+' && !input.locked && !(hud.menuOpen && playing && !MENU_HELD.has(b))) return false;
     con.exec(b, { key });
   } else {
     const release = releaseOf(b);
@@ -1326,7 +1345,7 @@ function updateOverlay() {
 }
 function closeBuyMenu() {
   hud.toggleMenu(false);
-  input.lock().catch(() => {});
+  input.lock().catch(() => input.clear()); // no mouse back (Escape): the held keys let go
   updateOverlay();
 }
 conWin.onToggle = (open) => {
@@ -1379,6 +1398,7 @@ const NO_ITEMS = new Items(), NO_HOSTAGES = new Hostages();
 // Forgets everything from the last game (server state, other players, effects).
 function resetSession() {
   synced = false;
+  roundSerial = -1;
   words.clear();
   blasts.clear();
   serverClock = -1;
@@ -1398,7 +1418,10 @@ function resetSession() {
   itemsVersion = grenadesVersion = -1;
   models.setBomb(false);
   fx.clear();
-  if (hud.menuOpen) hud.toggleMenu(false);
+  if (hud.menuOpen) {
+    hud.toggleMenu(false);
+    input.clear();
+  }
 }
 
 // Play: join the server on a team (CS:GO numbers: 1 spectators, 2 T, 3 CT; 0 auto).
@@ -1547,7 +1570,6 @@ globalThis.comicstrike = {
   player,
   ps,
   ws,
-  renderer,
   decals,
   angles,
   input,

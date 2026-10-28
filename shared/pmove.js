@@ -560,11 +560,11 @@ function duck(buttons) {
       duckAmount = 1; // no room to stand
       return;
     }
+    // Room to stand: the hull grows now and the view rises with the amount (the eye
+    // cannot rise above a ducked hull, so waiting for the amount held it down, then popped it up).
     duckAmount = Math.max(0, duckAmount - dt * duckSpeed);
-    if (duckAmount <= 0 || !onGround) {
-      hull = HULL_STAND;
-      oz += dz;
-    }
+    hull = HULL_STAND;
+    oz += dz;
   } else {
     duckAmount = Math.max(0, duckAmount - dt * duckSpeed);
   }

@@ -851,6 +851,7 @@ export class Game {
       this.bombCarrier = c;
     }
     this.round.round++;
+    this.round.serial = (this.round.serial + 1) & 255;
     this.setPhase(PHASE_FREEZE, this.rules.freezeTime);
   }
 

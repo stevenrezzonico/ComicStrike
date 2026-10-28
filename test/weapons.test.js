@@ -4,7 +4,7 @@ import { createPlayerState, PS_VEL, PS_FLAGS, FL_ONGROUND, FL_DUCKING } from '..
 import {
   WEAPONS, WEAPON_ID, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, ShotList, createWeaponState, giveWeapon,
   weaponTick, getInaccuracy, recoveryTime, UniformRandomStream, WS_ACTIVE, WS_SLOTS, WS_PUNCH, WS_EVENTS, WEV_FIRE, WEV_RELOADED,
-  WEV_SHELL, WS_RELOAD_END,
+  WEV_SHELL, WS_RELOAD_END, WEV_DRYFIRE, refillAmmo,
 } from '../shared/weapons.js';
 
 const DEG = Math.PI / 180;
@@ -41,20 +41,45 @@ Deno.test('AK-47 fire rate quantizes to the 64-tick clock like CS:GO', () => {
   assert.equal(hold(ctx, IN_ATTACK, 1000, 64).fired, 10);
 });
 
-Deno.test('emptying the clip auto-reloads on the next trigger pull', () => {
-  const ctx = setup('ak47');
-  const ak = WEAPONS[WEAPON_ID.ak47];
-  assert.equal(hold(ctx, IN_ATTACK, 1000, 7 * 30 + 3).fired, 30);
-  assert.equal(clip(ctx, SLOT_PRIMARY), 0);
-  let reloaded = false;
-  // One trigger pull on the empty clip starts the reload; then let go.
-  for (let t = 1300; t < 1300 + Math.ceil(ak.reloadTime / TICK_DT) + 2; t++) {
-    weaponTick(ctx.ws, ctx.ps, t === 1300 ? IN_ATTACK : 0, -1, 0, 0, t, ctx.shots);
-    if (ctx.ws.f[WS_EVENTS] & WEV_RELOADED) reloaded = true;
+Deno.test('emptying the clip reloads by itself, no extra trigger pull', () => {
+  for (const held of [IN_ATTACK, 0]) { // trigger still held after the last shot, or let go
+    const ctx = setup('ak47');
+    const ak = WEAPONS[WEAPON_ID.ak47];
+    assert.equal(hold(ctx, IN_ATTACK, 1000, 7 * 29 + 1).fired, 30); // the 30th on the last tick
+    assert.equal(clip(ctx, SLOT_PRIMARY), 0);
+    let start = -1, reloaded = false;
+    for (let t = 1204; t < 1204 + Math.ceil(ak.reloadTime / TICK_DT) + 10; t++) {
+      weaponTick(ctx.ws, ctx.ps, held, -1, 0, 0, t, ctx.shots);
+      if (start < 0 && ctx.ws.f[WS_RELOAD_END] > 0) start = t;
+      if (ctx.ws.f[WS_EVENTS] & WEV_RELOADED) {
+        reloaded = true;
+        break;
+      }
+    }
+    assert.equal(start, 1210, 'the reload starts when the last shot\'s cycle ends');
+    assert.ok(reloaded);
+    const firedAgain = (ctx.ws.f[WS_EVENTS] & WEV_FIRE) ? 1 : 0; // a held trigger fires in that tick
+    assert.equal(clip(ctx, SLOT_PRIMARY) + firedAgain, 30);
+    assert.equal(reserve(ctx, SLOT_PRIMARY), 60);
   }
-  assert.ok(reloaded);
-  assert.equal(clip(ctx, SLOT_PRIMARY), 30);
-  assert.equal(reserve(ctx, SLOT_PRIMARY), 60);
+  // Nothing left in reserve: the trigger dry-fires instead.
+  const ctx = setup('ak47');
+  ctx.ws.f[WS_SLOTS + SLOT_PRIMARY * 3 + 1] = 0;
+  ctx.ws.f[WS_SLOTS + SLOT_PRIMARY * 3 + 2] = 0;
+  weaponTick(ctx.ws, ctx.ps, IN_ATTACK, -1, 0, 0, 1000, ctx.shots);
+  assert.ok(ctx.ws.f[WS_EVENTS] & WEV_DRYFIRE);
+  assert.equal(ctx.ws.f[WS_RELOAD_END], 0);
+});
+
+Deno.test('a new round refills the survivors\' guns', () => {
+  const ctx = setup('ak47', 'glock');
+  hold(ctx, IN_ATTACK, 1000, 7 * 5 - 6); // 5 shots
+  ctx.ws.f[WS_SLOTS + SLOT_SECONDARY * 3 + 2] = 3;
+  refillAmmo(ctx.ws);
+  assert.deepEqual([clip(ctx, SLOT_PRIMARY), reserve(ctx, SLOT_PRIMARY)], [30, 90]);
+  const glock = WEAPONS[WEAPON_ID.glock];
+  assert.deepEqual([clip(ctx, SLOT_SECONDARY), reserve(ctx, SLOT_SECONDARY)], [glock.clip, glock.reserve]);
+  assert.equal(clip(ctx, SLOT_KNIFE), 0, 'the knife has no ammo');
 });
 
 Deno.test('manual reload keeps the remaining rounds', () => {

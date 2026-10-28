@@ -58,6 +58,7 @@ const REST_L = [6, 6, -30]; // the left hand out of sight (knife)
 const SHIELD_L = [15, 2.5, -2.6]; // the left hand before the eyes (flashed)
 
 const INSPECT_TIME = 3.2;
+const INSPECT_YAW = 62; // degrees the gun turns to show its side
 const SLASH_TIME = 0.35;
 const STAB_TIME = 0.6;
 const SHELL_END_TIME = 0.5; // tilting back (and pumping) after the last shell
@@ -379,19 +380,27 @@ export class ViewAnimator {
       }
     }
 
-    // Inspect.
+    // Inspect (CS:GO's look at weapon): the gun comes across the view and turns its left
+    // side to us, then rolls over to show its right side and top, and goes back.
     if (this.inspectStart >= 0) {
       const t = (time - this.inspectStart) / INSPECT_TIME;
       if (t >= 1) this.inspectStart = -1;
-      else if (t >= 0) {
+      else if (t >= 0 && holdName === 'knife') {
         const a = bump(t, 0.04, 0.22, 0.44, 0.56), b = bump(t, 0.5, 0.64, 0.84, 0.98);
-        roll -= 50 * a - 30 * b;
+        roll -= 50 * a - 30 * b + 360 * ramp(t, 0.3, 0.52);
         yaw += 12 * a + 8 * b;
         pitch += -10 * a + 15 * b;
         gy += 3 * a + 2 * b;
         gz += 2.5 * a + 1 * b;
         gx -= 2 * a;
-        if (holdName === 'knife') roll -= 360 * ramp(t, 0.3, 0.52);
+      } else if (t >= 0) {
+        const a = bump(t, 0.04, 0.2, 0.46, 0.58), b = bump(t, 0.5, 0.64, 0.84, 0.98);
+        yaw += INSPECT_YAW * a - 45 * b;
+        roll += 8 * a + 10 * b;
+        pitch += -6 * a - 6 * b;
+        gx += 6 * a + 8 * b;
+        gy += 5 * a + 8 * b;
+        gz += 3 * a + 3 * b;
       }
     }
 

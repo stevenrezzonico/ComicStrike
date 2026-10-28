@@ -11,6 +11,7 @@ import { GBuffer } from './gbuffer.js';
 import { mapLight } from './skinned.js';
 import { GpuTimer, PASS } from './gputimer.js';
 import { FlashLights } from './flashes.js';
+import { Afterimage } from './afterimage.js';
 
 // The light that prints fully lit: this share of the map's lit lightmap texels is at or
 // below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
@@ -46,6 +47,7 @@ export class Renderer {
     this.comp = program(gl, COMPOSITE_VS, COMPOSITE_FS, ['u_albedo', 'u_normal', 'u_depth', 'u_res', 'u_line',
       'u_dot', 'u_time', 'u_zoom', 'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft']);
     this.gbuf = new GBuffer(gl);
+    this.afterimage = new Afterimage(gl); // the flashbang's frozen frame
     this.timer = new GpuTimer(gl); // GPU time per pass (cl_showfps 3)
     this.emptyVao = gl.createVertexArray();
     this.vao = null;
@@ -122,6 +124,7 @@ export class Renderer {
     this.skyCount = mesh.skyCount;
     this.transCount = mesh.transCount;
     mapLight.full = fullLight(lm.data);
+    this.afterimage.warm(this.canvas.width, this.canvas.height);
   }
 
   // Hides (or restores) a breakable's faces without touching the vertex buffer.

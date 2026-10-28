@@ -198,6 +198,23 @@ Deno.test({ name: 'bots: a CT goes to the planted bomb and defuses it', ignore: 
   assert.equal(g.round.info >> 2, END_DEFUSE, 'defused before it went off');
 } });
 
+Deno.test({ name: 'bots: the T bots take the bomb to one site together and plant it', ignore: !dust2, fn: () => {
+  for (const seed of [1, 2, 3, 4]) {
+    const { host, g, join, run } = setup('de_dust2');
+    g.bots.random = seeded(seed);
+    const ct = join('watcher', TEAM_CT); // stands at the CT spawn; seen, but the bots do not shoot
+    host.con.exec('bot_dont_shoot 1; bot_add_t; bot_add_t; bot_add_t');
+    run(4);
+    while (g.phase !== PHASE_LIVE) run(1);
+    const sites = new Set(g.bots.list.map((b) => b.site));
+    assert.equal(sites.size, 1, 'one site for the team');
+    assert.ok(g.bombCarrier && g.bombCarrier.bot, 'a bot carries the bomb');
+    run(64 * 75, () => g.bomb.state === BOMB_PLANTED);
+    assert.equal(g.bomb.state, BOMB_PLANTED, `seed ${seed}: planted within 75 s`);
+    assert.ok(ct.alive);
+  }
+} });
+
 Deno.test({ name: 'bots: a CT carries a hostage out on cs_office', ignore: !office, fn: () => {
   const { host, g, join, run } = setup('cs_office');
   join('t', TEAM_T); // stays at the T spawn, so the round is live

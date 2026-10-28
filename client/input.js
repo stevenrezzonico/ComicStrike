@@ -22,11 +22,13 @@ export class Input {
     this.rawInput = true;
     // onKey(name, down) -> true if the key is used (its default action is then prevented).
     this.onKey = () => false;
+    // True while held keys should outlive losing the mouse (the buy menu: buy on the move).
+    this.keepKeys = () => false;
 
     canvas.addEventListener('click', () => this.lock());
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas;
-      if (!this.locked) this.clear();
+      if (!this.locked && !this.keepKeys()) this.clear();
     });
     document.addEventListener('mousemove', (e) => {
       if (!this.locked) return;

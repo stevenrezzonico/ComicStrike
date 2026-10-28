@@ -23,6 +23,7 @@
 //   SNAPSHOT u8 type, u32 seq, u32 baseSeq (0 = full), u32 lastCmd, u8 flags,
 //            [u32 x 8 broken-breakable mask if flags & SNAP_BROKEN],
 //            round: u8 phase, u32 ticksLeft, u8 scoreT, u8 scoreCT, u8 roundInfo, u8 round, u8 mode,
+//                   u8 serial (+1 at every round start, restarts too: clients clear the marks),
 //            bomb: u8 state, [f32 x, y, z, u16 ticksLeft if state >= BOMB_DROPPED],
 //            movers (shared/doors.js) not closed at rest: u8 n, n x { u8 mover, u8 bits
 //                        (dir + 1 | sign < 0 << 2), f32 from, u32 t0 },
@@ -48,7 +49,7 @@ import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 import { MAX_MOVERS } from './doors.js';
 
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -682,6 +683,7 @@ export class RoundState {
     this.info = 0; // last round: winner team | reason << 2
     this.round = 0;
     this.mode = 0; // GAME_FFA | GAME_DM (shared/economy.js)
+    this.serial = 0; // round starts mod 256 (the round number repeats on a restart in round 1)
   }
 }
 const NO_ROUND = new RoundState();
@@ -719,6 +721,7 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
   w.u8v(rs.info);
   w.u8v(rs.round);
   w.u8v(rs.mode);
+  w.u8v(rs.serial);
   w.u8v(bomb.state);
   if (bomb.state >= BOMB_DROPPED) {
     w.f32v(bomb.x);
@@ -892,6 +895,7 @@ export function readSnapshot(r, ring, own, ev = null) {
   rs.info = r.u8v();
   rs.round = r.u8v();
   rs.mode = r.u8v();
+  rs.serial = r.u8v();
   const bomb = own.bomb;
   bomb.state = r.u8v();
   if (bomb.state >= BOMB_DROPPED) {

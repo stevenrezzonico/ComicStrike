@@ -4,8 +4,9 @@ import { TICK_DT, IN_FORWARD, IN_JUMP, IN_DUCK, IN_SPEED, IN_MOVERIGHT } from '.
 import { CollisionWorld, Trace, traceHull, hullFits, HULL_POINT, HULL_STAND, ENT_LADDER, ENT_SOLID } from '../shared/trace.js';
 import {
   createPlayerState, playerMove, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_EVENTS, PS_WATERLEVEL,
-  FL_ONGROUND, FL_DUCKING, EV_JUMP, EV_LAND, MOVE,
+  FL_ONGROUND, FL_DUCKING, EV_JUMP, EV_LAND, MOVE, eyeOffset, VIEW_STAND, VIEW_DUCK,
 } from '../shared/pmove.js';
+import { feetOffset } from '../shared/hitgroups.js';
 import { boxWorld, floorWorld, emptyWorld, FLOOR, WATER } from './worlds.js';
 
 const KNIFE = 250;
@@ -109,6 +110,21 @@ Deno.test('standing up is blocked under a low ceiling', () => {
   run(w, ps, 128, IN_FORWARD); // crouch-walk (85 u/s) out from under it
   run(w, ps, 64);
   assert.ok(!(ps.i[PS_FLAGS] & FL_DUCKING), 'did not stand once clear');
+});
+
+Deno.test('standing up raises the view smoothly, no wait and no pop', () => {
+  const w = floorWorld();
+  const ps = run(w, settle(w, spawn(0, 0, 36)), 32, IN_DUCK);
+  const feetEye = () => eyeOffset(ps) + feetOffset(ps.i[PS_FLAGS]); // the feet stay on the floor
+  near(feetEye(), VIEW_DUCK, 0.01, 'crouched eye');
+  let last = feetEye();
+  run(w, ps, 32, 0, 0, 0, () => {
+    const e = feetEye();
+    assert.ok(e > last - 1e-4 && e - last < 6, `eye ${last} -> ${e}`);
+    last = e;
+  });
+  near(feetEye(), VIEW_STAND, 0.01, 'standing eye');
+  assert.ok(!(ps.i[PS_FLAGS] & FL_DUCKING));
 });
 
 function jumpPeak(buttonsInAir) {
