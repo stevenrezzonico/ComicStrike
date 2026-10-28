@@ -52,6 +52,7 @@ import { Players } from './gl/players.js';
 import { PlayerModels } from './gl/playermodels.js';
 import { GunMeshes } from './gl/gunmeshes.js';
 import { GrenadeFx } from './gl/grenadefx.js';
+import { Blasts } from './gl/blast.js';
 import { modelLight } from './gl/skinned.js';
 import { perspective, viewFromAngles, multiply, invert } from './gl/mat4.js';
 import { Input, SELECT_LAST } from './input.js';
@@ -255,6 +256,8 @@ const eye = new Float32Array(3);
 const angles = new Float32Array(2); // pitch, yaw (without recoil); f32 like the wire format
 const proj = new Float32Array(16);
 const view = new Float32Array(16);
+const blasts = new Blasts(renderer.gl, view); // explosions: the fire faces this camera
+overlays.push(blasts);
 const viewProj = new Float32Array(16);
 const invViewProj = new Float32Array(16);
 
@@ -608,11 +611,15 @@ function applyEvents() {
   }
 }
 
+// A comic explosion: the fireball and smoke (client/gl/blast.js), dark chunks and embers,
+// for the bomb a scorch on the ground under it.
 function explosion(x, y, z, size = 1) {
-  debris.puff(x, y, z + 24 * size, 1.0, 0.55, 0.12, Math.round(70 * size));
-  debris.puff(x, y, z + 40 * size, 0.25, 0.23, 0.2, Math.round(60 * size));
+  blasts.add(x, y, z, size, world && world.surfaces);
+  debris.puff(x, y, z + 24 * size, 0.2, 0.16, 0.12, Math.round(40 * size));
+  debris.puff(x, y, z + 40 * size, 1.0, 0.6, 0.12, Math.round(25 * size));
+  if (size >= 1) decals.add(x, y, z + 0.5, 0, 0, 1, 72, Math.random(), 0);
   sounds.explosion(Math.min(1, size * Sounds.falloff(Math.hypot(x - eye[0], y - eye[1], z - eye[2]), 1500)));
-  words.explosion(viewProj, x, y, z + 24 * size);
+  words.explosion(viewProj, x, y, z + 300 * size, size); // above the fireball
 }
 
 // While planted: beep, faster and faster (approximation of CS:GO's 1.4 s down to
@@ -964,6 +971,7 @@ function draw(now, alpha, dt) {
   multiply(viewProj, proj, view);
   invert(invViewProj, viewProj);
   debris.update(dt, world);
+  blasts.update(now / 1000);
   fx.update(net ? serverClock - cv.cl_interp_ratio.number : tickCount - 1 + alpha, world && world.surfaces);
   sounds.listen(eye[0], eye[1], eye[2], yaw);
   scape.effects(fx.cur, now / 1000, dt);
@@ -1259,6 +1267,7 @@ const NO_ITEMS = new Items(), NO_HOSTAGES = new Hostages();
 function resetSession() {
   synced = false;
   words.clear();
+  blasts.clear();
   serverClock = -1;
   predictedTick.fill(-1);
   serverBroken.fill(0);

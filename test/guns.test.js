@@ -3,6 +3,7 @@ import { buildGun, buildAllGuns, buildDefuser, GUN_ROOT, GUN_MAG, GUN_BOLT } fro
 import { WEAPONS } from '../shared/weapons.js';
 import { MESH_STRIDE } from '../client/gl/meshkit.js';
 import { buildFlash } from '../client/gl/gunmeshes.js';
+import { buildBurst, buildPuff } from '../client/gl/blast.js';
 
 // Closed (every directed edge matched by its reverse) and outward (positive volume).
 function closed(m, what) {
@@ -81,6 +82,15 @@ Deno.test('guns: every weapon has a closed, low-poly model with its muzzle at th
   });
   closed(buildDefuser(), 'defuser');
   closed(buildFlash(20, 0, 3), 'muzzle flash');
+});
+
+Deno.test('explosions: the fireball layers and smoke puffs are closed, low-poly meshes', () => {
+  for (let seed = 1; seed < 40; seed += 7) {
+    const burst = buildBurst([1, 0.5, 0.1], seed), puff = buildPuff(seed);
+    closed(burst, `burst ${seed}`);
+    closed(puff, `puff ${seed}`);
+    assert.ok(burst.tris <= 120 && puff.tris <= 200, `seed ${seed}: ${burst.tris} / ${puff.tris} triangles`);
+  }
 });
 
 Deno.test('guns: magazines and bolts are separate bones; sizes follow the real guns', () => {

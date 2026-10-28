@@ -77,7 +77,7 @@ export class InkWords {
     el.style.setProperty('--r', `${rnd(-14, 14).toFixed(1)}deg`);
     el.style.setProperty('--life', `${life}ms`);
     el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
-    const burst = cls !== 'wall' && cls !== 'shot';
+    const burst = cls !== 'wall' && !cls.startsWith('shot');
     it.bk.hidden = it.fg.hidden = !burst;
     if (burst) it.bk.style.clipPath = it.fg.style.clipPath = pick(STARS);
     it.b.textContent = text;
@@ -115,8 +115,10 @@ export class InkWords {
     if (Math.random() < 0.25) this.at(viewProj, x, y, z, pick(WALL), 'wall', rnd(18, 26), 620);
   }
 
-  explosion(viewProj, x, y, z) {
-    this.at(viewProj, x, y, z, pick(['KA-BOOM!', 'KRA-KOOM!', 'BOOOM!']), 'big', 64, 1000);
+  // An explosion of the given size (1 = the C4) at (x, y, z): bare lettering, the fireball
+  // (client/gl/blast.js) is its burst.
+  explosion(viewProj, x, y, z, size = 1) {
+    this.at(viewProj, x, y, z, pick(['KA-BOOM!', 'KRA-KOOM!', 'BOOOM!']), 'shot big', 40 + 30 * size, 1100);
   }
 
   // We fired a gun with gunshot voice `profile`.

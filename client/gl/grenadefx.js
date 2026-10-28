@@ -1,13 +1,14 @@
 // Grenades in the world (shared/grenades.js lists, from the server or the offline
 // simulation): flying grenades as their models, spinning, interpolated between the two
 // newest lists; smoke clouds as one cluster of flat-shaded puffs, fires as a patch of
-// flame cones, HE blasts and flashbang pops as glowing balls. Opaque and depth-tested,
-// so a smoke cloud hides what is behind it. One draw call per grenade or effect.
+// flame cones, flashbang pops as glowing balls (HE blasts are client/gl/blast.js).
+// Opaque and depth-tested, so a smoke cloud hides what is behind it. One draw call per
+// grenade or effect.
 
 import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN, modelLight } from './skinned.js';
 import { MeshBuilder } from './meshkit.js';
 import {
-  Grenades, smokeRadius, fireRadius, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE, MAX_GRENADES, MAX_EFFECTS,
+  Grenades, smokeRadius, fireRadius, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE, MAX_GRENADES, MAX_EFFECTS,
 } from '../../shared/grenades.js';
 
 const SPHERE = [[0, -1], [0.7, -0.7], [1, 0], [0.7, 0.7], [0, 1]];
@@ -57,7 +58,6 @@ export class GrenadeFx {
     this.renderer = new SkinnedRenderer(gl);
     this.cloud = new SkinnedMesh(gl, buildCloud());
     this.fire = new SkinnedMesh(gl, buildFire());
-    this.blast = new SkinnedMesh(gl, buildBall([0.62, 0.34, 0.08]));
     this.pop = new SkinnedMesh(gl, buildBall([0.62, 0.62, 0.6]));
     this.fizzle = new SkinnedMesh(gl, buildBall([0.5, 0.5, 0.48]));
     this.cur = new Grenades(); // newest list
@@ -150,10 +150,6 @@ export class GrenadeFx {
         mesh = this.fire;
         sx = fireRadius(age);
         sz = 46 * (0.85 + 0.15 * Math.sin(age * 23 + k)); // flicker
-        glow = 1;
-      } else if (kind === FX_HE) {
-        mesh = this.blast;
-        sx = sz = 110 * Math.min(1, age / 0.12) * Math.max(0, 1 - age / 0.45);
         glow = 1;
       } else if (kind === FX_FLASH) {
         mesh = this.pop;
