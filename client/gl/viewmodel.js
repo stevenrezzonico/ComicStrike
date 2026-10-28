@@ -1,12 +1,15 @@
 // First-person view: the team's arms (client/models/arms.js) holding the gun model
 // (client/gl/gunmeshes.js), posed by client/anim/viewanim.js, drawn in eye space with
 // their own projection into the G-buffer after the world (a depth clear first), so they
-// get the same ink and dots, lit by the map like everything else. Three or four draws:
-// arms, gun (a second pistol for the Dual Berettas), muzzle flash.
+// get the same ink and dots, lit by the map like everything else, with a bolder line
+// (G_FLAGS.VIEW). Five or six draws: sleeves, both hands (meshes fitted to what each
+// hand holds, built on first use), gun (a second pistol for the Dual Berettas), muzzle
+// flash.
 
 import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN } from './skinned.js';
+import { G_FLAGS } from './shaders.js';
 import { perspective, multiply } from './mat4.js';
-import { buildArms } from '../models/arms.js';
+import { buildArms, buildHand } from '../models/arms.js';
 import { TEAM_CT } from '../../shared/player.js';
 
 // Rig frame (x forward, y left, z up) -> eye space (right, up, back).
@@ -18,6 +21,7 @@ export class Viewmodel {
     this.gl = gl;
     this.guns = guns;
     this.renderer = new SkinnedRenderer(gl);
+    this.renderer.flags = G_FLAGS.VIEW;
     this.proj = new Float32Array(16);
     this.fovY = 54 * Math.PI / 180;
     this.model = new Float32Array(16); // the whole view (bob, offsets), eye space
@@ -25,6 +29,22 @@ export class Viewmodel {
     this.tmp = new Float32Array(16);
     this.tmp2 = new Float32Array(16);
     this.arms = { T: new SkinnedMesh(gl, buildArms('T')), CT: new SkinnedMesh(gl, buildArms('CT')) };
+    this.handMeshes = new Map(); // 'T L 1.9 1.5' -> SkinnedMesh
+    this.handsOf = { T: [], CT: [] }; // per weapon id: [left, right] SkinnedMesh
+  }
+
+  // The two hand meshes for weapon `id`, fitted to what they hold (built once).
+  hands(team, id) {
+    let h = this.handsOf[team][id];
+    if (h) return h;
+    const curls = this.guns.curlsOf(id);
+    h = curls.map((c, s) => {
+      const key = `${team} ${s} ${c.cy.toFixed(2)} ${c.r.toFixed(2)}`;
+      if (!this.handMeshes.has(key)) this.handMeshes.set(key, new SkinnedMesh(this.gl, buildHand(team, c, s === 0)));
+      return this.handMeshes.get(key);
+    });
+    this.handsOf[team][id] = h;
+    return h;
   }
 
   // va: the ViewAnimator, updated for this frame; anim: { x, y, z (eye-space offset),
@@ -40,7 +60,10 @@ export class Viewmodel {
 
     gl.clear(gl.DEPTH_BUFFER_BIT); // never clip into walls
     r.begin(this.proj);
-    r.draw(this.arms[team === TEAM_CT ? 'CT' : 'T'], this.rig, va.pose.skin, light);
+    const look = team === TEAM_CT ? 'CT' : 'T', hands = this.hands(look, weaponId);
+    r.draw(this.arms[look], this.rig, va.pose.skin, light);
+    r.draw(hands[0], this.rig, va.pose.skin, light);
+    r.draw(hands[1], this.rig, va.pose.skin, light);
     r.draw(gun, multiply(this.tmp, this.rig, va.gun), va.gunSkin, light);
     if (va.dual) {
       r.draw(gun, multiply(this.tmp2, this.rig, va.gun2), va.gunSkin, light);

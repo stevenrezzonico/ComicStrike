@@ -30,6 +30,10 @@ const BEVEL = 0.12; // edge rounding of boxes and outlines (in)
 const SEG = 12; // sides of round parts
 const C4_TAN = [0.52, 0.47, 0.3];
 const LED = [0.95, 0.12, 0.08];
+// Pistols: the off hand's point on the grip's left, beside the shooting hand's fingers,
+// and its grasp (the grip's axis that far in, wrapped with the shooting hand: that half-size).
+const PISTOL_SUPPORT = [-0.65, 1.35, -1.95];
+const PISTOL_GRASP = [1.35, 1.5];
 const LENS = finish([0.42, 0.6, 0.74], FINISH.METAL); // scope glass
 
 // --- parts ----------------------------------------------------------------------------
@@ -241,7 +245,9 @@ function pistol(b, s) {
   if (barrel) tube(b, x1, x1 + barrel, 0.3, 0.9, DARK);
   const r = rake * Math.PI / 180;
   return {
-    muzzle: [x1 + barrel, 0, 0.95], support: [-0.4, -0.6, -2.4],
+    // The off hand wraps the shooting hand on the grip's left (a two-handed hold): its
+    // fingers curl around the grip and the shooting hand's fingers.
+    muzzle: [x1 + barrel, 0, 0.95], support: [...PISTOL_SUPPORT], grasp: [...PISTOL_GRASP], gripR: w * 1.05 / 2,
     mag: [bx, 0, -gripLen - 0.3], magDir: [-Math.sin(r), 0, -Math.cos(r)], bolt: [-0.9, 0, sz + h / 2],
   };
 }
@@ -257,7 +263,8 @@ function longGun(b, s) {
   let sightTop = top + (s.cover ? 0.5 : 0) + 0.35;
   if (s.carry) sightTop = carryHandle(b, s.carry[0], s.carry[1], top, metal);
   if (s.rail) rail(b, rx0 + 0.5, rx1 - 0.5, top);
-  grip(b, s.gripLen || 3.6, rw * 0.85, s.gripColor || furn, s.rake ?? 15);
+  const gw = Math.min(rw * 0.85, 1.3); // pistol grip width (a hand's span, even on a wide body)
+  grip(b, s.gripLen || 3.6, gw, s.gripColor || furn, s.rake ?? 15);
   // Bolt / charging handle on the right side.
   const bh = s.boltHandle ?? (rx0 + rx1) / 2;
   b.bone(GUN_BOLT).color(s.boltColor || metal).box(1.2, 0.9, 0.5, bh, -rw / 2 - 0.4, z0 + rh * 0.7).bone(GUN_ROOT);
@@ -317,7 +324,24 @@ function longGun(b, s) {
   // grip, where long guns are held), else under the receiver front.
   const support = s.support || (s.foregrip ? [s.foregrip, 0, z0 - 1.6]
     : s.handguard ? [Math.min(rx1 + s.handguard[0] * 0.55, 12.5), 0, bore - 1.2] : [rx1 - 1.5, 0, z0]);
-  return { muzzle: [muzzle, 0, bore], support, mag, magDir, bolt, pump: !!s.pump, port: [rx1 - 2, 0, z0 - 0.3] };
+  // What the off hand holds there: how far its axis is above the support point, its
+  // half-height (the fingers curl around it), 1 if it stands upright (a foregrip, a
+  // magazine) rather than lying along the barrel, and its half-width (default the height).
+  let grasp;
+  if (s.grasp) grasp = s.grasp;
+  else if (s.foregrip) grasp = [0.1, 0.6, 1];
+  else if (s.handguard) {
+    const [, hh, hw = rw * 1.05] = s.handguard;
+    const style = s.hg || (hgColor.finish === FINISH.WOOD ? 'wood' : 'block');
+    if (style === 'round') grasp = [1.2, hh / 2];
+    else if (style === 'wood') { // the lower half, with the barrel or the gas tube's wood above it
+      const top = Math.max(0.2, br, s.gasTube ? 0.75 + 0.475 : 0), bot = -hh * 0.8;
+      grasp = [(top + bot) / 2 + 1.2, (top - bot) / 2, 0, hw / 2];
+    }
+    else grasp = [1.2 - hh * 0.3, hh / 2, 0, hw / 2];
+  } else grasp = [rh / 2, rh / 2, 0, rw / 2];
+  return { muzzle: [muzzle, 0, bore], support, grasp, gripR: gw / 2, mag, magDir, bolt, pump: !!s.pump,
+    port: [rx1 - 2, 0, z0 - 0.3] };
 }
 
 function norm(v) {
@@ -340,21 +364,21 @@ const GUNS = {
   p250: { pistol: { len: 7.0, slide: DARK, frame: POLY } },
   elite: { pistol: { len: 8.4, slide: SILVER, frame: SILVER, h: 1.3 } },
   fiveseven: { pistol: { len: 7.8, slide: DARK, frame: [0.25, 0.27, 0.25] } },
-  tec9: { long: { receiver: [-3, 6], height: 2.0, width: 1.2, barrel: 3, barrelR: 0.4, handguard: [2.5, 1.6], mag: { x: 1.6, len: 7, depth: 1.1 }, gripLen: 3.4, sights: true, support: [1.2, 0, -2.2] } },
+  tec9: { long: { receiver: [-3, 6], height: 2.0, width: 1.2, barrel: 3, barrelR: 0.4, handguard: [3.5, 1.6], mag: { x: 3.3, len: 7, depth: 1.1 }, gripLen: 3.4, sights: true, support: [...PISTOL_SUPPORT], grasp: [...PISTOL_GRASP] } },
   cz75a: { pistol: { len: 7.6, slide: DARK, frame: WOOD_DARK } },
   deagle: { pistol: { len: 10.6, h: 1.55, w: 1.25, slide: [0.42, 0.42, 0.44], frame: BLACK, gripLen: 4.6 } },
   revolver: { revolver: true },
   // SMGs.
-  mac10: { long: { receiver: [-3.5, 5], height: 2.6, width: 1.5, barrel: 1.5, mag: { x: 1.2, len: 6.5, depth: 1.1 }, stock: 'skeleton', stockLen: 6, gripLen: 3.4, rake: 5 } },
-  mp9: { long: { receiver: [-3, 6], height: 2.4, width: 1.3, barrel: 2, handguard: [2, 1.8], mag: { x: 1.1, len: 6.5, depth: 1.1 }, stock: 'skeleton', stockLen: 7, rail: true } },
-  mp7: { long: { receiver: [-3, 6.5], height: 2.6, width: 1.4, barrel: 3, handguard: [2.5, 1.8], mag: { x: 1.1, len: 5.5, depth: 1.1 }, stock: 'skeleton', stockLen: 7, rail: true } },
+  mac10: { long: { receiver: [-3.5, 5], height: 2.6, width: 1.5, barrel: 1.5, mag: { x: 0.55, len: 6.5, depth: 1.1, rake: -5 }, stock: 'skeleton', stockLen: 6, gripLen: 3.4, rake: 5 } },
+  mp9: { long: { receiver: [-3, 6], height: 2.4, width: 1.3, barrel: 2, handguard: [2, 1.8], mag: { x: 0.55, len: 6.5, depth: 1.1, rake: -15 }, stock: 'skeleton', stockLen: 7, rail: true } },
+  mp7: { long: { receiver: [-3, 6.5], height: 2.6, width: 1.4, barrel: 3, handguard: [2.5, 1.8], mag: { x: 0.55, len: 5.5, depth: 1.1, rake: -15 }, stock: 'skeleton', stockLen: 7, rail: true } },
   mp5sd: { long: { receiver: [-4, 6], height: 2.4, width: 1.4, barrel: 0.5, silencer: 9, handguard: [5.5, 2.2], mag: { x: 3.6, len: 6, depth: 1.2, curve: 0.25 }, stock: 'tube', stockLen: 8 } },
   ump45: { long: { receiver: [-4, 7], height: 2.8, width: 1.5, barrel: 3.5, handguard: [3.5, 2.2], mag: { x: 3.9, len: 7, depth: 1.5 }, stock: 'skeleton', stockLen: 8, rail: true } },
-  p90: { long: { receiver: [-8, 8], height: 3.3, width: 2.2, z0: -1.4, barrel: 2.5, mag: null, stock: null, gripLen: 2.6, rake: 0, support: [6, 0, -1.2], top: true } },
+  p90: { long: { receiver: [-8, 8], height: 2.7, width: 2.2, z0: 0, barrel: 2.5, mag: null, stock: null, gripLen: 2.6, rake: 0, support: [6, 0, -0.5], grasp: [1.85, 1.35, 0, 1.1], top: true } },
   bizon: { long: { receiver: [-3.5, 6], height: 2.4, width: 1.5, barrel: 9, handguard: [3, 1.8], stock: 'skeleton', stockLen: 9, mag: null, helical: true } },
   // Rifles.
   galilar: { long: { receiver: [-3, 8.5], height: 2.6, cover: true, barrel: 9, brake: 1.5, handguard: [7, 2.4], handguardColor: WOOD, mag: { x: 6.5, len: 7.5, depth: 1.6, curve: 0.18 }, stock: 'skeleton', stockLen: 9, carry: null } },
-  famas: { long: { receiver: [-9, 8], height: 3.0, width: 1.6, barrel: 7, brake: 1, metal: DARK, mag: { x: -2.2, len: 5.5, depth: 1.4 }, carry: [-4, 6], gripLen: 3.6, support: [5, 0, -1.2], bipod: 13 } },
+  famas: { long: { receiver: [-9, 8], height: 3.0, width: 1.6, barrel: 7, brake: 1, metal: DARK, mag: { x: -2.2, len: 5.5, depth: 1.4 }, carry: [-4, 6], gripLen: 3.6, support: [5, 0, -1.2], grasp: [1.5, 1.5, 0, 0.8], bipod: 13 } },
   ak47: { long: { receiver: [-2, 9], height: 2.6, cover: true, barrel: 11, brake: 1.2, brakeStyle: 'slant', frontSight: 19.4, rearSight: 8.2, handguard: [7.5, 2.4], handguardColor: WOOD, gasTube: 7.5, mag: { x: 6.2, len: 8, depth: 1.8, curve: 0.3, ribs: 5, color: [0.24, 0.2, 0.17] }, stock: 'solid', stockColor: WOOD, stockLen: 10, stockDrop: 2.2, gripColor: WOOD_DARK } },
   m4a1: { long: { receiver: [-2.5, 8], height: 2.6, barrel: 10, brake: 1.6, brakeStyle: 'bird', handguard: [7, 2.6], hg: 'round', mag: { x: 6.2, len: 7, depth: 1.6, curve: 0.12, ribs: 2 }, stock: 'tube', stockLen: 10, carry: [-0.6, 6.4] } },
   m4a1_silencer: { long: { receiver: [-2.5, 8], height: 2.6, barrel: 7, silencer: 7, brakeStyle: 'bird', handguard: [6.5, 2.6], mag: { x: 6.2, len: 6, depth: 1.6, curve: 0.08 }, stock: 'tube', stockLen: 10, rail: true } },
@@ -365,12 +389,12 @@ const GUNS = {
   g3sg1: { long: { receiver: [-3, 9], height: 2.8, barrel: 13, brake: 1.5, metal: DARK, furniture: BLACK, handguard: [8, 2.4], mag: { x: 6, len: 6, depth: 1.8, curve: 0.08 }, stock: 'solid', stockLen: 11, stockDrop: 1, scope: [3, 10, 0.75], bipod: 18 } },
   scar20: { long: { receiver: [-3, 9], height: 2.8, barrel: 12, brake: 1.5, metal: [0.24, 0.24, 0.23], furniture: SAND, handguard: [8, 2.6], handguardColor: SAND, mag: { x: 6, len: 5.5, depth: 1.8 }, stock: 'solid', stockColor: SAND, stockLen: 10, stockDrop: 0.8, scope: [3, 10, 0.75], rail: true } },
   // Shotguns.
-  nova: { long: { receiver: [-2, 6.5], height: 2.4, barrel: 15, barrelR: 0.45, tubeMag: 12, pump: 6, mag: null, stock: 'solid', stockLen: 11, stockDrop: 2, furniture: POLY, support: [11, 0, -0.4] } },
+  nova: { long: { receiver: [-2, 6.5], height: 2.4, barrel: 15, barrelR: 0.45, tubeMag: 12, pump: 6, mag: null, stock: 'solid', stockLen: 11, stockDrop: 2, furniture: POLY, support: [11, 0, -0.4], grasp: [0.96, 1.07, 0, 0.75] } },
   xm1014: { long: { receiver: [-2, 7], height: 2.4, barrel: 14, barrelR: 0.45, tubeMag: 13, handguard: [5, 1.6], mag: null, stock: 'tube', stockLen: 10, rail: true } },
-  sawedoff: { long: { receiver: [-2, 4.5], height: 2.4, barrel: 8, barrelR: 0.5, tubeMag: 7, pump: 4.5, mag: null, gripColor: WOOD, furniture: WOOD, stock: null, support: [8, 0, -0.4] } },
-  mag7: { long: { receiver: [-3, 8], height: 3.0, width: 1.8, barrel: 6, barrelR: 0.55, handguard: [5, 2.4], mag: { x: 1.2, len: 5, depth: 1.2 }, stock: 'skeleton', stockLen: 8, gripLen: 3.4, support: [10, 0, -1.4] } },
+  sawedoff: { long: { receiver: [-2, 4.5], height: 2.4, barrel: 8, barrelR: 0.5, tubeMag: 7, pump: 4.5, mag: null, gripColor: WOOD, furniture: WOOD, stock: null, support: [8, 0, -0.4], grasp: [0.99, 1.1, 0, 0.75] } },
+  mag7: { long: { receiver: [-3, 8], height: 3.0, width: 1.8, barrel: 6, barrelR: 0.55, handguard: [5, 2.4], mag: { x: 0.6, len: 5, depth: 1.2, rake: -15 }, stock: 'skeleton', stockLen: 8, gripLen: 3.4, support: [10, 0, -1.4], grasp: [1.2, 1.2, 0, 0.9] } },
   // Machine guns.
-  m249: { long: { receiver: [-3, 11], height: 3.4, width: 1.8, barrel: 14, brake: 1, handguard: [7, 2.8], mag: { x: 4.5, len: 5.5, depth: 4, w: 2.2, color: [0.3, 0.32, 0.24] }, stock: 'skeleton', stockLen: 10, carry: [2, 8], bipod: 20 } },
+  m249: { long: { receiver: [-3, 11], height: 3.4, width: 1.8, barrel: 14, brake: 1, handguard: [7, 2.8], mag: { x: 5.8, len: 5.5, depth: 4, w: 2.2, color: [0.3, 0.32, 0.24] }, stock: 'skeleton', stockLen: 10, carry: [2, 8], bipod: 20 } },
   negev: { long: { receiver: [-3, 11], height: 3.2, width: 1.8, barrel: 14, brake: 1.2, handguard: [8, 2.8], mag: { x: 4, drum: 3.4, t: 2.4, color: [0.3, 0.33, 0.25] }, stock: 'skeleton', stockLen: 10, carry: [1, 6], bipod: 21 } },
 };
 
@@ -381,7 +405,8 @@ function buildRevolver(b) {
   b.color(SILVER).box(6.4, 0.6, 0.45, 5.7, 0, 1.6); // top strap / rib
   pistolSights(b, -1, 8.6, 1.8);
   grip(b, 4.2, 1.15, WOOD, 25, 1.6);
-  return { muzzle: [9, 0, 1.1], support: [-0.4, -0.6, -2.4], cylinder: [0.3, 0, 0.85] };
+  return { muzzle: [9, 0, 1.1], support: [...PISTOL_SUPPORT], grasp: [...PISTOL_GRASP], gripR: 1.15 / 2,
+    cylinder: [0.3, 0, 0.85] };
 }
 
 function buildKnife(b) {
@@ -408,7 +433,7 @@ function buildGrenade(b, name) {
     b.color([0.36, 0.42, 0.22]).lathe([[1.0, -2.6], [1.0, 0.6], [0.45, 1.6], [0.4, 2.6]], SEG); // bottle
     b.color([0.75, 0.68, 0.55]).box(0.7, 0.9, 1.4, 0, 0, 3.1); // rag in the neck
     b.color([0.75, 0.68, 0.55]).box(1.6, 0.4, 0.4, 0.6, 0, 3.6); // its loose end
-    return { muzzle: [0, 0, 3.8], support: null };
+    return { muzzle: [0, 0, 3.8], support: null, bodyR: 1.0 };
   }
   const g = GRENADES[name], top = g.body[g.body.length - 1][1];
   b.color(g.color).lathe(g.body, SEG);
@@ -416,7 +441,7 @@ function buildGrenade(b, name) {
   b.color(STEEL).box(0.9, 0.7, 0.7, 0, 0, top + 0.3); // fuse head
   b.box(0.35, 0.5, 2.4, -0.55, 0, top - 0.6).box(0.7, 0.5, 0.3, -0.25, 0, top + 0.6); // spoon
   b.box(0.15, 0.9, 0.9, 0.55, 0, top + 0.5); // pin ring
-  return { muzzle: [0, 0, top + 0.8], support: null };
+  return { muzzle: [0, 0, top + 0.8], support: null, bodyR: Math.max(...g.body.map((p) => p[0])) };
 }
 
 function buildC4(b, ledColor = LED) {
@@ -436,9 +461,11 @@ export function buildDefuser() {
 }
 
 // Builds the model of weapon `name` (shared/weapons.js names; opts.noSilencer: the
-// M4A1-S / USP-S with their silencer off): { mesh, muzzle, support,
+// M4A1-S / USP-S with their silencer off): { mesh, muzzle, support, grasp, bodyR,
 // mag, magDir, bolt, pump, port, cylinder }, points in the gun frame: the muzzle; the off
-// hand's place (null: one-handed); where a hand takes the magazine and the way it comes
+// hand's place (null: one-handed) and what it holds there (grasp: [how far the held part's
+// axis is in from the point, its half-height, 1 if upright, its half-width]); the pistol grip's half-width;
+// a grenade's body radius; where a hand takes the magazine and the way it comes
 // out (null: no magazine); the bolt handle, slide rear or pump (pump: the bolt bone is a
 // pump); a shotgun's loading port; the revolver's cylinder.
 export function buildGun(name, opts = {}) {
@@ -472,7 +499,9 @@ export function buildGun(name, opts = {}) {
     }
   }
   return {
-    mesh: b.build(), muzzle: pts.muzzle, support: pts.support, mag: pts.mag || null, magDir: pts.magDir || null,
+    mesh: b.build(), muzzle: pts.muzzle, support: pts.support, grasp: pts.grasp || null, gripR: pts.gripR || 0,
+    bodyR: pts.bodyR || 0,
+    mag: pts.mag || null, magDir: pts.magDir || null,
     bolt: pts.bolt || null, pump: !!pts.pump, port: pts.port || null, cylinder: pts.cylinder || null,
   };
 }

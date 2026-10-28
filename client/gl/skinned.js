@@ -67,8 +67,9 @@ export class SkinnedRenderer {
     this.emissive = 0;
     this.white = 0;
     this.eye = new Float32Array(3);
+    this.flags = 0; // G_FLAGS on every pixel drawn (G_FLAGS.VIEW: the first-person view)
     this.prog = program(gl, SKINNED_VS, SKINNED_FS, ['u_viewProj', 'u_model', 'u_bones', 'u_light', 'u_lightDir',
-      'u_emissive', 'u_white', 'u_id', 'u_lightFull', 'u_eye']);
+      'u_emissive', 'u_white', 'u_id', 'u_lightFull', 'u_eye', 'u_flags']);
   }
 
   begin(viewProj) {
@@ -76,6 +77,7 @@ export class SkinnedRenderer {
     gl.useProgram(this.prog.p);
     gl.uniformMatrix4fv(this.prog.loc.u_viewProj, false, viewProj);
     gl.uniform3fv(this.prog.loc.u_eye, eyeOf(this.eye, viewProj));
+    gl.uniform1ui(this.prog.loc.u_flags, this.flags);
     gl.uniform3fv(this.prog.loc.u_lightDir, LIGHT_DIR);
     gl.uniform1f(this.prog.loc.u_emissive, (this.emissive = 0));
     gl.uniform1f(this.prog.loc.u_white, (this.white = 0));

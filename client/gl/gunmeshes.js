@@ -4,6 +4,7 @@
 import { SkinnedMesh } from './skinned.js';
 import { MeshBuilder } from './meshkit.js';
 import { buildGun } from '../models/guns.js';
+import { fitHands } from '../anim/handfit.js';
 import { WEAPONS } from '../../shared/weapons.js';
 
 const FLASH = [1.0, 0.82, 0.23];
@@ -36,6 +37,8 @@ export class GunMeshes {
     this.muzzle = [];
     this.support = []; // off-hand point in the gun frame, or null
     this.points = []; // buildGun's points (muzzle, support, mag, bolt, ...) for the hands
+    this.shapes = []; // positions kept until the first-person hands are fitted to the gun
+    this.curls = []; // fitted finger curls [left, right] (handsOf)
     this.bare = []; // the M4A1-S and USP-S with their silencer off
     this.bareFlash = [];
     WEAPONS.forEach((w, id) => {
@@ -45,6 +48,7 @@ export class GunMeshes {
       this.muzzle[id] = g.muzzle;
       this.support[id] = g.support;
       this.points[id] = { ...g, mesh: null };
+      this.shapes[id] = { positions: g.mesh.positions, count: g.mesh.count };
       if (w.gun) {
         const [mx, my, mz] = g.muzzle;
         this.flash[id] = new SkinnedMesh(gl, buildFlash(mx, my, mz));
@@ -60,6 +64,16 @@ export class GunMeshes {
   }
 
   // The mesh for weapon `id` as it is now (silencer on or off), and its flash.
+  // The first-person finger curls [left, right] for weapon `id`, fitted to its model on
+  // first use (client/anim/handfit.js).
+  curlsOf(id) {
+    if (!this.curls[id]) {
+      this.curls[id] = fitHands(id, { ...this.points[id], mesh: this.shapes[id] });
+      this.shapes[id] = null;
+    }
+    return this.curls[id];
+  }
+
   meshOf(id, silencedOn = true) {
     return !silencedOn && this.bare[id] ? this.bare[id] : this.mesh[id];
   }

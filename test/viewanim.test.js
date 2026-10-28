@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { ViewAnimator } from '../client/anim/viewanim.js';
-import { buildArms, HAND_GRIP } from '../client/models/arms.js';
+import { ViewAnimator, heldParts } from '../client/anim/viewanim.js';
+import { fitHands, restPose, handJoints, Solid } from '../client/anim/handfit.js';
+import { buildArms, buildHand, HAND_GRIP, GRIP_CURL } from '../client/models/arms.js';
 import { buildGun, GUN_MAG, GUN_BOLT } from '../client/models/guns.js';
 import { ARMS_SKELETON as A } from '../client/anim/skeleton.js';
 import * as Q from '../client/anim/quat.js';
@@ -31,15 +32,40 @@ const apply = (m, [x, y, z]) => [m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * 
   m[2] * x + m[6] * y + m[10] * z + m[14]];
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
-Deno.test('first-person arms: closed, low-poly, both teams', () => {
+const bonesOf = (m) => {
+  const bones = new Set(), u8 = new Uint8Array(m.data);
+  for (let v = 0; v < m.count; v++) bones.add(A.names[u8[v * 20 + 15]]);
+  return [...bones].sort();
+};
+
+Deno.test('first-person arms: sleeves and hands, low-poly, both teams', () => {
   for (const team of ['T', 'CT']) {
     const m = buildArms(team);
-    assert.ok(m.tris > 50 && m.tris <= 1500, `${team}: ${m.tris} triangles`);
-    const bones = new Set();
-    const u8 = new Uint8Array(m.data);
-    for (let v = 0; v < m.count; v++) bones.add(u8[v * 20 + 15]);
-    assert.equal(bones.size, 6, 'both arms skinned to their bones');
+    assert.ok(m.tris > 50 && m.tris <= 1200, `${team}: ${m.tris} sleeve triangles`);
+    assert.deepEqual(bonesOf(m), ['arm_lower_L', 'arm_lower_R', 'arm_upper_L', 'arm_upper_R']);
+    const right = buildHand(team, GRIP_CURL), left = buildHand(team, GRIP_CURL, true);
+    assert.ok(right.tris <= 1100, `${team}: ${right.tris} hand triangles`);
+    assert.deepEqual(bonesOf(right), ['hand_R']);
+    assert.deepEqual(bonesOf(left), ['hand_L']);
+    assert.ok(Math.abs(left.positions[1] + right.positions[1]) < 1e-4, 'the left hand mirrors the right');
   }
+});
+
+Deno.test('first-person: fitted fingers and thumbs stay outside the gun, snug around what they hold', () => {
+  const bad = [];
+  WEAPONS.forEach((w, id) => {
+    if (!w) return;
+    const g = buildGun(w.name), curls = fitHands(id, g), parts = heldParts(id, g);
+    const va = restPose(id, { ...g, mesh: null }), solid = new Solid(g.mesh);
+    for (const s of [0, 1]) {
+      if (!parts[s] || !va.onGun[s]) continue;
+      const n = handJoints(va, s, curls[s]).filter((q) => solid.inside(q)).length;
+      if (n) bad.push(`${w.name} ${s ? 'R' : 'L'}: ${n} joints inside`);
+      // The fit may widen a hand along it, but barely across: fingers keep touching the sides.
+      if (curls[s].r > parts[s].r * 1.25) bad.push(`${w.name} ${s ? 'R' : 'L'}: curl ${curls[s].r.toFixed(2)} for ${parts[s].r}`);
+    }
+  });
+  assert.deepEqual(bad, []);
 });
 
 Deno.test('first-person: at rest both hands are on the gun, for every weapon', () => {

@@ -11,7 +11,7 @@
 
 import { Pose, ARMS_SKELETON as A, MAX_BONES } from './skeleton.js';
 import * as Q from './quat.js';
-import { HAND_GRIP, HAND_GRIP_IN } from '../models/arms.js';
+import { HAND_GRIP, HAND_GRIP_IN, GRIP_CURL } from '../models/arms.js';
 import { GUN_MAG, GUN_BOLT } from '../models/guns.js';
 import {
   WEAPONS, SLOT_SECONDARY, SLOT_KNIFE, SLOT_C4, SLOT_GRENADE, WS_ACTIVE, WS_SLOTS, WS_RELOAD_END, WS_DEPLOY_END,
@@ -32,8 +32,7 @@ const euler = (pitch, yaw, roll) => Q.fromEuler(new Float32Array(4), 0, pitch, y
 const ROT = {
   grip: euler(15, 0, 0), // right hand around a pistol grip (raked back)
   knife: euler(62, 0, 0), // fist around the knife handle
-  support: euler(0, -35, -90), // left palm up under a handguard, fingers across
-  cup: euler(-10, -25, -50), // left hand cupping the right
+  support: euler(0, -60, -90), // left palm up under a handguard, fingers across it
   mag: euler(-15, -15, -70), // left hand taking a magazine from below
   top: euler(0, -20, 90), // palm down on top (P90 magazine)
   boltL: euler(0, -70, 110), // left hand reaching over to the right side
@@ -47,7 +46,7 @@ const ROT = {
 // shoulders (left, right).
 const HOLDS = {
   rifle: { grip: [10.8, -6, -7.5], angles: [0, 0, 0], shoulders: [[-3, 1, -12.5], [-10, -9.5, -13]] },
-  pistol: { grip: [14.9, -4.5, -5.2], angles: [0, 0, 0], shoulders: [[-6, 1, -13], [-7, -9.5, -13]] },
+  pistol: { grip: [14.9, -3.6, -5.2], angles: [0, 0, 0], shoulders: [[-6, 2, -13], [-7, -9.5, -13]] },
   knife: { grip: [13.4, -6.5, -6.5], angles: [-35, 6, 0], shoulders: [[-6, 6, -13], [-7, -9.5, -13]] },
   c4: { grip: [12, -3.5, -6], angles: [0, 0, 0], shoulders: [[-7, 5, -13], [-7, -7, -13]] },
   elite: { grip: [14.9, -6, -5.6], angles: [0, 2, 0], shoulders: [[-6, 7, -13], [-6, -7, -13]] },
@@ -72,6 +71,30 @@ function holdOf(w) {
 // Default hand points in the gun frame (constants: no array per frame).
 const HAND_KNIFE = [0.4, 0, 0], HAND_C4_R = [3, -2.3, 0], HAND_C4_L = [3, 2.3, 0], HAND_GRENADE = [0, 0, -0.3];
 const HAND_GUN = [-0.75, 0, -1.6];
+// How far in from the palm's axis the off hand's point is: under a long gun's handguard,
+// on a pistol's grip beside the shooting hand.
+const SUPPORT_IN = 0.6, PISTOL_IN = 0.55;
+
+// What each hand holds at rest with weapon `id` (pts: its buildGun points), in the gun
+// frame: [left, right], each { at, dir, r, rx } (a part around the axis through `at`
+// along `dir`, half-size r, rx across the hand where it differs, thumb: how the thumb
+// lies, see client/models/arms.js) or null (a flat hand, or the hand off the gun). client/anim/handfit.js curls the fingers around them.
+const GRIP_AXIS = [0.27, 0, 0.96]; // a raked pistol grip
+export function heldParts(id, pts) {
+  const hold = holdOf(WEAPONS[id]);
+  if (hold === 'c4') return [null, null];
+  const gr = pts.gripR || GRIP_CURL.r;
+  const grip = { at: HAND_GUN, dir: GRIP_AXIS, r: gr, rx: GRIP_CURL.rx * Math.max(1, gr / GRIP_CURL.r) };
+  const right = hold === 'grenade' ? { at: [0, 0, 0], dir: [0, 0, 1], r: pts.bodyR || 1 } :
+    hold === 'knife' ? { at: HAND_KNIFE, dir: [1, 0, 0], r: 0.6 } : grip;
+  if (hold === 'elite') return [grip, right];
+  if (!pts.support || !pts.grasp) return [null, right];
+  // A pistol's off hand wraps the grip with the shooting hand's fingers on it.
+  if (hold === 'pistol') return [{ at: HAND_GUN, dir: GRIP_AXIS, r: pts.grasp[1], thumb: 'forward' }, right];
+  const [x, y, z] = pts.support;
+  const [up, half, upright, wide = half] = pts.grasp;
+  return [{ at: [x, y, z + up], dir: upright ? [0, 0, 1] : [1, 0, 0], r: half, rx: wide }, right];
+}
 
 // 0..1 between a and b, eased.
 export function ramp(t, a, b) {
@@ -181,8 +204,8 @@ export class ViewAnimator {
     else this.setHand(R, HAND_GUN, ROT.grip, HAND_GRIP_IN);
     if (holdName === 'c4') this.setHand(L, HAND_C4_L, ROT.side, 0.55);
     else if (holdName === 'elite') this.setHand(L, HAND_GUN, ROT.grip, HAND_GRIP_IN);
-    else if (pts.support && holdName === 'pistol') this.setHand(L, pts.support, ROT.cup, 0.7);
-    else if (pts.support) this.setHand(L, pts.support, ROT.support, 0.6);
+    else if (pts.support && holdName === 'pistol') this.setHand(L, pts.support, ROT.grip, PISTOL_IN); // two-handed
+    else if (pts.support) this.setHand(L, pts.support, ROT.support, SUPPORT_IN);
     else {
       this.setHand(L, REST_L, ROT.rest, 0);
       this.onGun[L] = false;

@@ -20,13 +20,14 @@ float vnoise(vec2 p) {
 }`;
 
 // G-buffer flags (alpha of target 2), as GBUFFER_CONSTS declares them.
-export const G_FLAGS = { FLAT: 1, SKY: 2, SCREEN: 4 };
+export const G_FLAGS = { FLAT: 1, SKY: 2, SCREEN: 4, VIEW: 8 };
 
 const GBUFFER_CONSTS = `
 const float DEPTH_FAR = 16384.0; // linear depth range (units), stored in 24 bits
 const uint G_FLAT = 1u;   // unshaded (lights, flames, flashes): no dots, a bolder line
 const uint G_SKY = 2u;
 const uint G_SCREEN = 4u; // see-through, printed as a dot screen: no ink against what lies behind
+const uint G_VIEW = 8u;   // the first-person view: a bolder line, like a foreground figure
 const vec3 INK = vec3(0.09, 0.075, 0.06);`;
 
 // Fragment outputs of every scene shader.
@@ -485,6 +486,7 @@ uniform vec3 u_eye;   // camera position in the draw's space
 uniform float u_emissive; // 1: unlit glow (muzzle flash, LEDs, flames)
 uniform float u_white;    // 0..1 toward white (spawn protection's pulse)
 uniform float u_lightFull; // lifted light that prints fully lit (per map, Renderer.loadMap)
+uniform uint u_flags;      // G_ flags for every pixel of the draw (G_VIEW: first person)
 const float MODEL_FLOOR = 0.55; // models print at least this lit
 const uint FIN_METAL = 2u, FIN_POLYMER = 3u, FIN_WOOD = 4u;
 ${NOISE}
@@ -492,7 +494,7 @@ ${GBUFFER}
 void main() {
   vec3 n = normalize(v_nrm);
   if (u_emissive > 0.5) {
-    gbuffer(min(v_col * 1.25, vec3(1.0)), 1.0, n, v_id, v_w, G_FLAT);
+    gbuffer(min(v_col * 1.25, vec3(1.0)), 1.0, n, v_id, v_w, G_FLAT | u_flags);
     return;
   }
   if (!gl_FrontFacing) n = -n;
@@ -529,7 +531,7 @@ void main() {
       * (1.0 - smoothstep(0.12, 0.3, fw));
     albedo = mix(albedo, albedo * 0.3, stroke * 0.9);
   }
-  gbuffer(mix(albedo, vec3(1.0), u_white), clamp(mix(light, 1.0, u_white), 0.0, 1.0), n, v_id, v_w, 0u);
+  gbuffer(mix(albedo, vec3(1.0), u_white), clamp(mix(light, 1.0, u_white), 0.0, 1.0), n, v_id, v_w, u_flags);
 }`;
 
 // The comic print, one fullscreen pass over the G-buffer.
@@ -612,7 +614,7 @@ void main() {
     ivec2 pc = p + ivec2(round(wob));
     uvec4 Dc = dtex(pc);
     fc = Dc.a;
-    int s = max(1, int(u_line + 0.5)) + ((fc & G_FLAT) != 0u ? 1 : 0);
+    int s = max(1, int(u_line + 0.5)) + ((fc & (G_FLAT | G_VIEW)) != 0u ? 1 : 0);
     float dC = depthOf(Dc);
     wc = 1.0 / max(dC, 1.0);
     // Silhouettes: 2nd derivative of 1 / depth (zero on any plane), both sides: a bold line.
