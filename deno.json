@@ -1,6 +1,7 @@
 {
   "tasks": {
     "start": "deno run --unstable-net --allow-net --allow-read --allow-write=certs --allow-run=openssl --allow-env server/main.js",
+    "serve": "deno run --unstable-net --allow-net --allow-read --allow-env server/main.js",
     "test": "deno test --allow-read test/"
   },
   "fmt": {

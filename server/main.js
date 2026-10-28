@@ -1,12 +1,18 @@
 // Game server entry point.
-// HTTP (TCP) serves the client files and connection info; WebTransport (UDP/QUIC)
+// HTTP(S) (TCP) serves the client files and connection info; WebTransport (UDP/QUIC)
 // carries game traffic.
 //
 //   deno run --unstable-net -A server/main.js
 //
 // Env: HTTP_PORT (tcp 27015), GAME_PORT (udp 27015), BIND (0.0.0.0),
-//      HOSTNAMES ("localhost,127.0.0.1,::1") - names/IPs the certificate covers,
-//      MAP (de_dust2) - maps/<MAP>.bsp, RCON_PASSWORD - enables rcon
+//      MAP (de_dust2) - maps/<MAP>.bsp, RCON_PASSWORD - enables rcon,
+//      TLS_CERT, TLS_KEY - PEM files of a real certificate (e.g. Let's Encrypt fullchain.pem
+//        and privkey.pem): the pages go over HTTPS and WebTransport uses it as browsers
+//        check any site's. Without them: plain HTTP and a self-signed certificate made in
+//        certs/ that the page pins by hash (development),
+//      HOSTNAMES ("localhost,127.0.0.1,::1") - names/IPs the self-signed certificate covers,
+//      REDIRECT_PORT - with TLS, a plain HTTP port (80) that redirects to the HTTPS site.
+// See deploy/README.md for a server with its own domain.
 // cfg/server.cfg runs at startup; the terminal is a server console (status, map,
 // mp_restartgame, ...).
 
@@ -23,6 +29,8 @@ const GAME_PORT = Number(Deno.env.get('GAME_PORT') || 27015);
 const HOSTNAMES = (Deno.env.get('HOSTNAMES') || 'localhost,127.0.0.1,::1').split(',');
 const BIND = Deno.env.get('BIND') || '0.0.0.0';
 const MAP = Deno.env.get('MAP') || 'de_dust2';
+const TLS_CERT = Deno.env.get('TLS_CERT'), TLS_KEY = Deno.env.get('TLS_KEY');
+const REDIRECT_PORT = Number(Deno.env.get('REDIRECT_PORT') || 0);
 
 const STATIC_DIRS = ['client/', 'shared/', 'maps/'];
 // The game server code and mode cfgs, for Practice: the browser runs them in a Web Worker
@@ -38,7 +46,12 @@ const MIME = {
   cfg: 'text/plain; charset=utf-8',
 };
 
-const certInfo = await ensureCert(fileURLToPath(new URL('certs', ROOT)), HOSTNAMES);
+if (!TLS_CERT !== !TLS_KEY) throw new Error('set both TLS_CERT and TLS_KEY, or neither');
+// A real certificate (no hash: browsers check it like any site's; they only accept a pinned
+// one valid for at most 14 days), else our own self-signed one, pinned.
+const certInfo = TLS_CERT ?
+  { cert: Deno.readTextFileSync(TLS_CERT), key: Deno.readTextFileSync(TLS_KEY), hash: null } :
+  await ensureCert(fileURLToPath(new URL('certs', ROOT)), HOSTNAMES);
 
 if (!/^[\w-]+$/.test(MAP)) throw new Error(`bad MAP: ${MAP}`);
 const readText = (url) => {
@@ -110,16 +123,31 @@ async function serveStatic(pathname) {
   }
 }
 
-Deno.serve({ port: HTTP_PORT, onListen: () => {} }, async (req) => {
+const tls = TLS_CERT ? { cert: certInfo.cert, key: certInfo.key } : {};
+Deno.serve({ hostname: BIND, port: HTTP_PORT, ...tls, onListen: () => {} }, async (req) => {
   const { pathname } = new URL(req.url);
   if (pathname === '/connect.json') {
-    return Response.json({ port: GAME_PORT, certHash: Array.from(certInfo.hash), ...host.info() });
+    const certHash = certInfo.hash && Array.from(certInfo.hash);
+    return Response.json({ port: GAME_PORT, certHash, ...host.info() });
   }
   if (pathname === '/maps.json') return Response.json(host.opts.listMaps()); // for offline practice
   return (await serveStatic(pathname)) || new Response('not found', { status: 404 });
 });
 
-console.log(`http: http://127.0.0.1:${HTTP_PORT}/   webtransport: udp/${GAME_PORT}   map: ${MAP}   ${TICK_RATE} tick`);
+// Plain HTTP to the HTTPS site (port 80: people typing the bare name).
+if (TLS_CERT && REDIRECT_PORT) {
+  Deno.serve({ hostname: BIND, port: REDIRECT_PORT, onListen: () => {} }, (req) => {
+    const url = new URL(req.url);
+    url.protocol = 'https:';
+    url.port = HTTP_PORT === 443 ? '' : String(HTTP_PORT);
+    return Response.redirect(url.href, 301);
+  });
+}
+
+const site = TLS_CERT ? `https://${HOSTNAMES[0]}${HTTP_PORT === 443 ? '' : `:${HTTP_PORT}`}/` :
+  `http://127.0.0.1:${HTTP_PORT}/`;
+console.log(`${site}   webtransport: udp/${GAME_PORT}   ${TLS_CERT ? 'certificate: ' + TLS_CERT : 'self-signed certificate (development)'}` +
+  `   map: ${MAP}   ${TICK_RATE} tick`);
 
 // The terminal is a server console.
 (async () => {

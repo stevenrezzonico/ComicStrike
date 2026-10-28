@@ -73,15 +73,16 @@ export class NetClient {
     this.arrival = 0; // performance.now() when the newest snapshot arrived
   }
 
-  // Opens the WebTransport session using the server's pinned certificate hash.
+  // Opens the WebTransport session: with the server's pinned certificate hash (its own
+  // self-signed one), or none (a real certificate, checked like any site's).
   async connect(timeoutMs = 3000) {
     const info = await (await fetch('/connect.json')).json();
     // Chrome resolves "localhost" to ::1 first; the server listens on IPv4.
     const host = location.hostname === 'localhost' ? '127.0.0.1' : location.hostname;
     const url = `https://${host.includes(':') ? `[${host}]` : host}:${info.port}`;
-    this.wt = new WebTransport(url, {
+    this.wt = new WebTransport(url, info.certHash ? {
       serverCertificateHashes: [{ algorithm: 'sha-256', value: new Uint8Array(info.certHash) }],
-    });
+    } : {});
     let timer;
     await Promise.race([
       this.wt.ready,
