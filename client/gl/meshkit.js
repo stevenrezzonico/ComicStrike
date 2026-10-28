@@ -1,17 +1,19 @@
 // Procedural mesh builder for player and weapon models (zero assets): boxes, rounded
 // boxes, rounded slabs, spheres, lathes, extrusions (optionally bevelled), lofts and
-// capsules under a transform stack, one color, finish and skeleton bone per vertex.
+// capsules, and swept tubes under a transform stack, one color and finish per vertex,
+// skinned to one bone or blended between two (skin(): limbs that bend smoothly).
 // Normals are smooth within each primitive across edges flatter than its crease angle
 // (smooth(): round shapes shade round and get no crease ink, box corners stay sharp).
 // Every primitive is closed, wound counter-clockwise seen from outside. Runs once at
 // load; the result is one interleaved buffer for client/gl/skinned.js.
 //
-// Vertex (20 bytes): pos f32x3 | normal i8x3 norm, bone u8 | color u8x4 norm (rgb, finish).
+// Vertex (24 bytes): pos f32x3 | normal i8x3 norm, bone u8 | color u8x4 norm (rgb, finish) |
+// second bone u8, its weight u8 (0..255; the first bone is the heavier), 2 spare bytes.
 
-export const MESH_STRIDE = 20;
+export const MESH_STRIDE = 24;
 
 // Surface finishes (the vertex color's alpha byte): how SKINNED_FS prints a part.
-export const FINISH = { CLOTH: 0, SKIN: 1, METAL: 2, POLYMER: 3, WOOD: 4 };
+export const FINISH = { CLOTH: 0, SKIN: 1, METAL: 2, POLYMER: 3, WOOD: 4, PATTERN: 5 };
 
 // A color that carries its finish: color(finish([r, g, b], FINISH.METAL)).
 export function finish(rgb, fin) {
@@ -42,6 +44,9 @@ export class MeshBuilder {
     this.col = [];
     this.fins = [];
     this.bones = [];
+    this.bones2 = []; // per vertex: the second bone and its weight (0..0.5)
+    this.weights = [];
+    this.skinFn = null;
     this.groups = []; // per triangle: the primitive it belongs to
     this.creases = []; // per triangle: cos of its crease angle
     this.hards = []; // per triangle: 1 = a flat face that keeps its normal (bevels bend to it)
@@ -95,6 +100,14 @@ export class MeshBuilder {
   // Bone for the next vertices (remapped while building a mirrored half).
   bone(i) {
     this.boneIndex = this.boneMap ? this.boneMap[i] : i;
+    return this;
+  }
+
+  // Skinning by position for the next vertices: fn([x, y, z]) (builder space, after the
+  // transform) -> [bone a, bone b, weight of b] (bone indices remapped while mirroring);
+  // null: the bone() bone alone.
+  skin(fn = null) {
+    this.skinFn = fn;
     return this;
   }
 
@@ -183,7 +196,18 @@ export class MeshBuilder {
       this.nrm.push(nx / l, ny / l, nz / l);
       this.col.push(...this.rgb);
       this.fins.push(this.fin);
-      this.bones.push(this.boneIndex);
+      if (this.skinFn) {
+        let [a, b, w] = this.skinFn(q);
+        if (this.boneMap) [a, b] = [this.boneMap[a], this.boneMap[b]];
+        if (w > 0.5) [a, b, w] = [b, a, 1 - w];
+        this.bones.push(a);
+        this.bones2.push(b);
+        this.weights.push(Math.max(0, w));
+      } else {
+        this.bones.push(this.boneIndex);
+        this.bones2.push(this.boneIndex);
+        this.weights.push(0);
+      }
     }
     this.groups.push(this.depth ? this.group : ++this.group);
     this.creases.push(this.crease);
@@ -373,6 +397,53 @@ export class MeshBuilder {
     return this.lathe(profile, seg);
   }
 
+  // Tube along a path of sections [{ at: [x, y, z], a, b, n }]: each an oval (a
+  // superellipse of exponent n, 2 by default; 4 is a rounded box) square to the path, half-
+  // size b toward `up` and a across, `seg` sides; `ends` 'round' closes both ends with a
+  // dome, else flat caps. Torsos, limbs.
+  sweep(sections, seg = 12, up = [0, 0, 1], ends = 'round') {
+    const last = sections.length - 1;
+    const sub = (p, q) => [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
+    const unit = (v) => {
+      const l = Math.hypot(v[0], v[1], v[2]) || 1;
+      return [v[0] / l, v[1] / l, v[2] / l];
+    };
+    const ringAt = (s, i, shift = 0, shrink = 1) => {
+      const t = unit(sub(sections[Math.min(last, i + 1)].at, sections[Math.max(0, i - 1)].at));
+      const d = up[0] * t[0] + up[1] * t[1] + up[2] * t[2];
+      const e2 = unit([up[0] - t[0] * d, up[1] - t[1] * d, up[2] - t[2] * d]);
+      const e1 = [e2[1] * t[2] - e2[2] * t[1], e2[2] * t[0] - e2[0] * t[2], e2[0] * t[1] - e2[1] * t[0]]; // e1 x e2 = t
+      const e = 2 / (s.n || 2), out = [];
+      for (let k = 0; k < seg; k++) {
+        const th = 2 * Math.PI * k / seg, c = Math.cos(th), sn = Math.sin(th);
+        const x = Math.sign(c) * Math.abs(c) ** e * s.a * shrink, y = Math.sign(sn) * Math.abs(sn) ** e * s.b * shrink;
+        out.push([0, 1, 2].map((j) => s.at[j] + t[j] * shift + e1[j] * x + e2[j] * y));
+      }
+      return { pts: out, t };
+    };
+    const rings = sections.map((s, i) => ringAt(s, i));
+    if (ends === 'round') { // two shrinking rings past each end
+      const dome = (i, sign) => [1, 2].map((k) => {
+        const s = sections[i], ph = k / 3 * Math.PI / 2, depth = Math.min(s.a, s.b) * 0.9;
+        return ringAt(s, i, sign * depth * Math.sin(ph), Math.cos(ph));
+      });
+      rings.unshift(...dome(0, -1).reverse());
+      rings.push(...dome(last, 1));
+    }
+    this.open();
+    for (let i = 0; i + 1 < rings.length; i++) {
+      const a = rings[i].pts, b = rings[i + 1].pts;
+      for (let k = 0; k < seg; k++) {
+        const j = (k + 1) % seg;
+        this.quad(a[k], a[j], b[j], b[k]);
+      }
+    }
+    const t0 = rings[0].t, t1 = rings.at(-1).t;
+    this.polygon(rings[0].pts.slice().reverse(), [-t0[0], -t0[1], -t0[2]]);
+    this.polygon(rings.at(-1).pts, t1);
+    return this.close();
+  }
+
   // Skin between sections across z: rings [{ z, pts: [[x, y], ...] }], all with the same
   // number of points in the same (counter-clockwise from +z) order. Ends are capped.
   loft(rings) {
@@ -410,6 +481,8 @@ export class MeshBuilder {
       u8[o + 15] = this.bones[v];
       for (let c = 0; c < 3; c++) u8[o + 16 + c] = Math.max(0, Math.min(255, Math.round(this.col[v * 3 + c] * 255)));
       u8[o + 19] = this.fins[v];
+      u8[o + 20] = this.bones2[v];
+      u8[o + 21] = Math.round(this.weights[v] * 255);
     }
     return { data, count, tris: count / 3, positions: new Float32Array(this.pos), normals: nrm };
   }

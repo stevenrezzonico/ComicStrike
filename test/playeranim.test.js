@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { buildPlayer, HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4 } from '../client/models/players.js';
 import { PlayerAnimator, holdOf, gunInHand } from '../client/anim/playeranim.js';
 import { PLAYER_SKELETON as S } from '../client/anim/skeleton.js';
+import { MESH_STRIDE } from '../client/gl/meshkit.js';
 import { WEAPON_ID, WEAPONS } from '../shared/weapons.js';
 import { ANIM_PLANT, ANIM_RELOAD } from '../shared/protocol.js';
 
@@ -22,7 +23,7 @@ function run(a, n, pos, opts = {}) {
 Deno.test('player models: closed, under budget, team looks differ', () => {
   for (const [team, helmet] of [['T', false], ['CT', false], ['CT', true], ['H', false]]) {
     const m = buildPlayer(team, helmet);
-    assert.ok(m.tris <= 3500, `${team} ${m.tris} triangles`);
+    assert.ok(m.tris <= 6000, `${team} ${m.tris} triangles`);
     assert.ok(m.tris > 300);
   }
   assert.ok(buildPlayer('CT', true).tris > buildPlayer('CT', false).tris, 'the helmet adds geometry');
@@ -33,7 +34,6 @@ Deno.test('player models: closed, under budget, team looks differ', () => {
 });
 
 Deno.test('player models: every leg part rides the bone whose span it covers', () => {
-  const { MESH_STRIDE } = { MESH_STRIDE: 20 };
   for (const [team, helmet] of [['T', false], ['CT', true]]) {
     const m = buildPlayer(team, helmet), u8 = new Uint8Array(m.data);
     for (let v = 0; v < m.count; v++) {

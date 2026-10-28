@@ -44,6 +44,8 @@ Deno.test('meshkit: every primitive is closed with outward normals and the expec
     ['flat rounded box', (m) => m.rbox(2, 2, 0.4, 0.5, 0, 0, 0, 3), null], // the radius is clamped
     ['bevelled extrude', (m) => m.bevel(0.2).extrude([[0, 0], [4, 0], [4, 1], [1, 1], [1, 3], [0, 3]], 2), null],
     ['sphere', (m) => m.sphere(1.5, 12, 6), null],
+    ['swept tube', (m) => m.sweep([{ at: [0, 0, 0], a: 2, b: 1 }, { at: [0, 5, 0.5], a: 1.6, b: 1.2 }, { at: [0, 10, 0], a: 1, b: 1, n: 4 }]), null],
+    ['flat-ended tube', (m) => m.sweep([{ at: [0, 0, 0], a: 1, b: 1 }, { at: [0, 0, 4], a: 2, b: 1, n: 4 }], 10, [1, 0, 0], 'flat'), null],
     ['loft', (m) => m.loft([{ z: 0, pts: [[1, 1], [-1, 1], [-1, -1], [1, -1]] }, { z: 2, pts: [[2, 0], [0, 2], [-2, 0], [0, -2]] }]), null],
   ];
   for (const [what, make, volume] of cases) {
@@ -105,6 +107,18 @@ Deno.test('meshkit: round shapes get smooth normals, corners and caps stay sharp
   // Separate primitives never smooth into each other.
   const two = new MeshBuilder().box(1, 1, 1).box(1, 1, 1, 1, 0, 0).build();
   for (let v = 0; v < two.count; v++) assert.equal(normalOf(two, v).filter((x) => Math.abs(x) > 0.999).length, 1);
+});
+
+Deno.test('meshkit: skin() blends two bones by position, the heavier first, mirrored halves remapped', () => {
+  const b = new MeshBuilder().skin((q) => [1, 2, Math.min(1, Math.abs(q[1]) / 10)]);
+  b.mirror((m) => m.box(1, 1, 1, 0, 2.5, 0).box(1, 1, 1, 0, 8, 0), 1, [0, 3, 4, 1, 2]);
+  const m = b.build(), u8 = new Uint8Array(m.data);
+  for (let v = 0; v < m.count; v++) {
+    const y = m.positions[v * 3 + 1], w = Math.min(1, Math.abs(y) / 10), o = v * MESH_STRIDE;
+    const [first, second] = y > 0 ? [w > 0.5 ? 2 : 1, w > 0.5 ? 1 : 2] : [w > 0.5 ? 4 : 3, w > 0.5 ? 3 : 4];
+    assert.deepEqual([u8[o + 15], u8[o + 20]], [first, second], `y ${y}`);
+    assert.ok(Math.abs(u8[o + 21] / 255 - Math.min(w, 1 - w)) < 0.01);
+  }
 });
 
 Deno.test('meshkit: finishes ride in the color alpha', () => {

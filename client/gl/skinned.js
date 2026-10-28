@@ -53,6 +53,8 @@ export class SkinnedMesh {
     gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_BYTE, MESH_STRIDE, 15);
     gl.enableVertexAttribArray(3);
     gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, true, MESH_STRIDE, 16); // rgb, finish
+    gl.enableVertexAttribArray(4);
+    gl.vertexAttribIPointer(4, 2, gl.UNSIGNED_BYTE, MESH_STRIDE, 20); // second bone, its weight
     gl.bindVertexArray(null);
   }
 }

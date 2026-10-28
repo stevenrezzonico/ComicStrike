@@ -434,17 +434,19 @@ void main() {
   o_color = u_color;
 }`;
 
-// Skinned models (client/gl/skinned.js): every vertex follows one bone. Two flat tones
+// Skinned models (client/gl/skinned.js): every vertex follows one bone or a blend of two
+// (elbows, knees, the spine bend smoothly). Two flat tones
 // split by a crisp terminator, times the map's light at the model (never below
 // MODEL_FLOOR: characters stay readable in dark corners), a pale rim along the shadow
 // side's outline, and per finish (vertex alpha, FINISH in client/gl/meshkit.js) a shine
-// streak on metal and polymer and grain strokes on wood. Ids differ per draw and per
+// streak on metal and polymer, grain strokes on wood, a woven check on patterned cloth. Ids differ per draw and per
 // color, so the ink outlines every part of a model (jacket, trousers, gloves).
 export const SKINNED_VS = `#version 300 es
 layout(location=0) in vec3 a_pos;
 layout(location=1) in vec3 a_nrm;
 layout(location=2) in uint a_bone;
 layout(location=3) in vec4 a_col; // rgb, finish / 255
+layout(location=4) in uvec2 a_blend; // second bone, its weight (0..255)
 uniform mat4 u_viewProj;
 uniform mat4 u_model;
 uniform mat4 u_bones[24];
@@ -457,7 +459,9 @@ out float v_w;
 flat out uint v_id;
 flat out uint v_fin;
 void main() {
-  mat4 m = u_model * u_bones[a_bone];
+  // Linear blend skinning between two bones (one when the weight is 0).
+  float bw = float(a_blend.y) / 255.0;
+  mat4 m = u_model * (u_bones[a_bone] * (1.0 - bw) + u_bones[a_blend.x] * bw);
   v_nrm = mat3(m) * a_nrm;
   v_col = a_col.rgb;
   v_fin = uint(a_col.a * 255.0 + 0.5);
@@ -488,7 +492,7 @@ uniform float u_white;    // 0..1 toward white (spawn protection's pulse)
 uniform float u_lightFull; // lifted light that prints fully lit (per map, Renderer.loadMap)
 uniform uint u_flags;      // G_ flags for every pixel of the draw (G_VIEW: first person)
 const float MODEL_FLOOR = 0.55; // models print at least this lit
-const uint FIN_METAL = 2u, FIN_POLYMER = 3u, FIN_WOOD = 4u;
+const uint FIN_METAL = 2u, FIN_POLYMER = 3u, FIN_WOOD = 4u, FIN_PATTERN = 5u;
 ${NOISE}
 ${GBUFFER}
 void main() {
@@ -530,6 +534,13 @@ void main() {
     float stroke = (1.0 - smoothstep(0.8, 1.6, d)) * step(0.45, vnoise(vec2(v_obj.x * 0.8, floor(g) * 3.7)))
       * (1.0 - smoothstep(0.12, 0.3, fw));
     albedo = mix(albedo, albedo * 0.3, stroke * 0.9);
+  } else if (v_fin == FIN_PATTERN) {
+    // Woven check (a shemagh): two families of diagonal lines, gone where they crowd.
+    float g1 = dot(v_obj, vec3(1.1, 1.1, 1.1)), g2 = dot(v_obj, vec3(1.1, -1.1, 1.1));
+    float f1 = max(fwidth(g1), 1e-4), f2 = max(fwidth(g2), 1e-4);
+    float l1 = 1.0 - smoothstep(0.8, 1.8, abs(fract(g1) - 0.5) / f1);
+    float l2 = 1.0 - smoothstep(0.8, 1.8, abs(fract(g2) - 0.5) / f2);
+    albedo = mix(albedo, albedo * 0.45, max(l1, l2) * 0.85 * (1.0 - smoothstep(0.15, 0.35, max(f1, f2))));
   }
   gbuffer(mix(albedo, vec3(1.0), u_white), clamp(mix(light, 1.0, u_white), 0.0, 1.0), n, v_id, v_w, u_flags);
 }`;

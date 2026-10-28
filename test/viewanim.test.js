@@ -4,6 +4,7 @@ import { fitHands, restPose, handJoints, Solid } from '../client/anim/handfit.js
 import { buildArms, buildHand, HAND_GRIP, GRIP_CURL } from '../client/models/arms.js';
 import { buildGun, GUN_MAG, GUN_BOLT } from '../client/models/guns.js';
 import { ARMS_SKELETON as A } from '../client/anim/skeleton.js';
+import { MESH_STRIDE } from '../client/gl/meshkit.js';
 import * as Q from '../client/anim/quat.js';
 import {
   WEAPONS, WEAPON_ID, createWeaponState, giveWeapon, WS_ACTIVE, WS_DEPLOY_END, WS_RELOAD_END, WS_LAST_SHOT,
@@ -34,7 +35,7 @@ const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 const bonesOf = (m) => {
   const bones = new Set(), u8 = new Uint8Array(m.data);
-  for (let v = 0; v < m.count; v++) bones.add(A.names[u8[v * 20 + 15]]);
+  for (let v = 0; v < m.count; v++) bones.add(A.names[u8[v * MESH_STRIDE + 15]]);
   return [...bones].sort();
 };
 
