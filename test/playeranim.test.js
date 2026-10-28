@@ -76,6 +76,24 @@ Deno.test('player animation: standing feet are planted; the stride phase follows
   assert.ok(spread > 15, `stride spread ${spread}`);
 });
 
+Deno.test('player animation: lifted feet swing the way we walk, planted feet push back (no moonwalk)', () => {
+  for (const [dir, what] of [[1, 'forward'], [-1, 'backward']]) {
+    const a = new PlayerAnimator();
+    let lifted = 0, planted = 0, prev = null;
+    for (let k = 0; k < 192; k++) {
+      a.update(1 / 64, dir * k / 64 * 250, 0, 0, 0, 0, 0, true, HOLD_RIFLE, 0, 0, true);
+      const [x, , z] = bone(a, 'ankle_L');
+      if (prev && k > 32) {
+        if (z > 5) lifted += x - prev;
+        else if (z < 3.7) planted += x - prev;
+      }
+      prev = x;
+    }
+    assert.ok(lifted * dir > 5, `${what}: the lifted foot swings ${what} (${lifted.toFixed(1)})`);
+    assert.ok(planted * dir < -5, `${what}: the planted foot pushes back (${planted.toFixed(1)})`);
+  }
+});
+
 Deno.test('player animation: crouch drops the head toward the squashed head box', () => {
   const stand = run(new PlayerAnimator(), 32, () => [0, 0, 0]);
   const crouch = run(new PlayerAnimator(), 32, () => [0, 0, 0], { duck: 1 });

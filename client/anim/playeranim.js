@@ -171,10 +171,12 @@ export class PlayerAnimator {
     p.turn(HEAD, -lean * 0.6 + aimP * 0.35 + this.kick * 5, -twist, 0);
     p.solve();
 
-    // Legs: feet on the ground under the hips, cycling along the movement direction.
+    // Legs: feet on the ground under the hips, cycling along the movement direction. A foot
+    // is lifted while sin(ph) > 0 and swings from behind to ahead meanwhile (-cos), then
+    // stays planted while the body passes over it (the other way round was a moonwalk).
     for (let s = 0; s < 2; s++) {
       const ph = (this.phase + s * 0.5) * 2 * Math.PI;
-      const swing = Math.cos(ph) * this.stride * walk;
+      const swing = -Math.cos(ph) * this.stride * walk;
       const lift = Math.max(0, Math.sin(ph)) * (2 + this.stride * 0.35) * walk;
       const tx = 2 * c + dirF * swing + (s ? -3 : 4) * this.air;
       const ty = SIDE[s] * (4.5 + c) + dirL * swing;
