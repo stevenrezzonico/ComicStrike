@@ -31,6 +31,7 @@ import { SurfaceMap } from '../shared/surfaces.js';
 import { Items } from '../shared/items.js';
 import { IN_USE } from '../shared/constants.js';
 import { parse } from '../shared/cvars.js';
+import { Bots } from './bots.js';
 import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, FREEZE_TIME, ROUND_TIME, BUY_TIME, ROUND_END_DELAY,
   MAX_ROUNDS, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD,
@@ -174,6 +175,13 @@ export const DEFAULT_RULES = {
   immunityTime: 0, // mp_respawn_immunitytime (s)
   matchRestartDelay: 15, // mp_match_restart_delay (s)
   deathDropGun: true, // mp_death_drop_gun
+  // Bots (server/bots.js).
+  botQuota: 0, // bot_quota
+  botQuotaMode: 'normal', // bot_quota_mode: normal (that many bots) or fill (bots + humans)
+  botDifficulty: 1, // bot_difficulty 0 easy .. 3 expert
+  botJoinTeam: 'any', // bot_join_team: any, t, ct
+  botStop: false, // bot_stop: they stand still
+  botDontShoot: false, // bot_dont_shoot
 };
 
 const RCON_MAX_FAILS = 5; // bad passwords before a client is ignored for a while
@@ -183,6 +191,7 @@ export class Game {
   constructor(mapName, bsp, rules = {}) {
     this.mapName = mapName;
     this.rules = { ...DEFAULT_RULES, ...rules };
+    this.bsp = bsp;
     this.world = CollisionWorld.fromBSP(bsp);
     this.world.surfaces = new SurfaceMap(bsp);
     this.breakables = new Breakables(bsp, this.world);
@@ -252,6 +261,7 @@ export class Game {
 
     // Grenades, and what they act on: the clients (index = player id).
     this.grenades = new Grenades();
+    this.bots = new Bots(this);
     this.grenadeWriter = new Writer();
     const live = (i) => this.clients[i] && this.clients[i].joined && this.clients[i].alive;
     const origin = (i, out, dz) => {
@@ -329,6 +339,7 @@ export class Game {
 
   disconnect(c) {
     if (this.clients[c.id] !== c) return;
+    if (c.bot) this.bots.list = this.bots.list.filter((b) => b !== c.bot);
     if (this.bombCarrier === c) this.dropBomb(c, false);
     this.dropHostage(c);
     this.clients[c.id] = null;
@@ -361,16 +372,7 @@ export class Game {
       const ahead = (id - c.lastBuy) & 0xffff; // ids wrap; each BUY arrives up to 3 times
       if (c.lastBuy >= 0 && (ahead === 0 || ahead >= 0x8000)) return;
       c.lastBuy = id;
-      const free = this.rules.deathmatch;
-      if (!buyError(c.player, item, this.canBuy(c), free)) {
-        // A weapon bought into a taken slot throws the old one down (CS:GO; deathmatch:
-        // it is gone, and the new one is handed out again at every respawn).
-        const w = WEAPONS[item], p = c.player;
-        if (w && !w.melee && !w.c4 && p.ws.f[WS_SLOTS + w.slot * 3] && !free) this.dropSlot(c, w.slot, true);
-        applyBuy(p, item, free);
-        if (free && w && w.slot === SLOT_PRIMARY) p.primary = item;
-        if (free && w && w.slot === SLOT_SECONDARY) p.secondary = item;
-      }
+      this.buyItem(c, item);
     } else if (type === C2S_COMMAND && c.joined && r.remaining >= 4) {
       const id = r.u16v(), text = r.lstr();
       const ahead = (id - c.lastCommand) & 0xffff; // sent 3 times, like BUY
@@ -462,6 +464,20 @@ export class Game {
     return scored[Math.floor(Math.random() * Math.min(3, scored.length))][1];
   }
 
+  // Buys `item` for `c` if he may (BUY messages, bots).
+  buyItem(c, item) {
+    const free = this.rules.deathmatch;
+    if (buyError(c.player, item, this.canBuy(c), free)) return false;
+    // A weapon bought into a taken slot throws the old one down (CS:GO; deathmatch: it is
+    // gone, and the new one is handed out again at every respawn).
+    const w = WEAPONS[item], p = c.player;
+    if (w && !w.melee && !w.c4 && p.ws.f[WS_SLOTS + w.slot * 3] && !free) this.dropSlot(c, w.slot, true);
+    applyBuy(p, item, free);
+    if (free && w && w.slot === SLOT_PRIMARY) p.primary = item;
+    if (free && w && w.slot === SLOT_SECONDARY) p.secondary = item;
+    return true;
+  }
+
   // In a buy zone (or mp_buy_anywhere) in buy time; deathmatch: mp_buytime from each spawn.
   canBuy(c) {
     const ph = this.phase, r = this.rules;
@@ -479,6 +495,8 @@ export class Game {
     const ev = this.events;
     ev.shots = 0;
     while (ev.kills && ev.killTick[0] + KILL_REPEAT_TICKS < this.tick) ev.dropOldestKill();
+    if (this.tick % 16 === 0) this.bots.maintain(); // bot_quota
+    this.bots.think(); // bots queue this tick's commands like clients do
 
     for (const c of this.clients) {
       if (!c) continue;
@@ -1231,8 +1249,13 @@ export class Game {
     }
   }
 
-  // Can `o` see `c` (head or chest)?
-  sees(o, c) {
+  // Can `o` see `c` (head or chest) anywhere around him (no view cone)?
+  visible(o, c) {
+    return this.sees(o, c, -1);
+  }
+
+  // Can `o` see `c` (head or chest) within his view cone?
+  sees(o, c, cone = SPOT_CONE) {
     const f = o.player.ps.f, ex = f[PS_ORIGIN], ey = f[PS_ORIGIN + 1], ez = f[PS_ORIGIN + 2] + eyeOffset(o.player.ps);
     const cp = Math.cos(o.pitch * DEG), vx = cp * Math.cos(o.yaw * DEG), vy = cp * Math.sin(o.yaw * DEG);
     const vz = -Math.sin(o.pitch * DEG);
@@ -1240,7 +1263,7 @@ export class Game {
     for (const dz of [eyeOffset(c.player.ps), 0]) {
       const x = g[PS_ORIGIN], y = g[PS_ORIGIN + 1], z = g[PS_ORIGIN + 2] + dz;
       const dx = x - ex, dy = y - ey, dzz = z - ez, d = Math.hypot(dx, dy, dzz);
-      if (d > 0 && (dx * vx + dy * vy + dzz * vz) / d < SPOT_CONE) continue; // outside their view
+      if (d > 0 && (dx * vx + dy * vy + dzz * vz) / d < cone) continue; // outside their view
       traceHull(this.world, HULL_POINT, ex, ey, ez, x, y, z, tr);
       if (tr.fraction >= 1 && !this.grenades.smokeBetween(ex, ey, ez, x, y, z)) return true;
     }
@@ -1345,7 +1368,7 @@ export class Game {
     for (let s = 1; s <= b.count; s++) if (b.broken[s]) words[k * 8 + (s >> 5)] |= 1 << (s & 31);
 
     for (const c of this.clients) {
-      if (!c || !c.joined) continue;
+      if (!c || !c.joined || c.bot) continue;
       const base = c.ackSeq ? ring.find(c.ackSeq) : -1;
       c.session.send(writeSnapshot(c.writer(), ring, k, base, c.id, c, this.events, this.round, this.bomb));
     }

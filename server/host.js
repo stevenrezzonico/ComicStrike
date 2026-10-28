@@ -4,7 +4,7 @@
 
 import { Console, FCVAR_PROTECTED } from '../shared/cvars.js';
 import { writeChangelevel, MAX_PLAYERS } from '../shared/protocol.js';
-import { TEAM_NAMES } from '../shared/player.js';
+import { TEAM_NAMES, TEAM_T, TEAM_CT } from '../shared/player.js';
 import { PHASE_WARMUP } from '../shared/economy.js';
 import { Game, DEFAULT_RULES } from './game.js';
 
@@ -59,6 +59,49 @@ export class Host {
     num('mp_match_restart_delay', 15, 'Seconds between the end of a match and the next', 1, 300);
     num('mp_death_drop_gun', 1, 'The dead drop their best gun', 0, 1);
     this.modeName = 'competitive'; // of the running map
+    // Bots (server/bots.js).
+    num('bot_quota', 0, 'Bots on the server (bot_add / bot_kick change it)', 0, MAX_PLAYERS);
+    con.cvar('bot_quota_mode', 'normal', { help: 'normal: bot_quota bots; fill: bots fill up to bot_quota players',
+      onChange: apply });
+    num('bot_difficulty', 1, 'New bots: 0 easy, 1 normal, 2 hard, 3 expert', 0, 3);
+    con.cvar('bot_join_team', 'any', { help: 'Team new bots join: any, t, ct', onChange: apply });
+    num('bot_stop', 0, 'Bots stand still', 0, 1);
+    num('bot_dont_shoot', 0, 'Bots do not shoot', 0, 1);
+    const DIFFICULTY = { easy: 0, normal: 1, hard: 2, expert: 3 };
+    const botAdd = (team, args, ctx) => { // [easy|normal|hard|expert] [name]
+      let difficulty = -1, name = '';
+      for (const a of args) {
+        if (a.toLowerCase() in DIFFICULTY) difficulty = DIFFICULTY[a.toLowerCase()];
+        else name = a.slice(0, 31);
+      }
+      const c = this.game.bots.add(team, difficulty, name);
+      if (!c) return con.out(ctx, 'bot_add: the server is full');
+      this.con.get('bot_quota').set(this.game.bots.list.length);
+      con.out(ctx, `added ${c.name} (${c.team === TEAM_CT ? 'CT' : 'T'})`);
+    };
+    con.command('bot_add', (a, ctx) => {
+      const t = (a[1] || '').toLowerCase(), team = t === 't' ? TEAM_T : t === 'ct' ? TEAM_CT : 0;
+      botAdd(team, a.slice(team ? 2 : 1), ctx);
+    }, 'bot_add [t|ct] [easy|normal|hard|expert] [name]: adds a bot');
+    con.command('bot_add_t', (a, ctx) => botAdd(TEAM_T, a.slice(1), ctx), 'bot_add_t [difficulty] [name]');
+    con.command('bot_add_ct', (a, ctx) => botAdd(TEAM_CT, a.slice(1), ctx), 'bot_add_ct [difficulty] [name]');
+    con.command('bot_kick', (a, ctx) => {
+      const q = a.slice(1).join(' '), bots = this.game.bots;
+      const which = q === 'all' || !q ? bots.list.map((b) => b.c)
+        : q.toLowerCase() === 't' || q.toLowerCase() === 'ct'
+        ? bots.list.filter((b) => b.c.team === (q.toLowerCase() === 't' ? TEAM_T : TEAM_CT)).map((b) => b.c)
+        : bots.list.filter((b) => b.c.name === q || b.c.name === `BOT ${q}`).map((b) => b.c);
+      for (const c of which) bots.kick(c);
+      this.con.get('bot_quota').set(bots.list.length);
+      con.out(ctx, which.length ? `kicked ${which.length} bot(s)` : 'bot_kick [name|t|ct|all]: no such bot');
+    }, 'bot_kick [name|t|ct|all]: removes bots');
+    con.command('bot_kill', (a, ctx) => {
+      const q = a.slice(1).join(' ');
+      for (const b of this.game.bots.list) {
+        if ((!q || q === 'all' || b.c.name === q || b.c.name === `BOT ${q}`) && b.c.alive) this.game.kill(b.c, b.c, 0, false);
+      }
+      con.out(ctx, 'bots killed');
+    }, 'bot_kill [name|all]: kills bots');
 
     con.command('map', (a, ctx) => this.changeLevel(a[1], ctx), 'map <name>: switches to another map');
     con.command('changelevel', (a, ctx) => this.changeLevel(a[1], ctx), 'changelevel <name>: same as map');
@@ -134,6 +177,12 @@ export class Host {
       immunityTime: v('mp_respawn_immunitytime'),
       matchRestartDelay: v('mp_match_restart_delay'),
       deathDropGun: v('mp_death_drop_gun') !== 0,
+      botQuota: v('bot_quota'),
+      botQuotaMode: this.con.get('bot_quota_mode').value === 'fill' ? 'fill' : 'normal',
+      botDifficulty: v('bot_difficulty'),
+      botJoinTeam: this.con.get('bot_join_team').value.toLowerCase(),
+      botStop: v('bot_stop') !== 0,
+      botDontShoot: v('bot_dont_shoot') !== 0,
     };
   }
 
