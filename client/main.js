@@ -211,10 +211,15 @@ fx.onEffect = (kind, _weapon, x, y, z) => {
       sounds.hiss(x, y, z);
       words.smoke(viewProj, x, y, z);
     }
-    else for (let i = 0; i < 4; i++) sounds.crackle(x, y, z + 8);
+    else {
+      for (let i = 0; i < 4; i++) sounds.crackle(x, y, z + 8);
+      decals.add(x, y, z + 0.5, 0, 0, 1, 60, Math.random(), 0); // scorched ground
+      words.fire(viewProj, x, y, z);
+    }
   }
 };
 fx.onBounce = (x, y, z) => sounds.bounce(x, y, z);
+fx.onCrackle = (x, y, z) => words.crackle(viewProj, x, y, z);
 let breakables = null;
 let breakableColors = null; // rgb per breakable slot, for debris
 let doors = null; // doors and buttons: placed for the tick each command runs at, as on the server

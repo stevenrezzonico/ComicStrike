@@ -1,6 +1,6 @@
 // Comic sound words (cl_comicwords): BAM! on our hits, HEADSHOT! and KAPOW! on our kills,
 // BLAM! / RAT-TAT-TAT! for our own gunfire, PAK! on walls we hit, KA-BOOM! on explosions,
-// SMOKE! on smoke grenades.
+// SMOKE! on smoke grenades, FIRE! and CRACKLE! on fires.
 // A fixed pool of DOM elements, reused oldest first; the pop animation is CSS (#fx in
 // index.html). Spawning happens on events, never per frame; update() only hides the
 // expired ones and fades the gunfire ticker.
@@ -125,6 +125,16 @@ export class InkWords {
   // A smoke grenade popped at (x, y, z): the word rises out of the cloud.
   smoke(viewProj, x, y, z) {
     this.at(viewProj, x, y, z + 110, pick(['SMOKE!', 'FSSSHH!', 'POOF!']), 'shot big', 58, 1400);
+  }
+
+  // A fire caught at (x, y, z).
+  fire(viewProj, x, y, z) {
+    this.at(viewProj, x, y, z + 40, pick(['FIRE!', 'FWOOSH!']), 'shot big', 66, 1400);
+  }
+
+  // A burning fire crackles at (x, y, z).
+  crackle(viewProj, x, y, z) {
+    this.at(viewProj, x, y, z, pick(['CRACKLE!', 'CRACK!', 'WHOOSH!']), 'shot', rnd(26, 34), 900);
   }
 
   // We fired a gun with gunshot voice `profile`.

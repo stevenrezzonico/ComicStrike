@@ -4,6 +4,7 @@ import { WEAPONS } from '../shared/weapons.js';
 import { MESH_STRIDE } from '../client/gl/meshkit.js';
 import { buildFlash } from '../client/gl/gunmeshes.js';
 import { buildBurst, buildPuff } from '../client/gl/blast.js';
+import { buildFlame } from '../client/gl/grenadefx.js';
 
 // Closed (every directed edge matched by its reverse) and outward (positive volume).
 function closed(m, what) {
@@ -90,6 +91,9 @@ Deno.test('explosions: the fireball layers and smoke puffs are closed, low-poly 
     closed(burst, `burst ${seed}`);
     closed(puff, `puff ${seed}`);
     assert.ok(burst.tris <= 120 && puff.tris <= 200, `seed ${seed}: ${burst.tris} / ${puff.tris} triangles`);
+    const flame = buildFlame([1, 0.5, 0.1], seed);
+    closed(flame, `flame ${seed}`);
+    assert.ok(flame.tris <= 120, `flame ${seed}: ${flame.tris} triangles`);
   }
 });
 
