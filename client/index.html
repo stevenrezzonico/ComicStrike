@@ -91,7 +91,7 @@
     text-shadow: 1px 1px 0 var(--ink), 2px 2px 0 var(--ink), 3px 3px 0 var(--ink), 4px 4px 0 var(--ink),
       5px 5px 0 var(--ink); pointer-events: none; }
   /* Panels: paper, a heavy ink border, a hard shadow. */
-  #scoreboard, #buymenu { background: var(--paper); border: 4px solid var(--ink); box-shadow: 8px 8px 0 var(--ink);
+  #scoreboard { background: var(--paper); border: 4px solid var(--ink); box-shadow: 8px 8px 0 var(--ink);
     color: var(--ink); }
   #scoreboard { position: fixed; left: 50%; top: 14%; transform: translateX(-50%); display: none; min-width: 440px;
     padding: 10px 16px 12px; font: 15px/1.6 var(--body); pointer-events: none; }
@@ -105,22 +105,38 @@
   #scoreboard tr.spec td { color: #6d665c; }
   #scoreboard tr.me td { background: var(--yellow); font-weight: 700; }
   #scoreboard tr.dead td { opacity: 0.45; text-decoration: line-through; }
-  #buymenu { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); display: none;
-    width: min(580px, calc(100vw - 32px)); box-sizing: border-box; max-height: calc(100vh - 32px); overflow-y: auto;
-    padding: 14px; font: 15px/1.4 var(--body); }
-  #buymenu.closed .items::before { content: 'Buying is not possible here or now'; display: block; color: var(--red);
-    font-weight: 700; margin-bottom: 6px; }
-  #buymenu .cats { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-  #buymenu button { font: 17px/1 var(--display); letter-spacing: 0.04em; color: var(--ink); background: var(--paper-hi);
-    border: 3px solid var(--ink); box-shadow: 3px 3px 0 var(--ink); padding: 8px 10px 6px; cursor: pointer; }
-  #buymenu button:hover:not(:disabled) { background: var(--yellow); }
-  #buymenu button:active:not(:disabled) { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
-  #buymenu button:disabled { opacity: 0.4; cursor: default; }
-  #buymenu .items { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  #buymenu .items button { display: flex; justify-content: space-between; }
-  #buymenu .price { color: var(--red); }
-  #buymenu .hint { margin-top: 12px; font-size: 12px; opacity: 0.7; }
-  @media (max-width: 520px) { #buymenu .items { grid-template-columns: 1fr; } }
+  /* Buy menu: CS:GO's radial wheel in print. A full-screen layer (the mouse's direction picks a sector);
+     paper sectors with heavy ink edges and a hard shadow, the hovered one yellow and pushed out. */
+  #buymenu { position: fixed; inset: 0; display: none; cursor: default; user-select: none;
+    background: radial-gradient(circle, rgba(31, 26, 23, 0.28) 0 34%, rgba(31, 26, 23, 0) 70%); }
+  #buymenu .wheel { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: min(600px, calc(100vw - 32px), calc(100vh - 80px)); height: auto; overflow: visible;
+    filter: drop-shadow(6px 6px 0 var(--ink)); }
+  #buymenu .ring { transform-box: view-box; transform-origin: 50% 50%; }
+  #buymenu .ring.pop { animation: wheel-pop 160ms cubic-bezier(0.2, 1.4, 0.4, 1); }
+  @keyframes wheel-pop { from { transform: scale(0.82) rotate(-10deg); opacity: 0; } }
+  #buymenu .sector path { fill: var(--paper-hi); stroke: var(--ink); stroke-width: 4; stroke-linejoin: round; }
+  #buymenu .sector { transition: transform 70ms ease-out; cursor: pointer; }
+  #buymenu .sector.hot path { fill: var(--yellow); }
+  #buymenu .sector.off path { fill: url(#buy-hatch); }
+  #buymenu .sector.off text { opacity: 0.5; }
+  #buymenu .sector.off.hot path { fill: #e9dfb8; }
+  #buymenu .hatch-bg { fill: #e4dccb; }
+  #buymenu .hatch-line { stroke: #b9ad97; stroke-width: 3; }
+  #buymenu text { text-anchor: middle; fill: var(--ink); font-family: var(--display); letter-spacing: 0.04em;
+    pointer-events: none; }
+  #buymenu text.cat { font-size: 26px; dominant-baseline: middle; }
+  #buymenu text.name { font-size: 17px; }
+  #buymenu text.price { font-size: 17px; fill: var(--red); }
+  #buymenu text.key { font-size: 13px; opacity: 0.55; }
+  #buymenu .center circle { fill: var(--paper); stroke: var(--ink); stroke-width: 4; }
+  #buymenu .center text.big { font-size: 24px; }
+  #buymenu .center text.price { font-size: 22px; }
+  #buymenu .center text.small { font: 14px var(--body); letter-spacing: 0; }
+  #buymenu .center text.warn { fill: var(--red); font-weight: 700; }
+  #buymenu .hint { position: absolute; left: 0; right: 0; bottom: 16px; text-align: center; color: var(--paper-hi);
+    font: 14px var(--body); text-shadow: 1px 1px 0 var(--ink), -1px -1px 0 var(--ink), 1px -1px 0 var(--ink),
+      -1px 1px 0 var(--ink); }
   #roundbar.planted { background: var(--red); color: var(--yellow); }
   #hud-bomb { position: fixed; left: 20px; bottom: 100px; color: var(--t); font: 26px/1 var(--display);
     letter-spacing: 0.04em; pointer-events: none; }

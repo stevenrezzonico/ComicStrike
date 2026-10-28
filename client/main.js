@@ -1100,9 +1100,9 @@ setInterval(() => {
 // takes Escape and its number keys). `+` binds only act while playing (mouse captured).
 input.onKey = (key, down) => {
   if (conWin.isOpen) return false;
-  if (hud.menuOpen && down && (key === 'escape' || /^[1-9]$/.test(key))) {
+  if (hud.menuOpen && down && (key === 'escape' || /^[0-9]$/.test(key))) {
     if (key === 'escape') closeBuyMenu();
-    else hud.menuKey(+key);
+    else hud.menuKey(+key || 10);
     return true;
   }
   const b = binds.get(key);

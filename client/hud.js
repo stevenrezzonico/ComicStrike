@@ -5,8 +5,9 @@
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, END_MATCH, GAME_FFA, GAME_DM,
-  BUY_MENU, itemLabel, itemPrice,
+  BUY_MENU, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER, itemLabel, itemPrice,
 } from '../shared/economy.js';
+import { WEAPONS } from '../shared/weapons.js';
 import { BOMB_PLANTED } from '../shared/bomb.js';
 import { TICK_RATE } from '../shared/constants.js';
 
@@ -171,52 +172,167 @@ export class Hud {
     this.elScore.replaceChildren(table);
   }
 
-  // --- Buy menu (B) ---------------------------------------------------------------
+  // --- Buy menu (B): CS:GO's radial wheel ------------------------------------------
+  // A ring of categories; picking one turns it into a ring of that category's items (the
+  // ones our team can buy) around a center that shows the money, or the item under the
+  // mouse with its price and stats. The mouse's direction from the center picks a
+  // sector (anywhere on the screen, as in CS:GO), a click opens or buys it, a right click
+  // or a click in the center goes back; number keys pick too (0 = the tenth). SVG in a
+  // full-screen layer; only what changes is rewritten.
 
   buildMenu() {
-    this.elMenu.innerHTML = '';
-    const cats = document.createElement('div');
-    cats.className = 'cats';
-    this.items = document.createElement('div');
-    this.items.className = 'items';
-    BUY_MENU.forEach(([name], i) => {
-      const b = document.createElement('button');
-      b.textContent = `${i + 1}  ${name}`;
-      b.addEventListener('click', () => this.openCategory(i));
-      cats.appendChild(b);
-    });
+    const svg = svgEl('svg', { viewBox: `${-WHEEL} ${-WHEEL} ${WHEEL * 2} ${WHEEL * 2}`, class: 'wheel' });
+    const defs = svgEl('defs');
+    const hatch = svgEl('pattern', { id: 'buy-hatch', width: 8, height: 8, patternUnits: 'userSpaceOnUse',
+      patternTransform: 'rotate(45)' });
+    hatch.append(svgEl('rect', { width: 8, height: 8, class: 'hatch-bg' }), svgEl('line', { x1: 0, y1: 0, x2: 0, y2: 8,
+      class: 'hatch-line' }));
+    defs.appendChild(hatch);
+    this.ring = svgEl('g', { class: 'ring' });
+    this.center = svgEl('g', { class: 'center' });
+    this.center.appendChild(svgEl('circle', { r: R_IN - 8 }));
+    this.centerLines = [];
+    for (let i = 0; i < 6; i++) {
+      const t = svgEl('text', { y: -46 + i * 22, class: i === 0 ? 'big' : i === 1 ? 'price' : 'small' });
+      this.centerLines.push(t);
+      this.center.appendChild(t);
+    }
+    svg.append(defs, this.ring, this.center);
     const hint = document.createElement('div');
     hint.className = 'hint';
-    hint.textContent = 'B / Esc: close  ·  click the game to resume';
-    this.elMenu.append(cats, this.items, hint);
+    this.elHint = hint;
+    this.elMenu.replaceChildren(svg, hint);
+    this.wheel = svg;
+    this.sectors = []; // per sector: { g, path, item, label, price, key, shownPrice, shownState }
+    this.hover = -1;
+    this.view = 'cats';
+    this.elMenu.addEventListener('pointermove', (e) => this.pointAt(e.clientX, e.clientY));
+    this.elMenu.addEventListener('pointerdown', (e) => {
+      this.pointAt(e.clientX, e.clientY);
+      if (e.button === 2 || (e.button === 0 && this.hover < 0)) this.back();
+      else if (e.button === 0) this.pick(this.hover);
+    });
+    this.elMenu.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
-  openCategory(i) {
-    this.category = i;
-    this.items.innerHTML = '';
-    BUY_MENU[i][1].forEach((item, k) => {
-      const b = document.createElement('button');
-      b.dataset.item = item;
-      b.innerHTML = '<span></span><span class="price"></span>';
-      b.firstChild.textContent = `${k + 1}  ${itemLabel(item)}`;
-      b.addEventListener('click', () => this.onBuy(item));
-      this.items.appendChild(b);
+  // The sectors of the current view: the categories, or category `cat`'s items.
+  showRing(cat) {
+    this.view = cat < 0 ? 'cats' : 'items';
+    this.category = cat < 0 ? this.category : cat;
+    const team = this.lastPlayer ? this.lastPlayer.team : TEAM_T;
+    const entries = cat < 0 ? BUY_MENU.map(([name]) => ({ label: name, item: -1 }))
+      : BUY_MENU[cat][1].filter((item) => forTeam(item, team)).map((item) => ({ label: itemLabel(item), item }));
+    const n = entries.length, step = 360 / n;
+    this.ring.replaceChildren();
+    this.sectors = entries.map((en, i) => {
+      const mid = -90 + i * step, g = svgEl('g', { class: 'sector' });
+      const path = svgEl('path', { d: sectorPath(mid - step / 2 + GAP, mid + step / 2 - GAP, R_IN, R_OUT) });
+      const rad = mid * Math.PI / 180, tr = (R_IN + R_OUT) / 2 + (n > 8 ? 6 : 0);
+      const tx = Math.cos(rad) * tr, ty = Math.sin(rad) * tr;
+      const lines = wrapLabel(en.label, n > 8 ? 9 : 12);
+      const label = svgEl('text', { x: tx, y: ty - (lines.length - 1) * 9 - (cat < 0 ? 0 : 6), class: cat < 0 ? 'cat' : 'name' });
+      lines.forEach((line, k) => {
+        const span = svgEl('tspan', { x: tx, dy: k ? 18 : 0 });
+        span.textContent = line;
+        label.appendChild(span);
+      });
+      const price = svgEl('text', { x: tx, y: ty + lines.length * 9 + 8, class: 'price' });
+      const kr = R_OUT - 14, key = svgEl('text', { x: Math.cos(rad) * kr, y: Math.sin(rad) * kr + 4, class: 'key' });
+      key.textContent = i < 9 ? String(i + 1) : i === 9 ? '0' : '';
+      g.append(path, label, price, key);
+      g.dataset.dx = (Math.cos(rad) * 8).toFixed(1);
+      g.dataset.dy = (Math.sin(rad) * 8).toFixed(1);
+      this.ring.appendChild(g);
+      return { g, item: en.item, price, shownPrice: null, shownState: -1, enabled: cat < 0 };
     });
+    this.hover = -1;
+    this.ring.classList.remove('pop');
+    requestAnimationFrame(() => this.ring.classList.add('pop'));
+    this.elHint.textContent = cat < 0 ? 'B / Esc: close  ·  pick a category'
+      : 'B / Esc: close  ·  right click or the center: back';
+    this.centerKey = '';
     this.refreshMenu(this.lastPlayer, this.lastCanBuy, this.lastFree);
   }
 
-  // Grey out what this player cannot buy now; show prices (`free`: deathmatch).
+  // The sector in the mouse's direction from the wheel's center (-1: the center).
+  pointAt(x, y) {
+    const r = this.wheel.getBoundingClientRect();
+    if (!r.width) return;
+    const scale = r.width / (WHEEL * 2), dx = (x - r.left - r.width / 2) / scale, dy = (y - r.top - r.height / 2) / scale;
+    let k = -1;
+    if (dx * dx + dy * dy > (R_IN - 8) * (R_IN - 8) && this.sectors.length) {
+      const step = 360 / this.sectors.length, a = Math.atan2(dy, dx) * 180 / Math.PI + 90 + step / 2;
+      k = Math.floor((((a % 360) + 360) % 360) / step);
+    }
+    this.setHover(k);
+  }
+
+  setHover(k) {
+    if (k === this.hover) return;
+    if (this.hover >= 0 && this.sectors[this.hover]) {
+      this.sectors[this.hover].g.classList.remove('hot');
+      this.sectors[this.hover].g.style.transform = '';
+    }
+    this.hover = k;
+    if (k >= 0) {
+      const g = this.sectors[k].g;
+      g.classList.add('hot');
+      g.style.transform = `translate(${g.dataset.dx}px, ${g.dataset.dy}px)`;
+    }
+    this.centerKey = '';
+    this.refreshMenu(this.lastPlayer, this.lastCanBuy, this.lastFree);
+  }
+
+  pick(k) {
+    const s = this.sectors[k];
+    if (!s) return;
+    if (this.view === 'cats') this.showRing(k);
+    else if (s.enabled) this.onBuy(s.item);
+  }
+
+  back() {
+    if (this.view === 'items') this.showRing(-1);
+  }
+
+  // Prices, what this player cannot buy now and the center text (`free`: deathmatch).
+  // Called every frame: touches the DOM only when something changed.
   refreshMenu(player, canBuy, free = false) {
     this.lastPlayer = player;
     this.lastCanBuy = canBuy;
     this.lastFree = free;
     if (!this.menuOpen || !player) return;
-    for (const b of this.items.children) {
-      const price = itemPrice(player, +b.dataset.item);
-      b.lastChild.textContent = price < 0 ? '—' : free ? 'free' : `$${price}`;
-      b.disabled = !canBuy || price < 0 || (!free && price > player.money) || player.health <= 0;
+    if (this.shownTeam !== player.team) { // the items differ per team
+      this.shownTeam = player.team;
+      return this.showRing(this.view === 'items' ? this.category : -1);
     }
     this.elMenu.classList.toggle('closed', !canBuy);
+    if (this.view === 'items') {
+      for (const s of this.sectors) {
+        const price = itemPrice(player, s.item);
+        const state = price < 0 ? 1 : !canBuy || player.health <= 0 || (!free && price > player.money) ? 2 : 0;
+        s.enabled = state === 0;
+        if (state !== s.shownState) {
+          s.shownState = state;
+          s.g.classList.toggle('off', state !== 0);
+        }
+        const text = price < 0 ? 'OWNED' : free ? 'FREE' : `$${price}`;
+        if (text !== s.shownPrice) s.price.textContent = s.shownPrice = text;
+      }
+    }
+    // The center: the money and why we cannot buy, or the item under the mouse.
+    const s = this.sectors[this.hover];
+    const key = `${this.view}${this.hover}|${player.money}|${canBuy}|${free}|${s ? s.shownPrice : ''}`;
+    if (key === this.centerKey) return;
+    this.centerKey = key;
+    let lines;
+    if (this.view === 'items' && s) lines = [itemLabel(s.item), s.shownPrice, ...itemStats(s.item)];
+    else if (this.view === 'items') lines = [BUY_MENU[this.category][0], free ? 'FREE' : `$${player.money}`, 'right click: back'];
+    else lines = [free ? 'FREE' : `$${player.money}`, '', s ? BUY_MENU[this.hover][0] : 'BUY MENU'];
+    if (!canBuy) lines = [lines[0], lines[1], 'Buying is not', 'possible here', 'or now'];
+    this.centerLines.forEach((t, i) => {
+      t.textContent = lines[i] || '';
+      t.classList.toggle('warn', !canBuy && i >= 2);
+    });
   }
 
   toggleMenu(open = !this.menuOpen) {
@@ -224,20 +340,62 @@ export class Hud {
     this.elMenu.style.display = open ? 'block' : 'none';
     if (open) {
       if (document.pointerLockElement) document.exitPointerLock();
-      this.openCategory(this.category < 0 ? 0 : this.category);
+      this.showRing(-1);
     }
   }
 
-  // Number keys inside the menu: first a category, then an item.
+  // Number keys inside the menu: first a category, then an item (0 = the tenth).
   menuKey(n) {
     if (!this.menuOpen) return;
-    const items = this.items.children;
-    if (this.items.dataset.picking === '1' && n <= items.length) {
-      if (!items[n - 1].disabled) items[n - 1].click();
-      this.items.dataset.picking = '0';
-    } else if (n <= BUY_MENU.length) {
-      this.openCategory(n - 1);
-      this.items.dataset.picking = '1';
-    }
+    this.pick(n - 1);
   }
+}
+
+const WHEEL = 300; // view box half size
+const R_OUT = 286, R_IN = 118; // ring radii
+const GAP = 1.2; // degrees between sectors
+
+function svgEl(name, attrs = {}) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', name);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+
+// An annular sector from angle a0 to a1 (degrees, clockwise from +x), radii r0..r1.
+function sectorPath(a0, a1, r0, r1) {
+  const p = (a, r) => `${(Math.cos(a * Math.PI / 180) * r).toFixed(1)} ${(Math.sin(a * Math.PI / 180) * r).toFixed(1)}`;
+  const large = a1 - a0 > 180 ? 1 : 0;
+  return `M${p(a0, r1)} A${r1} ${r1} 0 ${large} 1 ${p(a1, r1)} L${p(a1, r0)} A${r0} ${r0} 0 ${large} 0 ${p(a0, r0)} Z`;
+}
+
+// A label in one or two lines (split at the space nearest the middle).
+function wrapLabel(label, max) {
+  if (label.length <= max || !label.includes(' ')) return [label];
+  let best = -1;
+  for (let i = 0; i < label.length; i++) {
+    if (label[i] === ' ' && (best < 0 || Math.abs(i - label.length / 2) < Math.abs(best - label.length / 2))) best = i;
+  }
+  return [label.slice(0, best), label.slice(best + 1)];
+}
+
+// Items a team can ever buy (CS:GO's wheel shows only those).
+function forTeam(item, team) {
+  if (item === ITEM_DEFUSER) return team === TEAM_CT;
+  const w = WEAPONS[item];
+  return !w || (w.teams & (team === TEAM_CT ? 2 : 1)) !== 0;
+}
+
+// The center's stat lines for an item.
+function itemStats(item) {
+  const w = WEAPONS[item];
+  if (item === ITEM_KEVLAR) return ['Body armor'];
+  if (item === ITEM_ASSAULTSUIT) return ['Body armor', 'and a helmet'];
+  if (item === ITEM_DEFUSER) return ['Defuses in 5 s'];
+  if (!w || !w.gun || w.grenade) return w && w.killAward ? [`Kill award $${w.killAward}`] : [];
+  return [
+    `Damage ${w.damage}${w.bullets > 1 ? ` x ${w.bullets}` : ''}`,
+    `${Math.round(60 / w.cycle)} rounds/min`,
+    `Magazine ${w.clip} / ${w.reserve}`,
+    `Kill award $${w.killAward}`,
+  ];
 }
