@@ -166,10 +166,12 @@ Deno.test({ name: 'deathmatch: spawn protection until the time runs out or he sh
   b.immuneUntil = host.game.tick + 4 * TICK_RATE; // as if just spawned
   fireUntil(run, a, () => b.player.health < 100, 64);
   assert.equal(b.player.health, 100, 'protected');
+  assert.ok(b.immune, 'shown (ANIM_IMMUNE, OWN_IMMUNE)');
   b.input.buttons = IN_ATTACK; // he shoots: protection ends
   run(1);
   b.input.buttons = 0;
   run(1);
+  assert.ok(!b.immune);
   fireUntil(run, a, () => b.player.health < 100);
   assert.ok(b.player.health < 100);
 } });

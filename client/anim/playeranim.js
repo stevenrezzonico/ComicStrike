@@ -4,18 +4,23 @@
 // travelled (a step every 2 x STEP_SCALE half-strides: a little foot slide buys a calmer
 // cadence than the short legs allow); hips drop and the torso leans to fit the crouch hit boxes;
 // the aim pitch bends spine and neck; hands reach per-hold grip points in the aim frame
-// (two-bone solves) and the gun hand takes the aim rotation. Nothing allocates per frame.
+// (two-bone solves) and the gun hand takes the aim rotation. Reloads follow the first-
+// person timeline (client/anim/viewanim.js) from when the reload bit came on: the gun
+// tilts, the off hand pulls the magazine out along its bone and seats a new one, racks
+// the bolt or slide; shotguns load shell by shell at the port; the revolver's cylinder.
+// The gun's bones move with it (magOff, boltOff). Nothing allocates per frame.
 
 import { Pose, PLAYER_SKELETON as S } from './skeleton.js';
 import * as Q from './quat.js';
 import { HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4, HOLD_TIED } from '../models/players.js';
 import { WEAPONS, SLOT_SECONDARY, SLOT_KNIFE, SLOT_C4 } from '../../shared/weapons.js';
 import { ANIM_RELOAD, ANIM_PLANT, ANIM_DEFUSE } from '../../shared/protocol.js';
+import { ramp, bump } from './viewanim.js';
 
 const PELVIS = S.bone('pelvis'), SPINE1 = S.bone('spine_1'), SPINE2 = S.bone('spine_2'), SPINE3 = S.bone('spine_3');
 const NECK = S.bone('neck_0'), HEAD = S.bone('head_0');
 const ARM = [S.bone('arm_upper_L'), S.bone('arm_upper_R')], ELBOW = [S.bone('arm_lower_L'), S.bone('arm_lower_R')];
-const HAND = [S.bone('hand_L'), S.bone('hand_R')];
+const HAND = [S.bone('hand_L'), S.bone('hand_R')], HAND_R = HAND[1];
 const HIP = [S.bone('leg_upper_L'), S.bone('leg_upper_R')], KNEE = [S.bone('leg_lower_L'), S.bone('leg_lower_R')];
 const ANKLE = [S.bone('ankle_L'), S.bone('ankle_R')];
 const SIDE = [1, -1]; // +y is the left side
@@ -36,7 +41,7 @@ const GRIPS = {
   [HOLD_C4]: { aimed: false, hands: [[11, 3, -13], [11, -2.5, -12.5]] },
   [HOLD_TIED]: { aimed: false, hands: [[-7, 2.5, -24], [-7, -2.5, -24]] },
 };
-const RELOAD_HAND = { [HOLD_RIFLE]: [7, -2, -11], [HOLD_PISTOL]: [5, 2, -14] }; // left hand fetching a magazine
+const RELOAD_HAND = { [HOLD_RIFLE]: [7, -2, -11], [HOLD_PISTOL]: [5, 2, -14] }; // guns without a magazine point
 
 // Hands turn a quarter about z on top of the aim so their boxes point forward, like
 // fingers around a grip: the right +90 degrees, the left -90. The palm is PALM ahead of
@@ -44,6 +49,23 @@ const RELOAD_HAND = { [HOLD_RIFLE]: [7, -2, -11], [HOLD_PISTOL]: [5, 2, -14] }; 
 export const PALM = 1.6;
 export const handTurn = [Q.fromAxisAngle(new Float32Array(4), 0, 0, 0, 1, -Math.PI / 2),
   Q.fromAxisAngle(new Float32Array(4), 0, 0, 0, 1, Math.PI / 2)];
+
+// The gun's matrix in the model frame (column-major, into `m`): in the right palm with
+// the hand's rotation minus its quarter turn. q: scratch Float32Array(8).
+export function gunInHand(pose, m, q) {
+  const h = HAND_R;
+  Q.conj(q, 4, handTurn[1], 0);
+  Q.mul(q, 0, pose.wrot, h * 4, q, 4);
+  const x = q[0], y = q[1], z = q[2], w = q[3];
+  m[0] = 1 - 2 * (y * y + z * z); m[1] = 2 * (x * y + z * w); m[2] = 2 * (x * z - y * w); m[3] = 0;
+  m[4] = 2 * (x * y - z * w); m[5] = 1 - 2 * (x * x + z * z); m[6] = 2 * (y * z + x * w); m[7] = 0;
+  m[8] = 2 * (x * z + y * w); m[9] = 2 * (y * z - x * w); m[10] = 1 - 2 * (x * x + y * y); m[11] = 0;
+  m[12] = pose.wpos[h * 3] + m[0] * PALM;
+  m[13] = pose.wpos[h * 3 + 1] + m[1] * PALM;
+  m[14] = pose.wpos[h * 3 + 2] + m[2] * PALM;
+  m[15] = 1;
+  return m;
+}
 
 export function holdOf(weaponId) {
   const w = WEAPONS[weaponId];
@@ -58,6 +80,7 @@ const tv = new Float32Array(6);
 export class PlayerAnimator {
   constructor() {
     this.pose = new Pose(S);
+    this.reload = { take: 0, roll: 0, drop: 0, x: 0, y: 0, z: 0 }; // reloadPose's result
     this.reset();
   }
 
@@ -74,12 +97,16 @@ export class PlayerAnimator {
     this.shots = -1;
     this.dead = 0; // seconds since death (0 = alive)
     this.time = 0;
+    this.reloadStart = -1; // time the reload bit came on (-1: not reloading)
+    this.magOff = 0; // the gun's bones this frame: magazine out along magDir, bolt back
+    this.boltOff = 0;
   }
 
   // Advances by dt seconds and rebuilds the pose. (x, y, z): feet; yaw / pitch in degrees
-  // (pitch down-positive); duck 0..1; support: the gun's off-hand point in its frame
-  // (client/models/guns.js), or null for the hold's default.
-  update(dt, x, y, z, yaw, pitch, duck, onGround, hold, anim, shots, alive, support = null) {
+  // (pitch down-positive); duck 0..1; pts: the gun's points in its frame (buildGun:
+  // support, mag / magDir, bolt, port, cylinder), or null for the hold's defaults;
+  // weapon: its id (reload timing).
+  update(dt, x, y, z, yaw, pitch, duck, onGround, hold, anim, shots, alive, pts = null, weapon = 0) {
     this.time += dt;
     // Velocity from positions, smoothed; teleports (spawns) start over.
     if (Number.isNaN(this.px) || Math.hypot(x - this.px, y - this.py, z - this.pz) > 96) {
@@ -110,6 +137,8 @@ export class PlayerAnimator {
 
     const kneel = anim & (ANIM_PLANT | ANIM_DEFUSE) ? 1 : 0;
     const c = Math.max(duck, kneel);
+    const support = pts ? pts.support : null;
+    const reload = this.reloadPose(anim, hold, pts, weapon);
     const p = this.pose.reset();
     if (this.dead > 0) return this.deathPose(c);
 
@@ -151,16 +180,20 @@ export class PlayerAnimator {
     const hr = handP * Math.PI / 180, ch = Math.cos(hr), sh = Math.sin(hr);
     for (let s = 1; s >= 0; s--) { // the gun hand first: the off hand follows the gun
       let [ox, oy, oz] = grip.hands[s];
-      if (s === 0 && anim & ANIM_RELOAD && RELOAD_HAND[hold]) {
+      if (s === 0 && grip.aimed && (support || reload.take > 0)) {
+        // Off hand on a point of the gun (its support, or what the reload reaches for):
+        // the right wrist plus the point turned by the gun's reload roll (aim frame).
+        const [rx, ry, rz] = grip.hands[1];
+        const k = reload.take, sx = support ? support[0] : ox - rx, sy = support ? support[1] : oy - ry;
+        const sz = support ? support[2] : oz - rz;
+        const gx = sx + (reload.x - sx) * k, gy = sy + (reload.y - sy) * k, gz = sz + (reload.z - sz) * k;
+        const cr = Math.cos(reload.roll * Math.PI / 180), sr = Math.sin(reload.roll * Math.PI / 180);
+        ox = rx + gx;
+        oy = ry + gy * cr - gz * sr;
+        oz = rz + gy * sr + gz * cr + reload.drop;
+      } else if (s === 0 && anim & ANIM_RELOAD && RELOAD_HAND[hold]) {
         [ox, oy, oz] = RELOAD_HAND[hold];
         oz += Math.sin(this.time * 7) * 1.2;
-      } else if (s === 0 && support && grip.aimed) {
-        // Off hand on the gun's support point: right wrist + palm offset + support, minus
-        // the left palm offset (all along the aim frame).
-        const [rx, ry, rz] = grip.hands[1];
-        ox = rx + support[0];
-        oy = ry + support[1];
-        oz = rz + support[2];
       }
       ox -= this.kick * 2;
       let tx, ty, tz;
@@ -178,12 +211,62 @@ export class PlayerAnimator {
         tz = cz + oz;
       }
       p.reach(ARM[s], ELBOW[s], HAND[s], tx, ty, tz, -0.2, SIDE[s] * 0.6, -1);
-      Q.fromEuler(tv, 0, grip.aimed || kneel ? handP : 0, 0, 0);
+      Q.fromEuler(tv, 0, grip.aimed || kneel ? handP : 0, 0, s === 1 && grip.aimed ? reload.roll : 0);
       Q.mul(tq, 0, tv, 0, handTurn[s], 0);
       p.setWorldRotation(HAND[s], tq, 0);
     }
     p.skinMatrices();
     return p;
+  }
+
+  // Where a reload has the gun and the off hand now (first person's timeline, smaller):
+  // the gun's roll (degrees), the hand's target in the gun frame and how much it goes
+  // there (take), a drop of the hand below it; sets magOff / boltOff.
+  reloadPose(anim, hold, pts, weapon) {
+    const R = this.reload;
+    R.take = R.roll = R.drop = 0;
+    this.magOff = this.boltOff = 0;
+    const w = WEAPONS[weapon];
+    if (!(anim & ANIM_RELOAD) || !w || !w.gun || !pts || (hold !== HOLD_RIFLE && hold !== HOLD_PISTOL)) {
+      this.reloadStart = -1;
+      return R;
+    }
+    if (this.reloadStart < 0) this.reloadStart = this.time;
+    const t = this.time - this.reloadStart, pistol = hold === HOLD_PISTOL;
+    if (w.shellTime && pts.port) { // tip the gun, the hand fetches each shell into the port
+      const tilt = ramp(t, 0, w.reloadStart);
+      R.roll = -25 * tilt;
+      [R.x, R.y, R.z] = pts.port;
+      R.take = tilt;
+      if (t > w.reloadStart) R.drop = -7 * bump(((t - w.reloadStart) / w.shellTime) % 1, 0.05, 0.38, 0.5, 0.9);
+      return R;
+    }
+    const r = Math.min(1, t / w.reloadTime);
+    R.roll = (pistol ? 22 : 18) * bump(r, 0, 0.12, 0.84, 1);
+    const out = r < 0.45 ? ramp(r, 0.2, 0.42) : 1 - ramp(r, 0.48, 0.64);
+    if (pts.mag) {
+      const md = pts.magDir, dist = md[2] > 0 ? 9 : 16;
+      this.magOff = dist * out * out;
+      R.x = pts.mag[0] + md[0] * this.magOff;
+      R.y = pts.mag[1] + md[1] * this.magOff;
+      R.z = pts.mag[2] + md[2] * this.magOff;
+      R.take = bump(r, 0.08, 0.2, 0.62, 0.7);
+      R.drop = -5 * bump(r, 0.4, 0.46, 0.46, 0.55); // down for the new one
+    } else if (pts.cylinder) { // revolver: rounds into the swung-out cylinder
+      [R.x, R.y, R.z] = pts.cylinder;
+      R.take = bump(r, 0.08, 0.2, 0.62, 0.7);
+      R.drop = -10 * bump(r, 0.28, 0.38, 0.48, 0.58);
+    }
+    if (pts.bolt) { // bolt / slide release
+      const b = bump(r, 0.68, 0.74, 0.82, 0.9);
+      if (b > R.take) {
+        [R.x, R.y, R.z] = pts.bolt;
+        R.take = b;
+        R.drop = 0;
+      }
+      this.boltOff = (pistol ? 1.1 : 1.6) * bump(r, 0.75, 0.78, 0.79, 0.83);
+    }
+    return R;
   }
 
   // Falls backward like a plank about the feet over 0.7 s, arms flung up.

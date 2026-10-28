@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { buildPlayer, HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4 } from '../client/models/players.js';
-import { PlayerAnimator, holdOf } from '../client/anim/playeranim.js';
+import { PlayerAnimator, holdOf, gunInHand } from '../client/anim/playeranim.js';
 import { PLAYER_SKELETON as S } from '../client/anim/skeleton.js';
-import { WEAPON_ID } from '../shared/weapons.js';
+import { WEAPON_ID, WEAPONS } from '../shared/weapons.js';
 import { ANIM_PLANT, ANIM_RELOAD } from '../shared/protocol.js';
 
 const bone = (a, name) => {
@@ -115,12 +115,48 @@ Deno.test('player animation: a shot kicks, then settles', () => {
 Deno.test('player animation: the off hand holds the gun at its support point', async () => {
   const { buildGun } = await import('../client/models/guns.js');
   for (const name of ['ak47', 'awp', 'deagle', 'p90']) {
-    const { support } = buildGun(name);
+    const g = buildGun(name), support = g.support;
     const a = run(new PlayerAnimator(), 8, () => [0, 0, 0], { hold: holdOf(WEAPON_ID[name]) });
     // Level aim: the left wrist sits at the right wrist plus the support offset.
-    a.update(1 / 64, 0, 0, 0, 0, 0, 0, true, holdOf(WEAPON_ID[name]), 0, 0, true, support);
+    a.update(1 / 64, 0, 0, 0, 0, 0, 0, true, holdOf(WEAPON_ID[name]), 0, 0, true, g, WEAPON_ID[name]);
     const l = bone(a, 'hand_L'), r = bone(a, 'hand_R');
     const err = Math.hypot(l[0] - r[0] - support[0], l[1] - r[1] - support[1], l[2] - r[2] - support[2]);
     assert.ok(err < 1, `${name}: off hand ${err.toFixed(2)} from the support point`);
   }
+});
+
+Deno.test('player animation: reloads move the magazine with the off hand, rack the bolt, and end at rest', async () => {
+  const { buildGun } = await import('../client/models/guns.js');
+  const m = new Float32Array(16), q = new Float32Array(8);
+  for (const name of ['ak47', 'm4a1', 'glock', 'deagle', 'mp9', 'awp']) {
+    const id = WEAPON_ID[name], g = buildGun(name), hold = holdOf(id), w = WEAPONS[id];
+    const a = run(new PlayerAnimator(), 8, () => [0, 0, 0], { hold });
+    let maxOff = 0, maxBolt = 0, closest = Infinity, maxRoll = 0;
+    const frames = Math.ceil(w.reloadTime * 64);
+    for (let k = 0; k < frames; k++) {
+      a.update(1 / 64, 0, 0, 0, 0, 0, 0, true, hold, ANIM_RELOAD, 0, true, g, id);
+      maxOff = Math.max(maxOff, a.magOff);
+      maxBolt = Math.max(maxBolt, a.boltOff);
+      maxRoll = Math.max(maxRoll, Math.abs(a.reload.roll));
+      if (a.reload.take > 0.95 && a.magOff > 4) { // holding the magazine: the left hand is at it
+        gunInHand(a.pose, m, q);
+        const [px, py, pz] = [0, 1, 2].map((i) => g.mag[i] + g.magDir[i] * a.magOff);
+        const wx = m[0] * px + m[4] * py + m[8] * pz + m[12], wy = m[1] * px + m[5] * py + m[9] * pz + m[13];
+        const wz = m[2] * px + m[6] * py + m[10] * pz + m[14];
+        const l = bone(a, 'hand_L');
+        closest = Math.min(closest, Math.hypot(l[0] - wx, l[1] - wy, l[2] - wz));
+      }
+    }
+    assert.ok(maxOff > 8, `${name}: magazine out ${maxOff.toFixed(1)}`);
+    assert.ok(closest < 4, `${name}: off hand ${closest.toFixed(1)} from the magazine`);
+    assert.ok(maxRoll > 10, `${name}: the gun tilts`);
+    if (g.bolt) assert.ok(maxBolt > 0.5, `${name}: bolt racked`);
+    a.update(1 / 64, 0, 0, 0, 0, 0, 0, true, hold, 0, 0, true, g, id);
+    assert.equal(a.magOff, 0);
+    assert.equal(a.reload.roll, 0);
+  }
+  // Shotguns tip the gun and work at the loading port.
+  const nova = buildGun('nova'), a = run(new PlayerAnimator(), 8, () => [0, 0, 0]);
+  for (let k = 0; k < 64; k++) a.update(1 / 64, 0, 0, 0, 0, 0, 0, true, HOLD_RIFLE, ANIM_RELOAD, 0, true, nova, WEAPON_ID.nova);
+  assert.ok(a.reload.roll < -20 && a.reload.take > 0.9);
 });

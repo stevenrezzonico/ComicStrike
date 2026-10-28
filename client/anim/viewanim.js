@@ -70,13 +70,13 @@ function holdOf(w) {
 }
 
 // 0..1 between a and b, eased.
-function ramp(t, a, b) {
+export function ramp(t, a, b) {
   const x = Math.max(0, Math.min(1, (t - a) / (b - a)));
   return x * x * (3 - 2 * x);
 }
 
 // Up over a..b, down over c..d.
-function bump(t, a, b, c, d) {
+export function bump(t, a, b, c, d) {
   return ramp(t, a, b) * (1 - ramp(t, c, d));
 }
 

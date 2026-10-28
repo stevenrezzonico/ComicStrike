@@ -40,7 +40,7 @@ import {
 import { Grenades, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE } from '../shared/grenades.js';
 import { HITGROUP_CHEST, HITGROUP_LEGS } from '../shared/hitgroups.js';
 import {
-  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, E_ACTIVE, E_X,
+  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, E_ACTIVE, E_X,
   E_Y, E_Z, E_PITCH, E_YAW,
   E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw,
 } from '../shared/protocol.js';
@@ -421,6 +421,7 @@ function applySnapshot() {
   applyMovers(own.movers);
   player.defuser = (own.flags & OWN_DEFUSER) !== 0; // before any replay: it sets the defuse time
   player.carrying = (own.flags & OWN_CARRYING) !== 0; // and this the speed
+  if (own.flags & OWN_IMMUNE) hud.flash('Spawn protection', 250, performance.now()); // until we shoot
 
   if (own.spawnCount !== player.spawnCount || !synced) {
     // (Re)spawned by the server: take its state and replay what it has not run yet.

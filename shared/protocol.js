@@ -27,7 +27,7 @@
 //            movers (shared/doors.js) not closed at rest: u8 n, n x { u8 mover, u8 bits
 //                        (dir + 1 | sign < 0 << 2), f32 from, u32 t0 },
 //            own player: u8 health, u8 armor (bit 7: helmet), u8 spawnCount, u8 team, f32 spawnYaw,
-//                        u16 money, u8 ownFlags (OWN_CAN_BUY, OWN_DEFUSER),
+//                        u16 money, u8 ownFlags (OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE),
 //                        u8 flash left, u8 flash length (1/32 s: flashbang blindness),
 //                        u8 use progress (0..255: picking up a hostage),
 //                        PlayerState bytes, WeaponState (full every time, for prediction:
@@ -80,6 +80,7 @@ export const SNAP_BROKEN = 1;
 export const OWN_CAN_BUY = 1;
 export const OWN_DEFUSER = 2;
 export const OWN_CARRYING = 4; // carrying a hostage (slower: the client predicts it)
+export const OWN_IMMUNE = 8; // our spawn protection is on (deathmatch)
 const BROKEN_WORDS = 8; // 256-bit mask, one bit per breakable slot
 
 // --- Byte buffers ------------------------------------------------------------
@@ -610,6 +611,7 @@ export const ANIM_HELMET = 8;
 export const ANIM_SILENCED = 16; // the gun in hand wears its silencer (M4A1-S, USP-S)
 export const ANIM_SPOTTED_T = 32; // on the Terrorists' radar (seen by one of them, or firing)
 export const ANIM_SPOTTED_CT = 64; // on the Counter-Terrorists' radar
+export const ANIM_IMMUNE = 128; // spawn protection (deathmatch): bullets do nothing
 
 const F_ORIGIN = 1;
 const F_ANGLES = 2;
@@ -732,7 +734,8 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
   w.u8v(p.team);
   w.f32v(own.spawnYaw);
   w.u16v(Math.min(Math.max(p.money, 0), 65535));
-  w.u8v((own.canBuy ? OWN_CAN_BUY : 0) | (p.defuser ? OWN_DEFUSER : 0) | (p.carrying ? OWN_CARRYING : 0));
+  w.u8v((own.canBuy ? OWN_CAN_BUY : 0) | (p.defuser ? OWN_DEFUSER : 0) | (p.carrying ? OWN_CARRYING : 0) |
+    (own.immune ? OWN_IMMUNE : 0));
   w.u8v(Math.min(Math.max(Math.round((own.flashLeft || 0) * 32), 0), 255));
   w.u8v(Math.min(Math.max(Math.round((own.flashTotal || 0) * 32), 0), 255));
   w.u8v(Math.min(Math.max(Math.round((own.useProgress || 0) * 255), 0), 255));

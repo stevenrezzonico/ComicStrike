@@ -6,9 +6,9 @@
 import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN, modelLight } from './skinned.js';
 import { buildPlayer, HOLD_TIED } from '../models/players.js';
 import { MAX_HOSTAGES, HS_IDLE, HS_CARRIED, HS_DEAD } from '../../shared/hostages.js';
-import { PlayerAnimator, holdOf, handTurn, PALM } from '../anim/playeranim.js';
-import { PLAYER_SKELETON as S } from '../anim/skeleton.js';
-import * as Q from '../anim/quat.js';
+import { PlayerAnimator, holdOf, gunInHand } from '../anim/playeranim.js';
+import { PLAYER_SKELETON as S, MAX_BONES } from '../anim/skeleton.js';
+import { GUN_MAG, GUN_BOLT } from '../models/guns.js';
 import { multiply } from './mat4.js';
 import { TEAM_CT } from '../../shared/player.js';
 import { WEAPON_ID } from '../../shared/weapons.js';
@@ -17,10 +17,9 @@ import { FL_ONGROUND } from '../../shared/pmove.js';
 import { feetOffset } from '../../shared/hitgroups.js';
 import {
   MAX_PLAYERS, E_ACTIVE, E_X, E_Y, E_Z, E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS,
-  E_FIELDS, ANIM_HELMET, ANIM_SILENCED, dequantizeYaw, dequantizePitch,
+  E_FIELDS, ANIM_HELMET, ANIM_SILENCED, ANIM_IMMUNE, dequantizeYaw, dequantizePitch,
 } from '../../shared/protocol.js';
 
-const HAND_R = S.bone('hand_R');
 const SPINE3 = S.bone('spine_3');
 const C4_ID = WEAPON_ID.c4;
 
@@ -36,6 +35,12 @@ export class PlayerModels {
     this.weapon = new Int16Array(MAX_PLAYERS); // weapon id in hand (0: none drawn)
     this.silenced = new Uint8Array(MAX_PLAYERS);
     this.gunModel = new Float32Array(MAX_PLAYERS * 16);
+    // Per player: the gun's bones (magazine and bolt moved by reloads), identity otherwise.
+    this.gunSkinOf = Array.from({ length: MAX_PLAYERS }, () => {
+      const s = new Float32Array(MAX_BONES * 16);
+      for (let i = 0; i < MAX_BONES; i++) for (let k = 0; k < 4; k++) s[i * 16 + k * 5] = 1;
+      return s;
+    });
     this.handM = new Float32Array(16);
     this.qGun = new Float32Array(8);
     this.bomb = { show: false, led: false, model: new Float32Array(16), light: new Float32Array([1, 1, 1]) };
@@ -54,6 +59,9 @@ export class PlayerModels {
     this.lightOf = Array.from({ length: MAX_PLAYERS }, (_, i) => this.light.subarray(i * 3, i * 3 + 3));
     this.lm = new Float32Array(3);
     this.tmpLight = new Float32Array(3);
+    this.immune = new Uint8Array(MAX_PLAYERS); // spawn protection: drawn pulsing toward white
+    this.time = 0;
+    this.drawLight = new Float32Array(3);
     // Hostages.
     this.bodyH = new SkinnedMesh(gl, buildPlayer('H'));
     this.hostageAnim = Array.from({ length: MAX_HOSTAGES }, () => new PlayerAnimator());
@@ -103,6 +111,7 @@ export class PlayerModels {
   // surfaces: the map's SurfaceMap (light under the players), or null. show = false
   // hides them all (cl_showhitboxes draws boxes instead).
   update(ents, row0, self, dt, surfaces, show = true) {
+    this.time += dt;
     for (let id = 0; id < MAX_PLAYERS; id++) {
       const r = row0 + id * E_FIELDS;
       const a = this.anim[id];
@@ -117,9 +126,10 @@ export class PlayerModels {
       const yaw = dequantizeYaw(ents[r + E_YAW]);
       const weapon = ents[r + E_WEAPON];
       a.update(dt, x, y, z, yaw, dequantizePitch(ents[r + E_PITCH]), ents[r + E_DUCK] / 255, (flags & FL_ONGROUND) !== 0,
-        holdOf(weapon), ents[r + E_ANIM], ents[r + E_SHOTS], alive, this.guns.support[weapon] || null);
+        holdOf(weapon), ents[r + E_ANIM], ents[r + E_SHOTS], alive, this.guns.points[weapon] || null, weapon);
       this.weapon[id] = alive && this.guns.mesh[weapon] ? weapon : 0;
       this.silenced[id] = (ents[r + E_ANIM] & ANIM_SILENCED) !== 0;
+      this.immune[id] = alive && (ents[r + E_ANIM] & ANIM_IMMUNE) !== 0;
       this.body[id] = ents[r + E_TEAM] === TEAM_CT
         ? (ents[r + E_ANIM] & ANIM_HELMET ? this.bodyCTHelmet : this.bodyCT)
         : this.bodyT;
@@ -131,7 +141,14 @@ export class PlayerModels {
       m[o + 8] = 0; m[o + 9] = 0; m[o + 10] = 1; m[o + 11] = 0;
       m[o + 12] = x; m[o + 13] = y; m[o + 14] = z; m[o + 15] = 1;
 
-      if (this.weapon[id]) this.placeGun(id);
+      if (this.weapon[id]) {
+        this.placeGun(id);
+        const pts = this.guns.points[weapon], md = pts && pts.magDir, skin = this.gunSkinOf[id];
+        skin[GUN_MAG * 16 + 12] = md ? md[0] * a.magOff : 0;
+        skin[GUN_MAG * 16 + 13] = md ? md[1] * a.magOff : 0;
+        skin[GUN_MAG * 16 + 14] = md ? md[2] * a.magOff : 0;
+        skin[GUN_BOLT * 16 + 12] = -a.boltOff;
+      }
 
       // Light: the lightmap under the chest, eased so crossing faces does not pop.
       if (surfaces && surfaces.lightAt(this.lm, x, y, z + 36)) {
@@ -145,18 +162,7 @@ export class PlayerModels {
   // Gun in the right palm: the hand's rotation without its quarter turn (= the aim), at
   // the palm, in world space.
   placeGun(id) {
-    const pose = this.anim[id].pose, h = HAND_R;
-    Q.conj(this.qGun, 4, handTurn[1], 0);
-    Q.mul(this.qGun, 0, pose.wrot, h * 4, this.qGun, 4);
-    const x = this.qGun[0], y = this.qGun[1], z = this.qGun[2], w = this.qGun[3], m = this.handM;
-    m[0] = 1 - 2 * (y * y + z * z); m[1] = 2 * (x * y + z * w); m[2] = 2 * (x * z - y * w); m[3] = 0;
-    m[4] = 2 * (x * y - z * w); m[5] = 1 - 2 * (x * x + z * z); m[6] = 2 * (y * z + x * w); m[7] = 0;
-    m[8] = 2 * (x * z + y * w); m[9] = 2 * (y * z - x * w); m[10] = 1 - 2 * (x * x + y * y); m[11] = 0;
-    m[12] = pose.wpos[h * 3] + m[0] * PALM;
-    m[13] = pose.wpos[h * 3 + 1] + m[1] * PALM;
-    m[14] = pose.wpos[h * 3 + 2] + m[2] * PALM;
-    m[15] = 1;
-    multiply(this.gunOf[id], this.modelOf[id], m);
+    multiply(this.gunOf[id], this.modelOf[id], gunInHand(this.anim[id].pose, this.handM, this.qGun));
   }
 
   // Weapons on the ground (shared/items.js): lying on their side, turned by their yaw,
@@ -200,11 +206,17 @@ export class PlayerModels {
         r.begin(viewProj);
         begun = true;
       }
-      const model = this.modelOf[id], light = this.lightOf[id];
+      const model = this.modelOf[id];
+      let light = this.lightOf[id];
+      if (this.immune[id]) { // spawn protection: a fast pulse toward white (approx. of CS:GO's)
+        const a = 0.3 + 0.3 * Math.sin(this.time * Math.PI * 6);
+        for (let ch = 0; ch < 3; ch++) this.drawLight[ch] = light[ch] + (1.6 - light[ch]) * a;
+        light = this.drawLight;
+      }
       const skin = this.anim[id].pose.skin;
       r.draw(this.body[id], model, skin, light);
       if (this.weapon[id]) {
-        r.draw(this.guns.meshOf(this.weapon[id], this.silenced[id]), this.gunOf[id], IDENTITY_SKIN, light);
+        r.draw(this.guns.meshOf(this.weapon[id], this.silenced[id]), this.gunOf[id], this.gunSkinOf[id], light);
       }
     }
     for (let k = 0; k < MAX_HOSTAGES; k++) {

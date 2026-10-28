@@ -49,7 +49,7 @@ import {
   quantizeYaw,
   E_ACTIVE, E_X, E_Y, E_Z,
   E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS, E_FIELDS, ANIM_RELOAD, ANIM_PLANT,
-  ANIM_DEFUSE, ANIM_HELMET, ANIM_SILENCED, ANIM_SPOTTED_T, ANIM_SPOTTED_CT,
+  ANIM_DEFUSE, ANIM_HELMET, ANIM_SILENCED, ANIM_SPOTTED_T, ANIM_SPOTTED_CT, ANIM_IMMUNE,
 } from '../shared/protocol.js';
 
 const CMD_BANK = 8; // commands a client may run ahead of server time (absorbs jitter, stops speedhacks)
@@ -94,6 +94,7 @@ class Client {
     this.respawnTick = Infinity; // while dead in warmup / with respawns: server tick to respawn at
     this.spawnTick = 0; // server tick of the last spawn (deathmatch buy time)
     this.immuneUntil = 0; // server tick: spawn protection (mp_respawn_immunitytime) until then
+    this.immune = false; // and whether it is on this tick (snapshots show it)
     this.spotted = 0; // ANIM_SPOTTED_T / _CT: on whose radar he shows
     this.revealUntil = 0; // server tick: fired an unsilenced gun, on everyone's radar until then
     this.life = 0; // increments per spawn: history never interpolates across a respawn
@@ -537,7 +538,11 @@ export class Game {
     this.updateItems();
     this.updateSpotting();
     this.updateRound();
-    for (const c of this.clients) if (c && c.joined) c.canBuy = this.canBuy(c);
+    for (const c of this.clients) {
+      if (!c || !c.joined) continue;
+      c.canBuy = this.canBuy(c);
+      c.immune = c.alive && this.tick < c.immuneUntil; // shown: others' models pulse, our HUD says so
+    }
     this.recordHistory();
     if (this.rosterDirty || this.tick % INFO_INTERVAL === 0) this.sendInfo();
     if (this.itemsDirty || this.tick % INFO_INTERVAL === 0) this.sendItems();
@@ -1430,7 +1435,7 @@ export class Game {
       const action = p.ws.f[WS_ACTION];
       E[row + E_ANIM] = (p.ws.f[WS_RELOAD_END] > 0 ? ANIM_RELOAD : 0) | (action === ACTION_PLANT ? ANIM_PLANT : 0) |
         (action === ACTION_DEFUSE ? ANIM_DEFUSE : 0) | (p.helmet && p.armor > 0 ? ANIM_HELMET : 0) |
-        (silenced(p.ws, p.ws.f[WS_ACTIVE]) ? ANIM_SILENCED : 0) | c.spotted;
+        (silenced(p.ws, p.ws.f[WS_ACTIVE]) ? ANIM_SILENCED : 0) | c.spotted | (c.immune ? ANIM_IMMUNE : 0);
       E[row + E_SHOTS] = c.shots;
     }
     const words = ring.broken;
