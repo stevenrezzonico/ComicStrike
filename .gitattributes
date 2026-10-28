@@ -1,0 +1,4 @@
+# Files used on the Linux server keep LF line endings in checkouts and in git archive
+# (core.autocrlf would give them CRLF: a carriage return at the end of every env value
+# and unit line).
+deploy/** text eol=lf
