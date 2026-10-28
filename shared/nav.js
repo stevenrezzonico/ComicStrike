@@ -20,10 +20,11 @@ const CROUCH_COST = 24;
 const SAFE_FALL = 160; // drops beyond this hurt (CS falls hurt from about 210 units): they cost more
 
 export class Nav {
-  constructor(bsp, world, cell = NAV_CELL) {
+  // doorsOpen: which doors to walk through (FloorGrid's option: those a player can open).
+  constructor(bsp, world, cell = NAV_CELL, doorsOpen = false) {
     const faces = floorFaces(bsp);
-    const bounds = new FloorGrid(bsp, world, 96, { faces }).layerBounds(); // where floors are at all
-    const g = this.grid = new FloorGrid(bsp, world, cell, { bounds, margin: 1, faces });
+    const bounds = new FloorGrid(bsp, world, 96, { faces, doorsOpen }).layerBounds(); // where floors are at all
+    const g = this.grid = new FloorGrid(bsp, world, cell, { bounds, margin: 1, faces, doorsOpen });
     const slots = g.w * g.h * LAYERS;
     const nodeOf = this.nodeOf = new Int32Array(slots).fill(-1); // grid slot -> node
     let n = 0;

@@ -44,6 +44,7 @@ export class BombState {
 export class BombSites {
   constructor(bsp) {
     this.boxes = []; // [minx, miny, minz, maxx, maxy, maxz]
+    this.targets = []; // per box: the name it fires when the bomb blows up there ('' = none)
     this.radius = DEFAULT_BOMB_RADIUS;
     const o = new Float32Array(3);
     const f = bsp.modelsF;
@@ -55,10 +56,12 @@ export class BombSites {
         parseVec3(e.origin, o);
         this.boxes.push([f[m * 16] + o[0], f[m * 16 + 1] + o[1], f[m * 16 + 2] + o[2], f[m * 16 + 3] + o[0],
           f[m * 16 + 4] + o[1], f[m * 16 + 5] + o[2]]);
+        this.targets.push(e.target || '');
       } else if (e.classname === 'info_bomb_target') {
         parseVec3(e.origin, o);
         const r = POINT_TARGET_RADIUS;
         this.boxes.push([o[0] - r, o[1] - r, o[2] - r, o[0] + r, o[1] + r, o[2] + r]);
+        this.targets.push(e.target || '');
       }
     }
   }
@@ -69,12 +72,18 @@ export class BombSites {
 
   // Does a box (center, half extents) touch a bomb site?
   touches(x, y, z, hx, hy, hz) {
-    for (const b of this.boxes) {
+    return this.siteAt(x, y, z, hx, hy, hz) >= 0;
+  }
+
+  // The bomb site a box touches, or -1.
+  siteAt(x, y, z, hx, hy, hz) {
+    for (let i = 0; i < this.boxes.length; i++) {
+      const b = this.boxes[i];
       if (x + hx >= b[0] && x - hx <= b[3] && y + hy >= b[1] && y - hy <= b[4] && z + hz >= b[2] && z - hz <= b[5]) {
-        return true;
+        return i;
       }
     }
-    return false;
+    return -1;
   }
 }
 

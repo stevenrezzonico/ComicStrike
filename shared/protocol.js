@@ -24,6 +24,8 @@
 //            [u32 x 8 broken-breakable mask if flags & SNAP_BROKEN],
 //            round: u8 phase, u32 ticksLeft, u8 scoreT, u8 scoreCT, u8 roundInfo, u8 round, u8 mode,
 //            bomb: u8 state, [f32 x, y, z, u16 ticksLeft if state >= BOMB_DROPPED],
+//            movers (shared/doors.js) not closed at rest: u8 n, n x { u8 mover, u8 bits
+//                        (dir + 1 | sign < 0 << 2), f32 from, u32 t0 },
 //            own player: u8 health, u8 armor (bit 7: helmet), u8 spawnCount, u8 team, f32 spawnYaw,
 //                        u16 money, u8 ownFlags (OWN_CAN_BUY, OWN_DEFUSER),
 //                        u8 flash left, u8 flash length (1/32 s: flashbang blindness),
@@ -44,8 +46,9 @@
 import { PS_SIZE } from './pmove.js';
 import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
+import { MAX_MOVERS } from './doors.js';
 
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -668,10 +671,22 @@ export class RoundState {
 const NO_ROUND = new RoundState();
 const NO_BOMB = new BombState();
 
+// Movers' replicated states as last received (only those away from rest).
+export class MoverStates {
+  constructor() {
+    this.count = 0;
+    this.mover = new Uint8Array(MAX_MOVERS);
+    this.dir = new Int8Array(MAX_MOVERS);
+    this.sign = new Int8Array(MAX_MOVERS);
+    this.from = new Float32Array(MAX_MOVERS);
+    this.t0 = new Int32Array(MAX_MOVERS);
+  }
+}
+
 // Encodes snapshot `k` of `ring` for player `self`, as a delta against slot `base`
 // (-1 = full), followed by the tick's events `ev` (optional).
 // `own` = { lastCmd, spawnYaw, canBuy, player }.
-export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_ROUND, bomb = NO_BOMB) {
+export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_ROUND, bomb = NO_BOMB, doors = null) {
   const E = ring.ents;
   w.reset();
   w.u8v(S2C_SNAPSHOT);
@@ -694,6 +709,20 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
     w.f32v(bomb.y);
     w.f32v(bomb.z);
     w.u16v(Math.min(Math.max(bomb.ticksLeft, 0), 65535));
+  }
+  const moversAt = w.pos;
+  w.u8v(0);
+  if (doors) {
+    let n = 0;
+    for (let m = 0; m < doors.count; m++) {
+      if (doors.atBottom(m)) continue;
+      w.u8v(m);
+      w.u8v((doors.dir[m] + 1) | (doors.sign[m] < 0 ? 4 : 0));
+      w.f32v(doors.from[m]);
+      w.u32v(doors.t0[m]);
+      n++;
+    }
+    w.u8[moversAt] = n;
   }
 
   const p = own.player;
@@ -807,6 +836,7 @@ export class OwnState {
     this.useProgress = 0; // 0..1: picking up a hostage
     this.round = new RoundState();
     this.bomb = new BombState();
+    this.movers = new MoverStates();
     this.ps = new Uint8Array(PS_SIZE * 4); // raw PlayerState bytes
     this.psF = new Float32Array(this.ps.buffer); // the same bytes as floats
     this.ws = new Uint8Array(WS_SIZE * 8); // raw WeaponState bytes
@@ -852,6 +882,16 @@ export function readSnapshot(r, ring, own, ev = null) {
     bomb.y = r.f32v();
     bomb.z = r.f32v();
     bomb.ticksLeft = r.u16v();
+  }
+  const mv = own.movers;
+  mv.count = r.u8v();
+  for (let m = 0; m < mv.count; m++) {
+    mv.mover[m] = r.u8v();
+    const bits = r.u8v();
+    mv.dir[m] = (bits & 3) - 1;
+    mv.sign[m] = bits & 4 ? -1 : 1;
+    mv.from[m] = r.f32v();
+    mv.t0[m] = r.u32v();
   }
   own.health = r.u8v();
   const armor = r.u8v();

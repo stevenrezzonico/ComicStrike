@@ -28,8 +28,9 @@ const SEEDS = new Set(['info_player_start', 'info_player_deathmatch', 'hostage_e
 
 export class FloorGrid {
   // cell: world units per cell; bounds [x0, y0, x1, y1] (world; default: every upward
-  // face); margin: empty cells around; doorsOpen: doors do not cut floors (the radar
-  // draws rooms behind them; players here cannot open them, so navigation keeps them).
+  // face); margin: empty cells around; doorsOpen: doors do not cut floors (true: every
+  // door, as the radar draws rooms behind them; or a test of the door's bsp entity index:
+  // navigation opens the doors players can open, shared/doors.js).
   constructor(bsp, world, cell, { bounds = null, margin = 0, doorsOpen = false, faces = null } = {}) {
     faces = faces || floorFaces(bsp);
     const [x0, y0, x1, y1] = bounds || faceBounds(faces);
@@ -42,7 +43,8 @@ export class FloorGrid {
     const doors = [];
     if (doorsOpen) {
       for (const e of world.ents) {
-        if (e.bspEntity >= 0 && DOORS.has(bsp.entities[e.bspEntity].classname) && e.kind !== ENT_NONE) {
+        if (e.bspEntity >= 0 && DOORS.has(bsp.entities[e.bspEntity].classname) && e.kind !== ENT_NONE &&
+          (doorsOpen === true || doorsOpen(e.bspEntity))) {
           doors.push([e, e.kind]);
           e.kind = ENT_NONE;
         }

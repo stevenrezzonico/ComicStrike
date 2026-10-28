@@ -128,6 +128,9 @@ let fx = 0, fy = 0, fz = 0, rx = 0, ry = 0; // forward (with pitch), right (flat
 let fmove = 0, smove = 0, maxspeed = 0;
 
 const tr = new Trace();
+// Brush entities the last playerMove ran into (GoldSrc's pmove touch list: doors open).
+export const touched = new Int32Array(4);
+export let touchedCount = 0;
 const planes = new Float64Array(MAX_CLIP_PLANES * 3);
 
 function trace(sx, sy, sz, ex, ey, ez) {
@@ -182,6 +185,7 @@ function tryPlayerMove() {
       numPlanes = 0;
     }
     if (tr.fraction === 1) break;
+    if (tr.ent > 0 && touchedCount < 4) touched[touchedCount++] = tr.ent;
 
     if (tr.nz > MOVE.standableNormal) blocked |= 1; // floor
     if (tr.nz === 0) blocked |= 2; // step / wall
@@ -617,6 +621,7 @@ export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) 
   hull = (flags & FL_DUCKING) ? HULL_DUCK : HULL_STAND;
   events = 0;
   landSpeed = 0;
+  touchedCount = 0;
 
   // View axes.
   const sp = Math.sin(pitch * DEG), cp = Math.cos(pitch * DEG);

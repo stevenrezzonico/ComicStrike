@@ -11,6 +11,9 @@ import {
   MAT_GLASS, MAT_WOOD, MAT_METAL, MAT_FLESH, MAT_CINDER, MAT_CEILING_TILE, MAT_COMPUTER, MAT_UNBREAKABLE_GLASS,
   MAT_ROCKS,
 } from './breakables.js';
+import { toLocal } from './trace.js';
+
+const la = new Float64Array(3), lb = new Float64Array(3);
 
 // CS:GO game materials (CHAR_TEX_*) that HandleBulletPenetration special-cases.
 export const GM_GLASS = 89; // 'Y'
@@ -175,17 +178,18 @@ export class SurfaceMap {
   // entity `ent` of `world` (0 = the world itself).
   surfaceAt(world, ent, x, y, z, dx, dy, dz) {
     const e = world.ents[ent];
-    let head = 0, ox = 0, oy = 0, oz = 0;
+    let head = 0;
     if (ent > 0 && e) {
       const h = this.entityHead.get(e.bspEntity);
       if (h === undefined) return SURF_DEFAULT;
       head = h;
-      ox = e.ox;
-      oy = e.oy;
-      oz = e.oz;
+      toLocal(e, x - dx * 4, y - dy * 4, z - dz * 4, la); // model space (moved / turned doors)
+      toLocal(e, x + dx * 4, y + dy * 4, z + dz * 4, lb);
+    } else {
+      la[0] = x - dx * 4; la[1] = y - dy * 4; la[2] = z - dz * 4;
+      lb[0] = x + dx * 4; lb[1] = y + dy * 4; lb[2] = z + dz * 4;
     }
-    const f = this.findFace(head, x - ox - dx * 4, y - oy - dy * 4, z - oz - dz * 4, x - ox + dx * 4, y - oy + dy * 4,
-      z - oz + dz * 4);
+    const f = this.findFace(head, la[0], la[1], la[2], lb[0], lb[1], lb[2]);
     if (f < 0) return SURF_DEFAULT;
     return this.texSurface[this.bsp.texinfoI[faceTexinfo(this.bsp, f) * 10 + 8]];
   }

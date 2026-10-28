@@ -20,8 +20,10 @@ export class Renderer {
     if (!gl) throw new Error('WebGL2 is not available');
     this.gl = gl;
     this.canvas = canvas;
-    this.world = program(gl, WORLD_VS, WORLD_FS, ['u_viewProj', 'u_lightmap', 'u_eye', 'u_time', 'u_fogColor', 'u_broken']);
+    this.world = program(gl, WORLD_VS, WORLD_FS, ['u_viewProj', 'u_lightmap', 'u_eye', 'u_time', 'u_fogColor', 'u_broken',
+      'u_moverBase', 'u_movers']);
     this.broken = new Uint32Array(8); // bit per breakable slot
+    this.movers = null; // shared/doors.js Doors: slots above slotBase are drawn moved
     const skyUniforms = ['u_eye', 'u_horizon', 'u_zenith', 'u_time'];
     this.skyMesh = program(gl, SKY_MESH_VS, SKY_FS, ['u_viewProj', ...skyUniforms]);
     this.skyFill = program(gl, SKY_FILL_VS, SKY_FS, ['u_invViewProj', ...skyUniforms]);
@@ -96,6 +98,11 @@ export class Renderer {
     this.broken.fill(0);
   }
 
+  // Doors and buttons (shared/doors.js): their slots take its matrices every frame.
+  setMovers(doors) {
+    this.movers = doors && doors.count ? doors : null;
+  }
+
   resize(scale = 1) {
     const c = this.canvas;
     const w = Math.max(1, Math.round(c.clientWidth * scale));
@@ -132,6 +139,8 @@ export class Renderer {
       gl.uniform3fv(w.loc.u_fogColor, this.horizon);
       gl.uniform1i(w.loc.u_lightmap, 0);
       gl.uniform4uiv(w.loc.u_broken, this.broken);
+      gl.uniform1ui(w.loc.u_moverBase, this.movers ? this.movers.slotBase : 255);
+      if (this.movers) gl.uniform4fv(w.loc.u_movers, this.movers.matrix);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.lightmapTex);
       gl.bindVertexArray(this.vao);

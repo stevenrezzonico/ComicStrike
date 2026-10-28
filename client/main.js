@@ -18,7 +18,9 @@ import {
   IN_ATTACK, IN_ATTACK2, IN_USE, IN_RELOAD, IN_DROP,
 } from '../shared/constants.js';
 import { CollisionWorld, Trace, traceHull, HULL_POINT } from '../shared/trace.js';
-import { eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_SIZE, FL_ONGROUND, FL_DUCKING } from '../shared/pmove.js';
+import {
+  eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_SIZE, FL_ONGROUND, FL_DUCKING, touched, touchedCount,
+} from '../shared/pmove.js';
 import {
   WEAPONS, WEAPON_ID, ShotList, giveWeapon, weaponTick, viewPunchPitch, viewPunchYaw, hash32, WS_LAST_SLOT,
   WS_EVENTS, WS_SIZE, WS_SLOTS, WS_ACTIVE, WS_ACTION, WS_ACTION_END, SLOT_C4, NUM_SLOTS, ACTION_PLANT, ACTION_DEFUSE,
@@ -29,6 +31,7 @@ import {
   BOMB_EXPLODED,
 } from '../shared/bomb.js';
 import { Breakables } from '../shared/breakables.js';
+import { Doors, MapLogic, MAX_MOVERS, MOVER_ROTATING } from '../shared/doors.js';
 import { HitTargets, feetOffset } from '../shared/hitgroups.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import {
@@ -139,6 +142,7 @@ const shots = new ShotList();
 const impacts = new ImpactList();
 let tickCount = 1;
 let lastButtons = 0;
+let lastUseButtons = 0; // buttons of the last tick (the sandbox's +use edge)
 let world = null;
 const lightSample = new Float32Array(3), lightTarget = new Float32Array(3);
 let itemsVersion = -1; // last weapons-on-the-ground list handed to the models
@@ -206,6 +210,15 @@ fx.onEffect = (kind, _weapon, x, y, z) => {
 fx.onBounce = (x, y, z) => sounds.bounce(x, y, z);
 let breakables = null;
 let breakableColors = null; // rgb per breakable slot, for debris
+let doors = null; // doors and buttons: placed for the tick each command runs at, as on the server
+let mapLogic = null; // the sandbox runs the map's triggers itself
+let cmdOffset = 0; // server tick - command number (newest snapshot): when the server runs a command
+const moverSeen = new Uint8Array(MAX_MOVERS);
+const moverDir = new Int8Array(MAX_MOVERS); // last tick's, for sounds
+const sandboxBodies = [];
+const sandboxAct = { x: 0, y: 0, z: 0, yaw: 0 };
+const sandboxActs = [sandboxAct];
+const sandboxFire = (name, act) => mapLogic.fireAt(tickCount, name, act, 0);
 const spawns = { [TEAM_T]: [], [TEAM_CT]: [] }; // offline spawn points [x, y, z, yaw]
 let noclip = false;
 
@@ -261,10 +274,14 @@ async function loadMap(name) {
   radar.setMap(new Overview(bsp, world), world.bombSites);
   breakables = new Breakables(bsp, world);
   breakableColors = mesh.breakableColors;
+  doors = new Doors(bsp, world, breakables.count);
+  mapLogic = new MapLogic(bsp, doors);
+  moverDir.fill(0);
+  renderer.setMovers(doors);
   const ms = (performance.now() - t0).toFixed(0);
   console.log(`${name}: ${mesh.numVerts} verts, ${(mesh.opaqueCount + mesh.skyCount + mesh.transCount) / 3} tris, ` +
     `lightmap ${mesh.lightmap.width}x${mesh.lightmap.height}, ${world.ents.length} collision ents, ` +
-    `${breakables.count} breakables, built in ${ms} ms`);
+    `${breakables.count} breakables, ${doors.count} doors / buttons, built in ${ms} ms`);
 
   const o = new Float32Array(3);
   spawns[TEAM_T].length = spawns[TEAM_CT].length = 0;
@@ -287,6 +304,8 @@ function resetView(yaw) {
 // Offline round restart: breakables come back, we spawn at our team's first spawn.
 function offlineRespawn() {
   breakables.reset(world);
+  doors.reset(world);
+  mapLogic.reset(tickCount);
   renderer.clearBroken();
   debris.clear();
   localGrenades.clear();
@@ -360,6 +379,7 @@ function replayFrom(from) {
     if (!cmds.has(t)) continue;
     const k = t & cmds.mask;
     if (player.health > 0) {
+      doors.apply(world, t + cmdOffset);
       runCommand(world, player, cmds.buttons[k], cmds.select[k], cmds.pitch[k], cmds.yaw[k], t, replayShots, frozen(),
         simBomb());
     }
@@ -397,6 +417,8 @@ function buy(item) {
 function applySnapshot() {
   const own = net.own;
   netStats.rtt = (tickCount - own.lastCmd) * TICK_DT * 1000;
+  cmdOffset = net.latestSeq - own.lastCmd;
+  applyMovers(own.movers);
   player.defuser = (own.flags & OWN_DEFUSER) !== 0; // before any replay: it sets the defuse time
   player.carrying = (own.flags & OWN_CARRYING) !== 0; // and this the speed
 
@@ -481,6 +503,62 @@ function applySnapshot() {
   const seq = net.latestSeq;
   if (serverClock < 0 || Math.abs(seq - serverClock) > 16) serverClock = seq;
   else serverClock += (seq - serverClock) * 0.05;
+}
+
+// Doors and buttons as the server has them (those absent are closed at rest).
+function applyMovers(mv) {
+  moverSeen.fill(0);
+  for (let m = 0; m < mv.count; m++) {
+    const k = mv.mover[m];
+    if (k >= doors.count) continue;
+    moverSeen[k] = 1;
+    doors.setState(k, mv.from[m], mv.dir[m], mv.sign[m], mv.t0[m]);
+  }
+  for (let k = 0; k < doors.count; k++) if (!moverSeen[k]) doors.setState(k, 0, 0, 1, 0);
+}
+
+// A door starting or stopping: its sound; one that starts moving loses its decals.
+function moverSounds() {
+  for (let k = 0; k < doors.count; k++) {
+    const dir = doors.dir[k], was = moverDir[k];
+    if (dir === was) continue;
+    moverDir[k] = dir;
+    const e = world.ents[doors.ent[k]];
+    const x = (e.amin[0] + e.amax[0]) / 2, y = (e.amin[1] + e.amax[1]) / 2, z = (e.amin[2] + e.amax[2]) / 2;
+    if (was === 0) {
+      decals.removeOwner(doors.slot(k));
+      const left = dir > 0 ? 1 - doors.from[k] : doors.from[k];
+      sounds.doorMove(x, y, z, left / doors.rate[k] * TICK_DT, doors.kind[k] === MOVER_ROTATING);
+    } else if (dir === 0) {
+      sounds.doorStop(x, y, z);
+    }
+  }
+}
+
+// Sandbox: the map's triggers and doors run here (touch, +use), the player pushed by them.
+function sandboxDoors(t, alive) {
+  const f = ps.f;
+  sandboxAct.x = f[PS_ORIGIN];
+  sandboxAct.y = f[PS_ORIGIN + 1];
+  sandboxAct.z = f[PS_ORIGIN + 2];
+  sandboxAct.yaw = angles[1];
+  sandboxBodies.length = 0;
+  if (alive && !noclip) sandboxBodies.push(ps);
+  mapLogic.update(t, alive ? sandboxActs : []);
+  doors.update(world, t, sandboxBodies, sandboxFire);
+}
+
+function sandboxTouches(t, buttons) {
+  for (let i = 0; i < touchedCount; i++) {
+    const k = doors.ofEnt(touched[i]);
+    if (k >= 0) doors.touch(k, t, sandboxAct);
+  }
+  if (!(buttons & IN_USE) || (lastUseButtons & IN_USE)) return;
+  const f = ps.f, cp = Math.cos(angles[0] * DEG);
+  const k = doors.findUse(world, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2], f[PS_ORIGIN], f[PS_ORIGIN + 1],
+    f[PS_ORIGIN + 2] + eyeOffset(ps), cp * Math.cos(angles[1] * DEG), cp * Math.sin(angles[1] * DEG),
+    -Math.sin(angles[0] * DEG));
+  if (k >= 0) doors.use(k, t, sandboxAct);
 }
 
 // Other players' shots and the kill feed.
@@ -645,13 +723,18 @@ function tick() {
 
   shots.count = 0;
   impacts.count = 0;
+  if (net) doors.apply(world, t + cmdOffset);
+  else sandboxDoors(t, alive);
   if (noclip && !net) {
     noclipTick(buttons);
     weaponTick(ws, ps, buttons, select, angles[0], angles[1], t, shots);
   } else if (alive) {
     const died = runCommand(world, player, buttons, select, angles[0], angles[1], t, shots, frozen(), simBomb());
+    if (!net) sandboxTouches(t, buttons);
     if (died && !net) offlineRespawn();
   }
+  lastUseButtons = buttons;
+  moverSounds();
   if (shots.count) {
     // Free for all: bullets stop at everyone (team 0 skips nobody), as on the server.
     resolveShots(world, breakables, ws, shots, impacts, net ? targets : null, selfId,
@@ -1325,6 +1408,9 @@ globalThis.webcs = {
   },
   get world() {
     return world;
+  },
+  get doors() {
+    return doors;
   },
   overlays, // objects drawn with draw(viewProj) after the opaque world
   models, // other players' animated models

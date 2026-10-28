@@ -9,6 +9,8 @@ import { parseVec3 } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
 import { CollisionWorld, Trace, traceHull, hullFits, HULL_STAND, HULL_POINT } from '../shared/trace.js';
 import { Breakables } from '../shared/breakables.js';
+import { Doors, MapLogic } from '../shared/doors.js';
+import { touched, touchedCount } from '../shared/pmove.js';
 import { PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, FL_ONGROUND, eyeOffset } from '../shared/pmove.js';
 import {
   ShotList, WEAPONS, WEAPON_ID, giveWeapon, silenced, canCarryGrenade, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4,
@@ -198,6 +200,11 @@ export class Game {
     this.world = CollisionWorld.fromBSP(bsp);
     this.world.surfaces = new SurfaceMap(bsp);
     this.breakables = new Breakables(bsp, this.world);
+    this.doors = new Doors(bsp, this.world, this.breakables.count);
+    this.logic = new MapLogic(bsp, this.doors);
+    this.doorBodies = []; // living players' PlayerStates, refilled every tick
+    this.doorActs = []; // and where they stand ({ x, y, z, yaw }: trigger activators)
+    this.fireTarget = (name, act) => this.logic.fireAt(this.tick, name, act, 0);
     this.buyZones = new BuyZones(bsp);
     this.spawns = { [TEAM_T]: [], [TEAM_CT]: [] };
     const o = new Float32Array(3);
@@ -509,6 +516,7 @@ export class Game {
     while (ev.kills && ev.killTick[0] + KILL_REPEAT_TICKS < this.tick) ev.dropOldestKill();
     if (this.tick % 16 === 0) this.bots.maintain(); // bot_quota
     this.bots.think(); // bots queue this tick's commands like clients do
+    this.updateDoors();
 
     for (const c of this.clients) {
       if (!c) continue;
@@ -581,8 +589,14 @@ export class Game {
       if (WEAPONS[heldId]?.c4) this.dropBomb(c, true);
       else this.spawnItem(c, heldId, heldClip, heldReserve, true);
     }
-    // E on a weapon on the ground: swap it for the one in its slot (not while defusing).
-    if ((c.buttons & IN_USE) && !c.useHeld && !p.ws.f[WS_ACTION]) this.useItem(c);
+    // Doors and buttons it ran into.
+    for (let i = 0; i < touchedCount; i++) {
+      const k = this.doors.ofEnt(touched[i]);
+      if (k >= 0) this.doors.touch(k, this.tick, this.actOf(c));
+    }
+    // E on a door or button, else on a weapon on the ground: swap it for the one in its
+    // slot (not while defusing).
+    if ((c.buttons & IN_USE) && !c.useHeld && !p.ws.f[WS_ACTION] && !this.useDoor(c)) this.useItem(c);
     c.useHeld = (c.buttons & IN_USE) !== 0;
     this.useHostage(c);
     if (events & WEV_PLANTED) this.plantBomb(c);
@@ -743,6 +757,8 @@ export class Game {
   // Everyone to a spawn point; survivors keep their gear unless `fresh`.
   startRound(fresh) {
     this.breakables.reset(this.world);
+    this.doors.reset(this.world);
+    this.logic.reset(this.tick);
     this.placing = true;
     for (const c of this.clients) if (c) c.placed = false;
     for (const c of this.clients) {
@@ -1060,6 +1076,46 @@ export class Game {
     if (old) this.spawnItem(c, old, oldClip, oldReserve, false);
   }
 
+  // --- Doors ----------------------------------------------------------------------------
+
+  // Map logic, then doors move (pushing living players) to where they are this tick, so
+  // the tick's commands run against them as the clients predict.
+  updateDoors() {
+    if (!this.doors.count && !this.logic.triggers.length) return;
+    const bodies = this.doorBodies, acts = this.doorActs;
+    bodies.length = acts.length = 0;
+    for (const c of this.clients) {
+      if (!c || !c.joined || !c.alive) continue;
+      bodies.push(c.player.ps);
+      acts.push(this.actOf(c));
+    }
+    this.logic.update(this.tick, acts);
+    this.doors.update(this.world, this.tick, bodies, this.fireTarget);
+  }
+
+  // Where client c stands and looks (door swing side, trigger activator).
+  actOf(c) {
+    const a = c.act || (c.act = { x: 0, y: 0, z: 0, yaw: 0 }), f = c.player.ps.f;
+    a.x = f[PS_ORIGIN];
+    a.y = f[PS_ORIGIN + 1];
+    a.z = f[PS_ORIGIN + 2];
+    a.yaw = c.yaw;
+    return a;
+  }
+
+  // +use on a usable door or button in reach; true if one was used.
+  useDoor(c) {
+    const d = this.doors;
+    if (!d.count) return false;
+    const f = c.player.ps.f, x = f[PS_ORIGIN], y = f[PS_ORIGIN + 1], z = f[PS_ORIGIN + 2];
+    const cp = Math.cos(c.pitch * Math.PI / 180);
+    const k = d.findUse(this.world, x, y, z, x, y, z + eyeOffset(c.player.ps), cp * Math.cos(c.yaw * Math.PI / 180),
+      cp * Math.sin(c.yaw * Math.PI / 180), -Math.sin(c.pitch * Math.PI / 180));
+    if (k < 0) return false;
+    d.use(k, this.tick, this.actOf(c));
+    return true;
+  }
+
   // --- Hostages ------------------------------------------------------------------------
 
   // A CT holding use on an idle hostage picks it up after PICKUP_TIME (letting go or
@@ -1220,6 +1276,9 @@ export class Game {
       applyDamage(c.player, damage, c4, HITGROUP_CHEST);
       if (c.player.health <= 0) this.kill(c, c, WEAPON_ID.c4, false);
     }
+    // CS: the site fires its target (de_torn blows a door open).
+    const site = this.bombSites.siteAt(b.x, b.y, b.z, 16, 16, 16);
+    if (site >= 0 && this.bombSites.targets[site]) this.fireTarget(this.bombSites.targets[site], null);
     console.log('bomb exploded');
     if (this.phase === PHASE_LIVE) this.endRound(TEAM_T, END_BOMB);
   }
@@ -1382,7 +1441,7 @@ export class Game {
     for (const c of this.clients) {
       if (!c || !c.joined || c.bot) continue;
       const base = c.ackSeq ? ring.find(c.ackSeq) : -1;
-      c.session.send(writeSnapshot(c.writer(), ring, k, base, c.id, c, this.events, this.round, this.bomb));
+      c.session.send(writeSnapshot(c.writer(), ring, k, base, c.id, c, this.events, this.round, this.bomb, this.doors));
     }
   }
 }

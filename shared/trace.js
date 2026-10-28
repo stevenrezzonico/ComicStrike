@@ -86,8 +86,33 @@ export class CollisionWorld {
       pushY: push ? push[1] : 0,
       pushZ: push ? push[2] : 0,
       bspEntity: -1,
+      slot: 0, // world vertex slot (shared/breakables.js, shared/doors.js): decals sit on it
+      rot: null, // model -> world rotation (columns forward, left, up), null = none
+      amin: new Float64Array([mins[0] + ox, mins[1] + oy, mins[2] + oz]), // world bounds
+      amax: new Float64Array([maxs[0] + ox, maxs[1] + oy, maxs[2] + oz]),
     });
     return this.ents.length - 1;
+  }
+
+  // Moves entity `i` (doors): origin and rotation (a Float64Array(9) from
+  // rotationFromAngles, or null). Rotated bounds are a sphere around the origin, as in
+  // GoldSrc.
+  setTransform(i, ox, oy, oz, rot) {
+    const e = this.ents[i];
+    e.ox = ox;
+    e.oy = oy;
+    e.oz = oz;
+    e.rot = rot;
+    if (rot) {
+      let r = 0;
+      for (let k = 0; k < 3; k++) r += Math.max(e.mins[k] * e.mins[k], e.maxs[k] * e.maxs[k]);
+      r = Math.sqrt(r);
+      e.amin[0] = ox - r; e.amin[1] = oy - r; e.amin[2] = oz - r;
+      e.amax[0] = ox + r; e.amax[1] = oy + r; e.amax[2] = oz + r;
+    } else {
+      e.amin[0] = e.mins[0] + ox; e.amin[1] = e.mins[1] + oy; e.amin[2] = e.mins[2] + oz;
+      e.amax[0] = e.maxs[0] + ox; e.amax[1] = e.maxs[1] + oy; e.amax[2] = e.maxs[2] + oz;
+    }
   }
 
   static fromBSP(bsp) {
@@ -271,9 +296,38 @@ function bind(world) {
 
 const entTrace = new Trace();
 
+// GoldSrc AngleVectors as a model -> world rotation: columns forward, left (-right), up,
+// so world = origin + R * local and local = R^T * (world - origin) (SV_ClipMoveToEntity).
+export function rotationFromAngles(pitch, yaw, roll, out = new Float64Array(9)) {
+  const D = Math.PI / 180;
+  const sp = Math.sin(pitch * D), cp = Math.cos(pitch * D), sy = Math.sin(yaw * D), cy = Math.cos(yaw * D);
+  const sr = Math.sin(roll * D), cr = Math.cos(roll * D);
+  out[0] = cp * cy; out[1] = cp * sy; out[2] = -sp; // forward
+  out[3] = -(-sr * sp * cy + cr * sy); out[4] = -(-sr * sp * sy - cr * cy); out[5] = -(-sr * cp); // left = -right
+  out[6] = cr * sp * cy + sr * sy; out[7] = cr * sp * sy - sr * cy; out[8] = cr * cp; // up
+  return out;
+}
+
+// World point -> entity model space (origin and rotation), into `out` [x, y, z].
+export function toLocal(e, x, y, z, out) {
+  x -= e.ox; y -= e.oy; z -= e.oz;
+  const R = e.rot;
+  if (!R) {
+    out[0] = x; out[1] = y; out[2] = z;
+  } else {
+    out[0] = x * R[0] + y * R[1] + z * R[2];
+    out[1] = x * R[3] + y * R[4] + z * R[5];
+    out[2] = x * R[6] + y * R[7] + z * R[8];
+  }
+  return out;
+}
+
+const ls = new Float64Array(3), le = new Float64Array(3);
+
 // Traces one entity's hull in world space. Result goes into `out`.
 export function traceEntity(world, entIndex, hull, sx, sy, sz, ex, ey, ez, out) {
   const e = world.ents[entIndex];
+  if (e.rot) return traceRotated(world, e, entIndex, hull, sx, sy, sz, ex, ey, ez, out);
   bind(world);
   T = out;
   out.fraction = 1;
@@ -295,6 +349,39 @@ export function traceEntity(world, entIndex, hull, sx, sy, sz, ex, ey, ez, out) 
   return out;
 }
 
+// A rotated entity (GoldSrc SV_ClipMoveToEntity): the trace runs in model space (the hull
+// box itself is not rotated, as in GoldSrc), then the plane turns back and the end point
+// is lerped in world space.
+function traceRotated(world, e, entIndex, hull, sx, sy, sz, ex, ey, ez, out) {
+  toLocal(e, sx, sy, sz, ls);
+  toLocal(e, ex, ey, ez, le);
+  bind(world);
+  T = out;
+  out.fraction = 1;
+  out.allsolid = true;
+  out.startsolid = false;
+  out.inopen = false;
+  out.inwater = false;
+  out.nx = out.ny = out.nz = out.dist = 0;
+  out.ent = -1;
+  out.head = e.heads[hull];
+  recursiveHullCheck(out.head, 0, 1, ls[0], ls[1], ls[2], le[0], le[1], le[2]);
+  if (out.fraction === 1) {
+    out.endx = ex; out.endy = ey; out.endz = ez;
+    return out;
+  }
+  const R = e.rot, nx = out.nx, ny = out.ny, nz = out.nz;
+  out.nx = R[0] * nx + R[3] * ny + R[6] * nz;
+  out.ny = R[1] * nx + R[4] * ny + R[7] * nz;
+  out.nz = R[2] * nx + R[5] * ny + R[8] * nz;
+  out.endx = sx + (ex - sx) * out.fraction;
+  out.endy = sy + (ey - sy) * out.fraction;
+  out.endz = sz + (ez - sz) * out.fraction;
+  out.dist = out.nx * out.endx + out.ny * out.endy + out.nz * out.endz;
+  out.ent = entIndex;
+  return out;
+}
+
 // Traces a hull against the world and all solid brush entities (GoldSrc PM_PlayerTrace
 // semantics: startsolid forces fraction 0).
 export function traceHull(world, hull, sx, sy, sz, ex, ey, ez, out) {
@@ -312,9 +399,8 @@ export function traceHull(world, hull, sx, sy, sz, ex, ey, ez, out) {
     const e = ents[i];
     if (e.kind !== ENT_SOLID) continue;
     // Broadphase: swept box vs model bounds.
-    if (bminx > e.maxs[0] + e.ox || bmaxx < e.mins[0] + e.ox ||
-      bminy > e.maxs[1] + e.oy || bmaxy < e.mins[1] + e.oy ||
-      bminz > e.maxs[2] + e.oz || bmaxz < e.mins[2] + e.oz) continue;
+    if (bminx > e.amax[0] || bmaxx < e.amin[0] || bminy > e.amax[1] || bmaxy < e.amin[1] ||
+      bminz > e.amax[2] || bmaxz < e.amin[2]) continue;
 
     traceEntity(world, i, hull, sx, sy, sz, ex, ey, ez, entTrace);
     if (entTrace.allsolid || entTrace.startsolid || entTrace.fraction < out.fraction) {
@@ -336,8 +422,9 @@ export function traceHull(world, hull, sx, sy, sz, ex, ey, ez, out) {
 // Contents of a point in one entity's hull (CONTENTS_*).
 export function entityContents(world, entIndex, hull, x, y, z) {
   const e = world.ents[entIndex];
+  toLocal(e, x, y, z, ls);
   bind(world);
-  return hullPointContents(e.heads[hull], x - e.ox, y - e.oy, z - e.oz);
+  return hullPointContents(e.heads[hull], ls[0], ls[1], ls[2]);
 }
 
 // Point contents for water checks: world hull 0 plus func_water volumes.

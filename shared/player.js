@@ -197,7 +197,7 @@ export class ImpactList {
     this.count = 0;
     this.pos = new Float64Array(capacity * 3);
     this.normal = new Float64Array(capacity * 3);
-    this.owner = new Uint8Array(capacity); // breakable slot hit (0 = static world)
+    this.owner = new Uint8Array(capacity); // world slot hit: breakable, door (0 = static world)
     this.broke = new Uint8Array(capacity); // breakable slot this hit broke, else 0
     this.player = new Int8Array(capacity); // player hit (-1 = none: world impact)
     this.group = new Uint8Array(capacity); // hit group when a player was hit
@@ -307,7 +307,7 @@ export function resolveShots(world, breakables, ws, shots, impacts, targets = nu
       if (!w.melee) damage *= Math.pow(w.rangeModifier, traveled / 500);
       const ent = t.ent;
       const hx = t.endx, hy = t.endy, hz = t.endz;
-      const slot = ent > 0 ? breakables.slotOfEnt[ent] : 0;
+      const slot = ent > 0 ? world.ents[ent].slot : 0; // breakable or door: decals go with it
       const enter = surfaceOf(world, breakables, ent, hx, hy, hz, dx, dy, dz);
       const broke = breakables.damage(world, ent, damage, w.melee);
       impacts.push(hx, hy, hz, t.nx, t.ny, t.nz, slot, broke, -1, 0, 0);
@@ -335,7 +335,7 @@ export function resolveShots(world, breakables, ws, shots, impacts, targets = nu
       const thickness = Math.hypot(ex - hx, ey - hy, ez - hz);
       damage -= penetrationLoss(damage, w.penetration, enter, exit, thickness);
       if (damage < 1) break;
-      const exitSlot = exitTrace.ent > 0 ? breakables.slotOfEnt[exitTrace.ent] : 0;
+      const exitSlot = exitTrace.ent > 0 ? world.ents[exitTrace.ent].slot : 0;
       impacts.push(ex, ey, ez, exitTrace.nx, exitTrace.ny, exitTrace.nz, exitSlot, 0, -1, 0, 0);
       x = ex;
       y = ey;

@@ -101,11 +101,11 @@ Deno.test('snapshots: full, then small deltas, removals and the breakable mask',
   server.ents[server.row(k, 3) + E_X] += 4;
   server.ents.fill(0, server.row(k, 7), server.row(k, 7) + E_FIELDS);
   const delta = writeSnapshot(w, server, k, base, 0, ownInfo);
-  // header 14 + round 10 + bomb 1 + own block (8 + money 3 + state) + 2 entries (moved: 2 + 12
+  // header 14 + round 10 + bomb 1 + movers 1 + own block (8 + money 3 + state) + 2 entries (moved: 2 + 12
   // bytes, removed: 2 bytes) + 2 empty event lists
   // (the weapon state: a field bitmask, then the fields that are not zero)
   const wsLength = Math.ceil(player.ws.f.length / 8) + 8 * player.ws.f.filter((v) => !Object.is(v, 0)).length;
-  assert.equal(delta.length, 14 + 10 + 1 + 8 + 6 + player.psBytes.length + wsLength + 1 + 14 + 2 + 2);
+  assert.equal(delta.length, 14 + 10 + 1 + 1 + 8 + 6 + player.psBytes.length + wsLength + 1 + 14 + 2 + 2);
   r.set(delta);
   r.u8v();
   const c2 = readSnapshot(r, client, own);

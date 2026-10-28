@@ -10,6 +10,8 @@ layout(location=5) in uvec4 a_mat;
 
 uniform mat4 u_viewProj;
 uniform uvec4 u_broken[2]; // 256-bit mask of broken breakable slots (a_mat.w)
+uniform uint u_moverBase; // slots above it are doors and buttons (shared/doors.js)
+uniform vec4 u_movers[192]; // their 3x4 model -> world matrices, MAX_MOVERS x 3 rows
 
 out vec3 v_pos;
 out vec2 v_uv;
@@ -25,13 +27,20 @@ void main() {
     gl_Position = vec4(0.0, 0.0, 2.0, 1.0); // outside the clip volume: triangle dropped
     return;
   }
-  v_pos = a_pos;
+  vec3 pos = a_pos, nrm = a_nrm.xyz;
+  if (slot > u_moverBase) {
+    int m = int(slot - u_moverBase - 1u) * 3;
+    vec4 p = vec4(a_pos, 1.0), r0 = u_movers[m], r1 = u_movers[m + 1], r2 = u_movers[m + 2];
+    pos = vec3(dot(r0, p), dot(r1, p), dot(r2, p));
+    nrm = vec3(dot(r0.xyz, nrm), dot(r1.xyz, nrm), dot(r2.xyz, nrm));
+  }
+  v_pos = pos;
   v_uv = a_uv;
   v_lm = a_lm;
-  v_nrm = a_nrm.xyz;
+  v_nrm = nrm;
   v_col = a_col;
   v_mat = a_mat.xyz;
-  gl_Position = u_viewProj * vec4(a_pos, 1.0);
+  gl_Position = u_viewProj * vec4(pos, 1.0);
 }`;
 
 export const WORLD_FS = `#version 300 es

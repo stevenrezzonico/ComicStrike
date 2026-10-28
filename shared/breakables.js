@@ -56,6 +56,7 @@ export class Breakables {
       const ce = world.ents[ent];
       this.ent[slot] = ent;
       this.slotOfEnt[ent] = slot;
+      ce.slot = slot;
       this.maxHealth[slot] = +(e.health || 0);
       this.material[slot] = +(e.material || MAT_GLASS);
       this.flags[slot] = +(e.spawnflags || 0);

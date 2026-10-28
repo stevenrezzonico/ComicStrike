@@ -7,13 +7,14 @@ import {
   faceVertex, modelFirstFace, modelNumFaces, entityModelIndex, parseVec3,
 } from '../shared/bsp.js';
 import { breakableEntities, MAX_BREAKABLES } from '../shared/breakables.js';
+import { moverEntities } from '../shared/doors.js';
 import { classify, isSkipped, MAT } from '../shared/materials.js';
 import { withOriginalColor } from './texcolors.js';
 
 // Vertex layout (40 bytes):
 //  0 pos   f32x3     12 uv f32x2 (texture tiles)   20 lm f32x2 (atlas 0..1)
 // 28 nrm   i8x4 norm 32 col u8x4 norm (rgb, alpha)
-// 36 mat   u8x4 int (material, flags, seed, breakable slot or 0)
+// 36 mat   u8x4 int (material, flags, seed, slot: breakable, then door / button, or 0)
 export const VERTEX_STRIDE = 40;
 
 const TEX_SPECIAL = 1; // texinfo flag: sky / water / no lightmap
@@ -61,7 +62,9 @@ class Atlas {
 function collectModels(bsp) {
   const out = [{ model: 0, ox: 0, oy: 0, oz: 0, alpha: 255, slot: 0 }];
   const origin = new Float32Array(3);
-  const slotOf = new Map(breakableEntities(bsp).map((bi, k) => [bi, k + 1]));
+  const breakables = breakableEntities(bsp);
+  const slotOf = new Map(breakables.map((bi, k) => [bi, k + 1]));
+  moverEntities(bsp, breakables.length).forEach((bi, k) => slotOf.set(bi, breakables.length + 1 + k));
   for (let ei = 0; ei < bsp.entities.length; ei++) {
     const e = bsp.entities[ei];
     const m = entityModelIndex(e);

@@ -269,6 +269,50 @@ export class Sounds {
     this.burst(v.out, v.t, 900 + Math.random() * 1500, 5000, 0.6 + Math.random() * 0.4, 0.04 + Math.random() * 0.05);
   }
 
+  // A door moving for `seconds`: a sliding door rumbles, a swinging one creaks (pitch
+  // wandering) over a softer rumble.
+  doorMove(x, y, z, seconds, swinging) {
+    const v = this.voice(x, y, z, 0.5, 300, 2500);
+    if (!v) return;
+    const ctx = this.ctx, t = v.t, end = t + Math.min(Math.max(seconds, 0.2), 6);
+    const src = ctx.createBufferSource(), l = ctx.createBiquadFilter(), g = ctx.createGain();
+    src.buffer = this.noise;
+    src.loop = true;
+    l.type = 'lowpass';
+    l.frequency.value = swinging ? 300 : 500;
+    g.gain.setValueAtTime(0.001, t);
+    g.gain.exponentialRampToValueAtTime(swinging ? 0.25 : 0.6, t + 0.08);
+    g.gain.setValueAtTime(swinging ? 0.25 : 0.6, end - 0.1);
+    g.gain.exponentialRampToValueAtTime(0.001, end);
+    src.connect(l).connect(g).connect(v.out);
+    src.start(t, Math.random() * 0.5);
+    src.stop(end + 0.02);
+    if (!swinging) return;
+    const osc = ctx.createOscillator(), og = ctx.createGain(), bp = ctx.createBiquadFilter();
+    osc.type = 'sawtooth';
+    const f = 150 + Math.random() * 60;
+    osc.frequency.setValueAtTime(f, t);
+    for (let k = 1, tk = t + 0.15; tk < end; k++, tk += 0.15) osc.frequency.linearRampToValueAtTime(f * (k & 1 ? 1.35 : 0.85), tk);
+    bp.type = 'bandpass';
+    bp.frequency.value = 900;
+    bp.Q.value = 2;
+    og.gain.setValueAtTime(0.001, t);
+    og.gain.exponentialRampToValueAtTime(0.12, t + 0.1);
+    og.gain.setValueAtTime(0.12, end - 0.15);
+    og.gain.exponentialRampToValueAtTime(0.001, end);
+    osc.connect(bp).connect(og).connect(v.out);
+    osc.start(t);
+    osc.stop(end + 0.02);
+  }
+
+  // A door or button reaching the end of its travel.
+  doorStop(x, y, z) {
+    const v = this.voice(x, y, z, 0.7, 300, 2500);
+    if (!v) return;
+    this.burst(v.out, v.t, 60, 700, 0.8, 0.18);
+    this.tone(v.out, v.t, 140, 60, 0.5, 0.15);
+  }
+
   // Flashed for `seconds`: a ringing in the ears, the world muffled meanwhile.
   earRing(seconds) {
     if (!this.ready || seconds <= 0) return;

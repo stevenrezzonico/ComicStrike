@@ -20,7 +20,7 @@ import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { BOMB_DROPPED, BOMB_PLANTED } from '../shared/bomb.js';
 import { HS_IDLE } from '../shared/hostages.js';
 import { PHASE_LIVE, PHASE_WARMUP, ITEM_ASSAULTSUIT, ITEM_KEVLAR, ITEM_DEFUSER, itemPrice } from '../shared/economy.js';
-import { Nav, NODE_CROUCH, EDGE_WALK, EDGE_JUMP, EDGE_LADDER } from '../shared/nav.js';
+import { Nav, NAV_CELL, NODE_CROUCH, EDGE_WALK, EDGE_JUMP, EDGE_LADDER } from '../shared/nav.js';
 import { Writer, writeHello } from '../shared/protocol.js';
 
 const DEG = Math.PI / 180;
@@ -61,7 +61,11 @@ export class Bots {
   ensureNav() {
     if (!this.nav) {
       const t = performance.now();
-      this.nav = new Nav(this.game.bsp, this.game.world);
+      // Paths go through the doors a player can open (walking into them, +use, triggers).
+      const { doors, logic } = this.game;
+      const open = new Set();
+      for (let k = 0; k < doors.count; k++) if (doors.opens(k, logic.named)) open.add(doors.bspEntity[k]);
+      this.nav = new Nav(this.game.bsp, this.game.world, NAV_CELL, (bi) => open.has(bi));
       console.log(`bot navigation: ${this.nav.count} nodes in ${(performance.now() - t).toFixed(0)} ms`);
     }
     return this.nav;
@@ -455,6 +459,14 @@ class Bot {
     return best;
   }
 
+  // Whether +use would work a door or button in front of us (feet at `feet`).
+  doorAhead(x, y, feet) {
+    const g = this.game, d = g.doors;
+    if (!d.count) return false;
+    const yr = this.yaw * DEG;
+    return d.findUse(g.world, x, y, feet + 36, x, y, feet + 64, Math.cos(yr), Math.sin(yr), 0) >= 0;
+  }
+
   // --- Walking ------------------------------------------------------------------------
 
   // Follows the path: the farthest waypoint straight ahead (no jump or ladder skipped),
@@ -504,7 +516,8 @@ class Bot {
       this.stuckAt = g.tick;
       this.stuckX = x;
       this.stuckY = y;
-      if (this.stuck >= 2) out.buttons |= IN_JUMP | IN_DUCK;
+      if (this.stuck >= 1 && this.doorAhead(x, y, feet)) out.buttons |= IN_USE; // a use-only door or a button
+      else if (this.stuck >= 2) out.buttons |= IN_JUMP | IN_DUCK;
       if (this.stuck === 4) this.repathAt = 0, this.goalWhy = '';
       if (this.stuck >= 8) {
         this.goalWhy = '';
