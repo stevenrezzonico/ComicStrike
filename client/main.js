@@ -3,10 +3,13 @@
 // the same shared simulation the server runs and reconciled against every snapshot
 // (replaying unacknowledged commands); other players are interpolated cl_interp_ratio
 // ticks behind the server clock, and each command tells the server which tick we were
-// seeing so it can rewind them (lag compensation). Practice (offline): everything runs
-// locally. The page opens on the start menu (client/menu.js); URL parameters skip it
-// (testing): ?team=t|ct|spec&primary=awp&secondary=deagle&name=me joins at once (offline if
-// no server answers), &offline&map=de_dust2 practices.
+// seeing so it can rewind them (lag compensation). Practice: the same server runs in a
+// Web Worker (client/localserver.js) with bots, joined the same way. The sandbox
+// (?offline) runs the player alone in the page, without game rules (noclip, give).
+// The page opens on the start menu (client/menu.js); URL parameters skip it (testing):
+// ?team=t|ct|spec&primary=awp&secondary=deagle&name=me joins at once (the sandbox if no
+// server answers), &practice&map=de_dust2&mode=deathmatch&players=10 practices,
+// &offline&map=de_dust2 opens the sandbox.
 // Keys are CS:GO binds (client/binds.js); ` opens the console (client/settings.js).
 
 import { parseBSP, parseVec3 } from '../shared/bsp.js';
@@ -1017,11 +1020,12 @@ con.command('kill', () => {
 }, 'Suicide');
 con.command('rcon', (a, ctx) => {
   if (!net) return con.out(ctx, 'rcon: not connected');
-  if (!cv.rcon_password.value) return con.out(ctx, 'set rcon_password first');
+  const password = net.localRcon || cv.rcon_password.value; // practice: the worker's own
+  if (!password) return con.out(ctx, 'set rcon_password first');
   if (a.length < 2) return con.out(ctx, 'rcon <command>');
   // One argument goes as is (rcon "mp_freezetime 3; mp_restartgame 1"); several are re-quoted.
   const command = a.length === 2 ? a[1] : a.slice(1).map((s) => (/[\s;"]/.test(s) || !s ? quote(s) : s)).join(' ');
-  net.command(`rcon ${quote(cv.rcon_password.value)} ${command}`);
+  net.command(`rcon ${quote(password)} ${command}`);
 }, 'rcon <command>: runs a command on the server (needs rcon_password)');
 con.command('status', (_a, ctx) => {
   if (!net) return con.out(ctx, `offline  map: ${currentMap}`);
@@ -1038,9 +1042,23 @@ con.command('disconnect', () => {
 con.command('retry', () => reconnect(), 'Reconnects to the server');
 con.command('map', (a, ctx) => {
   if (!a[1]) return con.out(ctx, 'map <name>');
+  if (net && net.localRcon) return net.command(`rcon ${quote(net.localRcon)} map ${quote(a[1])}`);
   if (net) return con.out(ctx, 'online, the server picks the map: rcon map <name>');
-  run(() => startPractice(a[1], player.team === TEAM_CT ? 3 : 2));
-}, 'map <name>: practices on a map (offline; online use rcon map)');
+  if (playing) run(() => startSandbox(a[1], player.team === TEAM_CT ? 3 : 2));
+  else run(() => startPractice(a[1], 2));
+}, 'map <name>: changes the practice map (online: rcon map <name>)');
+// Server settings and commands (mp_*, bot_*, ...) typed into the console: in practice the
+// server is ours, so they go to it (as on a CS:GO listen server); online they need rcon.
+con.unknown = (args, ctx) => {
+  const line = args.map((s) => (/[\s;"]/.test(s) || !s ? quote(s) : s)).join(' ');
+  if (net && net.localRcon) {
+    net.command(`rcon ${quote(net.localRcon)} ${line}`);
+    return true;
+  }
+  if (!net || !/^(mp_|bot_|sv_|game_)/i.test(args[0])) return false;
+  con.out(ctx, `"${args[0]}" is a server setting: rcon ${line}`);
+  return true;
+};
 watch(cv.name, () => {
   if (net) net.command(`name ${quote(cv.name.value)}`);
 });
@@ -1072,7 +1090,7 @@ document.addEventListener('pointerlockchange', updateOverlay);
 document.addEventListener('pointerdown', () => sounds.resume()); // audio may only start after a user gesture
 
 menu.onPlay = (team) => run(() => startOnline(team));
-menu.onPractice = (map, team) => run(() => startPractice(map, team));
+menu.onPractice = (map, team, opts) => run(() => startPractice(map, team, opts));
 menu.onResume = () => input.lock().catch(() => {});
 menu.onLeave = () => leaveGame();
 menu.onTeam = (team) => {
@@ -1099,7 +1117,8 @@ const secondary = WEAPON_ID[params.get('secondary')] || 0;
 async function joinServer(team) {
   menu.busy('Connecting...');
   net = new NetClient();
-  await net.connect();
+  if (localWorker) net.connectLocal(localWorker, localRcon);
+  else await net.connect();
   const welcome = await net.join(team, primary, secondary, cv.name.value);
   selfId = welcome.playerId;
   menu.busy(`Loading ${welcome.map}...`);
@@ -1146,8 +1165,37 @@ async function startOnline(team) {
   enterGame();
 }
 
-// Practice: a map offline, on a team (2 T, 3 CT).
-async function startPractice(map, team) {
+// Practice: the game server in a Web Worker (client/localserver.js) on `map` in `mode`,
+// bots filling the teams to `players` at `difficulty` (bot_quota fill, bot_difficulty);
+// then join it like a server, on `team` (2 T, 3 CT, 1 spectators, 0 auto).
+let localWorker = null, localRcon = '';
+async function startPractice(map, team, { mode = 'competitive', players = 10, difficulty = 1 } = {}) {
+  if (playing) leaveGame();
+  resetSession();
+  menu.busy(`Starting a practice game on ${map}...`);
+  const worker = new Worker('/client/localserver.js', { type: 'module' });
+  try {
+    localRcon = await new Promise((resolve, reject) => {
+      worker.onmessage = (e) => {
+        if (e.data.type === 'ready') resolve(e.data.rcon);
+        else if (e.data.type === 'failed') reject(new Error(e.data.error));
+      };
+      worker.onerror = (e) => reject(new Error(e.message || 'the practice server did not start'));
+      worker.postMessage({ type: 'start', map, mode, players, difficulty });
+    });
+  } catch (err) {
+    worker.terminate();
+    throw err;
+  }
+  worker.onmessage = worker.onerror = null;
+  localWorker = worker;
+  await joinServer(team === 3 ? TEAM_CT : team === 2 ? TEAM_T : team === 1 ? TEAM_SPECTATOR : 0);
+  conWin.print(`practice: ${currentMap} (${mode}); rcon works without a password (bot_add, map ...)`);
+  enterGame();
+}
+
+// The sandbox: a map in the page alone, without game rules (noclip, give), on a team.
+async function startSandbox(map, team) {
   if (playing) leaveGame();
   resetSession();
   menu.busy(`Loading ${map}...`);
@@ -1162,7 +1210,8 @@ async function startPractice(map, team) {
 
 function enterGame() {
   playing = true;
-  menu.online = net !== null;
+  menu.online = net !== null && !localWorker; // Disconnect, or Quit practice
+  menu.server = net !== null; // spectating needs server rules
   menu.busy('');
   menu.hide();
   input.lock().catch(() => {});
@@ -1173,6 +1222,10 @@ function enterGame() {
 function leaveGame(message = '') {
   if (net && !net.closed) net.close('disconnect');
   net = null;
+  if (localWorker) {
+    localWorker.terminate();
+    localWorker = null;
+  }
   playing = false;
   resetSession();
   if (document.pointerLockElement) document.exitPointerLock();
@@ -1214,17 +1267,23 @@ async function start() {
   if (params.get('name')) cv.name.set(params.get('name').slice(0, 31));
   status.style.display = 'none';
   requestAnimationFrame(frame);
-  // URL parameters skip the menu (testing): join at once, or practice if no server answers.
-  if (!params.has('team') && !params.has('offline') && !params.has('map')) return menu.showStart();
+  // URL parameters skip the menu (testing): join at once (the sandbox if no server
+  // answers), practice, or the sandbox.
+  if (!['team', 'offline', 'map', 'practice'].some((p) => params.has(p))) return menu.showStart();
   const team = { spec: 1, t: 2, ct: 3 }[params.get('team')] || 0;
+  const map = params.get('map') || 'de_dust2';
+  if (params.has('practice')) {
+    return await startPractice(map, team, { mode: params.get('mode') || 'competitive',
+      players: +(params.get('players') ?? 10), difficulty: +(params.get('difficulty') ?? 1) });
+  }
   if (!params.has('offline')) {
     try {
       return await startOnline(team);
     } catch (err) {
-      console.warn(`playing offline: ${err.message}`);
+      console.warn(`no server, sandbox: ${err.message}`);
     }
   }
-  await startPractice(params.get('map') || 'de_dust2', team === 3 ? 3 : 2);
+  await startSandbox(map, team === 3 ? 3 : 2);
 }
 
 start().catch((err) => {

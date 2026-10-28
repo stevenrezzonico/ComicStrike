@@ -202,6 +202,12 @@ export class Nav {
     return len;
   }
 
+  // Open floor: a standing player fits and every neighbor is walkable (no ledge, crate
+  // top or narrow gap: somewhere to put a player down).
+  open(k) {
+    return !(this.flags[k] & NODE_CROUCH) && this.first[k + 1] - this.first[k] >= 8;
+  }
+
   // The edge kind from node a to node b (EDGE_*), or -1 if they are not neighbors.
   edge(a, b) {
     for (let e = this.first[a]; e < this.first[a + 1]; e++) if (this.to[e] === b) return this.kind[e];

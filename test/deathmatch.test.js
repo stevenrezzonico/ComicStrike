@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { parseBSP } from '../shared/bsp.js';
 import { IN_ATTACK, TICK_RATE } from '../shared/constants.js';
-import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
-import { hullFits, HULL_STAND } from '../shared/trace.js';
+import { PS_ORIGIN, PS_VEL, eyeOffset } from '../shared/pmove.js';
+import { hullFits, traceHull, Trace, HULL_STAND, HULL_POINT } from '../shared/trace.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { WEAPON_ID, WS_SLOTS, SLOT_PRIMARY } from '../shared/weapons.js';
 import {
@@ -174,20 +174,31 @@ Deno.test({ name: 'deathmatch: spawn protection until the time runs out or he sh
   assert.ok(b.player.health < 100);
 } });
 
-Deno.test({ name: 'deathmatch: random spawns keep away from enemies', ignore: !haveMap, fn: () => {
+Deno.test({ name: 'deathmatch: spawns anywhere on the map, out of enemy sight and away from them', ignore: !haveMap, fn: () => {
   const { host, join, run, live } = setup();
   const a = join('alpha', TEAM_T), b = join('bravo', TEAM_T);
   run(2);
   live();
-  const g = host.game;
+  const g = host.game, tr = new Trace();
   const [x, y, z] = g.spawns[TEAM_T][0];
-  teleport(a, x, y, z); // a camps the T spawn
-  for (let i = 0; i < 10; i++) {
+  const teamSpawns = [...g.spawns[TEAM_T], ...g.spawns[TEAM_CT]];
+  const cells = new Set();
+  let away = 0;
+  for (let i = 0; i < 20; i++) {
+    teleport(a, x, y, z); // a camps the T spawn
     g.kill(a, b, 0, false);
     run(DM_RESPAWN * TICK_RATE + 1);
-    const f = b.player.ps.f;
-    assert.ok(Math.hypot(f[PS_ORIGIN] - x, f[PS_ORIGIN + 1] - y) > 1500, 'b respawns on the far side (CT spawn)');
+    const f = b.player.ps.f, bx = f[PS_ORIGIN], by = f[PS_ORIGIN + 1], bz = f[PS_ORIGIN + 2];
+    assert.ok(Math.hypot(bx - x, by - y) >= 500, 'not next to the enemy');
+    const af = a.player.ps.f; // where the camper stood (he settles onto the floor)
+    traceHull(g.world, HULL_POINT, af[PS_ORIGIN], af[PS_ORIGIN + 1], af[PS_ORIGIN + 2] + eyeOffset(a.player.ps),
+      bx, by, bz + 28, tr);
+    assert.ok(tr.fraction < 1, 'out of his sight');
+    cells.add(`${Math.floor(bx / 256)},${Math.floor(by / 256)}`);
+    if (teamSpawns.every((s) => Math.hypot(s[0] - bx, s[1] - by) > 300)) away++;
   }
+  assert.ok(cells.size >= 10, `spread over the map: ${cells.size} areas in 20 spawns`);
+  assert.ok(away >= 10, `mostly away from the team spawns: ${away} of 20`);
 } });
 
 Deno.test({ name: 'deathmatch: the time limit ends the match, the top score wins, a new match follows', ignore: !haveMap, fn: () => {

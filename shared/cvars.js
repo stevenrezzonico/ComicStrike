@@ -97,6 +97,9 @@ export class Console {
     this.commands = new Map(); // name -> { fn(args, ctx), help }
     this.aliases = new Map();
     this.depth = 0;
+    // unknown(args, ctx) -> true if it took a command no cvar or command here knows (the
+    // client hands those to a practice server, like a listen server's console).
+    this.unknown = null;
 
     this.command('echo', (a, ctx) => this.out(ctx, a.slice(1).join(' ')), 'Prints its arguments');
     this.command('alias', (a, ctx) => {
@@ -209,6 +212,7 @@ export class Console {
       else cv.set(args[1]);
       return;
     }
+    if (this.unknown && this.unknown(args, ctx)) return;
     this.out(ctx, `Unknown command "${args[0]}"`);
   }
 

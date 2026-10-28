@@ -86,6 +86,7 @@ export class Bots {
   kick(c = null, team = 0) {
     if (!c) {
       for (let i = this.list.length - 1; i >= 0 && !c; i--) if (!team || this.list[i].c.team === team) c = this.list[i].c;
+      if (!c && this.list.length) c = this.list[this.list.length - 1].c; // none on that side: the newest
     }
     if (!c || !c.bot) return '';
     this.list = this.list.filter((b) => b !== c.bot);
@@ -104,9 +105,10 @@ export class Bots {
     else if (this.list.length > want) this.kick(null, this.largerTeam());
   }
 
+  // The team with more players (humans count: a bot leaves the side that has one too many).
   largerTeam() {
     let t = 0, ct = 0;
-    for (const b of this.list) b.c.team === TEAM_CT ? ct++ : t++;
+    for (const c of this.game.clients) if (c && c.joined && c.playing) c.team === TEAM_CT ? ct++ : t++;
     return ct > t ? TEAM_CT : TEAM_T;
   }
 

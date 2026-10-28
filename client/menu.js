@@ -92,7 +92,11 @@ export class Menu {
     this.cv = cv;
     this.binds = binds;
     this.inGame = false; // pause menu (in a game) or start menu
-    this.online = false; // in game: on a server (else practice)
+    this.online = false; // in game: on a remote server (else practice or the sandbox)
+    this.server = false; // in game: server rules (online or practice), so spectating works
+    this.practiceMode = 'competitive';
+    this.practicePlayers = 10; // bot_quota fill: bots make up the rest
+    this.practiceDifficulty = 1;
     this.panel = ''; // open panel: '', 'play', 'practice', 'team', 'settings'
     this.tab = 0;
     this.shownAt = 0;
@@ -263,7 +267,7 @@ export class Menu {
     });
     row.append(name);
     body.append(row);
-    body.append(el('p', 'menu-hint', 'Play joins the server; Practice runs a map on your own, offline. ' +
+    body.append(el('p', 'menu-hint', 'Play joins the server; Practice runs a game with bots in this browser. ' +
       'Esc in game brings this menu back; ` opens the console.'));
   }
 
@@ -285,7 +289,7 @@ export class Menu {
     row.append(button('Terrorists', () => pick(2), 't'));
     row.append(button('Counter-Terrorists', () => pick(3), 'ct'));
     if (auto) row.append(button('Auto-select', () => pick(0)));
-    if (auto || this.online) row.append(button('Spectate', () => pick(1), 'spec'));
+    if (auto || this.server) row.append(button('Spectate', () => pick(1), 'spec'));
     body.append(row);
   }
 
@@ -318,7 +322,31 @@ export class Menu {
       teams.append(b);
     }
     body.append(teams);
-    body.append(button('Start', () => this.onPractice(this.practiceMap, this.practiceTeam), 'menu-go'));
+    const choice = (label, options, value, set) => { // a row of buttons, one picked
+      const row = el('div', 'menu-row menu-choice');
+      row.append(el('span', '', label));
+      for (const [v, text] of options) {
+        const b = button(text, () => {
+          set(v);
+          this.render();
+        });
+        if (v === value) b.classList.add('active');
+        row.append(b);
+      }
+      body.append(row);
+    };
+    choice('Mode', [['competitive', 'Competitive'], ['deathmatch', 'Deathmatch']], this.practiceMode, (v) => {
+      this.practiceMode = v;
+    });
+    choice('Bots', [[0, 'None'], [2, '1 vs 1'], [6, '3 vs 3'], [10, '5 vs 5']], this.practicePlayers, (v) => {
+      this.practicePlayers = v;
+    });
+    choice('Difficulty', [[0, 'Easy'], [1, 'Normal'], [2, 'Hard'], [3, 'Expert']], this.practiceDifficulty, (v) => {
+      this.practiceDifficulty = v;
+    });
+    body.append(button('Start', () => this.onPractice(this.practiceMap, this.practiceTeam, {
+      mode: this.practiceMode, players: this.practicePlayers, difficulty: this.practiceDifficulty,
+    }), 'menu-go'));
   }
 
   // --- Settings ------------------------------------------------------------------------

@@ -129,10 +129,14 @@ Deno.test({ name: 'bots: bot_add / bot_kick / bot_quota fill', ignore: !dust2, f
   join('human', TEAM_T);
   run(80);
   assert.equal(g.bots.list.length, 3, 'fill: 3 bots + 1 human');
+  host.con.exec('bot_add_ct');
+  run(40);
+  assert.equal(g.bots.list.length, 4, 'bot_add in fill mode stays');
+  assert.equal(host.con.get('bot_quota').number, 5);
   host.con.exec('bot_kick all');
   run(20);
   assert.equal(g.bots.list.length, 0);
-  assert.equal(host.con.get('bot_quota').number, 0);
+  assert.equal(host.con.get('bot_quota').number, 1, 'fill: the human alone');
 } });
 
 Deno.test({ name: 'bots: a T walks from its spawn to a bomb site', ignore: !dust2, fn: () => {

@@ -81,3 +81,18 @@ Deno.test('a + binding releases its + commands', () => {
   assert.equal(releaseOf('+jump; +duck; echo hi'), '"-jump";"-duck"');
   assert.equal(releaseOf('slot1'), '');
 });
+
+Deno.test('unknown commands go to the unknown hook first (a practice server takes them)', () => {
+  const out = [], taken = [];
+  const con = new Console((s) => out.push(s));
+  con.exec('mp_respawn_immunitytime 2');
+  assert.deepEqual(out, ['Unknown command "mp_respawn_immunitytime"']);
+  con.unknown = (args) => {
+    if (!args[0].startsWith('mp_')) return false;
+    taken.push(args.join(' '));
+    return true;
+  };
+  con.exec('mp_respawn_immunitytime 2; nonsense');
+  assert.deepEqual(taken, ['mp_respawn_immunitytime 2']);
+  assert.equal(out.at(-1), 'Unknown command "nonsense"');
+});

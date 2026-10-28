@@ -25,12 +25,17 @@ const BIND = Deno.env.get('BIND') || '0.0.0.0';
 const MAP = Deno.env.get('MAP') || 'de_dust2';
 
 const STATIC_DIRS = ['client/', 'shared/', 'maps/'];
+// The game server code and mode cfgs, for Practice: the browser runs them in a Web Worker
+// (client/localserver.js). Not main.js, the transport, the certificate or server.cfg.
+const STATIC_FILES = new Set(['server/host.js', 'server/game.js', 'server/bots.js', 'cfg/gamemode_competitive.cfg',
+  'cfg/gamemode_deathmatch.cfg']);
 const MIME = {
   html: 'text/html; charset=utf-8',
   js: 'text/javascript; charset=utf-8',
   json: 'application/json',
   css: 'text/css',
   bsp: 'application/octet-stream',
+  cfg: 'text/plain; charset=utf-8',
 };
 
 const certInfo = await ensureCert(fileURLToPath(new URL('certs', ROOT)), HOSTNAMES);
@@ -90,7 +95,7 @@ loop();
 async function serveStatic(pathname) {
   if (pathname === '/') pathname = '/client/index.html';
   const rel = pathname.slice(1);
-  if (rel.includes('..') || !STATIC_DIRS.some((d) => rel.startsWith(d))) return null;
+  if (rel.includes('..') || !(STATIC_DIRS.some((d) => rel.startsWith(d)) || STATIC_FILES.has(rel))) return null;
   try {
     const file = await Deno.open(new URL(rel, ROOT), { read: true });
     const ext = rel.slice(rel.lastIndexOf('.') + 1);

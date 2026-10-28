@@ -16,10 +16,15 @@ const KEEPALIVE_MS = 1000; // hidden tabs stop ticking; keep the server from tim
 const JOIN_TIMEOUT_MS = 5000;
 const QUEUE = 256; // datagrams buffered between polls (4 s: hidden tabs poll at 1 Hz)
 const SEND_BUFFERS = 8;
+let localSessions = 0; // connections made to the practice worker
 
 export class NetClient {
   constructor() {
     this.wt = null;
+    this.local = null; // the practice worker, when connected to it
+    this.localId = 0;
+    this.localRcon = '';
+    this.onLocal = null;
     this.writer = null;
     this.closed = false;
     this.closeReason = '';
@@ -91,6 +96,31 @@ export class NetClient {
         this.closeReason = reason || 'closed';
       });
     this.readLoop();
+    this.opened();
+  }
+
+  // Practice: the server running in a Web Worker (client/localserver.js); datagrams go
+  // as messages, one each way. `rcon`: the worker's rcon password (the console uses it).
+  connectLocal(worker, rcon) {
+    const id = this.localId = ++localSessions;
+    this.local = worker;
+    this.localRcon = rcon;
+    this.onLocal = (e) => {
+      const m = e.data;
+      if (m.id !== id) return;
+      if (m.type === 'dgram') this.receiveDatagram(new Uint8Array(m.bytes));
+      else if (m.type === 'close') {
+        this.closed = true;
+        this.closeReason = m.reason || 'closed';
+        worker.removeEventListener('message', this.onLocal);
+      }
+    };
+    worker.addEventListener('message', this.onLocal);
+    worker.postMessage({ type: 'open', id });
+    this.opened();
+  }
+
+  opened() {
     // Leaving or reloading the page: close the session so the server frees our player
     // at once instead of waiting for the timeout.
     addEventListener('pagehide', () => this.close('page closed'));
@@ -115,19 +145,24 @@ export class NetClient {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
-        this.bytesIn += value.byteLength + 28; // + UDP/IP headers, like net_graph counts
-        this.packetsIn++;
-        const t = performance.now();
-        if (this.lastPacketAt) this.gaps[this.gapCount++ & 127] = t - this.lastPacketAt;
-        this.lastPacketAt = t;
-        if (this.qLen === QUEUE) { // tick loop stalled: drop the oldest
-          this.qHead = (this.qHead + 1) % QUEUE;
-          this.qLen--;
-        }
-        this.queue[(this.qHead + this.qLen) % QUEUE] = value;
-        this.qLen++;
+        this.receiveDatagram(value);
       }
     } catch { /* closed */ }
+  }
+
+  // Queues an arriving datagram for the next poll().
+  receiveDatagram(value) {
+    this.bytesIn += value.byteLength + 28; // + UDP/IP headers, like net_graph counts
+    this.packetsIn++;
+    const t = performance.now();
+    if (this.lastPacketAt) this.gaps[this.gapCount++ & 127] = t - this.lastPacketAt;
+    this.lastPacketAt = t;
+    if (this.qLen === QUEUE) { // tick loop stalled: drop the oldest
+      this.qHead = (this.qHead + 1) % QUEUE;
+      this.qLen--;
+    }
+    this.queue[(this.qHead + this.qLen) % QUEUE] = value;
+    this.qLen++;
   }
 
   close(reason) {
@@ -138,6 +173,11 @@ export class NetClient {
     this.send(w.view());
     this.closed = true;
     this.closeReason = reason;
+    if (this.local) {
+      this.local.removeEventListener('message', this.onLocal);
+      this.local.postMessage({ type: 'close', id: this.localId });
+      return;
+    }
     try {
       this.wt.close({ closeCode: 0, reason });
     } catch { /* already closed */ }
@@ -148,6 +188,11 @@ export class NetClient {
     this.lastSend = performance.now();
     this.bytesOut += bytes.byteLength + 28;
     this.packetsOut++;
+    if (this.local) {
+      const copy = bytes.slice(); // the writers' buffers are reused
+      this.local.postMessage({ type: 'dgram', id: this.localId, bytes: copy.buffer }, [copy.buffer]);
+      return;
+    }
     this.writer.write(bytes).catch(() => {});
   }
 

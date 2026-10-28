@@ -76,7 +76,7 @@ export class Host {
       }
       const c = this.game.bots.add(team, difficulty, name);
       if (!c) return con.out(ctx, 'bot_add: the server is full');
-      this.con.get('bot_quota').set(this.game.bots.list.length);
+      this.syncBotQuota();
       con.out(ctx, `added ${c.name} (${c.team === TEAM_CT ? 'CT' : 'T'})`);
     };
     con.command('bot_add', (a, ctx) => {
@@ -92,7 +92,7 @@ export class Host {
         ? bots.list.filter((b) => b.c.team === (q.toLowerCase() === 't' ? TEAM_T : TEAM_CT)).map((b) => b.c)
         : bots.list.filter((b) => b.c.name === q || b.c.name === `BOT ${q}`).map((b) => b.c);
       for (const c of which) bots.kick(c);
-      this.con.get('bot_quota').set(bots.list.length);
+      this.syncBotQuota();
       con.out(ctx, which.length ? `kicked ${which.length} bot(s)` : 'bot_kick [name|t|ct|all]: no such bot');
     }, 'bot_kick [name|t|ct|all]: removes bots');
     con.command('bot_kill', (a, ctx) => {
@@ -123,6 +123,15 @@ export class Host {
     con.command('exec', (a, ctx) => this.execCfg(a[1], ctx), 'exec <file>: runs cfg/<file>.cfg');
     con.command('quit', () => opts.quit && opts.quit(), 'Stops the server');
     con.command('exit', () => opts.quit && opts.quit(), 'Stops the server');
+  }
+
+  // bot_add / bot_kick change bot_quota to what is there now (fill: bots and the humans
+  // on teams), as in CS:GO.
+  syncBotQuota() {
+    const g = this.game, fill = this.con.get('bot_quota_mode').value === 'fill';
+    let humans = 0;
+    for (const c of g.clients) if (c && c.joined && !c.bot && c.playing) humans++;
+    this.con.get('bot_quota').set(g.bots.list.length + (fill ? humans : 0));
   }
 
   // Starts the first map.

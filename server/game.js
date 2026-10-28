@@ -66,6 +66,9 @@ const SPOT_TICKS = 4;
 const SPOT_CONE = 0.5; // cos 60 degrees off the view
 const SHOT_REVEAL_TICKS = TICK_RATE; // firing an unsilenced gun shows the shooter for 1 s
 const DEG = Math.PI / 180;
+// Deathmatch spawns (approx. of CS:GO's): random spots tried, the least distance to an enemy.
+const DM_SPAWN_TRIES = 64;
+const DM_SPAWN_GAP = 512;
 
 // Lag compensation: how far back shots may rewind other players (CS:GO sv_maxunlag 1 s).
 const HISTORY = 64; // ticks, power of two
@@ -444,24 +447,33 @@ export class Game {
     return list.find((s) => this.spawnFree(c, s)) || list[0] || [0, 0, 0, 0];
   }
 
-  // mp_randomspawn: any team's spawn point, one of the few farthest from living enemies
-  // (CS:GO picks deathmatch spawns out of the enemies' sight; GoldSrc maps have only the
-  // team spawns, so distance stands in for it - approx.).
+  // mp_randomspawn: a random spot anywhere on the map, as CS:GO's deathmatch spawns
+  // (GoldSrc maps have only the team spawns, so the spots are the navigation's open
+  // floors: shared/nav.js): standing room, nobody on it, out of every living enemy's
+  // sight and at least DM_SPAWN_GAP from them; when no tried spot is, the farthest one.
   randomSpawn(c) {
-    const scored = [];
-    for (const s of [...this.spawns[TEAM_T], ...this.spawns[TEAM_CT]]) {
+    const nav = this.bots.ensureNav(), tr = this.spotTrace;
+    let best = null, bestD = -1;
+    for (let tries = 0; tries < DM_SPAWN_TRIES; tries++) {
+      const k = Math.floor(Math.random() * nav.count);
+      if (!nav.open(k)) continue;
+      const x = nav.x[k], y = nav.y[k], z = nav.z[k] + 37; // hull center 36 above the feet
+      const s = [x, y, z, Math.random() * 360];
       if (!this.spawnFree(c, s)) continue;
-      let near = Infinity;
+      let near = Infinity, seen = false;
       for (const o of this.clients) {
         if (!o || !o.joined || !o.alive || !this.isEnemy(c, o)) continue;
-        const f = o.player.ps.f;
-        near = Math.min(near, Math.hypot(f[PS_ORIGIN] - s[0], f[PS_ORIGIN + 1] - s[1], f[PS_ORIGIN + 2] - s[2]));
+        const f = o.player.ps.f, ez = f[PS_ORIGIN + 2] + eyeOffset(o.player.ps);
+        near = Math.min(near, Math.hypot(f[PS_ORIGIN] - x, f[PS_ORIGIN + 1] - y, f[PS_ORIGIN + 2] - z));
+        if (!seen) {
+          traceHull(this.world, HULL_POINT, f[PS_ORIGIN], f[PS_ORIGIN + 1], ez, x, y, z + 28, tr);
+          seen = tr.fraction >= 1; // his eye to where ours would be
+        }
       }
-      scored.push([near, s]);
+      if (!seen && near >= DM_SPAWN_GAP) return s;
+      if (near > bestD) [best, bestD] = [s, near];
     }
-    if (!scored.length) return this.teamSpawn(c);
-    scored.sort((a, b) => b[0] - a[0]);
-    return scored[Math.floor(Math.random() * Math.min(3, scored.length))][1];
+    return best || this.teamSpawn(c);
   }
 
   // Buys `item` for `c` if he may (BUY messages, bots).
