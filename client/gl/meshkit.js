@@ -44,6 +44,8 @@ export class MeshBuilder {
     this.bones = [];
     this.groups = []; // per triangle: the primitive it belongs to
     this.creases = []; // per triangle: cos of its crease angle
+    this.hards = []; // per triangle: 1 = a flat face that keeps its normal (bevels bend to it)
+    this.hard = false;
     this.m = IDENTITY.slice();
     this.stack = [];
     this.rgb = [0.5, 0.5, 0.5];
@@ -185,6 +187,7 @@ export class MeshBuilder {
     }
     this.groups.push(this.depth ? this.group : ++this.group);
     this.creases.push(this.crease);
+    this.hards.push(this.hard ? 1 : 0);
     return this;
   }
 
@@ -257,12 +260,15 @@ export class MeshBuilder {
         for (let i = 0; i + 1 < grid[u].length; i++) {
           for (let j = 0; j + 1 < grid[v].length; j++) {
             // (u, v, a) is right-handed: counter-clockwise from +a; flipped on the -a side.
+            // The flat middle of each face is hard: the rounding bends between them.
+            this.hard = i === seg && j === seg;
             if (s > 0) this.quad(at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
             else this.quad(at(i, j), at(i, j + 1), at(i + 1, j + 1), at(i + 1, j));
           }
         }
       }
     }
+    this.hard = false;
     return this.close();
   }
 
@@ -290,16 +296,20 @@ export class MeshBuilder {
       [ring(inset(outline, bv, ccw), -h), ring(outline, -h + bv), ring(outline, h - bv), ring(inset(outline, bv, ccw), h)] :
       [ring(outline, -h), ring(outline, h)];
     this.open();
+    // Bevelled: the side faces and the outline's sides are hard, the bevels bend between.
+    this.hard = bv > 0;
     this.polygon(rings[0], [0, -1, 0]);
     this.polygon(rings.at(-1), [0, 1, 0]);
     for (let r = 0; r + 1 < rings.length; r++) {
       const front = rings[r], back = rings[r + 1];
+      this.hard = bv > 0 && r === 1;
       for (let i = 0; i < n; i++) {
         const j = (i + 1) % n;
         if (ccw) this.quad(front[i], back[i], back[j], front[j]);
         else this.quad(front[j], back[j], back[i], front[i]);
       }
     }
+    this.hard = false;
     return this.close();
   }
 
@@ -388,7 +398,7 @@ export class MeshBuilder {
 
   build() {
     const count = this.pos.length / 3;
-    const nrm = smoothNormals(this.pos, this.nrm, this.groups, this.creases);
+    const nrm = smoothNormals(this.pos, this.nrm, this.groups, this.creases, this.hards);
     const data = new ArrayBuffer(count * MESH_STRIDE);
     const f = new Float32Array(data), i8 = new Int8Array(data), u8 = new Uint8Array(data);
     for (let v = 0; v < count; v++) {
@@ -407,17 +417,21 @@ export class MeshBuilder {
 
 // Smooth vertex normals: each corner of a triangle averages the face normals of the
 // triangles of its primitive meeting at that point whose normal is within the triangle's
-// crease angle of its own, weighted by their corner angles there (so how a quad is split
-// into triangles does not tilt the result).
-function smoothNormals(pos, faceNrm, groups, creases) {
+// crease angle of its own, weighted by their corner angle there times their area (so how
+// a quad is split into triangles does not tilt the result). Hard triangles (the flat
+// faces of bevelled boxes and outlines) average only hard ones; a soft corner touching a
+// hard face takes the hard faces' normal, so a bevel bends from one flat face's normal to
+// the next and the faces themselves stay flat.
+function smoothNormals(pos, faceNrm, groups, creases, hards) {
   const tris = groups.length;
-  const angle = new Float64Array(tris * 3);
+  const weight = new Float64Array(tris * 3);
   for (let v = 0; v < tris * 3; v++) {
     const t = (v / 3) | 0, a = v * 3, b = (t * 3 + (v + 1) % 3) * 3, c = (t * 3 + (v + 2) % 3) * 3;
     const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
     const wx = pos[c] - pos[a], wy = pos[c + 1] - pos[a + 1], wz = pos[c + 2] - pos[a + 2];
+    const cross = Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx);
     const cos = (ux * wx + uy * wy + uz * wz) / ((Math.hypot(ux, uy, uz) * Math.hypot(wx, wy, wz)) || 1);
-    angle[v] = Math.acos(Math.max(-1, Math.min(1, cos)));
+    weight[v] = Math.acos(Math.max(-1, Math.min(1, cos))) * cross;
   }
   const key = (v) => `${groups[(v / 3) | 0]}:${Math.round(pos[v * 3] * 1e3)},${Math.round(pos[v * 3 + 1] * 1e3)},` +
     `${Math.round(pos[v * 3 + 2] * 1e3)}`;
@@ -430,14 +444,18 @@ function smoothNormals(pos, faceNrm, groups, creases) {
   const out = new Float32Array(faceNrm.length);
   for (let v = 0; v < tris * 3; v++) {
     const t = (v / 3) | 0, f = t * 9;
-    let x = 0, y = 0, z = 0;
-    for (const w of at.get(key(v))) {
+    const near = at.get(key(v)).filter((w) => {
       const u = (w / 3) | 0, g = u * 9;
-      const d = faceNrm[f] * faceNrm[g] + faceNrm[f + 1] * faceNrm[g + 1] + faceNrm[f + 2] * faceNrm[g + 2];
-      if (u !== t && d < creases[t]) continue;
-      x += faceNrm[g] * angle[w];
-      y += faceNrm[g + 1] * angle[w];
-      z += faceNrm[g + 2] * angle[w];
+      return u === t || faceNrm[f] * faceNrm[g] + faceNrm[f + 1] * faceNrm[g + 1] + faceNrm[f + 2] * faceNrm[g + 2] >= creases[t];
+    });
+    const hardOnly = hards[t] === 1 || near.some((w) => hards[(w / 3) | 0] === 1);
+    let x = 0, y = 0, z = 0;
+    for (const w of near) {
+      const g = ((w / 3) | 0) * 9;
+      if (hardOnly && hards[(w / 3) | 0] !== 1) continue;
+      x += faceNrm[g] * weight[w];
+      y += faceNrm[g + 1] * weight[w];
+      z += faceNrm[g + 2] * weight[w];
     }
     const l = Math.hypot(x, y, z) || 1;
     out[v * 3] = x / l;

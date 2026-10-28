@@ -72,7 +72,7 @@ Deno.test('guns: every weapon has a closed, low-poly model with its muzzle at th
     const g = all[id];
     assert.ok(g, `${w.name} has a model`);
     closed(g.mesh, w.name);
-    assert.ok(g.mesh.tris <= 2000, `${w.name}: ${g.mesh.tris} triangles`);
+    assert.ok(g.mesh.tris <= 2500, `${w.name}: ${g.mesh.tris} triangles`);
     let maxX = -Infinity;
     for (let i = 0; i < g.mesh.count; i++) maxX = Math.max(maxX, g.mesh.positions[i * 3]);
     assert.ok(Math.abs(g.muzzle[0] - maxX) < 2.5, `${w.name}: muzzle ${g.muzzle[0]} vs front ${maxX}`);

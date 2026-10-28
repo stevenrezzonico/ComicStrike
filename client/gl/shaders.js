@@ -511,19 +511,22 @@ void main() {
     // face (its normal does not bend) would turn white all over: it gets two diagonal
     // bars instead.
     float h = dot(n, normalize(u_lightDir + V));
-    float sheen = smoothstep(0.8, 0.84, h) * (v_fin == FIN_METAL ? 0.45 : 0.3);
+    float curved = smoothstep(0.004, 0.03, length(fwidth(n)));
+    float sheen = smoothstep(0.8, 0.84, h) * (v_fin == FIN_METAL ? 0.45 : 0.3) * mix(0.3, 1.0, curved);
     albedo = mix(albedo, vec3(0.45, 0.5, 0.58), sheen);
     float b = fract((v_obj.x + v_obj.z + v_obj.y * 0.5) / 7.0);
-    float bars = step(0.12, b) * step(b, 0.24) + step(0.31, b) * step(b, 0.35);
-    float curved = smoothstep(0.004, 0.03, length(fwidth(n)));
+    float bars = step(0.12, b) * step(b, 0.18) + step(0.24, b) * step(b, 0.27);
     float streak = smoothstep(0.955, 0.965, h) * (v_fin == FIN_METAL ? 0.9 : 0.6) * mix(bars, 1.0, curved);
     albedo = mix(albedo, vec3(0.95, 0.96, 0.98), streak);
     light = mix(light, 1.0, max(streak, sheen));
   } else if (v_fin == FIN_WOOD) {
     // Grain: broken wavy strokes along the part.
     float g = v_obj.z * 2.2 + v_obj.y * 1.3 + sin(v_obj.x * 0.9 + v_obj.z) * 0.35;
-    float d = abs(fract(g) - 0.5) / max(fwidth(g), 1e-4);
-    float stroke = (1.0 - smoothstep(0.8, 1.6, d)) * step(0.45, vnoise(vec2(v_obj.x * 0.8, floor(g) * 3.7)));
+    float fw = max(fwidth(g), 1e-4);
+    float d = abs(fract(g) - 0.5) / fw;
+    // Broken strokes, gone where they would crowd closer than a few pixels.
+    float stroke = (1.0 - smoothstep(0.8, 1.6, d)) * step(0.45, vnoise(vec2(v_obj.x * 0.8, floor(g) * 3.7)))
+      * (1.0 - smoothstep(0.12, 0.3, fw));
     albedo = mix(albedo, albedo * 0.3, stroke * 0.9);
   }
   gbuffer(mix(albedo, vec3(1.0), u_white), clamp(mix(light, 1.0, u_white), 0.0, 1.0), n, v_id, v_w, 0u);

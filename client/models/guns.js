@@ -1,6 +1,7 @@
 // Gun models for every weapon (zero assets): a parts library on client/gl/meshkit.js and
-// one compact specification per gun, in CS:GO-like proportions and colors, flat and
-// low-poly (art style: few colors, crisp shapes). Units are inches (= game units).
+// one compact specification per gun, in CS:GO-like proportions and colors: few colors,
+// bevelled edges and round parts, details (ribs, slots, serrations) in their own shade so
+// the ink outlines them. Units are inches (= game units).
 //
 // Gun frame: x along the barrel, y left, z up; the origin is where the shooting hand
 // holds the grip (the top of the pistol grip). Three bones: GUN_ROOT, GUN_MAG (the
@@ -29,95 +30,219 @@ const BEVEL = 0.12; // edge rounding of boxes and outlines (in)
 const SEG = 12; // sides of round parts
 const C4_TAN = [0.52, 0.47, 0.3];
 const LED = [0.95, 0.12, 0.08];
+const LENS = finish([0.42, 0.6, 0.74], FINISH.METAL); // scope glass
 
 // --- parts ----------------------------------------------------------------------------
 // All take the builder and work in the gun frame.
 
-// Long-gun receiver: a box from x0 to x1, bottom at z0, height h, width w.
-function receiver(b, x0, x1, z0, h, w, color) {
-  b.color(color).box(x1 - x0, w, h, (x0 + x1) / 2, 0, z0 + h / 2);
+// Runs fn with the builder's edge rounding set to r (0: sharp, for small cheap details).
+function withBevel(b, r, fn) {
+  const bev = b.bev;
+  b.bevel(r);
+  fn();
+  b.bevel(bev);
 }
 
-// Round part along x (barrel, tube, silencer, scope body): radius r from x0 to x1 at
-// height z (and side y).
+// A lighter or darker print of a color, keeping its finish: details in another color get
+// their own ink outline (ribs, serrations).
+function shade(c, k) {
+  const s = c.map((v) => Math.min(1, v * k));
+  if (c.finish !== undefined) s.finish = c.finish;
+  return s;
+}
+
+// Long-gun receiver from x0 to x1, bottom at z0, height h, width w, its rear corners cut;
+// `cover`: a rounded dust cover on top (AK, Galil), half a cover height above it.
+function receiver(b, x0, x1, z0, h, w, color, cover = false) {
+  const c = Math.min(0.5, h * 0.2);
+  b.color(color).extrude([[x0, z0 + c], [x0 + c, z0], [x1, z0], [x1, z0 + h], [x0 + c, z0 + h], [x0, z0 + h - c]], w);
+  if (cover) b.color(shade(color, 1.2)).rbox(x1 - x0 - 1.4, w * 0.84, 1, 0.42, (x0 + x1) / 2 + 0.4, 0, z0 + h);
+}
+
+// Round part along x (barrel, tube, silencer): radius r from x0 to x1 at height z (and
+// side y).
 function tube(b, x0, x1, r, z, color, seg = SEG, y = 0) {
   b.color(color).push().translate(x0, y, z).rotate(90).lathe([[r, 0], [r, x1 - x0]], seg).pop();
 }
 
+// Surface of revolution along x from x0 at height z: profile [[radius, distance], ...].
+function turned(b, x0, z, profile, color, seg = SEG) {
+  b.color(color).push().translate(x0, 0, z).rotate(90).lathe(profile, seg).pop();
+}
+
 // Pistol grip at the origin, raked back `rake` degrees (the bottom behind the top), `len`
-// long.
+// long, with a palm swell; the trigger guard and trigger ahead of it.
 function grip(b, len, w, color, rake = 15, depth = 1.6) {
-  b.color(color).push().rotate(rake).extrude([[-depth * 0.55, 0.2], [depth * 0.45, 0.2], [depth * 0.4, -len],
-    [-depth * 0.6, -len]], w).pop();
-  b.color(color).box(1.6, w * 0.4, 0.25, 1.5, 0, -0.9); // trigger guard bar
+  const d = depth;
+  withBevel(b, 0.25, () => b.color(color).push().rotate(rake).extrude([[-d * 0.55, 0.2], [d * 0.45, 0.2],
+    [d * 0.42, -len * 0.25], [d * 0.5, -len * 0.5], [d * 0.42, -len * 0.75], [d * 0.4, -len], [-d * 0.62, -len],
+    [-d * 0.68, -len * 0.55], [-d * 0.6, -len * 0.2]], w).pop());
+  withBevel(b, 0, () => {
+    b.color(color).box(1.9, w * 0.35, 0.22, 1.55, 0, -1.25).box(0.22, w * 0.35, 1.25, 2.45, 0, -0.68);
+    b.color(BLACK).push().translate(1.25, 0, -0.25).rotate(-15).box(0.22, 0.25, 0.75, 0, 0, -0.3).pop();
+  });
 }
 
 // Magazine hanging from the receiver bottom at z0: front edge at x, `len` long, `depth`
-// deep (along x), curving forward by `curve` (fraction of len) — on the GUN_MAG bone.
-function magazine(b, x, z0, len, depth, w, color, curve = 0, rake = 0) {
-  const pts = [];
-  const steps = curve ? 3 : 1;
+// deep (along x), curving forward by `curve` (fraction of len) — on the GUN_MAG bone. A
+// floor plate at the bottom and `ribs` ribs across its sides.
+function magazine(b, x, z0, len, depth, w, color, curve = 0, rake = 0, ribs = 0) {
+  const lean = Math.tan(rake * Math.PI / 180);
+  const dx = (t) => curve * len * t * t + lean * len * t;
+  const steps = curve ? 6 : 1;
   const front = [], back = [];
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
-    const dx = curve * len * t * t + Math.tan(rake * Math.PI / 180) * len * t;
-    front.push([x + dx, z0 - len * t]);
-    back.push([x - depth + dx, z0 - len * t]);
+    front.push([x + dx(t), z0 - len * t]);
+    back.push([x - depth + dx(t), z0 - len * t]);
   }
-  pts.push(...back.slice().reverse(), ...front);
-  b.bone(GUN_MAG).color(color).extrude(pts.reverse(), w).bone(GUN_ROOT);
+  const pts = [...back.slice().reverse(), ...front];
+  b.bone(GUN_MAG).color(color).extrude(pts.reverse(), w);
+  // Across the magazine at t: turned with the curve.
+  const across = (t, sx, sy, sz, c, dz = 0) => {
+    const deg = Math.atan(2 * curve * t + lean) * 180 / Math.PI;
+    b.color(c).push().translate(x - depth / 2 + dx(t), 0, z0 - len * t + dz).rotate(-deg).box(sx, sy, sz).pop();
+  };
+  withBevel(b, 0, () => {
+    for (let i = 1; i <= ribs; i++) across(0.1 + 0.8 * i / (ribs + 1), depth * 0.72, w + 0.14, 0.2, shade(color, 1.35));
+  });
+  withBevel(b, 0.1, () => across(1, depth + 0.25, w + 0.2, 0.4, shade(color, 0.7), -0.05));
+  b.bone(GUN_ROOT);
 }
 
 // Drum or pan magazine: a disc of radius r and thickness t, centered at (x, z), axis
-// along y.
+// along y, its face stepped in.
 function drum(b, x, z, r, t, color) {
-  b.bone(GUN_MAG).color(color).push().translate(x, -t / 2, z).rotate(0, 0, -90).lathe([[r, 0], [r, t]], 16).pop()
-    .bone(GUN_ROOT);
+  b.bone(GUN_MAG).color(color).push().translate(x, -t / 2, z).rotate(0, 0, -90)
+    .lathe([[r * 0.85, 0], [r, t * 0.15], [r, t * 0.85], [r * 0.85, t]], 16).pop().bone(GUN_ROOT);
 }
 
-// Stock behind x0: 'solid' (wedge down to a butt `drop` below the bore line),
-// 'skeleton' (two rails and a butt plate), 'tube' (buffer tube and a small butt).
-function stock(b, type, x0, top, len, h, drop, color) {
-  if (type === 'solid') {
-    b.color(color).extrude([[x0, top], [x0, top - h * 0.5], [x0 - len, top - drop - h], [x0 - len, top - drop]], 1.5);
-  } else if (type === 'skeleton') {
-    b.color(color).box(len, 0.6, 0.5, x0 - len / 2, 0, top - 0.3);
-    b.box(len, 0.6, 0.5, x0 - len / 2, 0, top - h + 0.3 - drop * 0.5);
-    b.box(0.8, 1.4, h + drop * 0.5, x0 - len, 0, top - (h + drop * 0.5) / 2);
-  } else if (type === 'tube') {
-    tube(b, x0 - len * 0.6, x0, 0.6, top - 0.8, color);
-    b.color(color).box(len * 0.45, 1.5, h, x0 - len + len * 0.22, 0, top - 0.8 - h * 0.35);
+// Handguard from x0, `hl` long, `hh` high, `hw` wide around the barrel at `bore`:
+// 'round' a ribbed tube with end caps (M4), 'wood' a tapered lower half (AK, Galil),
+// else a rounded block.
+function handguard(b, style, x0, hl, hh, hw, bore, color) {
+  if (style === 'round') {
+    const r = hh / 2, n = Math.max(3, Math.round((hl - 0.8) / 0.9)), s = (hl - 0.8) / n;
+    const prof = [[r * 1.1, 0], [r * 1.1, 0.4]];
+    for (let i = 0; i < n; i++) {
+      const a = 0.4 + s * i;
+      prof.push([r, a], [r, a + s * 0.55], [r * 0.9, a + s * 0.55], [r * 0.9, a + s]);
+    }
+    prof.push([r * 1.1, hl - 0.4], [r * 1.1, hl]);
+    turned(b, x0, bore, prof, color, 10);
+  } else if (style === 'wood') {
+    const top = bore + 0.2, bot = bore - hh * 0.8;
+    withBevel(b, 0.3, () => b.color(color).extrude([[x0, top], [x0 + hl, top], [x0 + hl, bot + 0.6],
+      [x0 + hl - 0.7, bot], [x0 + 0.6, bot + 0.05], [x0, bot + 0.5]], hw));
+  } else {
+    b.color(color).rbox(hl, hw, hh, 0.35, x0 + hl / 2, 0, bore - hh * 0.3);
   }
 }
 
-// Telescopic sight along x centered on (x, z): a tube with wider bells and two mounts
-// down to z0.
+// Muzzle device from x, `len` long, radius r at height z: 'bird' a flared birdcage with
+// slots (M4), 'slant' a brake cut at the front (AK), else a brake with lipped ends.
+function muzzleDevice(b, x, len, r, z, color, style) {
+  if (style === 'bird') {
+    turned(b, x, z, [[r * 0.75, 0], [r * 0.75, len * 0.15], [r, len * 0.3], [r, len], [r * 0.7, len]], color);
+    withBevel(b, 0, () => {
+      for (let i = 0; i < 2; i++) b.color(BLACK).box(len * 0.45, 0.08, r * 0.5, x + len * 0.65, (i ? 1 : -1) * r, z);
+      b.color(BLACK).box(len * 0.45, r * 0.5, 0.08, x + len * 0.65, 0, z + r);
+    });
+  } else if (style === 'slant') {
+    turned(b, x, z, [[r, 0], [r, len * 0.7], [r * 0.82, len]], color);
+    withBevel(b, 0, () => b.color(BLACK).box(len * 0.3, r * 0.6, 0.1, x + len * 0.5, 0, z + r * 0.97));
+  } else {
+    turned(b, x, z, [[r * 0.9, 0], [r, len * 0.12], [r, len * 0.88], [r * 0.9, len]], color);
+  }
+}
+
+// Stock behind x0: 'solid' (a wedge down to a butt `drop` below the bore line, with a
+// pad), 'skeleton' (two rails and a butt plate), 'tube' (buffer tube and a small butt).
+function stock(b, type, x0, top, len, h, drop, color) {
+  const pad = color.finish === FINISH.WOOD ? BLACK : shade(color, 0.6);
+  if (type === 'solid') {
+    withBevel(b, 0.32, () => b.color(color).extrude([[x0, top], [x0, top - h * 0.5],
+      [x0 - len * 0.35, top - drop * 0.35 - h * 0.6], [x0 - len, top - drop - h], [x0 - len, top - drop],
+      [x0 - len * 0.5, top - drop * 0.5 + 0.05]], 1.5));
+    b.color(pad).rbox(0.45, 1.6, h + 0.1, 0.18, x0 - len - 0.2, 0, top - drop - h / 2);
+  } else if (type === 'skeleton') {
+    b.color(color).box(len, 0.6, 0.5, x0 - len / 2, 0, top - 0.3);
+    b.box(len, 0.6, 0.5, x0 - len / 2, 0, top - h + 0.3 - drop * 0.5);
+    b.rbox(0.8, 1.4, h + drop * 0.5, 0.3, x0 - len, 0, top - (h + drop * 0.5) / 2);
+  } else if (type === 'tube') {
+    tube(b, x0 - len * 0.6, x0, 0.6, top - 0.8, color);
+    b.color(color).rbox(len * 0.45, 1.5, h, 0.4, x0 - len + len * 0.22, 0, top - 0.8 - h * 0.35);
+  }
+}
+
+// Telescopic sight along x centered on (x, z): objective and eyepiece bells, turrets, blue
+// lenses at both ends, two mounts down to z0.
 function scope(b, x, z, len, r, z0, color) {
-  tube(b, x - len / 2, x - len / 2 + len * 0.22, r * 1.45, z, color);
-  tube(b, x - len / 2 + len * 0.22, x + len / 2 - len * 0.25, r, z, color);
-  tube(b, x + len / 2 - len * 0.25, x + len / 2, r * 1.6, z, color);
+  const x0 = x - len / 2;
+  turned(b, x0, z, [[r * 1.3, 0], [r * 1.45, len * 0.05], [r * 1.45, len * 0.2], [r, len * 0.3], [r, len * 0.68],
+    [r * 1.6, len * 0.82], [r * 1.6, len]], color);
+  turned(b, x0 - 0.04, z, [[r * 1.1, 0], [r * 1.1, 0.08]], LENS);
+  turned(b, x0 + len - 0.04, z, [[r * 1.35, 0], [r * 1.35, 0.08]], LENS);
+  b.color(color).push().translate(x0 + len * 0.49, 0, z + r * 0.8).lathe([[r * 0.5, 0], [r * 0.5, r * 0.8]], 10).pop();
+  b.push().translate(x0 + len * 0.49, -r * 0.8, z).rotate(0, 0, 90).lathe([[r * 0.45, 0], [r * 0.45, r * 0.7]], 10).pop();
   b.color(BLACK).box(0.8, 0.9, z - z0, x - len * 0.18, 0, (z + z0) / 2).box(0.8, 0.9, z - z0, x + len * 0.15, 0, (z + z0) / 2);
 }
 
-function sights(b, rear, front, z, color = BLACK) {
-  b.color(color).box(0.5, 0.8, 0.6, rear, 0, z + 0.3).box(0.3, 0.25, 0.8, front, 0, z + 0.4);
+// Iron sights of a long gun: a notch at x `rear` whose base is at `top` (on a block of its
+// own unless `block` is false: a carry handle's housing), and an A-frame front post at
+// `front` rising from the barrel (`base`) to the same height.
+function ironSights(b, rear, front, base, top, block = true, color = BLACK) {
+  withBevel(b, 0, () => {
+    if (block) b.color(color).box(0.6, 0.9, 0.35, rear, 0, top - 0.17);
+    b.color(color).box(0.6, 0.22, 0.3, rear, 0.34, top + 0.12).box(0.6, 0.22, 0.3, rear, -0.34, top + 0.12);
+    b.push().translate(front, 0, 0).extrude([[-0.5, base], [0.5, base], [0.12, top + 0.25], [-0.12, top + 0.25]], 0.3).pop();
+  });
 }
 
-// Pistol: slide (GUN_BOLT) from x = -1.4 forward, frame and grip; mag base in the grip.
+// Small sights on a slide or frame (pistols, the revolver).
+function pistolSights(b, rear, front, z, color = BLACK) {
+  withBevel(b, 0, () => b.color(color).box(0.5, 0.8, 0.3, rear, 0, z + 0.15).box(0.25, 0.22, 0.35, front, 0, z + 0.17));
+}
+
+// Rail on top from x0 to x1 at height z, its cross slots each outlined.
+function rail(b, x0, x1, z) {
+  withBevel(b, 0, () => {
+    b.color(BLACK).box(x1 - x0, 0.75, 0.3, (x0 + x1) / 2, 0, z + 0.15);
+    for (let x = x0 + 0.35; x < x1 - 0.2; x += 0.6) b.color(DARK).box(0.24, 0.8, 0.14, x, 0, z + 0.34);
+  });
+}
+
+// Carry handle from x0 to x1 on the receiver top z: one arch (two posts and a bridge, the
+// gap showing) rising at its back end into the rear sight housing. Returns the sight's
+// base height.
+function carryHandle(b, x0, x1, z, color) {
+  b.color(color).extrude([[x0, z], [x0 + 0.8, z], [x0 + 0.8, z + 0.85], [x1 - 0.8, z + 0.85], [x1 - 0.8, z], [x1, z],
+    [x1, z + 1.35], [x0 + 1.1, z + 1.35], [x0 + 0.9, z + 1.75], [x0, z + 1.75]], 0.8);
+  return z + 1.75;
+}
+
+// Pistol: slide (GUN_BOLT) from x = -1.4 forward with its front top cut, grip serrations,
+// the ejection port and the bore; frame and grip; mag base in the grip.
 function pistol(b, s) {
   const { len, h = 1.25, w = 1.0, slide = DARK, frame = POLY, gripLen = 4.2, rake = 18, barrel = 0 } = s;
-  b.bone(GUN_BOLT).color(slide).box(len, w, h, -1.4 + len / 2, 0, 0.35 + h / 2);
-  sights(b, -1.1, len - 1.7, 0.35 + h);
-  b.bone(GUN_ROOT).color(frame).box(len * 0.72, w * 0.9, 0.55, -1.4 + len * 0.36 + 0.4, 0, 0.1);
+  const x0 = -1.4, x1 = x0 + len, sz = 0.35;
+  b.bone(GUN_BOLT).color(slide).extrude([[x0, sz], [x1, sz], [x1, sz + h * 0.7], [x1 - 0.45, sz + h], [x0, sz + h]], w);
+  withBevel(b, 0, () => {
+    for (let i = 0; i < 5; i++) b.color(shade(slide, 1.6)).box(0.08, w + 0.04, h * 0.62, x0 + 0.35 + i * 0.22, 0, sz + h * 0.5);
+    b.color(BLACK).box(Math.min(1.6, len * 0.22), 0.06, h * 0.45, x0 + len * 0.45, -w / 2, sz + h * 0.62); // ejection port
+  });
+  turned(b, x1 - 0.02, 0.95, [[0.22, 0], [0.22, 0.05]], BLACK, 10); // the bore
+  pistolSights(b, x0 + 0.3, x1 - 0.4, sz + h);
+  b.bone(GUN_ROOT).color(frame).box(len * 0.72, w * 0.9, 0.55, x0 + len * 0.36 + 0.4, 0, 0.1);
   grip(b, gripLen, w * 1.05, frame, rake, 1.5);
   // Magazine base plate at the bottom of the grip.
   const bx = -Math.tan(rake * Math.PI / 180) * gripLen;
   b.bone(GUN_MAG).color(BLACK).box(1.6, w * 1.1, 0.4, bx, 0, -gripLen - 0.1).bone(GUN_ROOT);
-  if (barrel) tube(b, -1.4 + len, -1.4 + len + barrel, 0.3, 0.9, DARK);
+  if (barrel) tube(b, x1, x1 + barrel, 0.3, 0.9, DARK);
   const r = rake * Math.PI / 180;
   return {
-    muzzle: [-1.4 + len + barrel, 0, 0.95], support: [-0.4, -0.6, -2.4],
-    mag: [bx, 0, -gripLen - 0.3], magDir: [-Math.sin(r), 0, -Math.cos(r)], bolt: [-0.9, 0, 0.35 + h / 2],
+    muzzle: [x1 + barrel, 0, 0.95], support: [-0.4, -0.6, -2.4],
+    mag: [bx, 0, -gripLen - 0.3], magDir: [-Math.sin(r), 0, -Math.cos(r)], bolt: [-0.9, 0, sz + h / 2],
   };
 }
 
@@ -127,33 +252,45 @@ function longGun(b, s) {
   const metal = s.metal || DARK, furn = s.furniture || POLY;
   const [rx0, rx1] = s.receiver; // receiver x range
   const rh = s.height || 2.4, rw = s.width || 1.4, z0 = s.z0 ?? -0.3;
-  const bore = z0 + rh * 0.62;
-  receiver(b, rx0, rx1, z0, rh, rw, metal);
-  if (s.carry) b.color(metal).box(s.carry[1] - s.carry[0], 0.8, 0.9, (s.carry[0] + s.carry[1]) / 2, 0, z0 + rh + 0.45);
-  if (s.rail) b.color(BLACK).box(rx1 - rx0 - 1, 0.7, 0.35, (rx0 + rx1) / 2, 0, z0 + rh + 0.17);
+  const bore = z0 + rh * 0.62, top = z0 + rh;
+  receiver(b, rx0, rx1, z0, rh, rw, metal, s.cover);
+  let sightTop = top + (s.cover ? 0.5 : 0) + 0.35;
+  if (s.carry) sightTop = carryHandle(b, s.carry[0], s.carry[1], top, metal);
+  if (s.rail) rail(b, rx0 + 0.5, rx1 - 0.5, top);
   grip(b, s.gripLen || 3.6, rw * 0.85, s.gripColor || furn, s.rake ?? 15);
   // Bolt / charging handle on the right side.
   const bh = s.boltHandle ?? (rx0 + rx1) / 2;
   b.bone(GUN_BOLT).color(s.boltColor || metal).box(1.2, 0.9, 0.5, bh, -rw / 2 - 0.4, z0 + rh * 0.7).bone(GUN_ROOT);
   // Barrel and handguard.
-  const bl = s.barrel;
-  tube(b, rx1, rx1 + bl, s.barrelR || 0.35, bore, metal);
+  const bl = s.barrel, br = s.barrelR || 0.35;
+  tube(b, rx1, rx1 + bl, br, bore, metal);
+  const hgColor = s.handguardColor || furn;
   if (s.handguard) {
     const [hl, hh, hw = rw * 1.05] = s.handguard;
-    b.color(s.handguardColor || furn).box(hl, hw, hh, rx1 + hl / 2, 0, bore - hh * 0.3);
+    handguard(b, s.hg || (hgColor.finish === FINISH.WOOD ? 'wood' : 'block'), rx1, hl, hh, hw, bore, hgColor);
   }
-  if (s.gasTube) tube(b, rx1, rx1 + s.gasTube, 0.32, bore + 0.75, metal);
+  if (s.gasTube) {
+    tube(b, rx1, rx1 + s.gasTube, 0.32, bore + 0.75, metal);
+    if (hgColor.finish === FINISH.WOOD) b.color(hgColor).rbox(s.gasTube * 0.6, rw * 0.8, 0.95, 0.4, rx1 + s.gasTube * 0.3 + 0.2, 0, bore + 0.75);
+  }
   let muzzle = rx1 + bl;
   if (s.silencer) {
-    tube(b, muzzle, muzzle + s.silencer, 0.75, bore, BLACK);
+    turned(b, muzzle, bore, [[0.6, 0], [0.75, 0.4], [0.75, s.silencer - 0.3], [0.6, s.silencer]], BLACK);
     muzzle += s.silencer;
   } else if (s.brake) {
-    tube(b, muzzle, muzzle + s.brake, 0.55, bore, metal);
+    muzzleDevice(b, muzzle, s.brake, 0.55, bore, metal, s.brakeStyle);
     muzzle += s.brake;
   }
   if (s.tubeMag) { // shotgun magazine tube under the barrel, with the pump on it
     tube(b, rx1, rx1 + s.tubeMag, 0.42, bore - 1.05, metal);
-    if (s.pump) b.bone(GUN_BOLT).color(furn).box(s.pump, 1.5, 1.3, rx1 + 2.5 + s.pump / 2, 0, bore - 1.05).bone(GUN_ROOT);
+    if (s.pump) {
+      const px = rx1 + 2.5 + s.pump / 2;
+      b.bone(GUN_BOLT).color(furn).rbox(s.pump, 1.5, 1.3, 0.5, px, 0, bore - 1.05);
+      withBevel(b, 0, () => {
+        for (let i = 1; i < 4; i++) b.color(shade(furn, 1.6)).box(0.14, 1.56, 1.1, px - s.pump / 2 + s.pump * i / 4, 0, bore - 1.05);
+      });
+      b.bone(GUN_ROOT);
+    }
   }
   // Magazine; the hand takes it by its lower part.
   const m = s.mag;
@@ -164,14 +301,17 @@ function longGun(b, s) {
     magDir = norm([m.drum ? 0 : curve + lean, 0, -1]);
 
     if (m.drum) drum(b, m.x, z0 - m.drum, m.drum, m.t || 2.2, m.color || metal);
-    else magazine(b, m.x, z0 + 0.1, m.len, m.depth || 1.4, m.w || rw * 0.75, m.color || metal, m.curve || 0, m.rake || 0);
+    else magazine(b, m.x, z0 + 0.1, m.len, m.depth || 1.4, m.w || rw * 0.75, m.color || metal, curve, m.rake || 0, m.ribs || 0);
   }
   // Bolt handle on the right, or the pump under the barrel.
   const bolt = s.pump ? [rx1 + 2.5 + s.pump / 2, 0, bore - 1.75] : [bh, -rw / 2 - 0.8, z0 + rh * 0.7];
-  if (s.stock) stock(b, s.stock, rx0, z0 + rh, s.stockLen || 9, s.stockH || 3.2, s.stockDrop ?? 1, s.stockColor || furn);
-  if (s.scope) scope(b, s.scope[0], z0 + rh + 1.5, s.scope[1], s.scope[2] || 0.7, z0 + rh, s.scopeColor || BLACK);
-  if (s.sights !== false && !s.scope) sights(b, rx0 + 1.5, muzzle - 1, bore + 0.3);
-  if (s.foregrip) b.color(furn).box(1.2, 1.1, 3, s.foregrip, 0, z0 - 1.5); // vertical foregrip
+  if (s.stock) stock(b, s.stock, rx0, top, s.stockLen || 9, s.stockH || 3.2, s.stockDrop ?? 1, s.stockColor || furn);
+  if (s.scope) scope(b, s.scope[0], top + 1.5, s.scope[1], s.scope[2] || 0.7, top, s.scopeColor || BLACK);
+  if (s.sights !== false && !s.scope) {
+    const front = s.frontSight ?? Math.min(s.handguard ? rx1 + s.handguard[0] + 0.8 : muzzle - 1, muzzle - 1);
+    ironSights(b, s.rearSight ?? (s.carry ? s.carry[0] + 0.45 : rx0 + 1.5), front, bore + br * 0.5, sightTop, !s.carry);
+  }
+  if (s.foregrip) b.color(furn).rbox(1.2, 1.1, 3, 0.45, s.foregrip, 0, z0 - 1.5); // vertical foregrip
   if (s.bipod) b.color(BLACK).box(0.5, 0.5, 4, s.bipod, 0.8, bore - 2.4).box(0.5, 0.5, 4, s.bipod, -0.8, bore - 2.4);
   // The off hand: a vertical foregrip, else the handguard (at most 12.5 in ahead of the
   // grip, where long guns are held), else under the receiver front.
@@ -187,7 +327,10 @@ function norm(v) {
 
 // --- specifications ----------------------------------------------------------------------
 // Long guns: receiver [x0, x1], barrel length, handguard [length, height, width?],
-// mag { x (front edge), len, depth, curve, drum }, stock type and size, scope [x, len, r].
+// mag { x (front edge), len, depth, curve, drum, ribs }, stock type and size, scope [x, len, r];
+// hg handguard style ('round', 'wood', 'block'; wood colors default to 'wood'), cover (dust
+// cover), carry [x0, x1] (carry handle), brakeStyle ('bird', 'slant'), frontSight /
+// rearSight x.
 
 const GUNS = {
   // Pistols: slide length, colors, extras.
@@ -210,11 +353,11 @@ const GUNS = {
   p90: { long: { receiver: [-8, 8], height: 3.3, width: 2.2, z0: -1.4, barrel: 2.5, mag: null, stock: null, gripLen: 2.6, rake: 0, support: [6, 0, -1.2], top: true } },
   bizon: { long: { receiver: [-3.5, 6], height: 2.4, width: 1.5, barrel: 9, handguard: [3, 1.8], stock: 'skeleton', stockLen: 9, mag: null, helical: true } },
   // Rifles.
-  galilar: { long: { receiver: [-3, 8.5], height: 2.6, barrel: 9, brake: 1.5, handguard: [7, 2.4], handguardColor: WOOD, mag: { x: 6.5, len: 7.5, depth: 1.6, curve: 0.18 }, stock: 'skeleton', stockLen: 9, carry: null } },
+  galilar: { long: { receiver: [-3, 8.5], height: 2.6, cover: true, barrel: 9, brake: 1.5, handguard: [7, 2.4], handguardColor: WOOD, mag: { x: 6.5, len: 7.5, depth: 1.6, curve: 0.18 }, stock: 'skeleton', stockLen: 9, carry: null } },
   famas: { long: { receiver: [-9, 8], height: 3.0, width: 1.6, barrel: 7, brake: 1, metal: DARK, mag: { x: -2.2, len: 5.5, depth: 1.4 }, carry: [-4, 6], gripLen: 3.6, support: [5, 0, -1.2], bipod: 13 } },
-  ak47: { long: { receiver: [-2, 9], height: 2.6, barrel: 11, brake: 1.2, handguard: [7.5, 2.4], handguardColor: WOOD, gasTube: 7.5, mag: { x: 6.2, len: 8, depth: 1.8, curve: 0.3, color: [0.24, 0.2, 0.17] }, stock: 'solid', stockColor: WOOD, stockLen: 10, stockDrop: 2.2, gripColor: WOOD_DARK } },
-  m4a1: { long: { receiver: [-2.5, 8], height: 2.6, barrel: 10, brake: 1.2, handguard: [7, 2.6], mag: { x: 6.2, len: 7, depth: 1.6, curve: 0.12 }, stock: 'tube', stockLen: 10, carry: null, rail: true } },
-  m4a1_silencer: { long: { receiver: [-2.5, 8], height: 2.6, barrel: 7, silencer: 7, handguard: [6.5, 2.6], mag: { x: 6.2, len: 6, depth: 1.6, curve: 0.08 }, stock: 'tube', stockLen: 10, rail: true } },
+  ak47: { long: { receiver: [-2, 9], height: 2.6, cover: true, barrel: 11, brake: 1.2, brakeStyle: 'slant', frontSight: 19.4, rearSight: 8.2, handguard: [7.5, 2.4], handguardColor: WOOD, gasTube: 7.5, mag: { x: 6.2, len: 8, depth: 1.8, curve: 0.3, ribs: 5, color: [0.24, 0.2, 0.17] }, stock: 'solid', stockColor: WOOD, stockLen: 10, stockDrop: 2.2, gripColor: WOOD_DARK } },
+  m4a1: { long: { receiver: [-2.5, 8], height: 2.6, barrel: 10, brake: 1.6, brakeStyle: 'bird', handguard: [7, 2.6], hg: 'round', mag: { x: 6.2, len: 7, depth: 1.6, curve: 0.12, ribs: 2 }, stock: 'tube', stockLen: 10, carry: [-0.6, 6.4] } },
+  m4a1_silencer: { long: { receiver: [-2.5, 8], height: 2.6, barrel: 7, silencer: 7, brakeStyle: 'bird', handguard: [6.5, 2.6], mag: { x: 6.2, len: 6, depth: 1.6, curve: 0.08 }, stock: 'tube', stockLen: 10, rail: true } },
   sg556: { long: { receiver: [-2.5, 8], height: 2.8, barrel: 10, brake: 1.4, handguard: [6.5, 2.6], mag: { x: 6, len: 6.5, depth: 1.6, curve: 0.2, color: [0.32, 0.3, 0.2] }, stock: 'skeleton', stockLen: 9.5, scope: [3, 7, 0.65] } },
   aug: { long: { receiver: [-10, 8], height: 2.8, width: 1.8, barrel: 8, brake: 1, metal: OLIVE, furniture: OLIVE, mag: { x: -2.5, len: 6, depth: 1.6, curve: 0.15, color: [0.5, 0.52, 0.5] }, scope: [2, 6, 0.7], scopeColor: OLIVE, foregrip: 4.5 } },
   ssg08: { long: { receiver: [-2, 9], height: 2.2, width: 1.3, barrel: 16, barrelR: 0.32, metal: DARK, furniture: [0.22, 0.24, 0.26], handguard: [8, 2, 1.4], mag: { x: 4, len: 3.5, depth: 2 }, stock: 'solid', stockLen: 12, stockDrop: 1.5, scope: [3, 11, 0.7], boltHandle: 0.5 } },
@@ -236,7 +379,7 @@ function buildRevolver(b) {
   tube(b, -1.2, 1.8, 0.85, 0.85, SILVER, 8); // cylinder (on the slide bone for the reload swing)
   tube(b, 2.7, 9, 0.38, 1.1, SILVER);
   b.color(SILVER).box(6.4, 0.6, 0.45, 5.7, 0, 1.6); // top strap / rib
-  sights(b, -1, 8.6, 1.8);
+  pistolSights(b, -1, 8.6, 1.8);
   grip(b, 4.2, 1.15, WOOD, 25, 1.6);
   return { muzzle: [9, 0, 1.1], support: [-0.4, -0.6, -2.4], cylinder: [0.3, 0, 0.85] };
 }

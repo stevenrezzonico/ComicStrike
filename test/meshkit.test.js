@@ -87,6 +87,21 @@ Deno.test('meshkit: round shapes get smooth normals, corners and caps stay sharp
   for (let v = 0; v < flat.count; v += 3) {
     assert.ok(near(normalOf(flat, v), normalOf(flat, v + 1)) && near(normalOf(flat, v), normalOf(flat, v + 2)));
   }
+  // Bevelled boxes and outlines: the flat faces keep their own normal; the bevels bend.
+  for (const [what, mesh] of [['chamfered box', new MeshBuilder().bevel(0.2).box(3, 2, 1).build()],
+    ['bevelled outline', new MeshBuilder().bevel(0.2).extrude([[0, 0], [4, 0], [4, 1], [0, 1]], 2).build()]]) {
+    let flat = 0, bending = 0;
+    for (let t = 0; t < mesh.count; t += 3) {
+      const c = [0, 1, 2].map((k) => normalOf(mesh, t + k));
+      if (near(c[0], c[1]) && near(c[0], c[2])) flat++;
+      else bending++;
+    }
+    assert.ok(flat >= 12 && bending > 0, `${what}: ${flat} flat, ${bending} bending triangles`);
+    // The middle of the +z face prints exactly flat.
+    let top = 0;
+    for (let v = 0; v < mesh.count; v++) if (near(normalOf(mesh, v), [0, 0, 1])) top++;
+    assert.ok(top >= 3, `${what}: no flat top`);
+  }
   // Separate primitives never smooth into each other.
   const two = new MeshBuilder().box(1, 1, 1).box(1, 1, 1, 1, 0, 0).build();
   for (let v = 0; v < two.count; v++) assert.equal(normalOf(two, v).filter((x) => Math.abs(x) > 0.999).length, 1);
