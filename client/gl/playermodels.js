@@ -4,6 +4,7 @@
 // fell until they respawn or leave. Also draws the dropped bomb.
 
 import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN, modelLight } from './skinned.js';
+import { G_FLAGS } from './shaders.js';
 import { buildPlayer, HOLD_TIED } from '../models/players.js';
 import { MAX_HOSTAGES, HS_IDLE, HS_CARRIED, HS_DEAD } from '../../shared/hostages.js';
 import { PlayerAnimator, holdOf, gunInHand } from '../anim/playeranim.js';
@@ -272,6 +273,7 @@ export class PlayerModels {
   draw(viewProj) {
     const r = this.renderer;
     let begun = false;
+    r.flags = G_FLAGS.CHAR; // players and hostages (G_CHAR: far away their colors show)
     for (let id = 0; id < MAX_PLAYERS; id++) {
       if (!this.visible[id]) continue;
       if (!begun) {
@@ -295,6 +297,8 @@ export class PlayerModels {
       begun = true;
       r.draw(this.bodyH, this.hostageModel[k], this.hostageAnim[k].pose.skin, this.hostageLight[k]);
     }
+    if (begun) r.setFlags(0); // weapons on the ground and the bomb are things
+    else r.flags = 0;
     for (let i = 0; i < this.itemCount; i++) {
       const mesh = this.guns.mesh[this.itemWeapon[i]];
       if (!mesh || this.itemHidden[i]) continue;

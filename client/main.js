@@ -54,6 +54,7 @@ import { GunMeshes } from './gl/gunmeshes.js';
 import { GrenadeFx } from './gl/grenadefx.js';
 import { Blasts } from './gl/blast.js';
 import { modelLight } from './gl/skinned.js';
+import { crosshairLayout } from './gl/crosshair.js';
 import { perspective, viewFromAngles, multiply, invert } from './gl/mat4.js';
 import { Input, SELECT_LAST } from './input.js';
 import { WeaponView } from './weaponview.js';
@@ -421,6 +422,16 @@ function storePrediction(t) {
 
 // Freeze time (from the newest snapshot): the same input mask the server applies.
 const frozen = () => net !== null && net.own.round.phase === PHASE_FREEZE;
+// The dot-free zone round the crosshair (px, before r_crosshair_clearzone): just past the
+// arms (they open with the spread, last frame's), the middle of a scope; none when nothing
+// is aimed with.
+const calmLayout = {};
+function calmRadius(height) {
+  if (weaponView.scoped) return height * 0.04;
+  if (weaponView.hidden || weaponView.spread < 0 || !cv.crosshair.bool) return 0;
+  const L = crosshairLayout(cv, height, weaponView.spread, calmLayout);
+  return Math.max(height * 0.02, (L.gap + L.len + Math.max(L.outline, 0)) * 1.6 + 4);
+}
 // Can we take control of player `id` (a living bot of our team, mid-round, not deathmatch)?
 function canTakeOver(id) {
   if (!net || id < 0 || (gameMode() & (GAME_DM | GAME_DEMO))) return false;
@@ -1020,6 +1031,8 @@ function draw(now, alpha, dt) {
   style.dots = cv.r_halftone.number;
   style.bands = cv.r_shadebands.number;
   style.lift = cv.r_shadowlift.number;
+  style.soft = cv.r_halftone_style.number >= 1;
+  style.calm = calmRadius(canvas.height) * cv.r_crosshair_clearzone.number;
   style.boil = cv.r_lineboil.bool && !reducedMotion.matches;
   renderer.zoom = 90 / fov;
   renderer.begin();

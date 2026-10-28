@@ -20,7 +20,7 @@ float vnoise(vec2 p) {
 }`;
 
 // G-buffer flags (alpha of target 2), as GBUFFER_CONSTS declares them.
-export const G_FLAGS = { FLAT: 1, SKY: 2, SCREEN: 4, VIEW: 8 };
+export const G_FLAGS = { FLAT: 1, SKY: 2, SCREEN: 4, VIEW: 8, CHAR: 16 };
 
 const GBUFFER_CONSTS = `
 const float DEPTH_FAR = 16384.0; // linear depth range (units), stored in 24 bits
@@ -28,6 +28,7 @@ const uint G_FLAT = 1u;   // unshaded (lights, flames, flashes): no dots, a bold
 const uint G_SKY = 2u;
 const uint G_SCREEN = 4u; // see-through, printed as a dot screen: no ink against what lies behind
 const uint G_VIEW = 8u;   // the first-person view: a bolder line, like a foreground figure
+const uint G_CHAR = 16u;  // a character (player, hostage, their guns): far away, color over ink
 const vec3 INK = vec3(0.09, 0.075, 0.06);`;
 
 // Fragment outputs of every scene shader.
@@ -507,9 +508,12 @@ void main() {
   vec3 albedo = clamp(v_col * mix(vec3(1.0), clamp(u_light / max(lum, 0.05), 0.0, 2.0), 0.5), 0.0, 1.0);
   float lit = clamp(max(lum / u_lightFull, MODEL_FLOOR), 0.0, 1.0);
   float ndl = dot(n, u_lightDir);
-  float light = ndl > 0.0 ? lit : 0.6 * lit;
+  // Small on screen (a far figure, a few units a pixel): the detail (two tones, rim, shine)
+  // is only speckle there, so it fades to one flat tone and the silhouette carries it.
+  float small = smoothstep(1.2, 3.0, length(fwidth(v_pos)));
+  float light = mix(ndl > 0.0 ? lit : 0.6 * lit, 0.85 * lit, small);
   // Rim: a pale band along the outline on the shadow side.
-  float rim = smoothstep(0.68, 0.76, 1.0 - max(dot(n, V), 0.0)) * step(ndl, 0.0);
+  float rim = smoothstep(0.68, 0.76, 1.0 - max(dot(n, V), 0.0)) * step(ndl, 0.0) * (1.0 - small);
   light = mix(light, lit, rim);
   albedo = mix(albedo, min(albedo * 1.35 + 0.08, vec3(1.0)), rim);
   if (v_fin == FIN_METAL || v_fin == FIN_POLYMER) {
@@ -518,11 +522,12 @@ void main() {
     // bars instead.
     float h = dot(n, normalize(u_lightDir + V));
     float curved = smoothstep(0.004, 0.03, length(fwidth(n)));
-    float sheen = smoothstep(0.8, 0.84, h) * (v_fin == FIN_METAL ? 0.45 : 0.3) * mix(0.3, 1.0, curved);
+    float sheen = smoothstep(0.8, 0.84, h) * (v_fin == FIN_METAL ? 0.45 : 0.3) * mix(0.3, 1.0, curved) * (1.0 - small);
     albedo = mix(albedo, vec3(0.45, 0.5, 0.58), sheen);
     float b = fract((v_obj.x + v_obj.z + v_obj.y * 0.5) / 7.0);
     float bars = step(0.12, b) * step(b, 0.18) + step(0.24, b) * step(b, 0.27);
-    float streak = smoothstep(0.955, 0.965, h) * (v_fin == FIN_METAL ? 0.9 : 0.6) * mix(bars, 1.0, curved);
+    float streak = smoothstep(0.955, 0.965, h) * (v_fin == FIN_METAL ? 0.9 : 0.6) * mix(bars, 1.0, curved)
+      * (1.0 - small);
     albedo = mix(albedo, vec3(0.95, 0.96, 0.98), streak);
     light = mix(light, 1.0, max(streak, sheen));
   } else if (v_fin == FIN_WOOD) {
@@ -567,6 +572,8 @@ uniform float u_zoom;  // 90 / fov: distance fades follow the scope
 uniform float u_bands; // light posterized into this many bands (0: smooth)
 uniform float u_lift;  // share of the darkness taken away (r_shadowlift): dark corners stay readable
 uniform int u_style;   // 0: plain lit colors (r_comic 0)
+uniform vec3 u_calm;   // calm zone round the crosshair: center, radius (px; 0: none): dots there go flat
+uniform float u_soft;  // shade dots: 0 bold, 1 soft (a finer screen, a paler print, less ink)
 out vec4 o_color;
 ${GBUFFER_CONSTS}
 ${NOISE}
@@ -604,14 +611,16 @@ float tone(vec2 frag, float dark, float size, float ang, float far) {
 void main() {
   vec2 frag = gl_FragCoord.xy;
   ivec2 p = ivec2(frag);
-  vec4 C = texelFetch(u_albedo, cl(p + ivec2(1, 0)), 0); // color plate printed 1 px off the ink plate
+  uvec4 Dp = dtex(p);
+  uint fl = Dp.a;
+  float dP = depthOf(Dp);
+  // The color plate is printed 1 px off the ink plate; not on characters (on a small figure
+  // that left a pale sliver of the background inside its outline).
+  vec4 C = texelFetch(u_albedo, cl(p + ivec2((fl & G_CHAR) != 0u ? 0 : 1, 0)), 0);
   vec3 alb = C.rgb;
   float light = C.a;
   if (u_bands > 0.5) light = floor(light * u_bands + 0.5) / u_bands;
   light = 1.0 - (1.0 - light) * (1.0 - u_lift);
-  uvec4 Dp = dtex(p);
-  uint fl = Dp.a;
-  float dP = depthOf(Dp);
   if (u_style == 0) {
     o_color = vec4(alb * mix(0.3, 1.15, light), 1.0);
     return;
@@ -628,16 +637,23 @@ void main() {
     int s = max(1, int(u_line + 0.5)) + ((fc & (G_FLAT | G_VIEW)) != 0u ? 1 : 0);
     float dC = depthOf(Dc);
     wc = 1.0 / max(dC, 1.0);
-    // Silhouettes: 2nd derivative of 1 / depth (zero on any plane), both sides: a bold line.
-    // Each neighbor is fetched once (an integrated GPU feels every fetch here).
+    // Silhouettes: 2nd derivative of 1 / depth (zero on any plane), on the nearer side only:
+    // the object in front carries its outline, as a comic artist draws it (both sides made
+    // every line twice as thick). There 1 / depth bulges above its neighbors' mean, behind
+    // it dips below. Each neighbor is fetched once (an integrated GPU feels every fetch here).
     uvec4 tL = dtex(pc + ivec2(-s, 0)), tR = dtex(pc + ivec2(s, 0)), tD = dtex(pc + ivec2(0, -s));
     uvec4 tU = dtex(pc + ivec2(0, s)), tDL = dtex(pc + ivec2(-s, -s)), tUR = dtex(pc + ivec2(s, s));
     uvec4 tUL = dtex(pc + ivec2(-s, s)), tDR = dtex(pc + ivec2(s, -s));
-    float lap = abs(invd(tL) + invd(tR) - 2.0 * wc) + abs(invd(tD) + invd(tU) - 2.0 * wc)
-      + 0.5 * (abs(invd(tDL) + invd(tUR) - 2.0 * wc) + abs(invd(tUL) + invd(tDR) - 2.0 * wc));
+    float w2 = 2.0 * wc;
+    float lap = max(w2 - invd(tL) - invd(tR), 0.0) + max(w2 - invd(tD) - invd(tU), 0.0)
+      + 0.5 * (max(w2 - invd(tDL) - invd(tUR), 0.0) + max(w2 - invd(tUL) - invd(tDR), 0.0));
     float eD = smoothstep(0.05, 0.16, lap / wc);
-    // Creases and object boundaries: one side only, a thinner line.
-    bool ax = across(tR), ay = across(tU), ad = across(tUR);
+    // Creases and object boundaries: one side only, a thinner line. Inside a character, only
+    // against more character (the seams between its parts): its edge to the world is the
+    // silhouette's (this one-sided line made a figure's right and top edges thicker).
+    bool cc = (fc & G_CHAR) != 0u;
+    bool ax = across(tR) || (cc && (tR.a & G_CHAR) == 0u), ay = across(tU) || (cc && (tU.a & G_CHAR) == 0u);
+    bool ad = across(tUR) || (cc && (tUR.a & G_CHAR) == 0u);
     vec4 nc = ntex(pc), nx = ntex(pc + ivec2(s, 0)), ny = ntex(pc + ivec2(0, s)), nxy = ntex(pc + ivec2(s, s));
     vec3 c = nc.xyz * 2.0 - 1.0;
     float nd = 0.0;
@@ -647,23 +663,62 @@ void main() {
     float eN = smoothstep(0.22, 0.45, nd);
     float eI = (!ax && abs(nx.w - nc.w) > 0.002) || (!ay && abs(ny.w - nc.w) > 0.002) ? 1.0 : 0.0;
     float fade = 1.0 - 0.65 * smoothstep(1000.0 * u_zoom, 3400.0 * u_zoom, dC);
-    edge = max(eD, max(eN, eI) * fade);
+    // Characters past arm's length: a crisp outline and their colors, not their ink (the
+    // two-sided silhouette and the part lines are a black blob on a small figure; a thinned
+    // one goes ragged, as the samples are s pixels apart). Their silhouette becomes a ring
+    // exactly one pixel wide just outside them (a pixel touching a character in front of
+    // it: only next to characters are these four extra fetches made), and the lines inside
+    // fade out. By the nearest character depth round the sample, so a near one keeps its
+    // bold comic outline.
+    float dChar = (fc & G_CHAR) != 0u ? dC : 1e9;
+    if ((tL.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tL));
+    if ((tR.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tR));
+    if ((tD.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tD));
+    if ((tU.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tU));
+    // (the diagonal samples too: the silhouette test reads them, so a character there would
+    // otherwise still print its old, jittered line round the ring)
+    if ((tDL.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tDL));
+    if ((tUR.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tUR));
+    if ((tUL.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tUL));
+    if ((tDR.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tDR));
+    float farC = dChar < 1e8 ? smoothstep(80.0 * u_zoom, 250.0 * u_zoom, dChar) : 0.0;
+    float sil = eD;
+    if (farC > 0.0) {
+      float ring = 0.0;
+      if ((fl & G_CHAR) == 0u) {
+        uvec4 r0 = dtex(p + ivec2(1, 0)), r1 = dtex(p + ivec2(-1, 0)), r2 = dtex(p + ivec2(0, 1)), r3 = dtex(p + ivec2(0, -1));
+        float lim = dP - 8.0;
+        if (((r0.a & G_CHAR) != 0u && depthOf(r0) < lim) || ((r1.a & G_CHAR) != 0u && depthOf(r1) < lim) ||
+          ((r2.a & G_CHAR) != 0u && depthOf(r2) < lim) || ((r3.a & G_CHAR) != 0u && depthOf(r3) < lim)) ring = 1.0;
+      }
+      sil = mix(eD, ring, farC);
+    }
+    // Crease and object lines: inside a far character they fade out; beside one (the
+    // background next to it) they go at once, else their jittered samples speckle the ring.
+    float inner = (fc & G_CHAR) != 0u ? 1.0 - smoothstep(200.0 * u_zoom, 600.0 * u_zoom, dC) : 1.0 - farC;
+    edge = max(sil, max(eN, eI) * fade * inner);
   }
 
   vec3 col;
-  float size = max(u_dot, 1.0);
-  float far = u_dot < 1.0 ? 1.0 : smoothstep(500.0 * u_zoom, 1300.0 * u_zoom, dP);
+  float size = max(u_dot, 1.0) * (1.0 - 0.25 * u_soft);
+  // Round the crosshair the dots melt into their own average tone (same brightness, no
+  // pattern for it to get lost in).
+  float calm = u_calm.z > 0.0 ? 1.0 - smoothstep(u_calm.z * 0.55, u_calm.z, distance(frag, u_calm.xy)) : 0.0;
+  float far = u_dot < 1.0 ? 1.0 : max(smoothstep(500.0 * u_zoom, 1300.0 * u_zoom, dP), calm);
+  if ((fl & G_CHAR) != 0u) far = max(far, smoothstep(300.0 * u_zoom, 800.0 * u_zoom, dP)); // flat colors sooner
   if ((fl & G_SKY) != 0u) {
-    col = mix(alb, alb * vec3(0.43, 0.71, 0.89), tone(frag, 1.0 - light, size * 1.15, 0.26, u_dot < 1.0 ? 1.0 : 0.0));
+    col = mix(alb, alb * vec3(0.43, 0.71, 0.89), tone(frag, 1.0 - light, size * 1.15, 0.26, u_dot < 1.0 ? 1.0 : calm));
   } else if ((fl & G_FLAT) != 0u) {
     col = alb * (0.62 + 0.38 * light);
   } else {
     float dark = 1.0 - light;
-    float m = tone(frag, dark, size, 0.785, far);
+    // (A flat tone reads darker than the same tone in dots: the calm zone prints lighter.)
+    float m = tone(frag, dark, size, 0.785, far) * (1.0 - 0.15 * calm);
     vec3 base = alb * (0.84 + 0.16 * light);
-    // Shade dots: a cool, darker print of the color, only a little ink even at full dark.
-    vec3 shade = alb * vec3(0.52, 0.53, 0.62);
-    col = mix(base, mix(shade, INK, 0.12 + 0.28 * smoothstep(0.5, 0.9, dark)), m);
+    // Shade dots: a cool, darker print of the color, only a little ink even at full dark
+    // (soft: paler still, and less ink).
+    vec3 shade = mix(alb * vec3(0.52, 0.53, 0.62), base, 0.3 * u_soft);
+    col = mix(base, mix(shade, INK, (0.12 + 0.28 * smoothstep(0.5, 0.9, dark)) * (1.0 - 0.6 * u_soft)), m);
   }
   col *= 0.965 + 0.035 * h21(frag); // paper grain
   vec2 uv = frag / u_res - 0.5;

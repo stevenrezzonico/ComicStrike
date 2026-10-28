@@ -37,7 +37,7 @@ export class Renderer {
     this.skyMesh = program(gl, SKY_MESH_VS, SKY_FS, ['u_viewProj', ...skyUniforms]);
     this.skyFill = program(gl, SKY_FILL_VS, SKY_FS, ['u_invViewProj', ...skyUniforms]);
     this.comp = program(gl, COMPOSITE_VS, COMPOSITE_FS, ['u_albedo', 'u_normal', 'u_depth', 'u_res', 'u_line',
-      'u_dot', 'u_time', 'u_zoom', 'u_bands', 'u_lift', 'u_style']);
+      'u_dot', 'u_time', 'u_zoom', 'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft']);
     this.gbuf = new GBuffer(gl);
     this.emptyVao = gl.createVertexArray();
     this.vao = null;
@@ -47,7 +47,9 @@ export class Renderer {
     this.horizon = new Float32Array([0.76, 0.89, 0.93]);
     // The print (client/settings.js r_* cvars): comic or plain, ink line width and dot
     // size relative to the screen height, light bands, line boil.
-    this.style = { comic: true, ink: 1, dots: 1, bands: 0, boil: true, lift: 0.3 };
+    // calm: the radius (px) of the dot-free zone round the screen center (the crosshair);
+    // soft: soft shade dots (r_halftone_style 1).
+    this.style = { comic: true, ink: 1, dots: 1, bands: 0, boil: true, lift: 0.3, calm: 0, soft: false };
     this.zoom = 1; // 90 / fov
 
     gl.enable(gl.DEPTH_TEST);
@@ -224,6 +226,8 @@ export class Renderer {
     gl.uniform1f(c.u_bands, st.bands);
     gl.uniform1f(c.u_lift, st.lift);
     gl.uniform1i(c.u_style, st.comic ? 1 : 0);
+    gl.uniform3f(c.u_calm, this.canvas.width / 2, h / 2, st.calm);
+    gl.uniform1f(c.u_soft, st.soft ? 1 : 0);
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);

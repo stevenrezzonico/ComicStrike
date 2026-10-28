@@ -74,6 +74,11 @@ export class SkinnedRenderer {
       'u_emissive', 'u_white', 'u_id', 'u_lightFull', 'u_eye', 'u_flags']);
   }
 
+  // Changes the G_FLAGS of the next draws (between begin and end).
+  setFlags(flags) {
+    if (flags !== this.flags) this.gl.uniform1ui(this.prog.loc.u_flags, (this.flags = flags));
+  }
+
   begin(viewProj) {
     const gl = this.gl;
     gl.useProgram(this.prog.p);

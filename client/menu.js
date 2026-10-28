@@ -43,6 +43,8 @@ const TABS = [
     ['toggle', 'r_comic', 'Comic print'],
     ['slider', 'r_inkwidth', 'Ink line width', 0, 3, 0.25],
     ['slider', 'r_halftone', 'Halftone dot size', 0, 3, 0.1],
+    ['select', 'r_halftone_style', 'Shade dots', ['Bold', 'Soft']],
+    ['slider', 'r_crosshair_clearzone', 'No dots round the crosshair', 0, 3, 0.25],
     ['slider', 'r_shadebands', 'Shadow bands (0: smooth)', 0, 6, 1],
     ['slider', 'r_shadowlift', 'Shadow brightness', 0, 1, 0.05],
     ['toggle', 'r_lineboil', 'Hand-drawn line wobble'],

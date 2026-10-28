@@ -71,6 +71,8 @@ export function createConsole(print) {
   add('r_halftone', 1, 'Halftone dot size, relative to the screen height (0: flat tones)', 0, 4);
   add('r_shadebands', 0, 'Light printed in this many flat bands (0: smooth)', 0, 8);
   add('r_shadowlift', 0.3, 'Share of the shade taken away: dark corners print lighter', 0, 1);
+  add('r_halftone_style', 1, 'Shade dots: 0 bold, 1 soft (finer, paler, less ink)', 0, 1);
+  add('r_crosshair_clearzone', 1, 'Dots melt into flat tone round the crosshair: size of that zone (0: off)', 0, 3);
   add('r_lineboil', 1, 'Hand-drawn wobble of the ink lines (off with reduced motion)', 0, 1);
   add('mat_viewportscale', 1, 'Render resolution, relative to the window', 0.25, 1);
   // View.
