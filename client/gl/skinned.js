@@ -1,11 +1,12 @@
-// Skinned model drawing: one VAO per built mesh (client/gl/meshkit.js), one draw call
-// per model instance with its bone matrices (client/anim/skeleton.js Pose.skin).
+// Skinned model drawing: one VAO per built mesh (client/gl/meshkit.js), indexed (shared
+// vertices: indexMesh), one draw call per model instance with its bone matrices
+// (client/anim/skeleton.js Pose.skin; only as many as the mesh uses are sent).
 // Models wind counter-clockwise (the world is clockwise, GoldSrc), so the front face
 // flips around the draws.
 
 import { program } from './program.js';
 import { SKINNED_VS, SKINNED_FS } from './shaders.js';
-import { MESH_STRIDE } from './meshkit.js';
+import { MESH_STRIDE, indexMesh } from './meshkit.js';
 import { MAX_BONES } from '../anim/skeleton.js';
 
 // Sun-ish direction for the two tones: from above, slightly in front.
@@ -40,11 +41,14 @@ for (let i = 0; i < MAX_BONES; i++) for (let k = 0; k < 4; k++) IDENTITY_SKIN[i 
 
 export class SkinnedMesh {
   constructor(gl, built) {
-    this.count = built.count;
+    const ix = indexMesh(built.data, built.count);
+    this.count = built.count; // indices
+    this.indexType = ix.indices.BYTES_PER_ELEMENT === 2 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT;
+    this.bones = ix.bones; // bone matrices its vertices use
     this.vao = gl.createVertexArray();
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-    gl.bufferData(gl.ARRAY_BUFFER, built.data, gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, ix.vertices, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, MESH_STRIDE, 0);
     gl.enableVertexAttribArray(1);
@@ -55,6 +59,8 @@ export class SkinnedMesh {
     gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, true, MESH_STRIDE, 16); // rgb, finish
     gl.enableVertexAttribArray(4);
     gl.vertexAttribIPointer(4, 2, gl.UNSIGNED_BYTE, MESH_STRIDE, 20); // second bone, its weight
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer()); // kept by the VAO
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, ix.indices, gl.STATIC_DRAW);
     gl.bindVertexArray(null);
   }
 }
@@ -100,10 +106,10 @@ export class SkinnedRenderer {
     if (white !== this.white) gl.uniform1f(this.prog.loc.u_white, (this.white = white));
     gl.uniform1ui(this.prog.loc.u_id, (nextId = (nextId + 1) & 1023));
     gl.uniformMatrix4fv(this.prog.loc.u_model, false, model);
-    gl.uniformMatrix4fv(this.prog.loc.u_bones, false, skin, 0, MAX_BONES * 16);
+    gl.uniformMatrix4fv(this.prog.loc.u_bones, false, skin, 0, mesh.bones * 16);
     gl.uniform3fv(this.prog.loc.u_light, light);
     gl.bindVertexArray(mesh.vao);
-    gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
+    gl.drawElements(gl.TRIANGLES, mesh.count, mesh.indexType, 0);
   }
 
   end() {

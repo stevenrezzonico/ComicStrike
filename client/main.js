@@ -53,6 +53,7 @@ import { PlayerModels } from './gl/playermodels.js';
 import { GunMeshes } from './gl/gunmeshes.js';
 import { GrenadeFx } from './gl/grenadefx.js';
 import { Blasts } from './gl/blast.js';
+import { PASS } from './gl/gputimer.js';
 import { modelLight } from './gl/skinned.js';
 import { crosshairLayout } from './gl/crosshair.js';
 import { perspective, viewFromAngles, multiply, invert } from './gl/mat4.js';
@@ -116,6 +117,7 @@ const players = new Players(renderer.gl);
 const guns = new GunMeshes(renderer.gl); // every gun model, shared by first and third person
 const models = new PlayerModels(renderer.gl, guns);
 const fx = new GrenadeFx(renderer.gl, guns);
+models.pass = PASS.MODELS; // its GPU time apart from the effects' (cl_showfps 3)
 const overlays = [decals, debris, players, models, fx];
 const words = new InkWords(document.getElementById('fx'));
 const weaponView = new WeaponView(renderer.gl, FOV_Y, cv, guns);
@@ -330,7 +332,7 @@ async function loadMap(name) {
   moverDir.fill(0);
   renderer.setMovers(doors);
   const ms = (performance.now() - t0).toFixed(0);
-  console.log(`${name}: ${mesh.numVerts} verts, ${(mesh.opaqueCount + mesh.skyCount + mesh.transCount) / 3} tris, ` +
+  console.log(`${name}: ${mesh.numVerts} verts, ${(mesh.opaqueCount + mesh.cutoutCount + mesh.skyCount + mesh.transCount) / 3} tris, ` +
     `lightmap ${mesh.lightmap.width}x${mesh.lightmap.height}, ${world.ents.length} collision ents, ` +
     `${breakables.count} breakables, ${doors.count} doors / buttons, built in ${ms} ms`);
 
@@ -876,6 +878,8 @@ let frames = 0;
 let fpsTime = last;
 let frameMsMax = 0;
 let fps = 0;
+let cpuSim = 0, cpuDraw = 0; // ms summed over the readout's window (cl_showfps 3)
+let gpuText = '';
 
 function frame(now) {
   if (!playing) { // the start menu: nothing runs
@@ -906,6 +910,7 @@ function frame(now) {
   if (sounds.volume !== cv.volume.number) sounds.setVolume(cv.volume.number);
   sounds.stepVolume = cv.snd_footstep_volume.number;
   input.applyMouse(angles);
+  const t0 = performance.now();
   accumulator += elapsed;
   if (serverClock >= 0) serverClock += Math.min(elapsed, 0.25) * TICK_RATE;
   let ticks = 0;
@@ -916,7 +921,12 @@ function frame(now) {
   }
   if (ticks === MAX_TICKS_PER_FRAME) accumulator = 0; // fell far behind (tab was hidden)
 
+  const t1 = performance.now();
+  renderer.timer.on = cv.cl_showfps.number >= 3;
   draw(now, accumulator / TICK_DT, Math.min(elapsed, 0.1));
+  renderer.timer.endFrame();
+  cpuSim += t1 - t0;
+  cpuDraw += performance.now() - t1;
 
   frames++;
   if (now - fpsTime >= 250) {
@@ -928,6 +938,13 @@ function frame(now) {
     if (cv.cl_showfps.number) {
       lines.push(`fps: ${fps.toFixed(0)}${cv.cl_showfps.number > 1 ? `  worst frame: ${frameMsMax.toFixed(1)} ms` : ''}`);
     }
+    if (cv.cl_showfps.number >= 3) {
+      // CPU: the simulation ticks, then building and sending the frame (the draw calls).
+      lines.push(`cpu: sim ${(cpuSim / frames).toFixed(2)} ms · frame ${(cpuDraw / frames).toFixed(2)} ms`);
+      gpuText = renderer.timer.report() || gpuText;
+      if (gpuText) lines.push(gpuText);
+    }
+    cpuSim = cpuDraw = 0;
     if (cv.cl_showpos.number) {
       lines.push(`pos: ${f[0].toFixed(0)} ${f[1].toFixed(0)} ${f[2].toFixed(0)}`,
         `ang: ${angles[0].toFixed(1)} ${angles[1].toFixed(1)}`,
@@ -1096,6 +1113,7 @@ function draw(now, alpha, dt) {
     deathNotice.style.whiteSpace = 'pre';
     if (spec) deathNotice.textContent = spec;
   }
+  renderer.timer.mark(PASS.VIEW);
   if (inEyes) {
     spectator.syncWeapon(interp, now / 1000, dt, weaponView);
     weaponView.draw(canvas.height, aspect, spectator.ws, spectator.ps, 0, now / 1000, dt,
@@ -1110,6 +1128,7 @@ function draw(now, alpha, dt) {
   words.update(now);
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
   else showFlash(flash.left, flash.total);
+  renderer.timer.mark(PASS.OVER);
   weaponView.drawCrosshair(canvas.width, canvas.height);
 }
 

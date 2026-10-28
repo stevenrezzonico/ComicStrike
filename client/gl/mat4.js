@@ -72,3 +72,16 @@ export function invert(out, m) {
   out[15] = (a20 * b03 - a21 * b01 + a22 * b00) * det;
   return out;
 }
+
+// Whether a sphere (center x y z, radius r) reaches into the view volume of the
+// view-projection matrix m (column-major, GL clip space): it lies inside or within r of
+// each of the six clip planes (rows 3 + and - rows 0, 1, 2). Allocates nothing.
+export function sphereInView(m, x, y, z, r) {
+  for (let i = 0; i < 3; i++) {
+    for (let s = -1; s <= 1; s += 2) {
+      const a = m[3] + s * m[i], b = m[7] + s * m[4 + i], c = m[11] + s * m[8 + i], d = m[15] + s * m[12 + i];
+      if (a * x + b * y + c * z + d < -r * Math.sqrt(a * a + b * b + c * c)) return false;
+    }
+  }
+  return true;
+}

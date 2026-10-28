@@ -114,6 +114,15 @@ uniform float u_lightFull; // lifted map light that prints fully lit (no dots), 
 
 ${GBUFFER}
 
+// CUT drops the fragment. WORLD_SOLID_FS (the opaque bulk) defines SOLID: a shader that can
+// discard keeps many GPUs from skipping hidden pixels before shading them, so that one has
+// none (its faces never take the branches: alpha-tested and see-through faces draw apart).
+#ifdef SOLID
+#define CUT
+#else
+#define CUT discard
+#endif
+
 const uint FLAG_ALPHATEST = 1u;
 const uint FLAG_FULLBRIGHT = 2u;
 
@@ -176,7 +185,7 @@ vec3 surface(uint mat, vec2 uv, vec2 fw, vec3 base, float seed, uint flags, floa
     return base;
   } else if (mat == 5u) { // FOLIAGE
     float n = vnoise(s * 6.0);
-    if ((flags & FLAG_ALPHATEST) != 0u && n < 0.42) discard;
+    if ((flags & FLAG_ALPHATEST) != 0u && n < 0.42) CUT;
     if (vnoise(s * 14.0) < 0.3) dark = 0.3;
     return base * (0.9 + 0.3 * step(0.7, n));
   } else if (mat == 6u) { // WOOD: plank seams
@@ -200,7 +209,7 @@ vec3 surface(uint mat, vec2 uv, vec2 fw, vec3 base, float seed, uint flags, floa
   } else if (mat == 9u) { // GRATE
     vec2 g = fract(uv * 8.0);
     bool bar = min(g.x, g.y) < 0.28;
-    if (!bar && (flags & FLAG_ALPHATEST) != 0u) discard;
+    if (!bar && (flags & FLAG_ALPHATEST) != 0u) CUT;
     if (!bar) dark = 0.6;
     return base * (bar ? 1.0 : 0.4);
   } else if (mat == 10u) { // WINDOW: dark pane, frame, two glints
@@ -282,11 +291,14 @@ void main() {
   light = mix(light, 1.0, ink);
 
   if (v_col.a < 0.999) { // glass, water: a dot screen over what lies behind
-    if (screenAt(gl_FragCoord.xy, v_col.a, max(u_dot * 0.6, 2.0)) < 0.5) discard;
+    if (screenAt(gl_FragCoord.xy, v_col.a, max(u_dot * 0.6, 2.0)) < 0.5) CUT;
     g |= G_SCREEN;
   }
   gbuffer(albedo, light, v_nrm, v_mat.w, v_w, g);
 }`;
+
+// The opaque bulk of the world: WORLD_FS without a discard (see CUT).
+export const WORLD_SOLID_FS = WORLD_FS.replace('#version 300 es\n', '#version 300 es\n#define SOLID\n');
 
 // Sky. Two vertex shaders feed one fragment shader with a world-space view ray:
 // SKY_MESH_VS draws the map's sky brushes (writing depth, so they hide what lies

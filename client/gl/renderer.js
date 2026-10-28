@@ -4,11 +4,12 @@
 // (as a dot screen) into it; the first-person view goes in after a depth clear; then
 // composite() prints the whole frame to the canvas in one pass (ink lines, halftone).
 
-import { WORLD_VS, WORLD_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS, COMPOSITE_VS, COMPOSITE_FS } from './shaders.js';
+import { WORLD_VS, WORLD_FS, WORLD_SOLID_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS, COMPOSITE_VS, COMPOSITE_FS } from './shaders.js';
 import { VERTEX_STRIDE } from '../mapmesh.js';
 import { program } from './program.js';
 import { GBuffer } from './gbuffer.js';
 import { mapLight } from './skinned.js';
+import { GpuTimer, PASS } from './gputimer.js';
 
 // The light that prints fully lit: this share of the map's lit lightmap texels is at or
 // below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
@@ -29,8 +30,12 @@ export class Renderer {
     if (!gl) throw new Error('WebGL2 is not available');
     this.gl = gl;
     this.canvas = canvas;
-    this.world = program(gl, WORLD_VS, WORLD_FS, ['u_viewProj', 'u_lightmap', 'u_time', 'u_zoom', 'u_dot', 'u_lightFull',
-      'u_broken', 'u_moverBase', 'u_movers']);
+    const worldUniforms = ['u_viewProj', 'u_lightmap', 'u_time', 'u_zoom', 'u_dot', 'u_lightFull', 'u_broken',
+      'u_moverBase', 'u_movers'];
+    // The opaque bulk with a shader that never discards; alpha-tested and see-through faces
+    // with the one that does.
+    this.solid = program(gl, WORLD_VS, WORLD_SOLID_FS, worldUniforms);
+    this.world = program(gl, WORLD_VS, WORLD_FS, worldUniforms);
     this.broken = new Uint32Array(8); // bit per breakable slot
     this.movers = null; // shared/doors.js Doors: slots above slotBase are drawn moved
     const skyUniforms = ['u_eye', 'u_horizon', 'u_time'];
@@ -39,9 +44,11 @@ export class Renderer {
     this.comp = program(gl, COMPOSITE_VS, COMPOSITE_FS, ['u_albedo', 'u_normal', 'u_depth', 'u_res', 'u_line',
       'u_dot', 'u_time', 'u_zoom', 'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft']);
     this.gbuf = new GBuffer(gl);
+    this.timer = new GpuTimer(gl); // GPU time per pass (cl_showfps 3)
     this.emptyVao = gl.createVertexArray();
     this.vao = null;
     this.opaqueCount = 0;
+    this.cutoutCount = 0;
     this.skyCount = 0;
     this.transCount = 0;
     this.horizon = new Float32Array([0.76, 0.89, 0.93]);
@@ -99,6 +106,7 @@ export class Renderer {
     this.vao = vao;
     this.lightmapTex = tex;
     this.opaqueCount = mesh.opaqueCount;
+    this.cutoutCount = mesh.cutoutCount;
     this.skyCount = mesh.skyCount;
     this.transCount = mesh.transCount;
     mapLight.full = fullLight(lm.data);
@@ -138,6 +146,20 @@ export class Renderer {
     return this.style.dots > 0 ? Math.max(3, this.canvas.height / 165) * this.style.dots : 0;
   }
 
+  setWorldUniforms(w, viewProj, time) {
+    const gl = this.gl;
+    gl.useProgram(w.p);
+    gl.uniformMatrix4fv(w.loc.u_viewProj, false, viewProj);
+    gl.uniform1f(w.loc.u_time, time);
+    gl.uniform1f(w.loc.u_zoom, this.zoom);
+    gl.uniform1f(w.loc.u_dot, this.dotSize());
+    gl.uniform1f(w.loc.u_lightFull, mapLight.full);
+    gl.uniform1i(w.loc.u_lightmap, 0);
+    gl.uniform4uiv(w.loc.u_broken, this.broken);
+    gl.uniform1ui(w.loc.u_moverBase, this.movers ? this.movers.slotBase : 255);
+    if (this.movers) gl.uniform4fv(w.loc.u_movers, this.movers.matrix);
+  }
+
   setSkyUniforms(s, eye, time) {
     const gl = this.gl;
     gl.useProgram(s.p);
@@ -148,39 +170,39 @@ export class Renderer {
 
   // Starts a frame in the G-buffer.
   begin() {
+    this.timer.mark(PASS.CLEAR);
     this.gbuf.begin();
   }
 
   // overlays: objects with draw(viewProj) (decals, debris, players), drawn after the
-  // sky and before see-through surfaces.
+  // sky and before see-through surfaces; their GPU time counts under their 'pass' (PASS.EFFECTS
+  // by default).
   render(viewProj, invViewProj, eye, time, overlays = null) {
     const gl = this.gl;
     const w = this.world;
+    const t = this.timer;
     if (this.vao) {
-      gl.useProgram(w.p);
-      gl.uniformMatrix4fv(w.loc.u_viewProj, false, viewProj);
-      gl.uniform1f(w.loc.u_time, time);
-      gl.uniform1f(w.loc.u_zoom, this.zoom);
-      gl.uniform1f(w.loc.u_dot, this.dotSize());
-      gl.uniform1f(w.loc.u_lightFull, mapLight.full);
-      gl.uniform1i(w.loc.u_lightmap, 0);
-      gl.uniform4uiv(w.loc.u_broken, this.broken);
-      gl.uniform1ui(w.loc.u_moverBase, this.movers ? this.movers.slotBase : 255);
-      if (this.movers) gl.uniform4fv(w.loc.u_movers, this.movers.matrix);
+      t.mark(PASS.WORLD);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.lightmapTex);
       gl.bindVertexArray(this.vao);
+      this.setWorldUniforms(this.solid, viewProj, time);
       gl.drawElements(gl.TRIANGLES, this.opaqueCount, gl.UNSIGNED_INT, 0);
+      // Set either way: see-through faces draw with it too.
+      this.setWorldUniforms(w, viewProj, time);
+      if (this.cutoutCount > 0) gl.drawElements(gl.TRIANGLES, this.cutoutCount, gl.UNSIGNED_INT, this.opaqueCount * 4);
 
       // Sky brushes write depth like walls, so nothing behind them shows through.
       if (this.skyCount > 0) {
+        t.mark(PASS.SKY);
         this.setSkyUniforms(this.skyMesh, eye, time);
         gl.uniformMatrix4fv(this.skyMesh.loc.u_viewProj, false, viewProj);
-        gl.drawElements(gl.TRIANGLES, this.skyCount, gl.UNSIGNED_INT, this.opaqueCount * 4);
+        gl.drawElements(gl.TRIANGLES, this.skyCount, gl.UNSIGNED_INT, (this.opaqueCount + this.cutoutCount) * 4);
       }
     }
 
     // Fill whatever nothing covered (cracks, outside the map): depth LEQUAL on the far plane.
+    t.mark(PASS.SKY);
     this.setSkyUniforms(this.skyFill, eye, time);
     gl.uniformMatrix4fv(this.skyFill.loc.u_invViewProj, false, invViewProj);
     gl.bindVertexArray(this.emptyVao);
@@ -192,14 +214,22 @@ export class Renderer {
     gl.depthMask(true);
     gl.depthFunc(gl.LESS);
 
-    if (overlays) for (let i = 0; i < overlays.length; i++) overlays[i].draw(viewProj, this.gbuf);
+    if (overlays) {
+      for (let i = 0; i < overlays.length; i++) {
+        const o = overlays[i];
+        t.mark(o.pass ?? PASS.EFFECTS);
+        o.draw(viewProj, this.gbuf);
+      }
+    }
 
     // Glass and water: opaque dots of a screen (WORLD_FS), so no sorting or blending.
     if (this.vao && this.transCount > 0) {
+      t.mark(PASS.GLASS);
       gl.useProgram(w.p);
       gl.bindVertexArray(this.vao);
       gl.disable(gl.CULL_FACE);
-      gl.drawElements(gl.TRIANGLES, this.transCount, gl.UNSIGNED_INT, (this.opaqueCount + this.skyCount) * 4);
+      gl.drawElements(gl.TRIANGLES, this.transCount, gl.UNSIGNED_INT,
+        (this.opaqueCount + this.cutoutCount + this.skyCount) * 4);
       gl.enable(gl.CULL_FACE);
     }
     gl.bindVertexArray(null);
@@ -209,6 +239,7 @@ export class Renderer {
   composite(time) {
     const gl = this.gl, c = this.comp.loc, st = this.style;
     const h = this.canvas.height;
+    this.timer.mark(PASS.PRINT);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.canvas.width, h);
     gl.disable(gl.DEPTH_TEST);

@@ -1,5 +1,7 @@
 // Load-time conversion of BSP faces into one interleaved vertex buffer, one index
-// buffer (opaque, sky and translucent ranges, in that order) and a lightmap atlas built
+// buffer (opaque, alpha-tested, sky and translucent ranges, in that order: the opaque bulk
+// is drawn by a shader that never discards, so the GPU can skip hidden pixels early) and a
+// lightmap atlas built
 // from the BSP lighting lump. Runs once per map; nothing here touches the frame loop.
 
 import {
@@ -8,7 +10,7 @@ import {
 } from '../shared/bsp.js';
 import { breakableEntities, MAX_BREAKABLES } from '../shared/breakables.js';
 import { moverEntities } from '../shared/doors.js';
-import { classify, isSkipped, MAT } from '../shared/materials.js';
+import { classify, isSkipped, MAT, FLAG_ALPHATEST } from '../shared/materials.js';
 import { withOriginalColor } from './texcolors.js';
 
 // Vertex layout (40 bytes):
@@ -110,9 +112,11 @@ export function buildMapMesh(bsp) {
   const vi8 = new Int8Array(vbuf);
   const vu8 = new Uint8Array(vbuf);
   const opaque = new Uint32Array(numIdx);
+  const cutout = new Uint32Array(numIdx);
   const trans = new Uint32Array(numIdx);
   const sky = new Uint32Array(numIdx);
   let nOpaque = 0;
+  let nCutout = 0;
   let nTrans = 0;
   let nSky = 0;
 
@@ -251,15 +255,16 @@ export function buildMapMesh(bsp) {
         slotColor[m.slot * 4 + 3]++;
       }
 
-      const translucent = alpha < 255;
-      const dst = translucent ? trans : opaque;
-      let n = translucent ? nTrans : nOpaque;
+      const translucent = alpha < 255, cut = !translucent && (mat.flags & FLAG_ALPHATEST) !== 0;
+      const dst = translucent ? trans : cut ? cutout : opaque;
+      let n = translucent ? nTrans : cut ? nCutout : nOpaque;
       for (let i = 1; i < ne - 1; i++) {
         dst[n++] = base;
         dst[n++] = base + i;
         dst[n++] = base + i + 1;
       }
       if (translucent) nTrans = n;
+      else if (cut) nCutout = n;
       else nOpaque = n;
     }
   }
@@ -272,10 +277,11 @@ export function buildMapMesh(bsp) {
     vf[i * 10 + 6] *= invH;
   }
 
-  const indices = new Uint32Array(nOpaque + nSky + nTrans);
+  const indices = new Uint32Array(nOpaque + nCutout + nSky + nTrans);
   indices.set(opaque.subarray(0, nOpaque), 0);
-  indices.set(sky.subarray(0, nSky), nOpaque);
-  indices.set(trans.subarray(0, nTrans), nOpaque + nSky);
+  indices.set(cutout.subarray(0, nCutout), nOpaque);
+  indices.set(sky.subarray(0, nSky), nOpaque + nCutout);
+  indices.set(trans.subarray(0, nTrans), nOpaque + nCutout + nSky);
 
   const breakableColors = new Uint8Array((MAX_BREAKABLES + 1) * 3);
   for (let k = 0; k <= MAX_BREAKABLES; k++) {
@@ -288,6 +294,7 @@ export function buildMapMesh(bsp) {
     numVerts,
     indices,
     opaqueCount: nOpaque,
+    cutoutCount: nCutout, // alpha-tested ('{' textures: holes)
     skyCount: nSky,
     transCount: nTrans,
     lightmap: { width: atlas.width, height: atlas.height, data: atlas.data },

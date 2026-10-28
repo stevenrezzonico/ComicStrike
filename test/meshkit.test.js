@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { MeshBuilder, MESH_STRIDE, FINISH, finish } from '../client/gl/meshkit.js';
+import { MeshBuilder, MESH_STRIDE, FINISH, finish, indexMesh } from '../client/gl/meshkit.js';
+import { buildPlayer } from '../client/models/players.js';
 import { eyeOf } from '../client/gl/skinned.js';
+import { perspective, viewFromAngles, multiply, sphereInView } from '../client/gl/mat4.js';
 import { PLAYER_SKELETON, Pose } from '../client/anim/skeleton.js';
 import * as Q from '../client/anim/quat.js';
 
@@ -157,6 +159,39 @@ Deno.test('meshkit: vertices carry normals, color, finish and bone; budgets stay
   assert.deepEqual([i8[12], i8[13], i8[14]], [127, 0, 0], 'first face is +x');
   assert.deepEqual([u8[15], u8[16], u8[17], u8[18], u8[19]], [7, 255, 128, 0, FINISH.CLOTH]);
   assert.equal(new MeshBuilder().capsule(1, 6, 6, 1).build().tris, 6 * 2 + 6 * 2 * 1, 'a 6-sided capsule');
+});
+
+Deno.test('meshkit: indexed meshes draw exactly the built triangles with far fewer vertices', () => {
+  for (const built of [buildPlayer('CT', true), new MeshBuilder().box(2, 3, 4).build()]) {
+    const ix = indexMesh(built.data, built.count);
+    assert.equal(ix.indices.length, built.count);
+    const src = new Uint8Array(built.data);
+    for (let v = 0; v < built.count; v++) {
+      const o = ix.indices[v] * MESH_STRIDE;
+      for (let b = 0; b < MESH_STRIDE; b++) assert.equal(ix.vertices[o + b], src[v * MESH_STRIDE + b]);
+    }
+    let bones = 0;
+    for (let v = 0; v < built.count; v++) bones = Math.max(bones, src[v * MESH_STRIDE + 15], src[v * MESH_STRIDE + 20]);
+    assert.equal(ix.bones, bones + 1, 'bones used');
+  }
+  const player = indexMesh(buildPlayer('T').data, buildPlayer('T').count);
+  assert.ok(player.vertexCount < player.indices.length / 3, `shared vertices: ${player.vertexCount} for ${player.indices.length} corners`);
+  assert.equal(indexMesh(new MeshBuilder().box(1, 1, 1).build().data, 36).vertexCount, 24, 'a box: 4 per face');
+});
+
+Deno.test('mat4: spheres in view are kept, ones behind or beside the view are skipped', () => {
+  // At the origin looking along +x (yaw 0), 90 degree fov, 4:3.
+  const proj = new Float32Array(16), view = new Float32Array(16), vp = new Float32Array(16);
+  perspective(proj, 2 * Math.atan(0.75), 4 / 3, 4, 16384);
+  viewFromAngles(view, 0, 0, 0, 0, 0);
+  multiply(vp, proj, view);
+  assert.ok(sphereInView(vp, 500, 0, 0, 1), 'straight ahead');
+  assert.ok(!sphereInView(vp, -500, 0, 0, 84), 'behind');
+  assert.ok(!sphereInView(vp, 100, 400, 0, 84), 'far to the left');
+  // Just outside the left edge (y = x at 90 degrees): kept while the radius reaches in.
+  assert.ok(sphereInView(vp, 500, 550, 0, 84), 'its edge reaches into view');
+  assert.ok(!sphereInView(vp, 500, 650, 0, 84), 'clear of the edge');
+  assert.ok(!sphereInView(vp, 20000, 0, 0, 84), 'past the far plane');
 });
 
 Deno.test('quaternions: Euler order matches yaw, then pitch, then roll', () => {

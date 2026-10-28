@@ -488,6 +488,42 @@ export class MeshBuilder {
   }
 }
 
+// A built triangle list (data, count) as shared vertices and indices: corners that are the
+// same bytes (position, normal, bones, color: a smooth surface's) become one vertex, so the
+// vertex shader runs once for them (a player: ~14,400 corners, ~4,000 vertices). Hard
+// edges keep their separate vertices. Also the number of bones the vertices use.
+export function indexMesh(data, count) {
+  const words = MESH_STRIDE / 4;
+  const src = new Uint32Array(data, 0, count * words), u8 = new Uint8Array(data);
+  const out = new Uint32Array(count * words);
+  const indices = count <= 65536 ? new Uint16Array(count) : new Uint32Array(count);
+  const mask = (1 << Math.ceil(Math.log2(count * 2 + 2))) - 1;
+  const table = new Int32Array(mask + 1).fill(-1); // open addressing: slot -> vertex
+  let n = 0, bones = 1;
+  for (let v = 0; v < count; v++) {
+    const o = v * words;
+    let h = 0x811c9dc5;
+    for (let k = 0; k < words; k++) h = Math.imul(h ^ src[o + k], 0x01000193);
+    for (let s = (h >>> 0) & mask; ; s = (s + 1) & mask) {
+      const u = table[s];
+      if (u < 0) {
+        table[s] = n;
+        for (let k = 0; k < words; k++) out[n * words + k] = src[o + k];
+        bones = Math.max(bones, u8[v * MESH_STRIDE + 15] + 1, u8[v * MESH_STRIDE + 20] + 1);
+        indices[v] = n++;
+        break;
+      }
+      let k = 0;
+      while (k < words && out[u * words + k] === src[o + k]) k++;
+      if (k === words) {
+        indices[v] = u;
+        break;
+      }
+    }
+  }
+  return { vertices: new Uint8Array(out.buffer, 0, n * MESH_STRIDE), indices, vertexCount: n, bones };
+}
+
 // Smooth vertex normals: each corner of a triangle averages the face normals of the
 // triangles of its primitive meeting at that point whose normal is within the triangle's
 // crease angle of its own, weighted by their corner angle there times their area (so how

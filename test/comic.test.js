@@ -1,10 +1,13 @@
 // The comic renderer's GL-free contracts: every scene shader writes the whole G-buffer,
 // decals paint only the albedo, the flags agree between JS and GLSL, every material class
-// has its ink, and the per-map light level is a percentile of the lightmap.
+// has its ink, the per-map light level is a percentile of the lightmap, and the opaque
+// bulk of the world draws with a shader that never discards.
 import assert from 'node:assert/strict';
-import { GBUFFER_SHADERS, WORLD_FS, DECAL_FS, COMPOSITE_FS, G_FLAGS } from '../client/gl/shaders.js';
+import { GBUFFER_SHADERS, WORLD_FS, WORLD_SOLID_FS, DECAL_FS, COMPOSITE_FS, G_FLAGS } from '../client/gl/shaders.js';
 import { fullLight } from '../client/gl/renderer.js';
-import { MAT } from '../shared/materials.js';
+import { buildMapMesh, VERTEX_STRIDE } from '../client/mapmesh.js';
+import { parseBSP } from '../shared/bsp.js';
+import { MAT, FLAG_ALPHATEST } from '../shared/materials.js';
 
 const outputs = (src) => [...src.matchAll(/layout\(location ?= ?(\d)\) out vec4/g)].map((m) => +m[1]).sort();
 
@@ -53,3 +56,26 @@ Deno.test('comic: the fully lit level is a percentile of the lit lightmap texels
   for (let i = 0; i < 4; i++) texel(dark, i, 3);
   assert.equal(fullLight(dark), 0.5, 'a black map still prints its brightest as dark');
 });
+
+// de_aztec has alpha-tested faces (foliage, grates); skipped without the map.
+const aztec = (() => {
+  try {
+    return Deno.readFileSync(new URL('../maps/de_aztec.bsp', import.meta.url)).buffer;
+  } catch {
+    return null;
+  }
+})();
+
+Deno.test({ name: 'comic: alpha-tested faces draw apart; the opaque bulk never discards', ignore: !aztec, fn: () => {
+  // Every discard goes through CUT, which SOLID turns into nothing.
+  const code = WORLD_FS.replace(/\/\/.*$/gm, '').replace('#define CUT discard', '');
+  assert.doesNotMatch(code, /discard/);
+  assert.match(WORLD_FS, /#ifdef SOLID\n#define CUT\n#else\n#define CUT discard\n#endif/);
+  assert.ok(WORLD_SOLID_FS.startsWith('#version 300 es\n#define SOLID\n'));
+  const mesh = buildMapMesh(parseBSP(aztec));
+  assert.ok(mesh.cutoutCount > 0, 'aztec has alpha-tested faces');
+  const flags = new Uint8Array(mesh.vertices);
+  const cut = (i) => (flags[mesh.indices[i] * VERTEX_STRIDE + 37] & FLAG_ALPHATEST) !== 0;
+  for (let i = 0; i < mesh.opaqueCount; i++) assert.ok(!cut(i), 'opaque range');
+  for (let i = mesh.opaqueCount; i < mesh.opaqueCount + mesh.cutoutCount; i++) assert.ok(cut(i), 'alpha-tested range');
+} });

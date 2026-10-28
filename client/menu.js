@@ -59,7 +59,7 @@ const TABS = [
     ['slider', 'cl_radar_scale', 'Radar zoom', 0.25, 1, 0.05],
     ['toggle', 'cl_radar_rotate', 'Rotate the radar'],
     ['toggle', 'cl_radar_always_centered', 'Radar always centered'],
-    ['select', 'cl_showfps', 'Frame rate', ['Off', 'FPS', 'FPS and slowest frame']],
+    ['select', 'cl_showfps', 'Frame rate', ['Off', 'FPS', 'FPS and slowest frame', 'FPS and time per pass']],
     ['toggle', 'net_graph', 'Net graph'],
     ['toggle', 'cl_showpos', 'Show position'],
   ]],

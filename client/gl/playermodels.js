@@ -10,7 +10,7 @@ import { MAX_HOSTAGES, HS_IDLE, HS_CARRIED, HS_DEAD } from '../../shared/hostage
 import { PlayerAnimator, holdOf, gunInHand } from '../anim/playeranim.js';
 import { PLAYER_SKELETON as S, MAX_BONES } from '../anim/skeleton.js';
 import { GUN_MAG, GUN_BOLT } from '../models/guns.js';
-import { multiply } from './mat4.js';
+import { multiply, sphereInView } from './mat4.js';
 import { TEAM_CT } from '../../shared/player.js';
 import { WEAPON_ID } from '../../shared/weapons.js';
 import { MAX_ITEMS } from '../../shared/items.js';
@@ -26,6 +26,10 @@ const SPINE3 = S.bone('spine_3');
 const C4_ID = WEAPON_ID.c4;
 const ITEM_SPIN = 720; // degrees/s a flying weapon turns end over end
 const OWN_TOSS_TICKS = 16; // our own thrown weapon stays hidden this long (first person shows it)
+// Bounding spheres for skipping what lies outside the view: a character from the middle of
+// its standing height (lying dead or carried on a shoulder, with the gun held out, it
+// stays within), a weapon on the ground from its grip, the bomb.
+const BODY_MID = 36, BODY_R = 84, ITEM_R = 48, BOMB_R = 16;
 
 export class PlayerModels {
   // guns: GunMeshes (client/gl/gunmeshes.js).
@@ -276,11 +280,12 @@ export class PlayerModels {
     r.flags = G_FLAGS.CHAR; // players and hostages (G_CHAR: far away their colors show)
     for (let id = 0; id < MAX_PLAYERS; id++) {
       if (!this.visible[id]) continue;
+      const model = this.modelOf[id];
+      if (!sphereInView(viewProj, model[12], model[13], model[14] + BODY_MID, BODY_R)) continue;
       if (!begun) {
         r.begin(viewProj);
         begun = true;
       }
-      const model = this.modelOf[id];
       const light = this.lightOf[id];
       // Spawn protection: a fast pulse toward white (approx. of CS:GO's).
       const white = this.immune[id] ? 0.3 + 0.3 * Math.sin(this.time * Math.PI * 6) : 0;
@@ -292,22 +297,24 @@ export class PlayerModels {
       }
     }
     for (let k = 0; k < MAX_HOSTAGES; k++) {
-      if (!this.hostageShown[k]) continue;
+      const hm = this.hostageModel[k];
+      if (!this.hostageShown[k] || !sphereInView(viewProj, hm[12], hm[13], hm[14] + BODY_MID, BODY_R)) continue;
       if (!begun) r.begin(viewProj);
       begun = true;
-      r.draw(this.bodyH, this.hostageModel[k], this.hostageAnim[k].pose.skin, this.hostageLight[k]);
+      r.draw(this.bodyH, hm, this.hostageAnim[k].pose.skin, this.hostageLight[k]);
     }
     if (begun) r.setFlags(0); // weapons on the ground and the bomb are things
     else r.flags = 0;
     for (let i = 0; i < this.itemCount; i++) {
       const mesh = this.guns.mesh[this.itemWeapon[i]];
-      if (!mesh || this.itemHidden[i]) continue;
+      const im = this.itemOf[i];
+      if (!mesh || this.itemHidden[i] || !sphereInView(viewProj, im[12], im[13], im[14], ITEM_R)) continue;
       if (!begun) r.begin(viewProj);
       begun = true;
-      r.draw(mesh, this.itemOf[i], IDENTITY_SKIN, this.itemLightOf[i]);
+      r.draw(mesh, im, IDENTITY_SKIN, this.itemLightOf[i]);
     }
     const b = this.bomb;
-    if (b.show) {
+    if (b.show && sphereInView(viewProj, b.model[12], b.model[13], b.model[14], BOMB_R)) {
       if (!begun) r.begin(viewProj);
       begun = true;
       r.draw(b.led ? this.guns.mesh[C4_ID] : this.guns.c4Off, b.model, IDENTITY_SKIN, b.light, 0);
