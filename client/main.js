@@ -207,7 +207,10 @@ fx.onEffect = (kind, _weapon, x, y, z) => {
   } else if (kind === FX_FLASH || kind === FX_SMOKE || kind === FX_FIRE) {
     debris.puff(x, y, z + 4, 0.8, 0.8, 0.8, 12);
     if (kind === FX_FLASH) sounds.bang(x, y, z);
-    else if (kind === FX_SMOKE) sounds.hiss(x, y, z);
+    else if (kind === FX_SMOKE) {
+      sounds.hiss(x, y, z);
+      words.smoke(viewProj, x, y, z);
+    }
     else for (let i = 0; i < 4; i++) sounds.crackle(x, y, z + 8);
   }
 };
