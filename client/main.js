@@ -148,6 +148,13 @@ const scape = new SoundScape(sounds, (x, y, z) => {
   if (gm === 68 || gm === 75 || gm === 79) return 'soft'; // dirt, snow, foliage
   return 'hard';
 });
+
+// A muzzle flash lights the walls round it for a moment (client/gl/flashes.js); a silencer
+// keeps it small.
+function muzzleLight(x, y, z, quiet) {
+  renderer.flashes.add(x, y, z, quiet ? 140 : 260, quiet ? 0.4 : 1, 0.08, performance.now() / 1000);
+}
+scape.onShot = muzzleLight;
 const OFFLINE_MONEY = 16000;
 
 const player = new Player();
@@ -682,6 +689,7 @@ function applyEvents() {
 // for the bomb a scorch on the ground under it.
 function explosion(x, y, z, size = 1) {
   blasts.add(x, y, z, size, world && world.surfaces);
+  renderer.flashes.add(x, y, z + 40 * size, 700 * size, 1, 0.25 + 0.35 * size, performance.now() / 1000);
   debris.puff(x, y, z + 24 * size, 0.2, 0.16, 0.12, Math.round(40 * size));
   debris.puff(x, y, z + 40 * size, 1.0, 0.6, 0.12, Math.round(25 * size));
   if (size >= 1) decals.add(x, y, z + 0.5, 0, 0, 1, 72, Math.random(), 0);
@@ -866,6 +874,10 @@ function tick() {
     const w = activeWeapon(ws);
     if ((ws.f[WS_EVENTS] & WEV_FIRE) && w && w.gun) {
       words.shot(gunProfile(w, silenced(ws, ws.f[WS_ACTIVE])), performance.now());
+      // Our own flash, a little ahead of the eye along the view.
+      const p = angles[0] * DEG, yw = angles[1] * DEG, c = Math.cos(p) * 24;
+      muzzleLight(eye[0] + Math.cos(yw) * c, eye[1] + Math.sin(yw) * c, eye[2] - Math.sin(p) * 24,
+        silenced(ws, ws.f[WS_ACTIVE]));
     }
     scape.ownMove(ps, buttons & IN_SPEED, ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1],
       ps.f[PS_ORIGIN + 2] - feetOffset(ps.i[PS_FLAGS]));
@@ -1047,7 +1059,9 @@ function draw(now, alpha, dt) {
   }
   if (net && synced) bombBeeps(now);
 
-  const aspect = renderer.resize(cv.mat_viewportscale.number);
+  // r_hidpi: the screen's own pixels (up to 2 per page pixel) for crisp ink on high-DPI
+  // screens; lines and dots keep their size (they scale with the canvas height).
+  const aspect = renderer.resize(cv.mat_viewportscale.number * (cv.r_hidpi.bool ? Math.min(2, devicePixelRatio || 1) : 1));
   const style = renderer.style;
   style.comic = cv.r_comic.bool;
   style.ink = cv.r_inkwidth.number;
@@ -1568,6 +1582,7 @@ globalThis.comicstrike = {
   },
   overlays, // objects drawn with draw(viewProj, gbuffer) after the opaque world
   models, // other players' animated models
+  renderer, // the comic print (style, flash lights, GPU timer)
   // Offline only: equip any weapon by name, e.g. comicstrike.give('negev').
   give: (name) => {
     const id = WEAPON_ID[name];

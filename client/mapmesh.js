@@ -15,11 +15,16 @@ import { withOriginalColor } from './texcolors.js';
 
 // Vertex layout (40 bytes):
 //  0 pos   f32x3     12 uv f32x2 (texture tiles)   20 lm f32x2 (atlas 0..1)
-// 28 nrm   i8x4 norm 32 col u8x4 norm (rgb, alpha)
+// 28 nrm   i8x3 norm, scroll i8 (tiles/s x SCROLL_UNIT along s)   32 col u8x4 norm (rgb, alpha)
 // 36 mat   u8x4 int (material, flags, seed, slot: breakable, then door / button, or 0)
 export const VERTEX_STRIDE = 40;
 
 const TEX_SPECIAL = 1; // texinfo flag: sky / water / no lightmap
+// Conveyor faces with a texture named scroll* slide along the texture's s axis at the
+// conveyor's speed over the texture's width, as in GoldSrc (mappers line s up with the
+// push: fy_buzzkill's belts, de_torn's flowing water). The rate rides in the normal's
+// spare byte, 1 / SCROLL_UNIT tiles a second a step (WORLD_VS).
+export const SCROLL_UNIT = 8;
 const ATLAS_W = 1024;
 
 // Brush entities that are never visible.
@@ -62,7 +67,7 @@ class Atlas {
 }
 
 function collectModels(bsp) {
-  const out = [{ model: 0, ox: 0, oy: 0, oz: 0, alpha: 255, slot: 0 }];
+  const out = [{ model: 0, ox: 0, oy: 0, oz: 0, alpha: 255, slot: 0, speed: 0 }];
   const origin = new Float32Array(3);
   const breakables = breakableEntities(bsp);
   const slotOf = new Map(breakables.map((bi, k) => [bi, k + 1]));
@@ -81,7 +86,9 @@ function collectModels(bsp) {
       if (alpha <= 0) continue;
     }
     parseVec3(e.origin, origin);
-    out.push({ model: m, ox: origin[0], oy: origin[1], oz: origin[2], alpha, slot: slotOf.get(ei) || 0 });
+    // A conveyor's speed (HL SDK CFuncConveyor: 100 when not set).
+    const speed = cls === 'func_conveyor' ? +(e.speed || 0) || 100 : 0;
+    out.push({ model: m, ox: origin[0], oy: origin[1], oz: origin[2], alpha, slot: slotOf.get(ei) || 0, speed });
   }
   return out;
 }
@@ -219,6 +226,8 @@ export function buildMapMesh(bsp) {
       const nz = Math.round(bsp.planesF[pi + 2] * sign * 127);
 
       const alpha = mat.mat === MAT.WATER ? Math.min(m.alpha, 150) : m.alpha;
+      const scroll = m.speed && bsp.textureNames[tex].startsWith('scroll')
+        ? Math.max(-127, Math.min(127, Math.round(m.speed / tw * SCROLL_UNIT))) : 0;
       const base = v;
       for (let i = 0; i < ne; i++, v++) {
         const vi = faceVertex(bsp, f, i) * 3;
@@ -239,6 +248,7 @@ export function buildMapMesh(bsp) {
         vi8[b + 28] = nx;
         vi8[b + 29] = ny;
         vi8[b + 30] = nz;
+        vi8[b + 31] = scroll;
         vu8[b + 32] = mat.r;
         vu8[b + 33] = mat.g;
         vu8[b + 34] = mat.b;

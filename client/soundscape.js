@@ -50,6 +50,7 @@ export class SoundScape {
     this.px = new Float32Array(MAX_PLAYERS).fill(NaN);
     this.py = new Float32Array(MAX_PLAYERS);
     this.nextDecoy = new Map(); // decoy effect id -> its next fake shot (s)
+    this.onShot = null; // (x, y, z, silenced): another player fired a gun (the muzzle flash light)
   }
 
   // Our predicted weapon events of one tick; w: the weapon in hand; silencedOn.
@@ -95,8 +96,10 @@ export class SoundScape {
       const x = rows[r + E_X], y = rows[r + E_Y], z = rows[r + E_Z], w = WEAPONS[rows[r + E_WEAPON]];
       const shots = rows[r + E_SHOTS], anim = rows[r + E_ANIM];
       if (this.shots[id] >= 0 && shots !== this.shots[id] && w) {
-        if (w.gun) s.gun(gunProfile(w, (anim & ANIM_SILENCED) !== 0), x, y, z + 28, 1, pitchOf(rows[r + E_WEAPON]));
-        else s.swish(x, y, z + 28);
+        if (w.gun) {
+          s.gun(gunProfile(w, (anim & ANIM_SILENCED) !== 0), x, y, z + 28, 1, pitchOf(rows[r + E_WEAPON]));
+          if (this.onShot) this.onShot(x, y, z + 28, (anim & ANIM_SILENCED) !== 0);
+        } else s.swish(x, y, z + 28);
       }
       this.shots[id] = shots;
       if ((anim & ANIM_RELOAD) && !(this.anim[id] & ANIM_RELOAD) && w && w.gun && !w.shellTime) {

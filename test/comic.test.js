@@ -3,7 +3,8 @@
 // has its ink, the per-map light level is a percentile of the lightmap, and the opaque
 // bulk of the world draws with a shader that never discards.
 import assert from 'node:assert/strict';
-import { GBUFFER_SHADERS, WORLD_FS, WORLD_SOLID_FS, DECAL_FS, COMPOSITE_FS, G_FLAGS } from '../client/gl/shaders.js';
+import { GBUFFER_SHADERS, WORLD_FS, WORLD_SOLID_FS, DECAL_FS, SHADOW_FS, COMPOSITE_FS, G_FLAGS } from '../client/gl/shaders.js';
+import { FlashLights, MAX_FLASHES } from '../client/gl/flashes.js';
 import { fullLight } from '../client/gl/renderer.js';
 import { buildMapMesh, VERTEX_STRIDE } from '../client/mapmesh.js';
 import { parseBSP } from '../shared/bsp.js';
@@ -21,6 +22,25 @@ Deno.test('comic: every G-buffer shader writes all three targets through gbuffer
 
 Deno.test('comic: decals paint the albedo target only', () => {
   assert.deepEqual(outputs(DECAL_FS), [0]);
+  assert.deepEqual(outputs(SHADOW_FS), [0], 'contact shadows: the light in its alpha');
+});
+
+Deno.test('comic: flash lights fade out, the live ones packed first, the newest replacing the nearest end', () => {
+  const f = new FlashLights();
+  f.add(1, 2, 3, 100, 1, 1, 10);
+  f.add(4, 5, 6, 200, 0.5, 0.1, 10);
+  f.update(10.05);
+  assert.equal(f.count, 2);
+  assert.ok(Math.abs(f.k[0] - 0.95) < 1e-6 && Math.abs(f.k[1] - 0.25) < 1e-6, 'linear fades');
+  f.update(10.5); // the short one is gone: the long one stays first
+  assert.equal(f.count, 1);
+  assert.deepEqual([...f.pos.slice(0, 4)], [1, 2, 3, 100]);
+  for (let i = 0; i < MAX_FLASHES; i++) f.add(i, 0, 0, 10, 1, 2 + i, 10.5);
+  f.update(10.6);
+  assert.equal(f.count, MAX_FLASHES);
+  assert.ok(![...f.pos].some((v, i) => i % 4 === 3 && v === 100), 'the one ending soonest made room');
+  f.update(100);
+  assert.equal(f.count, 0);
 });
 
 Deno.test('comic: the G-buffer flags agree between JS and GLSL', () => {

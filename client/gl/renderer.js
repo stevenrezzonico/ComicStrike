@@ -10,6 +10,7 @@ import { program } from './program.js';
 import { GBuffer } from './gbuffer.js';
 import { mapLight } from './skinned.js';
 import { GpuTimer, PASS } from './gputimer.js';
+import { FlashLights } from './flashes.js';
 
 // The light that prints fully lit: this share of the map's lit lightmap texels is at or
 // below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
@@ -31,7 +32,8 @@ export class Renderer {
     this.gl = gl;
     this.canvas = canvas;
     const worldUniforms = ['u_viewProj', 'u_lightmap', 'u_time', 'u_zoom', 'u_dot', 'u_lightFull', 'u_broken',
-      'u_moverBase', 'u_movers'];
+      'u_moverBase', 'u_movers', 'u_flash', 'u_flashK', 'u_flashN'];
+    this.flashes = new FlashLights(); // muzzle flashes and explosions lighting the world
     // The opaque bulk with a shader that never discards; alpha-tested and see-through faces
     // with the one that does.
     this.solid = program(gl, WORLD_VS, WORLD_SOLID_FS, worldUniforms);
@@ -168,6 +170,12 @@ export class Renderer {
     gl.uniform4uiv(w.loc.u_broken, this.broken);
     gl.uniform1ui(w.loc.u_moverBase, this.movers ? this.movers.slotBase : 255);
     if (this.movers) gl.uniform4fv(w.loc.u_movers, this.movers.matrix);
+    const f = this.flashes;
+    gl.uniform1i(w.loc.u_flashN, f.count);
+    if (f.count) {
+      gl.uniform4fv(w.loc.u_flash, f.pos);
+      gl.uniform1fv(w.loc.u_flashK, f.k);
+    }
   }
 
   setSkyUniforms(s, eye, time) {
@@ -191,6 +199,7 @@ export class Renderer {
     const gl = this.gl;
     const w = this.world;
     const t = this.timer;
+    this.flashes.update(time);
     if (this.vao) {
       t.mark(PASS.WORLD);
       gl.activeTexture(gl.TEXTURE0);

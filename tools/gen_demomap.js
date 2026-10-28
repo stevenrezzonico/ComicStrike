@@ -41,6 +41,7 @@ const TEX = {
   crete3_wall02: [128, 128],
   '{ladder1': [64, 64],
   duct_flr01: [64, 64],
+  scroll_conv: [64, 64],
   metal_wall05b: [128, 128],
   steel: [64, 64],
   stripes2: [64, 64],
@@ -170,10 +171,11 @@ breakable({ material: '7', health: '1' }, box(120, -560, 0, 184, -496, 64, 'crat
 // A free-standing wall between the lanes and the pool (cover, and shade).
 world.push(box(-160, 180, 0, 160, 196, 192, { top: 'crete3_wall02', bottom: null, side: 'crete3_wall02' }));
 
-// Conveyor belt: carries whoever stands on it east.
+// Conveyor belt: carries whoever stands on it east; its top is a scroll* texture, so it
+// slides that way (GoldSrc scrolls those along s at the conveyor's speed).
 world.push(box(280, -968, 0, 920, -960, 12, 'stripes2'), box(280, -856, 0, 920, -848, 12, 'stripes2'));
 brushEntity({ classname: 'func_conveyor', speed: '160', angles: '0 0 0' },
-  [box(280, -960, 0, 920, -856, 8, { top: 'duct_flr01', bottom: null, side: 'steel' })]);
+  [box(280, -960, 0, 920, -856, 8, { top: 'scroll_conv', bottom: null, side: 'steel' })]);
 
 // Metal yard: steel plates and a metal shed with an open side.
 world.push(box(280, -760, 0, 920, -400, 2, { top: 'duct_flr01', bottom: null, side: 'steel' }));
@@ -431,6 +433,7 @@ const TEX_AXES = [[[0, 1, 0], [0, 0, -1]], [[1, 0, 0], [0, 0, -1]], [[1, 0, 0], 
 function texinfo(tex, axis) {
   const key = `${tex}:${axis}`;
   if (!texinfoOf.has(key)) {
+    if (!texIndex.has(tex)) throw new Error(`texture ${tex} is not in TEX`); // (it would print as sky)
     texinfoOf.set(key, texinfos.length);
     const special = tex === 'sky' || tex[0] === '!' ? 1 : 0;
     texinfos.push({ s: TEX_AXES[axis][0], t: TEX_AXES[axis][1], miptex: texIndex.get(tex), flags: special });

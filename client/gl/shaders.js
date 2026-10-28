@@ -59,6 +59,7 @@ uniform mat4 u_viewProj;
 uniform uvec4 u_broken[2]; // 256-bit mask of broken breakable slots (a_mat.w)
 uniform uint u_moverBase; // slots above it are doors and buttons (shared/doors.js)
 uniform vec4 u_movers[192]; // their 3x4 model -> world matrices, MAX_MOVERS x 3 rows
+uniform float u_time;
 
 out vec3 v_pos;
 out vec2 v_uv;
@@ -83,7 +84,8 @@ void main() {
     nrm = vec3(dot(r0.xyz, nrm), dot(r1.xyz, nrm), dot(r2.xyz, nrm));
   }
   v_pos = pos;
-  v_uv = a_uv;
+  // Conveyor belts: the texture slides along s (a_nrm.w: SCROLL_UNIT 8ths of a tile a second).
+  v_uv = vec2(a_uv.x - u_time * a_nrm.w * (127.0 / 8.0), a_uv.y);
   v_lm = a_lm;
   v_nrm = nrm;
   v_col = a_col;
@@ -111,6 +113,10 @@ uniform float u_time;
 uniform float u_zoom; // 90 / fov: the ink fade follows the scope
 uniform float u_dot;  // halftone cell (px): see-through surfaces use a finer screen
 uniform float u_lightFull; // lifted map light that prints fully lit (no dots), per map
+// Flash lights (client/gl/flashes.js): xyz, radius; strength; how many are on.
+uniform vec4 u_flash[4];
+uniform float u_flashK[4];
+uniform int u_flashN;
 
 ${GBUFFER}
 
@@ -285,6 +291,17 @@ void main() {
     float lum = dot(lm, vec3(0.3, 0.59, 0.11));
     albedo = clamp(albedo * mix(vec3(1.0), clamp(lm / max(lum, 0.05), 0.0, 2.0), 0.5), 0.0, 1.0);
     light = dark < 0.0 ? 0.8 : pow(clamp(lum / u_lightFull, 0.0, 1.0), 0.8) * (1.0 - dark);
+    // Muzzle flashes and explosions: the light rises toward full (the dots there thin out
+    // and go), most on faces turned to the flash, with a warm cast.
+    float glow = 0.0;
+    for (int i = 0; i < u_flashN; i++) {
+      vec3 d = u_flash[i].xyz - v_pos;
+      float f = smoothstep(0.0, 1.0, 1.0 - length(d) / u_flash[i].w);
+      glow += u_flashK[i] * f * (0.6 + 0.4 * max(0.0, dot(normalize(v_nrm), normalize(d))));
+    }
+    glow = min(glow, 1.0);
+    light = mix(light, 1.0, glow);
+    albedo = mix(albedo, min(albedo * vec3(1.18, 1.06, 0.82), vec3(1.0)), 0.6 * glow);
   }
   ink *= 1.0 - smoothstep(720.0 * u_zoom, 1600.0 * u_zoom, v_w);
   albedo = mix(albedo, INK, ink);
@@ -349,6 +366,32 @@ void main() {
   float dark = cloud ? 0.0 : clamp(0.06 + dir.z * 0.55, 0.03, 0.42);
   gbuffer(cloud ? vec3(0.98, 0.97, 0.93) : u_horizon, 1.0 - dark, vec3(0.0, 0.0, 1.0), cloud ? 1u : 0u,
     DEPTH_FAR, G_SKY);
+}`;
+
+// Contact shadows (client/gl/shadows.js): a disc lying on the floor under each character
+// takes light away (the albedo target's alpha only, multiplied down), so the print shows it
+// as shade dots like any shadow; no ink, no other target touched.
+export const SHADOW_VS = `#version 300 es
+layout(location=0) in vec4 a_disc; // x, y, floor height, radius (per instance)
+layout(location=1) in float a_dark; // share of the light taken at its middle
+uniform mat4 u_viewProj;
+out vec2 v_q;
+out float v_dark;
+void main() {
+  vec2 q = vec2(gl_VertexID & 1, gl_VertexID >> 1) * 2.0 - 1.0;
+  v_q = q;
+  v_dark = a_dark;
+  gl_Position = u_viewProj * vec4(a_disc.xy + q * a_disc.w, a_disc.z + 1.0, 1.0);
+}`;
+
+export const SHADOW_FS = `#version 300 es
+precision mediump float;
+in vec2 v_q;
+in float v_dark;
+layout(location = 0) out vec4 o_albedo;
+void main() {
+  // A firm edge, slightly soft: it reads as a shape, printed in dots.
+  o_albedo = vec4(0.0, 0.0, 0.0, v_dark * (1.0 - smoothstep(0.75, 1.0, length(v_q))));
 }`;
 
 // Bullet holes: world-space quads, an ink star written into the albedo only (decals.js).

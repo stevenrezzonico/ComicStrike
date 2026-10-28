@@ -76,6 +76,7 @@ export function createConsole(print) {
   add('r_crosshair_clearzone', 1, 'Dots melt into flat tone round the crosshair: size of that zone (0: off)', 0, 3);
   add('r_lineboil', 1, 'Hand-drawn wobble of the ink lines (off with reduced motion)', 0, 1);
   add('mat_viewportscale', 1, 'Render resolution, relative to the window', 0.25, 1);
+  add('r_hidpi', 0, 'Sharp: render at the screen pixel density on high-DPI screens (up to 2x; costs up to 4x the pixels)', 0, 1);
   // View.
   add('viewmodel_fov', 60, 'Weapon model field of view', 54, 68);
   add('viewmodel_offset_x', 1, 'Weapon model offset: right', -2.5, 2.5);

@@ -104,6 +104,7 @@ export class SurfaceMap {
     this.entityHead = new Map();
     this.hitS = 0;
     this.hitT = 0;
+    this.hitZ = NaN; // height of the face lightAt found (NaN: none), the floor under a model
     bsp.entities.forEach((e, i) => {
       const m = entityModelIndex(e);
       if (m > 0) this.entityHead.set(i, modelHeadnode(bsp, m, 0));
@@ -140,6 +141,7 @@ export class SurfaceMap {
         if (s >= this.extents[e] && s <= this.extents[e + 1] && t >= this.extents[e + 2] && t <= this.extents[e + 3]) {
           this.hitS = s; // texture coordinates of the hit, for lightAt
           this.hitT = t;
+          this.hitZ = mz;
           return f;
         }
       }
@@ -156,6 +158,7 @@ export class SurfaceMap {
   // and returns false (out = 0) where nothing lit is found. Client only (models).
   lightAt(out, x, y, z) {
     out[0] = out[1] = out[2] = 0;
+    this.hitZ = NaN;
     const b = this.bsp;
     const f = this.findFace(0, x, y, z, x, y, z - 2048);
     if (f < 0) return false;

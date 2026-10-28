@@ -11,6 +11,7 @@ import { PlayerAnimator, holdOf, gunInHand } from '../anim/playeranim.js';
 import { PLAYER_SKELETON as S, MAX_BONES } from '../anim/skeleton.js';
 import { GUN_MAG, GUN_BOLT } from '../models/guns.js';
 import { multiply, sphereInView } from './mat4.js';
+import { FloorShadows } from './shadows.js';
 import { TEAM_CT } from '../../shared/player.js';
 import { WEAPON_ID } from '../../shared/weapons.js';
 import { MAX_ITEMS } from '../../shared/items.js';
@@ -30,6 +31,9 @@ const OWN_TOSS_TICKS = 16; // our own thrown weapon stays hidden this long (firs
 // its standing height (lying dead or carried on a shoulder, with the gun held out, it
 // stays within), a weapon on the ground from its grip, the bomb.
 const BODY_MID = 36, BODY_R = 84, ITEM_R = 48, BOMB_R = 16;
+// Contact shadow under a living character: radius and the light it takes at its middle,
+// growing fainter and wider with the height above the floor (a jump), gone at SHADOW_FADE.
+const SHADOW_R = 20, SHADOW_DARK = 0.75, SHADOW_FADE = 180;
 
 export class PlayerModels {
   // guns: GunMeshes (client/gl/gunmeshes.js).
@@ -70,6 +74,9 @@ export class PlayerModels {
     this.itemLightOf = Array.from({ length: MAX_ITEMS }, () => new Float32Array([1, 1, 1]));
     this.anim = Array.from({ length: MAX_PLAYERS }, () => new PlayerAnimator());
     this.visible = new Uint8Array(MAX_PLAYERS);
+    this.floorZ = new Float32Array(MAX_PLAYERS); // under each player (NaN: no shadow)
+    this.hostageFloorZ = new Float32Array(MAX_HOSTAGES);
+    this.shadows = new FloorShadows(gl);
     this.body = new Array(MAX_PLAYERS).fill(null);
     this.model = new Float32Array(MAX_PLAYERS * 16);
     this.light = new Float32Array(MAX_PLAYERS * 3).fill(1);
@@ -95,6 +102,7 @@ export class PlayerModels {
   // or see through his eyes). Call after update().
   updateHostages(h, dt, surfaces) {
     this.hostageShown.fill(0);
+    this.hostageFloorZ.fill(NaN); // carried ones cast none
     for (let k = 0; k < h.count; k++) {
       const a = this.hostageAnim[k], m = this.hostageModel[k], state = h.state[k];
       if (state === HS_IDLE || state === HS_DEAD) {
@@ -104,6 +112,7 @@ export class PlayerModels {
         m[0] = c; m[1] = s; m[4] = -s; m[5] = c; m[10] = 1;
         m[12] = h.x[k]; m[13] = h.y[k]; m[14] = h.z[k]; m[15] = 1;
         if (surfaces && surfaces.lightAt(this.lm, h.x[k], h.y[k], h.z[k] + 36)) modelLight(this.hostageLight[k], this.lm);
+        this.hostageFloorZ[k] = state === HS_IDLE ? h.z[k] : NaN;
         this.hostageShown[k] = 1;
       } else if (state === HS_CARRIED && h.carrier[k] >= 0 && this.visible[h.carrier[k]]) {
         // Lying across his shoulders, face down, head to his left.
@@ -175,6 +184,8 @@ export class PlayerModels {
         const k = 1 - Math.exp(-dt * 8);
         for (let ch = 0; ch < 3; ch++) this.light[id * 3 + ch] += (this.tmpLight[ch] - this.light[id * 3 + ch]) * k;
       }
+      // The floor for its contact shadow: under the feet when standing, else the face below.
+      this.floorZ[id] = !alive ? NaN : flags & FL_ONGROUND ? z : surfaces ? surfaces.hitZ : NaN;
     }
   }
 
@@ -261,6 +272,26 @@ export class PlayerModels {
     m[12] = x; m[13] = y; m[14] = z + 0.8; m[15] = 1;
   }
 
+  // Contact shadows under the living players and standing hostages, before they are drawn
+  // (their own pixels then cover the disc).
+  drawShadows(viewProj, gbuf) {
+    for (let id = 0; id < MAX_PLAYERS; id++) {
+      if (this.visible[id]) this.addShadow(viewProj, this.modelOf[id], this.floorZ[id]);
+    }
+    for (let k = 0; k < MAX_HOSTAGES; k++) {
+      if (this.hostageShown[k]) this.addShadow(viewProj, this.hostageModel[k], this.hostageFloorZ[k]);
+    }
+    this.shadows.draw(viewProj, gbuf);
+  }
+
+  addShadow(viewProj, m, floor) {
+    const h = m[14] - floor; // feet above the floor (NaN: none)
+    if (!(h > -2 && h < SHADOW_FADE)) return;
+    const rad = SHADOW_R * (1 + Math.max(h, 0) / 150);
+    if (!sphereInView(viewProj, m[12], m[13], floor, rad)) return;
+    this.shadows.add(m[12], m[13], floor, rad, SHADOW_DARK * (1 - Math.max(h, 0) / SHADOW_FADE));
+  }
+
   // The bomb lying at (x, y, z = floor), turned by yaw (radians); show = false hides it.
   setBomb(show, x = 0, y = 0, z = 0, yaw = 0, led = false, surfaces = null) {
     const b = this.bomb;
@@ -274,7 +305,8 @@ export class PlayerModels {
     if (surfaces && surfaces.lightAt(this.lm, x, y, z + 8)) modelLight(b.light, this.lm);
   }
 
-  draw(viewProj) {
+  draw(viewProj, gbuf) {
+    this.drawShadows(viewProj, gbuf);
     const r = this.renderer;
     let begun = false;
     r.flags = G_FLAGS.CHAR; // players and hostages (G_CHAR: far away their colors show)

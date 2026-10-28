@@ -7,6 +7,7 @@ import { SurfaceMap } from '../shared/surfaces.js';
 import { TEAM_T } from '../shared/player.js';
 import { Writer, CmdRing, writeHello, writeCmds } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
+import { buildMapMesh, VERTEX_STRIDE, SCROLL_UNIT } from '../client/mapmesh.js';
 
 // de_playground is our own map (tools/gen_demomap.js), so it is in the repository.
 const bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url)).buffer);
@@ -90,6 +91,11 @@ Deno.test('de_playground: the ladder climbs the tower; the belt carries; doors a
   c.input = { buttons: 0, pitch: 0, yaw: 0 };
   run(64);
   assert.ok(c.player.ps.f[PS_ORIGIN] > 500, `the belt carried us east (to ${c.player.ps.f[PS_ORIGIN].toFixed(0)})`);
+  // Its top (scroll_conv, 64 wide, s along +x) slides east at the belt's speed.
+  const mesh = buildMapMesh(bsp), b = new Int8Array(mesh.vertices);
+  const rates = new Set();
+  for (let v = 0; v < mesh.numVerts; v++) if (b[v * VERTEX_STRIDE + 31]) rates.add(b[v * VERTEX_STRIDE + 31]);
+  assert.deepEqual([...rates], [160 / 64 * SCROLL_UNIT], 'the belt top scrolls, nothing else');
   assert.equal(game.doors.count, 4, 'three doors and a button');
   assert.equal(game.breakables.count, 6);
 });

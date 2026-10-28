@@ -49,6 +49,7 @@ const TABS = [
     ['slider', 'r_shadowlift', 'Shadow brightness', 0, 1, 0.05],
     ['toggle', 'r_lineboil', 'Hand-drawn line wobble'],
     ['slider', 'mat_viewportscale', 'Render resolution', 0.5, 1, 0.05],
+    ['select', 'r_hidpi', 'High-DPI screens', ['Page pixels', 'Sharp (screen pixels)']],
     ['slider', 'viewmodel_fov', 'Weapon field of view', 54, 68, 1],
     ['slider', 'viewmodel_offset_x', 'Weapon offset right', -2.5, 2.5, 0.1],
     ['slider', 'viewmodel_offset_y', 'Weapon offset forward', -2, 2, 0.1],
