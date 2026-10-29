@@ -10,7 +10,7 @@ import {
 } from '../shared/bsp.js';
 import { breakableEntities, MAX_BREAKABLES } from '../shared/breakables.js';
 import { moverEntities } from '../shared/doors.js';
-import { classify, isSkipped, MAT, FLAG_ALPHATEST } from '../shared/materials.js';
+import { classify, isSkipped, MAT, FLAG_ALPHATEST, FLAG_ENTITY } from '../shared/materials.js';
 import { withOriginalColor } from './texcolors.js';
 
 // Vertex layout (40 bytes):
@@ -254,7 +254,7 @@ export function buildMapMesh(bsp) {
         vu8[b + 34] = mat.b;
         vu8[b + 35] = alpha;
         vu8[b + 36] = mat.mat;
-        vu8[b + 37] = mat.flags;
+        vu8[b + 37] = mat.flags | (m.model ? FLAG_ENTITY : 0);
         vu8[b + 38] = mat.seed;
         vu8[b + 39] = m.slot;
       }

@@ -29,9 +29,13 @@ export const MAT = {
 export const FLAG_ALPHATEST = 1; // '{' textures: holes via discard
 export const FLAG_FULLBRIGHT = 2; // ignore lightmap
 export const FLAG_SCROLL = 4; // animated / flowing
+export const FLAG_ENTITY = 8; // a brush entity's face: drawn a hair nearer than the world (WORLD_VS)
 
-// Names that are never drawn.
-const SKIP = new Set(['sky', 'aaatrigger', 'clip', 'null', 'origin', 'hint', 'skip', 'bevel', '{invisible', 'noclip']);
+// Names that are never drawn. Alpha-tested textures with no opaque pixel ({blue is all
+// blue, the transparent color) are invisible in GoldSrc: mappers put them on func_walls
+// as invisible blockers, often flush on a world face.
+const SKIP = new Set(['sky', 'aaatrigger', 'clip', 'null', 'origin', 'hint', 'skip', 'bevel', '{invisible', 'noclip',
+  '{blue', '{wallinv', '{wallinv2', '{wallinv3']);
 
 // First match wins. [substrings, material, base rgb]
 const RULES = [

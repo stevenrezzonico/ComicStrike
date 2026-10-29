@@ -93,6 +93,15 @@ void main() {
   // BSP's splits of one surface.
   v_mat = uvec4(a_mat.xyz, (a_mat.z * 7u + slot * 13u) % 127u + 1u);
   gl_Position = u_viewProj * vec4(pos, 1.0);
+  // Brush entity faces (FLAG_ENTITY) win over world faces in their plane, and nets,
+  // fences (alpha-tested) and breakables / doors over other entities': mappers lay
+  // func_walls, func_illusionaries and water flush on the world or each other, which
+  // z-fought. ~25 steps of the 24-bit depth buffer a level, a constant in clip space (a
+  // polygon offset within the one draw).
+  if ((a_mat.y & 8u) != 0u) {
+    float level = 1.0 + float(slot != 0u || (a_mat.y & 1u) != 0u);
+    gl_Position.z -= 3e-6 * level * gl_Position.w;
+  }
   v_w = gl_Position.w;
 }`;
 
