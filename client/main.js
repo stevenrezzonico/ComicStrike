@@ -984,8 +984,9 @@ function frame(now) {
     return;
   }
   // Practice pauses with the pause menu, like a listen server: the worker's ticks stop
-  // (bots, the round clock, timeouts) and so do ours; the frame still draws.
-  const paused = localWorker !== null && menu.visible && menu.inGame;
+  // (bots, the round clock, timeouts) and so do ours; the frame still draws. sv_pausable 0
+  // keeps it running (testing: the game goes on while the menu is up or the mouse is lost).
+  const paused = localWorker !== null && menu.visible && menu.inGame && cv.sv_pausable.bool;
   if (paused !== localPaused) {
     localPaused = paused;
     if (localWorker) localWorker.postMessage({ type: 'pause', on: paused });
