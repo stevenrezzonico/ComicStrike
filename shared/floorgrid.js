@@ -3,14 +3,15 @@
 // LAYERS floor heights per cell, keeping only floors a crouching player fits on. A flood
 // fill from the spawn points (and hostages) then walks those floors the way a player
 // can (`moves`): onto a neighbor's floor at most a stair up or any distance down (the
-// floor he walks or falls onto), onto anything a crouch jump reaches, up ladders. Used
+// floor he walks or falls onto, when his hull really drops there), onto anything a
+// crouch jump reaches, up ladders. Used
 // by the radar's overview (shared/overview.js) and the bots' navigation (shared/nav.js).
 
 import {
   entityModelIndex, faceNumEdges, facePlane, faceSide, faceTexinfo, faceVertex, modelFirstFace, modelNumFaces,
   parseVec3,
 } from './bsp.js';
-import { hullFits, HULL_DUCK, ENT_LADDER, ENT_NONE } from './trace.js';
+import { hullFits, traceHull, Trace, HULL_DUCK, ENT_LADDER, ENT_NONE } from './trace.js';
 
 export const LAYERS = 6; // floor heights kept per cell (the highest go first when full)
 export const STAIR = 18; // sv_stepsize: walked up without a jump
@@ -30,8 +31,11 @@ export class FloorGrid {
   // cell: world units per cell; bounds [x0, y0, x1, y1] (world; default: every upward
   // face); margin: empty cells around; doorsOpen: doors do not cut floors (true: every
   // door, as the radar draws rooms behind them; or a test of the door's bsp entity index:
-  // navigation opens the doors players can open, shared/doors.js).
-  constructor(bsp, world, cell, { bounds = null, margin = 0, doorsOpen = false, faces = null } = {}) {
+  // navigation opens the doors players can open, shared/doors.js); strictFalls: a fall is
+  // a move only where the hull really drops (`drops`; the navigation: a bot must not walk
+  // against a railing or a crate's side), else wherever there is room over the neighbor
+  // (the overview keeps the floors a player gets to somehow, over a railing or off a crate).
+  constructor(bsp, world, cell, { bounds = null, margin = 0, doorsOpen = false, faces = null, strictFalls = false } = {}) {
     faces = faces || floorFaces(bsp);
     const [x0, y0, x1, y1] = bounds || faceBounds(faces);
     this.cell = cell;
@@ -51,6 +55,7 @@ export class FloorGrid {
       }
     }
     this.world = world;
+    this.strictFalls = strictFalls;
     try {
       for (const f of faces) this.raster(f, world);
       this.ladder = this.ladders(world); // per cell: the top of a ladder there, or -Infinity
@@ -96,7 +101,8 @@ export class FloorGrid {
 
   // Every move from floor slot s: out(slot, kind) for each floor a player gets to from
   // there (MOVE_WALK / MOVE_JUMP onto a neighbor, MOVE_LADDER up this cell's ladder). A
-  // fall needs room at our height over the neighbor (not through a railing or a wall).
+  // fall needs room at our height over the neighbor (not through a railing or a wall)
+  // and, with strictFalls, the hull must really drop there (`drops`).
   moves(s, out) {
     const L = this.layers, w = this.w, i = Math.floor(s / LAYERS), z = L[s];
     const lad = this.ladder[i];
@@ -108,7 +114,16 @@ export class FloorGrid {
       }
       const j = i + (d === 0 ? -1 : d === 1 ? 1 : d === 2 ? -w : w);
       const c = this.landing(j, z + STAIR);
-      if (c >= 0 && (L[c] >= z - STAIR || fitsCrouched(this.world, this.centerX(j), this.centerY(j), z))) out(c, MOVE_WALK);
+      if (c >= 0) {
+        if (L[c] >= z - STAIR) out(c, MOVE_WALK);
+        else {
+          const nx = this.centerX(j), ny = this.centerY(j);
+          if (fitsCrouched(this.world, nx, ny, z) &&
+            (!this.strictFalls || this.drops(nx, ny, z, nx - this.centerX(i), ny - this.centerY(i), L[c]))) {
+            out(c, MOVE_WALK);
+          }
+        }
+      }
       for (let k = 0; k < LAYERS; k++) {
         const z2 = L[j * LAYERS + k];
         if (z2 > z + STAIR && z2 <= limit) out(j * LAYERS + k, z2 <= z + CLIMB ? MOVE_JUMP : MOVE_LADDER);
@@ -117,6 +132,30 @@ export class FloorGrid {
     if (lad > -Infinity) { // on a ladder: every floor of this cell up to its top
       for (let k = 0; k < LAYERS; k++) if (L[i * LAYERS + k] > z && L[i * LAYERS + k] <= limit) out(i * LAYERS + k, MOVE_LADDER);
     }
+  }
+
+  // Does a crouching player walking from the cell center (x - dx, y - dy) on floor level
+  // z to (x, y) fall onto the floor `floor` below (more than a stair down)? His hull must
+  // get there level, then down to within a stair of that floor, unobstructed; there or a
+  // little further along the move: past the rim of a ledge, where the hull at the cell
+  // center still overlaps the floor he is leaving. A cell whose own floor the grid could
+  // not keep (a step or a crate's side within the hull of its center, a railing at the
+  // floor's edge) was otherwise a "fall" onto the floor far below it (de_nuke's upper
+  // floors over the lower level), and the bot walked there and stood.
+  drops(x, y, z, dx, dy, floor) {
+    const tr = dropTrace, fx = x - dx, fy = y - dy;
+    let up = 0;
+    while (up <= STAIR && !hullFits(this.world, HULL_DUCK, fx, fy, z + 19 + up)) up += STAIR / 2;
+    if (up > STAIR) return false;
+    const top = z + 19 + up, bottom = floor + 19;
+    for (let along = 0; along <= 1; along++) {
+      const px = x + dx * along * 0.85, py = y + dy * along * 0.85;
+      traceHull(this.world, HULL_DUCK, fx, fy, top, px, py, top, tr);
+      if (tr.fraction < 1) return false; // something in the way (the railing, the step)
+      traceHull(this.world, HULL_DUCK, px, py, top, px, py, bottom, tr);
+      if (top - (top - bottom) * tr.fraction <= bottom + STAIR + 2) return true;
+    }
+    return false;
   }
 
   // Flood fill from the spawn points and hostages: 1 per reachable floor slot. Maps
@@ -242,6 +281,8 @@ export class FloorGrid {
     L[o + k] = z;
   }
 }
+
+const dropTrace = new Trace();
 
 // Does a crouching player fit on floor z at (x, y)? Uneven ground (terrain, curbs)
 // lifts him by up to a stair step, so the hull is tried a little higher too.

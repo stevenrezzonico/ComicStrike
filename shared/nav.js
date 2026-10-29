@@ -2,7 +2,10 @@
 // reachable floors of a FloorGrid (shared/floorgrid.js) at NAV_CELL resolution, with the
 // doors as they are in this game (closed), become graph nodes; edges are the moves a
 // player makes (walk or fall, jump, ladder) to the 8 neighbors (diagonals only where
-// both sides are open). A* finds paths; `direct` tells whether a straight walk between
+// both sides are open). Falls only where the hull really drops (the grid's strictFalls):
+// a floor the grid could not keep at a cell (a crate's side or a step within the hull of
+// its center, a railing at the edge) made the room below it the cell's landing, and
+// bots walked to the spot and stood there (de_nuke's upper floors). A* finds paths; `direct` tells whether a straight walk between
 // two points stays on the floors (bots cut corners with it). Everything is preallocated
 // for the path searches.
 
@@ -24,7 +27,7 @@ export class Nav {
   constructor(bsp, world, cell = NAV_CELL, doorsOpen = false) {
     const faces = floorFaces(bsp);
     const bounds = new FloorGrid(bsp, world, 96, { faces, doorsOpen }).layerBounds(); // where floors are at all
-    const g = this.grid = new FloorGrid(bsp, world, cell, { bounds, margin: 1, faces, doorsOpen });
+    const g = this.grid = new FloorGrid(bsp, world, cell, { bounds, margin: 1, faces, doorsOpen, strictFalls: true });
     const slots = g.w * g.h * LAYERS;
     const nodeOf = this.nodeOf = new Int32Array(slots).fill(-1); // grid slot -> node
     let n = 0;
@@ -51,23 +54,28 @@ export class Nav {
     }
 
     // Edges (compressed rows): the grid's moves, plus diagonals walkable both ways round.
+    // Each node's moves are taken from the grid once (the diagonals ask for them again
+    // and again: with the fall check that was most of the build time).
     const from = [], to = [], kind = [];
-    const moves = [];
+    const moveLists = new Array(n);
+    let moves = [];
     const collect = (s2, m) => moves.push(s2, m);
+    for (let k = 0; k < n; k++) {
+      moves = [];
+      g.moves(this.slot[k], collect);
+      moveLists[k] = moves;
+    }
     const walkTo = (s, di) => { // the walk move from slot s to neighbor index offset di, or -1
-      moves.length = 0;
-      g.moves(s, collect);
+      const list = moveLists[nodeOf[s]];
       const j = Math.floor(s / LAYERS) + di;
-      for (let q = 0; q < moves.length; q += 2) {
-        if (moves[q + 1] === MOVE_WALK && Math.floor(moves[q] / LAYERS) === j) return moves[q];
+      for (let q = 0; q < list.length; q += 2) {
+        if (list[q + 1] === MOVE_WALK && Math.floor(list[q] / LAYERS) === j) return list[q];
       }
       return -1;
     };
     for (let k = 0; k < n; k++) {
       const s = this.slot[k];
-      moves.length = 0;
-      g.moves(s, collect);
-      const list = moves.slice();
+      const list = moveLists[k];
       for (let q = 0; q < list.length; q += 2) {
         const k2 = nodeOf[list[q]];
         if (k2 < 0 || k2 === k) continue;
@@ -77,7 +85,7 @@ export class Nav {
       }
       for (const [dx, dy] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
         const a = walkTo(s, dx), b = walkTo(s, -dy * g.w);
-        if (a < 0 || b < 0) continue;
+        if (a < 0 || b < 0 || nodeOf[a] < 0 || nodeOf[b] < 0) continue;
         const c1 = walkTo(a, -dy * g.w), c2 = walkTo(b, dx);
         if (c1 < 0 || c1 !== c2 || nodeOf[c1] < 0) continue;
         from.push(k);

@@ -147,14 +147,17 @@ Deno.test({ name: 'bots: a T walks from its spawn to a bomb site', ignore: !dust
   assert.ok(g.bombSites.boxes.some((box) => inBox(b.c, box)), 'reached a site within 45 s');
 } });
 
-Deno.test({ name: 'bots: a hard bot kills a player standing in plain view', ignore: !dust2, fn: () => {
+// A duel: a CT bot of `level` (no bomb to carry) facing a T standing 400 units away in
+// plain view on open ground at the T spawn; the bots' random seeded with `seed`. Returns
+// the seconds until the kill (20 if none) and whether it was a headshot.
+function duel(level, seed) {
   const { host, g, join, run } = setup('de_dust2');
-  const target = join('target', TEAM_CT);
-  host.con.exec('bot_add t hard');
+  g.bots.random = seeded(seed);
+  const target = join('target', TEAM_T);
+  host.con.exec(`bot_add ct ${['easy', 'normal', 'hard', 'expert'][level]}`);
   const bot = g.bots.list[0].c;
   run(4);
   while (g.phase !== PHASE_LIVE) run(1);
-  // The target 400 units ahead of the bot on open ground at the T spawn.
   const [x, y, z] = g.spawns[TEAM_T][0];
   const nav = g.bots.nav, k = nav.nodeAt(x, y, z - 36);
   let best = -1;
@@ -170,9 +173,40 @@ Deno.test({ name: 'bots: a hard bot kills a player standing in plain view', igno
   teleport(target, nav.x[best], nav.y[best], nav.z[best] + 36);
   g.bots.list[0].yaw = Math.atan2(nav.y[best] - nav.y[k], nav.x[best] - nav.x[k]) * 180 / Math.PI;
   g.bots.list[0].c.yaw = g.bots.list[0].yaw;
-  run(64 * 8, () => !target.alive);
-  assert.ok(!target.alive, 'killed within 8 s');
+  let headshot = false;
+  const kill = g.kill.bind(g);
+  g.kill = (killer, victim, weapon, hs) => {
+    headshot = !!hs;
+    kill(killer, victim, weapon, hs);
+  };
+  const t0 = g.tick;
+  run(64 * 20, () => !target.alive);
+  return { bot, target, seconds: (g.tick - t0) / 64, headshot };
+}
+
+Deno.test({ name: 'bots: a hard bot kills a player standing in plain view', ignore: !dust2, fn: () => {
+  const { bot, target, seconds } = duel(2, 7);
+  assert.ok(!target.alive && seconds < 8, 'killed within 8 s');
   assert.equal(bot.kills, 1);
+} });
+
+Deno.test({ name: 'bots: an easy bot takes much longer than a hard one and lands fewer headshots', ignore: !dust2, fn: () => {
+  const stats = (level) => {
+    let time = 0, kills = 0, heads = 0;
+    for (let seed = 1; seed <= 8; seed++) {
+      const r = duel(level, seed);
+      if (!r.target.alive) kills++;
+      time += r.seconds;
+      if (r.headshot) heads++;
+    }
+    return { kills, mean: time / 8, heads };
+  };
+  const easy = stats(0), hard = stats(2);
+  assert.equal(hard.kills, 8, 'a hard bot kills every time');
+  assert.ok(hard.mean < 1.5, `hard: ${hard.mean.toFixed(2)} s a kill`);
+  assert.ok(easy.kills >= 6, `easy kills in 20 s: ${easy.kills}`);
+  assert.ok(easy.mean > 2 * hard.mean, `easy ${easy.mean.toFixed(2)} s vs hard ${hard.mean.toFixed(2)} s`);
+  assert.ok(easy.heads < hard.heads, `headshot kills: easy ${easy.heads}, hard ${hard.heads}`);
 } });
 
 Deno.test({ name: 'bots: a CT goes to the planted bomb and defuses it', ignore: !dust2, fn: () => {
