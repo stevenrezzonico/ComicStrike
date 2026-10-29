@@ -93,10 +93,7 @@ export class NetClient {
     this.writer = this.wt.datagrams.writable.getWriter();
     this.wt.closed
       .then((info) => info && info.reason, (err) => err.message)
-      .then((reason) => {
-        this.closed = true;
-        this.closeReason = reason || 'closed';
-      });
+      .then((reason) => this.ended(reason || 'closed'));
     this.readLoop();
     this.opened();
   }
@@ -112,8 +109,7 @@ export class NetClient {
       if (m.id !== id) return;
       if (m.type === 'dgram') this.receiveDatagram(new Uint8Array(m.bytes));
       else if (m.type === 'close') {
-        this.closed = true;
-        this.closeReason = m.reason || 'closed';
+        this.ended(m.reason || 'closed');
         worker.removeEventListener('message', this.onLocal);
       }
     };
@@ -124,8 +120,10 @@ export class NetClient {
 
   opened() {
     // Leaving or reloading the page: close the session so the server frees our player
-    // at once instead of waiting for the timeout.
-    addEventListener('pagehide', () => this.close('page closed'));
+    // at once instead of waiting for the timeout. Removed on close: every map change and
+    // rejoin opens a new client, and each listener kept its closed client alive.
+    this.onPageHide = () => this.close('page closed');
+    addEventListener('pagehide', this.onPageHide);
     const keepalive = setInterval(() => {
       if (this.closed) clearInterval(keepalive);
       else if (this.welcome && performance.now() - this.lastSend > KEEPALIVE_MS / 2) this.sendKeepalive();
@@ -173,8 +171,7 @@ export class NetClient {
     const w = this.nextWriter().reset();
     w.u8v(C2S_BYE);
     this.send(w.view());
-    this.closed = true;
-    this.closeReason = reason;
+    this.ended(reason);
     if (this.local) {
       this.local.removeEventListener('message', this.onLocal);
       this.local.postMessage({ type: 'close', id: this.localId });
@@ -183,6 +180,13 @@ export class NetClient {
     try {
       this.wt.close({ closeCode: 0, reason });
     } catch { /* already closed */ }
+  }
+
+  // Closed, by us or the server.
+  ended(reason) {
+    if (!this.closed) this.closeReason = reason;
+    this.closed = true;
+    if (this.onPageHide) removeEventListener('pagehide', this.onPageHide);
   }
 
   send(bytes) {

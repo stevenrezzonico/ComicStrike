@@ -22,16 +22,17 @@ async function setup(t) {
     return null;
   }
   const out = [];
+  const clock = { ms: 0 };
   const host = new Host({
     loadMap, listMaps: () => ['de_dust2', 'fy_buzzkill'], readCfg: () => null, print: (s) => out.push(s),
-    defer: (fn) => fn(),
+    defer: (fn) => fn(), now: () => clock.ms,
   });
   host.start('de_dust2');
   const w = new Writer();
   let cmdId = 0;
-  const join = (name, team) => {
+  const join = (name, team, address) => {
     const sent = [];
-    const session = { send: (b) => sent.push(b.slice()), close: (reason) => sent.push(reason), closed: false };
+    const session = { send: (b) => sent.push(b.slice()), close: (reason) => sent.push(reason), closed: false, address };
     const c = host.game.connect(session);
     host.game.receive(c, writeHello(w, team, 0, 0, name).slice());
     c.cmds = new CmdRing();
@@ -58,7 +59,7 @@ async function setup(t) {
       host.game.step();
     }
   };
-  return { host, out, join, run };
+  return { host, out, join, run, clock };
 }
 
 Deno.test('server console: mp_* cvars become the game rules (round time by map type)', async (t) => {
@@ -119,6 +120,65 @@ Deno.test('rcon: off without a password, bad passwords are refused and rate-limi
   for (let i = 0; i < 5; i++) a.command('rcon nope status');
   a.command('rcon hunter2 status');
   assert.match(a.prints().at(-1), /too many bad passwords/);
+});
+
+Deno.test('a tick that throws is logged at most once a second and the game goes on', async (t) => {
+  const s = await setup(t);
+  if (!s) return;
+  const { host, clock } = s;
+  const game = host.game, step = game.step;
+  let broken = true;
+  game.step = function () {
+    step.call(this);
+    if (broken) throw new Error('bug in a tick');
+  };
+  const logged = [], error = console.error;
+  console.error = (...a) => logged.push(a.join(' '));
+  try {
+    const t0 = game.tick;
+    for (let i = 0; i < 10; i++) host.step(game);
+    assert.equal(game.tick, t0 + 10, 'every tick still counts');
+    assert.equal(logged.length, 1, 'one report a second');
+    assert.match(logged[0], /bug in a tick/);
+    clock.ms += 1000;
+    host.step(game);
+    assert.equal(logged.length, 2);
+    assert.match(logged[1], /10 failed ticks/);
+    broken = false;
+    host.step(game);
+    assert.equal(game.tick, t0 + 12);
+  } finally {
+    console.error = error;
+  }
+});
+
+Deno.test('rcon: guesses are counted by address, so reconnecting does not reset them', async (t) => {
+  const s = await setup(t);
+  if (!s) return;
+  const { host, join, clock } = s;
+  host.con.exec('rcon_password hunter2');
+  const guess = (c, n) => {
+    for (let i = 0; i < n; i++) c.command(`rcon guess${i} status`);
+  };
+  const a = join('alpha', TEAM_T, '203.0.113.7');
+  guess(a, 3);
+  host.game.disconnect(a);
+  const again = join('alpha', TEAM_T, '203.0.113.7'); // a new session, same address
+  guess(again, 2);
+  again.command('rcon hunter2 status');
+  assert.match(again.prints().at(-1), /too many bad passwords/, 'blocked after 5 in all');
+  const other = join('bravo', TEAM_CT, '198.51.100.2');
+  other.command('rcon hunter2 status');
+  assert.match(other.prints().at(-1), /bravo/, 'another address is not blocked');
+  // IPv6: a whole /64 counts as one sender.
+  const v6 = join('charlie', TEAM_T, '2001:db8:1:2::10');
+  guess(v6, 5);
+  const v6b = join('delta', TEAM_T, '2001:db8:1:2:ffff::99');
+  v6b.command('rcon hunter2 status');
+  assert.match(v6b.prints().at(-1), /too many bad passwords/);
+  clock.ms += 61000; // the block runs out
+  again.command('rcon hunter2 status');
+  assert.match(again.prints().at(-1), /alpha/);
 });
 
 Deno.test('round control: mp_warmup_end, mp_restartgame, mp_warmup_start', async (t) => {

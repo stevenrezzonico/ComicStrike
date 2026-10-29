@@ -17,13 +17,16 @@
 // mp_restartgame, ...).
 
 import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { ensureCert } from './cert.js';
+import { staticPath } from './static.js';
 import { listen } from './transport.js';
 import { Host, GAME_MODES } from './host.js';
 import { parseBSP } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
 
 const ROOT = new URL('../', import.meta.url);
+const ROOT_PATH = fileURLToPath(ROOT);
 const HTTP_PORT = Number(Deno.env.get('HTTP_PORT') || 27015);
 const GAME_PORT = Number(Deno.env.get('GAME_PORT') || 27015);
 const HOSTNAMES = (Deno.env.get('HOSTNAMES') || 'localhost,127.0.0.1,::1').split(',');
@@ -97,7 +100,7 @@ function loop() {
   const due = Math.floor((performance.now() - epoch) / TICK_MS);
   let ran = 0;
   while (game.tick < due && ran < 8) {
-    game.step();
+    host.step(game);
     ran++;
   }
   if (game.tick < due) epoch = performance.now() - game.tick * TICK_MS; // fell behind: resync
@@ -106,11 +109,10 @@ function loop() {
 loop();
 
 async function serveStatic(pathname) {
-  if (pathname === '/') pathname = '/client/index.html';
-  const rel = pathname.slice(1);
-  if (rel.includes('..') || !(STATIC_DIRS.some((d) => rel.startsWith(d)) || STATIC_FILES.has(rel))) return null;
+  const rel = staticPath(pathname, STATIC_DIRS, STATIC_FILES);
+  if (!rel) return null;
   try {
-    const file = await Deno.open(new URL(rel, ROOT), { read: true });
+    const file = await Deno.open(join(ROOT_PATH, rel), { read: true });
     const ext = rel.slice(rel.lastIndexOf('.') + 1);
     return new Response(file.readable, {
       headers: {

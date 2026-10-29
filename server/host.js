@@ -10,6 +10,8 @@ import { Game, DEFAULT_RULES } from './game.js';
 
 const PHASE_NAMES = ['warmup', 'freeze time', 'live', 'round over'];
 const CHANGELEVEL_CLOSE_MS = 500;
+const RCON_MAX_FAILS = 5; // bad passwords from one address before it is ignored for a while
+const RCON_BLOCK_MS = 60000;
 
 // CS:GO game modes by game_type / game_mode. A mode is a cfg of mode convars run when a
 // map loads (cfg/gamemode_<name>.cfg, then cfg/gamemode_<name>_server.cfg for the
@@ -21,13 +23,31 @@ export const GAME_MODES = {
   '2/0': 'demo',
 };
 
+// The part of an address rcon guesses are counted by: an IPv4 address, or an IPv6 address's
+// /64 (one machine gets a whole /64 and can use any address in it).
+export function addressKey(address) {
+  if (!address || !address.includes(':')) return address || '';
+  const v4 = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address); // IPv4 mapped
+  if (v4) return v4[1];
+  const [head, tail] = address.replace(/%.*$/, '').split('::');
+  const h = head ? head.split(':') : [], t = tail ? tail.split(':') : [];
+  const groups = tail === undefined ? h : [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
+  return groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(':') + '::/64';
+}
+
 export class Host {
   // opts: loadMap(name) -> parsed BSP (throws if missing), listMaps() -> names,
   //       readCfg(name) -> text or null, quit(), print(text), rules (test overrides),
-  //       defer(fn, ms) (default setTimeout)
+  //       defer(fn, ms) (default setTimeout), now() -> ms (default performance.now)
   constructor(opts) {
     this.opts = opts;
     this.game = null;
+    // Bad rcon passwords by the sender's address (sessions without one share a key):
+    // counted here, not per player, so reconnecting does not reset them, and kept across
+    // map changes. Address key -> { fails, blockedUntil }.
+    this.rconGuard = new Map();
+    this.failedTicks = 0; // ticks that threw since the last report
+    this.failReportAt = -Infinity;
     const con = this.con = new Console(opts.print || ((s) => console.log(s)));
     const apply = () => this.applyRules();
     const num = (name, value, help, min, max) => con.cvar(name, value, { help, min, max, onChange: apply });
@@ -259,11 +279,45 @@ export class Host {
     this.con.exec(text, ctx);
   }
 
-  // rcon from a client: null if the password is wrong, else the command's output.
+  // One tick of `game`. A tick that throws (a bug) is logged, at most once a second, and
+  // the game goes on (step() counts the tick first): one bad tick must not stop the server
+  // for everyone. Uncaught, it ended the Deno process and froze the practice worker.
+  step(game) {
+    try {
+      game.step();
+    } catch (err) {
+      this.failedTicks++;
+      const now = this.opts.now ? this.opts.now() : performance.now();
+      if (now - this.failReportAt < 1000) return;
+      this.failReportAt = now;
+      const more = this.failedTicks > 1 ? ` (${this.failedTicks} failed ticks since the last report)` : '';
+      this.failedTicks = 0;
+      console.error(`tick ${game.tick} failed${more}:`, err);
+    }
+  }
+
+  // rcon from a client: null if the password is wrong, else the command's output (or
+  // why it was not run).
   rcon(c, password, command) {
     const pw = this.password.value;
     if (!pw) return 'rcon is disabled on this server (no rcon_password)';
-    if (password !== pw) return null;
+    const now = this.opts.now ? this.opts.now() : performance.now();
+    const key = addressKey(c.session && c.session.address);
+    let g = this.rconGuard.get(key);
+    if (g && now < g.blockedUntil) return 'rcon: too many bad passwords, try later';
+    if (password !== pw) {
+      if (!g) {
+        if (this.rconGuard.size >= 4096) this.rconGuard.clear(); // a flood of addresses: start over
+        this.rconGuard.set(key, g = { fails: 0, blockedUntil: 0 });
+      }
+      if (++g.fails >= RCON_MAX_FAILS) {
+        g.fails = 0;
+        g.blockedUntil = now + RCON_BLOCK_MS;
+      }
+      console.log(`rcon: bad password from player ${c.id} "${c.name}"${key ? ` (${key})` : ''}`);
+      return null;
+    }
+    this.rconGuard.delete(key);
     console.log(`rcon from player ${c.id} "${c.name}": ${command}`);
     const out = [];
     this.con.exec(command, { print: (s) => out.push(s), source: 'rcon' });

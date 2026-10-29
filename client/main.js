@@ -976,10 +976,12 @@ con.command('benchmark', (a, ctx) => {
 }, 'benchmark [seconds]: frame rate, slow frames, CPU and GPU time per pass over 10 s (or the given time)');
 
 function frame(now) {
+  // The next frame first: a frame that throws (a bug) then costs one frame, not the game
+  // (the error still shows in the console).
+  requestAnimationFrame(frame);
   if (!playing) { // the start menu: nothing runs
     last = now;
     accumulator = 0;
-    requestAnimationFrame(frame);
     return;
   }
   const elapsed = (now - last) / 1000;
@@ -1069,7 +1071,6 @@ function frame(now) {
   gi.corrected = netStats.corrected;
   gi.interpTicks = cv.cl_interp_ratio.number;
   netGraph.update(cv.net_graph.bool, now, net, gi);
-  requestAnimationFrame(frame);
 }
 
 function draw(now, alpha, dt) {

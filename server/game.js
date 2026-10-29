@@ -118,8 +118,6 @@ class Client {
     this.picking = -1; // hostage being picked up (use held), or -1
     this.pickEnd = 0; // server tick it is done
     this.useProgress = 0; // 0..1, sent in the own block
-    this.rconFails = 0;
-    this.rconBlockedUntil = 0; // server tick
     // Last command run, repeated when one is lost.
     this.buttons = 0;
     this.pitch = 0;
@@ -205,9 +203,6 @@ export const DEFAULT_RULES = {
   botStop: false, // bot_stop: they stand still
   botDontShoot: false, // bot_dont_shoot
 };
-
-const RCON_MAX_FAILS = 5; // bad passwords before a client is ignored for a while
-const RCON_BLOCK_TICKS = 60 * TICK_RATE;
 
 export class Game {
   constructor(mapName, bsp, rules = {}) {
@@ -1022,20 +1017,10 @@ export class Game {
     }
   }
 
+  // The Host checks the password and limits guessing (server/host.js).
   rconCommand(c, password, command) {
     if (!this.rcon) return 'rcon is disabled on this server (no rcon_password)';
-    if (this.tick < c.rconBlockedUntil) return 'rcon: too many bad passwords, try later';
-    const out = this.rcon(c, password, command);
-    if (out === null) { // wrong password
-      if (++c.rconFails >= RCON_MAX_FAILS) {
-        c.rconFails = 0;
-        c.rconBlockedUntil = this.tick + RCON_BLOCK_TICKS;
-      }
-      console.log(`rcon: bad password from player ${c.id} "${c.name}"`);
-      return 'Bad rcon_password.';
-    }
-    c.rconFails = 0;
-    return out;
+    return this.rcon(c, password, command) ?? 'Bad rcon_password.';
   }
 
   // CS:GO jointeam: 1 = spectators, 2 = T, 3 = CT. Switching while alive costs the life

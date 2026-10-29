@@ -75,7 +75,7 @@ function loop() {
     const due = Math.floor((performance.now() - epoch) / TICK_MS);
     let ran = 0;
     while (game.tick < due && ran < 8) {
-      game.step();
+      host.step(game);
       ran++;
     }
     if (game.tick < due) epoch = performance.now() - game.tick * TICK_MS; // fell behind: resync

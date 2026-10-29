@@ -2,9 +2,10 @@
 // Everything runtime-specific lives here so the transport can be swapped.
 
 export class Session {
-  constructor(id, wt) {
+  constructor(id, wt, address) {
     this.id = id;
     this.wt = wt;
+    this.address = address; // the remote IP (rcon counts bad passwords by it)
     this.writer = wt.datagrams.writable.getWriter();
     this.open = true;
     this.maxDatagramSize = wt.datagrams.maxDatagramSize || 1200;
@@ -38,7 +39,7 @@ export function listen({ hostname = '0.0.0.0', port, cert, key }, onSession) {
     const conn = await incoming.accept();
     const wt = await Deno.upgradeWebTransport(conn);
     await wt.ready;
-    const session = new Session(nextId++, wt);
+    const session = new Session(nextId++, wt, conn.remoteAddr && conn.remoteAddr.hostname);
     const handlers = onSession(session);
     const reader = wt.datagrams.readable.getReader();
     // Whichever notices first (closed promise or the end of the datagram stream).
