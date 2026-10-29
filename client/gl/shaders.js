@@ -641,7 +641,6 @@ uniform sampler2D u_depth;
 uniform vec2 u_res;
 uniform float u_line;  // ink line spacing (px); 0: no lines
 uniform float u_dot;   // halftone cell (px); 0: flat tones
-uniform float u_time;  // line boil clock (s); constant when r_lineboil is 0
 uniform float u_zoom;  // 90 / fov: distance fades follow the scope
 uniform float u_bands; // light posterized into this many bands (0: smooth)
 uniform float u_lift;  // share of the darkness taken away (r_shadowlift): dark corners stay readable
@@ -651,12 +650,6 @@ uniform float u_soft;  // shade dots: 0 bold, 1 soft (a finer screen, a paler pr
 out vec4 o_color;
 ${GBUFFER_CONSTS}
 ${NOISE}
-
-// Two hashes from one (the line boil's x and y).
-vec2 hh(vec2 p) {
-  float h = h21(p);
-  return vec2(h, fract(h * 47.13 + 0.37));
-}
 
 ivec2 cl(ivec2 p) { return clamp(p, ivec2(0), ivec2(u_res) - 1); }
 uvec4 dtex(ivec2 p) { return uvec4(texelFetch(u_depth, cl(p), 0) * 255.0 + 0.5); }
@@ -706,18 +699,15 @@ void main() {
     return;
   }
 
-  // Ink. The whole ink plate shifts up to a pixel, re-rolled 7 times a second: hand-drawn
-  // boil. One shift for every pixel keeps straight edges straight (a jitter varying across
-  // the screen bent them into one-pixel steps).
+  // Ink, sampled at the pixel itself (pc; the ink plate holds still: a hand-drawn boil
+  // shifting it 7 times a second was tiring to play with).
   float edge = 0.0;
   if (u_line > 0.0) {
-    float t = floor(u_time * 7.0);
-    vec2 wob = u_time > 0.0 ? (hh(vec2(t, 7.0)) - 0.5) * 1.6 : vec2(0.0);
-    ivec2 pc = p + ivec2(round(wob));
-    uvec4 Dc = dtex(pc);
+    ivec2 pc = p;
+    uvec4 Dc = Dp;
     fc = Dc.a;
     int s = max(1, int(u_line + 0.5)) + ((fc & (G_FLAT | G_VIEW)) != 0u ? 1 : 0);
-    float dC = depthOf(Dc);
+    float dC = dP;
     wc = 1.0 / max(dC, 1.0);
     // Silhouettes: 2nd derivative of 1 / depth (zero on any plane), on the nearer side only:
     // the object in front carries its outline, as a comic artist draws it (both sides made

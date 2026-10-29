@@ -83,7 +83,6 @@ import {
 const DEG = Math.PI / 180;
 const FOV_Y = 73.74 * DEG; // CS:GO fov 90 at 4:3, kept vertical (Hor+)
 const ZOOM_RATE = 30; // per second: how fast the view zooms in or out (approximation)
-const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)'); // no line boil
 let fov = 90; // current CS:GO-style fov (horizontal at 4:3), eased toward the scope's
 const scopeEl = document.getElementById('scope');
 let scopeShown = '';
@@ -1161,7 +1160,6 @@ function draw(now, alpha, dt) {
   style.lift = cv.r_shadowlift.number;
   style.soft = cv.r_halftone_style.number >= 1;
   style.calm = calmRadius(canvas.height) * cv.r_crosshair_clearzone.number;
-  style.boil = cv.r_lineboil.bool && !reducedMotion.matches;
   renderer.novis = cv.r_novis.bool;
   style.fast = cv.r_inkfast.bool || (cv.r_dynres.bool && dynres.fastInk);
   renderer.zoom = 90 / fov;
@@ -1237,7 +1235,7 @@ function draw(now, alpha, dt) {
       player.armor);
   }
   // Print the frame, then what goes over it; the flashbang's afterimage is taken from it.
-  renderer.composite(now / 1000);
+  renderer.composite();
   words.enabled = cv.cl_comicwords.bool && cv.cl_drawhud.bool;
   words.update(now);
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);

@@ -19,7 +19,7 @@ import { WorldVis } from './worldvis.js';
 // The light that prints fully lit: this share of the map's lit lightmap texels is at or
 // below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
 const LIGHT_FULL_SHARE = 0.75;
-const COMPOSITE_UNIFORMS = ['u_albedo', 'u_normal', 'u_depth', 'u_res', 'u_line', 'u_dot', 'u_time', 'u_zoom', 'u_bands',
+const COMPOSITE_UNIFORMS = ['u_albedo', 'u_normal', 'u_depth', 'u_res', 'u_line', 'u_dot', 'u_zoom', 'u_bands',
   'u_lift', 'u_style', 'u_calm', 'u_soft'];
 
 export class Renderer {
@@ -62,10 +62,10 @@ export class Renderer {
     this.transCount = 0;
     this.horizon = new Float32Array([0.76, 0.89, 0.93]);
     // The print (client/settings.js r_* cvars): comic or plain, ink line width and dot
-    // size relative to the screen height, light bands, line boil.
+    // size relative to the screen height, light bands.
     // calm: the radius (px) of the dot-free zone round the screen center (the crosshair);
     // soft: soft shade dots (r_halftone_style 1).
-    this.style = { comic: true, ink: 1, dots: 1, bands: 0, boil: true, lift: 0.3, calm: 0, soft: false, fast: false };
+    this.style = { comic: true, ink: 1, dots: 1, bands: 0, lift: 0.3, calm: 0, soft: false, fast: false };
     this.novis = false; // r_novis: draw the whole world (no visibility culling)
     this.zoom = 1; // 90 / fov
     // The canvas's size on the page, kept by a ResizeObserver: reading clientWidth every
@@ -284,7 +284,7 @@ export class Renderer {
   }
 
   // Prints the G-buffer to the canvas. Leaves the canvas bound (crosshair after it).
-  composite(time) {
+  composite() {
     const gl = this.gl, st = this.style;
     const h = this.canvas.height;
     this.timer.mark(PASS.PRINT);
@@ -303,7 +303,6 @@ export class Renderer {
     gl.uniform2f(c.u_res, this.canvas.width, h);
     gl.uniform1f(c.u_line, st.ink > 0 ? Math.max(1, Math.round(h / 540 * st.ink)) : 0);
     gl.uniform1f(c.u_dot, this.dotSize());
-    gl.uniform1f(c.u_time, st.boil ? time : 0);
     gl.uniform1f(c.u_zoom, this.zoom);
     gl.uniform1f(c.u_bands, st.bands);
     gl.uniform1f(c.u_lift, st.lift);
