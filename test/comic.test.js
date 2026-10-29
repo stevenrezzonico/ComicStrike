@@ -12,13 +12,18 @@ import { buildMapMesh, VERTEX_STRIDE } from '../client/mapmesh.js';
 import { parseBSP } from '../shared/bsp.js';
 import { MAT, FLAG_ALPHATEST } from '../shared/materials.js';
 
-const outputs = (src) => [...src.matchAll(/layout\(location ?= ?(\d)\) out vec4/g)].map((m) => +m[1]).sort();
+const outputs = (src) => [...new Set([...src.matchAll(/layout\(location ?= ?(\d)\) out vec[24]/g)].map((m) => +m[1]))].sort();
 
 Deno.test('comic: every G-buffer shader writes all three targets through gbuffer()', () => {
   for (const [name, src] of Object.entries(GBUFFER_SHADERS)) {
     assert.deepEqual(outputs(src), [0, 1, 2], name);
     const main = src.slice(src.lastIndexOf('void main()'));
     assert.match(main, /gbuffer\(/, `${name} never calls gbuffer()`);
+    // The depth target: a half float, or 24 bits of an RGBA8 where those are missing.
+    assert.match(src, /#ifdef DEPTH_PACKED\nlayout\(location = 2\) out vec4 o_depth;[^\n]*\n#else\nlayout\(location = 2\) out vec2 o_depth;/, name);
+  }
+  for (const src of [COMPOSITE_FS, COMPOSITE_FAST_FS]) {
+    assert.doesNotMatch(src.slice(src.indexOf('void main()')), /\.a & G_|uvec4/, 'the print reads depth texels through DTEX only');
   }
 });
 

@@ -1,15 +1,17 @@
 // The G-buffer every scene shader draws into (GBUFFER in client/gl/shaders.js), read
-// back by the composite pass: three RGBA8 targets plus a depth renderbuffer, sized like
+// back by the composite pass: three color targets plus a depth renderbuffer, sized like
 // the canvas.
-//   0: albedo rgb, light
-//   1: normal xyz, object id
-//   2: linear depth (24 bits), G_ flags
+//   0: albedo rgb, light (RGBA8)
+//   1: normal xyz, object id (RGBA8)
+//   2: DEPTH_NEAR / linear depth, G_ flags (RG16F: the print reads the depth of a dozen
+//      neighbors a pixel, and a float is read as it is; packed into 24 bits of an RGBA8
+//      it cost a third of the print pass to decode). Where half-float targets are
+//      missing (EXT_color_buffer_half_float), the shaders pack it (DEPTH_PACKED).
+// The color targets are never cleared: every pixel is written each frame (the world,
+// else the sky fill at the far plane), and clearing them cost a fifth of the GPU frame.
 
-import { G_FLAGS } from './shaders.js';
+import { shaderDefines } from './program.js';
 
-const CLEAR_ALBEDO = new Float32Array([0, 0, 0, 1]);
-const CLEAR_NORMAL = new Float32Array([0.5, 0.5, 1, 0]);
-const CLEAR_DEPTH = new Float32Array([1, 1, 1, G_FLAGS.SKY / 255]); // the far plane, sky
 const CLEAR_Z = new Float32Array([1]);
 
 export class GBuffer {
@@ -22,6 +24,8 @@ export class GBuffer {
     this.height = 0;
     this.all = [gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2];
     this.albedoOnly = [gl.COLOR_ATTACHMENT0, gl.NONE, gl.NONE];
+    this.packed = !gl.getExtension('EXT_color_buffer_half_float');
+    if (this.packed) shaderDefines.prefix += '#define DEPTH_PACKED\n';
   }
 
   resize(w, h) {
@@ -34,7 +38,7 @@ export class GBuffer {
       if (this.tex[i]) gl.deleteTexture(this.tex[i]);
       const t = this.tex[i] = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
-      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
+      gl.texStorage2D(gl.TEXTURE_2D, 1, i === 2 && !this.packed ? gl.RG16F : gl.RGBA8, w, h);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -52,14 +56,11 @@ export class GBuffer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  // Binds it for drawing and clears it to sky at the far plane.
+  // Binds it for drawing and clears the depth (the color targets get overwritten whole).
   begin() {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
     gl.viewport(0, 0, this.width, this.height);
-    gl.clearBufferfv(gl.COLOR, 0, CLEAR_ALBEDO);
-    gl.clearBufferfv(gl.COLOR, 1, CLEAR_NORMAL);
-    gl.clearBufferfv(gl.COLOR, 2, CLEAR_DEPTH);
     gl.clearBufferfv(gl.DEPTH, 0, CLEAR_Z);
   }
 

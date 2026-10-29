@@ -23,7 +23,8 @@ float vnoise(vec2 p) {
 export const G_FLAGS = { FLAT: 1, SKY: 2, SCREEN: 4, VIEW: 8, CHAR: 16 };
 
 const GBUFFER_CONSTS = `
-const float DEPTH_FAR = 16384.0; // linear depth range (units), stored in 24 bits
+const float DEPTH_FAR = 16384.0; // linear depth range (units)
+const float DEPTH_NEAR = 4.0;    // the near plane: the depth target holds DEPTH_NEAR / depth, 0..1
 const uint G_FLAT = 1u;   // unshaded (lights, flames, flashes): no dots, a bolder line
 const uint G_SKY = 2u;
 const uint G_SCREEN = 4u; // see-through, printed as a dot screen: no ink against what lies behind
@@ -31,20 +32,30 @@ const uint G_VIEW = 8u;   // the first-person view: a bolder line, like a foregr
 const uint G_CHAR = 16u;  // a character (player, hostage, their guns): far away, color over ink
 const vec3 INK = vec3(0.09, 0.075, 0.06);`;
 
-// Fragment outputs of every scene shader.
+// Fragment outputs of every scene shader. The depth target is a half-float RG (1 / depth,
+// read as it is by the print's dozen neighbor fetches); without half-float targets
+// (DEPTH_PACKED, client/gl/gbuffer.js) 24 bits of an RGBA8, decoded at every fetch.
 const GBUFFER = `
 layout(location = 0) out vec4 o_albedo; // rgb albedo, a: light 0..1
 layout(location = 1) out vec4 o_normal; // normal * 0.5 + 0.5, a: object id / 255
+#ifdef DEPTH_PACKED
 layout(location = 2) out vec4 o_depth;  // rgb: linear depth / DEPTH_FAR in 24 bits, a: G_ flags / 255
+#else
+layout(location = 2) out vec2 o_depth;  // r: DEPTH_NEAR / linear depth, g: G_ flags
+#endif
 ${GBUFFER_CONSTS}
 void gbuffer(vec3 albedo, float light, vec3 n, uint id, float depth, uint flags) {
   o_albedo = vec4(albedo, light);
   o_normal = vec4(normalize(n) * 0.5 + 0.5, float(id) / 255.0);
+#ifdef DEPTH_PACKED
   float x = floor(clamp(depth / DEPTH_FAR, 0.0, 1.0) * 16777215.0);
   float hi = floor(x / 65536.0);
   x -= hi * 65536.0;
   float mid = floor(x / 256.0);
   o_depth = vec4(hi, mid, x - mid * 256.0, float(flags)) / 255.0;
+#else
+  o_depth = vec2(DEPTH_NEAR / max(depth, 1.0), float(flags)); // (the first-person view comes nearer than the near plane)
+#endif
 }`;
 
 export const WORLD_VS = `#version 300 es
@@ -652,15 +663,29 @@ ${GBUFFER_CONSTS}
 ${NOISE}
 
 ivec2 cl(ivec2 p) { return clamp(p, ivec2(0), ivec2(u_res) - 1); }
-uvec4 dtex(ivec2 p) { return uvec4(texelFetch(u_depth, cl(p), 0) * 255.0 + 0.5); }
-float depthOf(uvec4 t) { return float((t.r << 16u) | (t.g << 8u) | t.b) * (DEPTH_FAR / 16777215.0); }
+// A depth texel (DTEX): its flags, its depth, and 1 / depth up to a constant (the
+// silhouette test only compares them).
+#ifdef DEPTH_PACKED
+#define DTEX uvec4
+DTEX dtex(ivec2 p) { return uvec4(texelFetch(u_depth, cl(p), 0) * 255.0 + 0.5); }
+uint flagsOf(DTEX t) { return t.a; }
+float depthOf(DTEX t) { return float((t.r << 16u) | (t.g << 8u) | t.b) * (DEPTH_FAR / 16777215.0); }
+float invOf(DTEX t) { return 1.0 / max(depthOf(t), 1.0); }
+#else
+#define DTEX vec2
+DTEX dtex(ivec2 p) { return texelFetch(u_depth, cl(p), 0).rg; }
+uint flagsOf(DTEX t) { return uint(t.g); }
+float depthOf(DTEX t) { return DEPTH_NEAR / t.r; }
+float invOf(DTEX t) { return t.r; }
+#endif
 vec4 ntex(ivec2 p) { return texelFetch(u_normal, cl(p), 0); }
 
 uint fc;  // flags at the line sample
 float wc; // 1 / depth there
 // A see-through screen and what lies behind it count as one surface: no ink between them.
-bool across(uvec4 t) { return ((t.a ^ fc) & G_SCREEN) != 0u; }
-float invd(uvec4 t) { return across(t) ? wc : 1.0 / max(depthOf(t), 1.0); }
+bool across(DTEX t) { return ((flagsOf(t) ^ fc) & G_SCREEN) != 0u; }
+float invd(DTEX t) { return across(t) ? wc : invOf(t); }
+bool isChar(DTEX t) { return (flagsOf(t) & G_CHAR) != 0u; }
 // Crease between the line sample's normal c and a neighbor's normal texel n.
 float crease(vec3 c, vec4 n) { return 1.0 - dot(c, n.xyz * 2.0 - 1.0); }
 
@@ -684,8 +709,8 @@ float tone(vec2 frag, float dark, float size, float ang, float far) {
 void main() {
   vec2 frag = gl_FragCoord.xy;
   ivec2 p = ivec2(frag);
-  uvec4 Dp = dtex(p);
-  uint fl = Dp.a;
+  DTEX Dp = dtex(p);
+  uint fl = flagsOf(Dp);
   float dP = depthOf(Dp);
   // The color plate is printed 1 px off the ink plate; not on characters (on a small figure
   // that left a pale sliver of the background inside its outline).
@@ -704,45 +729,51 @@ void main() {
   float edge = 0.0;
   if (u_line > 0.0) {
     ivec2 pc = p;
-    uvec4 Dc = Dp;
-    fc = Dc.a;
+    DTEX Dc = Dp;
+    fc = flagsOf(Dc);
     int s = max(1, int(u_line + 0.5)) + ((fc & (G_FLAT | G_VIEW)) != 0u ? 1 : 0);
     float dC = dP;
-    wc = 1.0 / max(dC, 1.0);
+    wc = invOf(Dc);
     // Silhouettes: 2nd derivative of 1 / depth (zero on any plane), on the nearer side only:
     // the object in front carries its outline, as a comic artist draws it (both sides made
     // every line twice as thick). There 1 / depth bulges above its neighbors' mean, behind
     // it dips below. Each neighbor is fetched once (an integrated GPU feels every fetch here).
-    uvec4 tL = dtex(pc + ivec2(-s, 0)), tR = dtex(pc + ivec2(s, 0)), tD = dtex(pc + ivec2(0, -s));
-    uvec4 tU = dtex(pc + ivec2(0, s));
-#ifdef INK_FAST
-    // r_inkfast: the four direct neighbors only (the diagonals read as the sample itself: no
-    // silhouette, crease or character term from them), 5 fetches fewer.
-    uvec4 tDL = Dc, tUR = Dc, tUL = Dc, tDR = Dc;
-#else
-    uvec4 tDL = dtex(pc + ivec2(-s, -s)), tUR = dtex(pc + ivec2(s, s));
-    uvec4 tUL = dtex(pc + ivec2(-s, s)), tDR = dtex(pc + ivec2(s, -s));
-#endif
+    DTEX tL = dtex(pc + ivec2(-s, 0)), tR = dtex(pc + ivec2(s, 0)), tD = dtex(pc + ivec2(0, -s));
+    DTEX tU = dtex(pc + ivec2(0, s));
     float w2 = 2.0 * wc;
-    float lap = max(w2 - invd(tL) - invd(tR), 0.0) + max(w2 - invd(tD) - invd(tU), 0.0)
-      + 0.5 * (max(w2 - invd(tDL) - invd(tUR), 0.0) + max(w2 - invd(tUL) - invd(tDR), 0.0));
-    float eD = smoothstep(0.05, 0.16, lap / wc);
+    float lap = max(w2 - invd(tL) - invd(tR), 0.0) + max(w2 - invd(tD) - invd(tU), 0.0);
     // Creases and object boundaries: one side only, a thinner line. Inside a character, only
     // against more character (the seams between its parts): its edge to the world is the
     // silhouette's (this one-sided line made a figure's right and top edges thicker).
     bool cc = (fc & G_CHAR) != 0u;
-    bool ax = across(tR) || (cc && (tR.a & G_CHAR) == 0u), ay = across(tU) || (cc && (tU.a & G_CHAR) == 0u);
-    bool ad = across(tUR) || (cc && (tUR.a & G_CHAR) == 0u);
+    bool ax = across(tR) || (cc && !isChar(tR)), ay = across(tU) || (cc && !isChar(tU));
     vec4 nc = ntex(pc), nx = ntex(pc + ivec2(s, 0)), ny = ntex(pc + ivec2(0, s));
     vec3 c = nc.xyz * 2.0 - 1.0;
     float nd = 0.0;
     if (!ax) nd = max(nd, crease(c, nx));
     if (!ay) nd = max(nd, crease(c, ny));
-#ifndef INK_FAST
-    if (!ad) nd = max(nd, crease(c, ntex(pc + ivec2(s, s))));
-#endif
-    float eN = smoothstep(0.22, 0.45, nd);
     float eI = (!ax && abs(nx.w - nc.w) > 0.002) || (!ay && abs(ny.w - nc.w) > 0.002) ? 1.0 : 0.0;
+    // The diagonals read as the sample itself (no silhouette, crease or character term from
+    // them) unless fetched below.
+    DTEX tDL = Dc, tUR = Dc, tUL = Dc, tDR = Dc;
+#ifndef INK_FAST
+    // The diagonals (5 fetches more) only where the four direct neighbors show anything at
+    // all: a depth bulge, a crease or another surface well under the line's start, other
+    // flags. On a plane, inside one surface (most pixels) they would add nothing; the
+    // r_inkfast print leaves them out everywhere.
+    if (lap > 0.01 * wc || nd > 0.06 || eI > 0.0 ||
+      flagsOf(tL) != fc || flagsOf(tR) != fc || flagsOf(tD) != fc || flagsOf(tU) != fc) {
+      tDL = dtex(pc + ivec2(-s, -s));
+      tUR = dtex(pc + ivec2(s, s));
+      tUL = dtex(pc + ivec2(-s, s));
+      tDR = dtex(pc + ivec2(s, -s));
+      lap += 0.5 * (max(w2 - invd(tDL) - invd(tUR), 0.0) + max(w2 - invd(tUL) - invd(tDR), 0.0));
+      bool ad = across(tUR) || (cc && !isChar(tUR));
+      if (!ad) nd = max(nd, crease(c, ntex(pc + ivec2(s, s))));
+    }
+#endif
+    float eD = smoothstep(0.05, 0.16, lap / wc);
+    float eN = smoothstep(0.22, 0.45, nd);
     float fade = 1.0 - 0.65 * smoothstep(1000.0 * u_zoom, 3400.0 * u_zoom, dC);
     // Characters past arm's length: a crisp outline and their colors, not their ink (the
     // two-sided silhouette and the part lines are a black blob on a small figure; a thinned
@@ -751,26 +782,26 @@ void main() {
     // it: only next to characters are these four extra fetches made), and the lines inside
     // fade out. By the nearest character depth round the sample, so a near one keeps its
     // bold comic outline.
-    float dChar = (fc & G_CHAR) != 0u ? dC : 1e9;
-    if ((tL.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tL));
-    if ((tR.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tR));
-    if ((tD.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tD));
-    if ((tU.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tU));
+    float dChar = cc ? dC : 1e9;
+    if (isChar(tL)) dChar = min(dChar, depthOf(tL));
+    if (isChar(tR)) dChar = min(dChar, depthOf(tR));
+    if (isChar(tD)) dChar = min(dChar, depthOf(tD));
+    if (isChar(tU)) dChar = min(dChar, depthOf(tU));
     // (the diagonal samples too: the silhouette test reads them, so a character there would
     // otherwise still print its old, jittered line round the ring)
-    if ((tDL.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tDL));
-    if ((tUR.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tUR));
-    if ((tUL.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tUL));
-    if ((tDR.a & G_CHAR) != 0u) dChar = min(dChar, depthOf(tDR));
+    if (isChar(tDL)) dChar = min(dChar, depthOf(tDL));
+    if (isChar(tUR)) dChar = min(dChar, depthOf(tUR));
+    if (isChar(tUL)) dChar = min(dChar, depthOf(tUL));
+    if (isChar(tDR)) dChar = min(dChar, depthOf(tDR));
     float farC = dChar < 1e8 ? smoothstep(80.0 * u_zoom, 250.0 * u_zoom, dChar) : 0.0;
     float sil = eD;
     if (farC > 0.0) {
       float ring = 0.0;
       if ((fl & G_CHAR) == 0u) {
-        uvec4 r0 = dtex(p + ivec2(1, 0)), r1 = dtex(p + ivec2(-1, 0)), r2 = dtex(p + ivec2(0, 1)), r3 = dtex(p + ivec2(0, -1));
+        DTEX r0 = dtex(p + ivec2(1, 0)), r1 = dtex(p + ivec2(-1, 0)), r2 = dtex(p + ivec2(0, 1)), r3 = dtex(p + ivec2(0, -1));
         float lim = dP - 8.0;
-        if (((r0.a & G_CHAR) != 0u && depthOf(r0) < lim) || ((r1.a & G_CHAR) != 0u && depthOf(r1) < lim) ||
-          ((r2.a & G_CHAR) != 0u && depthOf(r2) < lim) || ((r3.a & G_CHAR) != 0u && depthOf(r3) < lim)) ring = 1.0;
+        if ((isChar(r0) && depthOf(r0) < lim) || (isChar(r1) && depthOf(r1) < lim) ||
+          (isChar(r2) && depthOf(r2) < lim) || (isChar(r3) && depthOf(r3) < lim)) ring = 1.0;
       }
       sil = mix(eD, ring, farC);
     }

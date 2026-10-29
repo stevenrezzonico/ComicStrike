@@ -1,7 +1,12 @@
 // Shader compilation helpers.
 
+// Lines put after every shader's #version (the G-buffer's DEPTH_PACKED, where half-float
+// targets are missing; set by GBuffer before any scene shader compiles).
+export const shaderDefines = { prefix: '' };
+
 function compile(gl, type, src) {
   const sh = gl.createShader(type);
+  if (shaderDefines.prefix) src = src.replace('#version 300 es\n', `#version 300 es\n${shaderDefines.prefix}`);
   gl.shaderSource(sh, src);
   gl.compileShader(sh);
   if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {

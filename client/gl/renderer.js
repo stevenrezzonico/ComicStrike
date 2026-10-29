@@ -37,6 +37,7 @@ export class Renderer {
     if (!gl) throw new Error('WebGL2 is not available');
     this.gl = gl;
     this.canvas = canvas;
+    this.gbuf = new GBuffer(gl); // first: it sets the shader defines (DEPTH_PACKED)
     const worldUniforms = ['u_viewProj', 'u_lightmap', 'u_time', 'u_zoom', 'u_dot', 'u_lightFull', 'u_broken',
       'u_moverBase', 'u_movers', 'u_flash', 'u_flashK', 'u_flashN'];
     this.flashes = new FlashLights(); // muzzle flashes and explosions lighting the world
@@ -51,7 +52,6 @@ export class Renderer {
     this.skyFill = program(gl, SKY_FILL_VS, SKY_FS, ['u_invViewProj', ...skyUniforms]);
     this.compFull = this.comp = program(gl, COMPOSITE_VS, COMPOSITE_FS, COMPOSITE_UNIFORMS);
     this.compFast = null; // r_inkfast's, built when first asked for
-    this.gbuf = new GBuffer(gl);
     this.afterimage = new Afterimage(gl); // the flashbang's frozen frame
     this.timer = new GpuTimer(gl); // GPU time per pass (cl_showfps 3)
     this.emptyVao = gl.createVertexArray();
