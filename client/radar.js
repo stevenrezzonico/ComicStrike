@@ -43,7 +43,12 @@ export class Radar {
     img.width = overview.width;
     img.height = overview.height;
     img.getContext('2d').putImageData(new ImageData(overview.rgba, overview.width, overview.height), 0, 0);
-    this.sites = bombSites.boxes.map((b, i) => [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, String.fromCharCode(65 + i)]);
+    this.setSites(bombSites);
+  }
+
+  // The bomb sites drawn (Wingman keeps one).
+  setSites(bombSites) {
+    this.sites = bombSites.boxes.map((b, i) => [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, bombSites.names[i]]);
   }
 
   // view: { x, y, z (camera), yaw (degrees) }; rows: interpolated snapshot rows (or

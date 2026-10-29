@@ -316,6 +316,12 @@ export function giveWeapon(ws, id) {
   return true;
 }
 
+// Gives weapon `id` and draws it at `time` (the gun game modes' next weapon after a kill).
+export function equip(ws, id, time) {
+  giveWeapon(ws, id);
+  deploy(ws, WEAPONS[id].slot, time);
+}
+
 // Every gun held back to a full magazine and reserve (a new round for survivors).
 export function refillAmmo(ws) {
   for (let s = 0; s < NUM_SLOTS; s++) {

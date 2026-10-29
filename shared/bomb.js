@@ -45,6 +45,7 @@ export class BombSites {
   constructor(bsp) {
     this.boxes = []; // [minx, miny, minz, maxx, maxy, maxz]
     this.targets = []; // per box: the name it fires when the bomb blows up there ('' = none)
+    this.names = []; // per box: its letter (A, B, ... in entity order, approx.)
     this.radius = DEFAULT_BOMB_RADIUS;
     const o = new Float32Array(3);
     const f = bsp.modelsF;
@@ -57,17 +58,27 @@ export class BombSites {
         this.boxes.push([f[m * 16] + o[0], f[m * 16 + 1] + o[1], f[m * 16 + 2] + o[2], f[m * 16 + 3] + o[0],
           f[m * 16 + 4] + o[1], f[m * 16 + 5] + o[2]]);
         this.targets.push(e.target || '');
+        this.names.push(String.fromCharCode(65 + this.names.length));
       } else if (e.classname === 'info_bomb_target') {
         parseVec3(e.origin, o);
         const r = POINT_TARGET_RADIUS;
         this.boxes.push([o[0] - r, o[1] - r, o[2] - r, o[0] + r, o[1] + r, o[2] + r]);
         this.targets.push(e.target || '');
+        this.names.push(String.fromCharCode(65 + this.names.length));
       }
     }
   }
 
   get count() {
     return this.boxes.length;
+  }
+
+  // Keeps only site i (Wingman: one site; CS:GO's Wingman maps are single sites).
+  keepOnly(i) {
+    if (i < 0 || i >= this.boxes.length) return;
+    this.boxes = [this.boxes[i]];
+    this.targets = [this.targets[i]];
+    this.names = [this.names[i]];
   }
 
   // Does a box (center, half extents) touch a bomb site?

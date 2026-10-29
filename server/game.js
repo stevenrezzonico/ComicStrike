@@ -6,7 +6,8 @@
 // close(reason).
 
 import { parseVec3 } from '../shared/bsp.js';
-import { TICK_RATE } from '../shared/constants.js';
+import { TICK_RATE, TICK_DT } from '../shared/constants.js';
+import { ARMS_RACE, DEMOLITION, armLevel } from '../shared/progression.js';
 import { CollisionWorld, Trace, traceHull, hullFits, HULL_STAND, HULL_POINT } from '../shared/trace.js';
 import { Breakables } from '../shared/breakables.js';
 import { Doors, MapLogic } from '../shared/doors.js';
@@ -39,7 +40,7 @@ import {
   MAX_ROUNDS, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD,
   PLANT_LOSS_BONUS, LOSS_STREAK_MAX, TEAMKILL_PENALTY, END_ELIMINATION, END_TIME, END_DRAW, END_BOMB, END_DEFUSE,
   END_RESCUE, RESCUE_WIN_REWARD, RESCUE_REWARD, HOSTAGE_TOUCH_REWARD, HOSTAGE_HIT_PENALTY, HOSTAGE_KILL_PENALTY,
-  END_MATCH, GAME_FFA, GAME_DM, GAME_DEMO, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
+  END_MATCH, GAME_FFA, GAME_DM, GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION, GAME_WINGMAN, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
@@ -109,6 +110,9 @@ class Client {
     this.controlled = false; // a bot a dead teammate took control of: out of play until it respawns
     this.lastHealth = 100; // the demo: health last tick, and when it heals back
     this.healAt = 0;
+    this.level = 0; // Arms Race / Demolition: place in the weapon list (shared/progression.js)
+    this.roundKills = 0; // Demolition: kills this round (one earns the next level)
+    this.cmdTime = 0; // sim time of the last command run (a weapon earned mid-command draws then)
     this.flashLeft = 0; // seconds of flashbang blindness left (sent in the own block)
     this.flashTotal = 0;
     this.picking = -1; // hostage being picked up (use held), or -1
@@ -173,6 +177,11 @@ export const DEFAULT_RULES = {
   cheats: false, // sv_cheats: setpos for testing
   // Game mode (server/host.js: game_type / game_mode and the mode convars).
   deathmatch: false, // free weapons (kept for the next life), points instead of money
+  wingman: false, // 2 against 2 on one bomb site (B, the second in entity order: approx.)
+  armsRace: false, // a new weapon for every kill, the knife last; a knife kill there wins
+  demolition: false, // bomb rounds; a kill earns the next weapon for the next round
+  halftime: true, // mp_halftime: teams swap sides after half the rounds
+  teamSizeMax: 0, // mp_teamsize_max: most players on one team (0 no limit)
   demo: false, // the demo: free buying anywhere and anytime, infinite ammo, humans cannot die, anyone
   // plants and defuses, the bomb comes back after each explosion or defuse (cfg/gamemode_demo.cfg)
   teammatesAreEnemies: false, // mp_teammates_are_enemies: free for all
@@ -225,6 +234,7 @@ export class Game {
     }
     // Who wins when the round clock runs out: CTs defend bomb sites, Ts hold hostages.
     this.bombSites = new BombSites(bsp);
+    if (this.rules.wingman && this.bombSites.count > 1) this.bombSites.keepOnly(1);
     this.world.bombSites = this.bombSites;
     const hostages = bsp.entities.some((e) => e.classname === 'hostage_entity');
     this.timeWinner = this.bombSites.count ? TEAM_CT : hostages ? TEAM_T : 0;
@@ -420,6 +430,11 @@ export class Game {
       for (const o of this.clients) if (o && o !== c && o.joined && o.playing) o.team === TEAM_CT ? ct++ : t++;
       p.team = ct < t ? TEAM_CT : TEAM_T;
     }
+    // A full team (mp_teamsize_max): the other one, else watch.
+    if (p.team !== TEAM_SPECTATOR && this.teamFull(p.team, c)) {
+      const other = p.team === TEAM_CT ? TEAM_T : TEAM_CT;
+      p.team = this.teamFull(other, c) ? TEAM_SPECTATOR : other;
+    }
     p.money = this.phase === PHASE_WARMUP ? WARMUP_MONEY : this.rules.startMoney;
     if (c.playing && (this.phase === PHASE_WARMUP || this.phase === PHASE_FREEZE ||
       (this.phase === PHASE_LIVE && this.respawns(c)))) {
@@ -438,6 +453,8 @@ export class Game {
     if (!c.playing) return;
     const pick = this.rules.randomSpawn ? this.randomSpawn(c) : this.teamSpawn(c);
     spawnPlayer(c.player, pick[0], pick[1], pick[2], keepGear, withLoadout);
+    const list = this.progression();
+    if (list) armLevel(c.player.ws, list, c.level, c.team === TEAM_CT);
     if (this.rules.freeArmor) {
       c.player.armor = 100;
       c.player.helmet = true;
@@ -548,9 +565,16 @@ export class Game {
     return true;
   }
 
+  // The gun game modes' weapon list, or null.
+  progression() {
+    return this.rules.armsRace ? ARMS_RACE : this.rules.demolition ? DEMOLITION : null;
+  }
+
   // In a buy zone (or mp_buy_anywhere) in buy time; deathmatch: mp_buytime from each spawn.
+  // The gun game modes earn their weapons instead.
   canBuy(c) {
     const ph = this.phase, r = this.rules;
+    if (r.armsRace || r.demolition) return false;
     if (r.demo) return c.alive && ph !== PHASE_OVER; // anywhere, anytime
     const inTime = r.deathmatch ? ph !== PHASE_OVER && this.tick < c.spawnTick + r.buyTime * TICK_RATE
       : ph === PHASE_WARMUP || ph === PHASE_FREEZE || (ph === PHASE_LIVE && this.tick < this.buyEnd);
@@ -628,6 +652,7 @@ export class Game {
 
   runCommand(c, t, select, frozen) {
     const p = c.player;
+    c.cmdTime = t * TICK_DT;
     const wf = p.ws.f, held = WS_SLOTS + wf[WS_ACTIVE] * 3;
     const heldId = wf[held], heldClip = wf[held + 1], heldReserve = wf[held + 2]; // what G may drop
     const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots, frozen, this.bomb,
@@ -645,6 +670,7 @@ export class Game {
     }
     if (events & WEV_DROP) {
       if (WEAPONS[heldId]?.c4) this.dropBomb(c, true);
+      else if (this.progression()) armLevel(p.ws, this.progression(), c.level, c.team === TEAM_CT, c.cmdTime); // earned, not dropped
       else this.spawnItem(c, heldId, heldClip, heldReserve, true);
     }
     // Doors and buttons it ran into.
@@ -719,6 +745,10 @@ export class Game {
         else if (this.phase !== PHASE_WARMUP) {
           k.money = Math.min(this.rules.maxMoney, k.money + (WEAPONS[weapon]?.killAward || 0));
         }
+        if (this.phase === PHASE_LIVE) {
+          if (this.rules.armsRace) this.armsRaceKill(killer, victim, weapon);
+          else if (this.rules.demolition) killer.roundKills++;
+        }
       }
     }
     if (this.phase === PHASE_WARMUP) victim.respawnTick = this.tick + WARMUP_RESPAWN * TICK_RATE;
@@ -726,6 +756,23 @@ export class Game {
     this.events.addKill(this.nextKillId, killer.id, victim.id, weapon, headshot ? KILL_HEADSHOT : 0, this.tick);
     this.nextKillId = (this.nextKillId + 1) & 0xffff || 1;
     this.rosterDirty = true;
+  }
+
+  // Arms Race: the killer gets the next weapon at once (score = level); a knife kill takes a
+  // level from the victim; a kill on the last level (the knife) wins the match.
+  armsRaceKill(killer, victim, weapon) {
+    if (WEAPONS[weapon]?.melee && victim.level > 0) {
+      victim.level--;
+      victim.player.score = victim.level;
+    }
+    if (killer.level >= ARMS_RACE.length - 1) {
+      killer.player.score = ARMS_RACE.length; // past the last level: the top score
+      this.endMatch();
+      return;
+    }
+    killer.level++;
+    killer.player.score = killer.level;
+    armLevel(killer.player.ws, ARMS_RACE, killer.level, killer.team === TEAM_CT, killer.cmdTime);
   }
 
   // --- Rounds -----------------------------------------------------------------------
@@ -749,7 +796,8 @@ export class Game {
       else this.startWarmup(false);
     }
     const ready = this.ready(t, ct), r = this.rules;
-    rs.mode = (r.teammatesAreEnemies ? GAME_FFA : 0) | (r.deathmatch ? GAME_DM : 0) | (r.demo ? GAME_DEMO : 0);
+    rs.mode = (r.teammatesAreEnemies ? GAME_FFA : 0) | (r.deathmatch ? GAME_DM : 0) | (r.demo ? GAME_DEMO : 0) |
+      (r.armsRace ? GAME_ARMSRACE : 0) | (r.demolition ? GAME_DEMOLITION : 0) | (r.wingman ? GAME_WINGMAN : 0);
     if (rs.phase === PHASE_WARMUP) {
       if (!ready) this.warmupReady = -1;
       else if (this.warmupReady < 0) this.warmupReady = this.tick;
@@ -779,8 +827,9 @@ export class Game {
       const max = this.rules.maxRounds, half = Math.floor(max / 2);
       if (rs.info >> 2 === END_MATCH || rs.scoreT > half || rs.scoreCT > half || this.roundsPlayed >= max) this.startMatch();
       else {
-        if (this.roundsPlayed === half) this.halftime();
-        this.startRound(this.roundsPlayed === half);
+        const swap = this.roundsPlayed === half && this.rules.halftime;
+        if (swap) this.halftime();
+        this.startRound(swap);
       }
     }
     rs.ticksLeft = rs.phase === PHASE_WARMUP || this.phaseEnd === Infinity ? 0 : this.phaseEnd - this.tick;
@@ -810,6 +859,7 @@ export class Game {
       if (!c || !c.joined) continue;
       c.player.money = this.rules.startMoney;
       c.player.kills = c.player.deaths = c.player.score = 0;
+      c.level = c.roundKills = 0;
     }
     this.rosterDirty = true;
     console.log('match start');
@@ -823,9 +873,15 @@ export class Game {
     this.logic.reset(this.tick);
     this.placing = true;
     for (const c of this.clients) if (c) c.placed = false;
+    const demolition = this.rules.demolition;
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
-      this.respawn(c, !fresh && c.alive, this.rules.deathmatch); // deathmatch: the weapons picked
+      if (demolition && c.roundKills > 0) c.level = Math.min(c.level + 1, DEMOLITION.length - 1); // a kill: the next weapon
+      if (demolition) c.player.score = c.level; // clients show the level from the score
+      c.roundKills = 0;
+      // Survivors keep their gear (deathmatch: the weapons picked); Demolition arms everyone
+      // for their level instead.
+      this.respawn(c, !fresh && c.alive && !demolition, this.rules.deathmatch);
     }
     this.placing = false;
     this.resetBomb();
@@ -852,6 +908,7 @@ export class Game {
     }
     this.round.round++;
     this.round.serial = (this.round.serial + 1) & 255;
+    if (demolition) this.rosterDirty = true; // the new levels
     this.setPhase(PHASE_FREEZE, this.rules.freezeTime);
   }
 
@@ -987,6 +1044,9 @@ export class Game {
     const team = n === 1 ? TEAM_SPECTATOR : n === 2 ? TEAM_T : n === 3 ? TEAM_CT : 0;
     if (!team) return this.print(c, 'jointeam 1 (Spectators), 2 (Terrorists) or 3 (Counter-Terrorists)');
     if (team === c.team) return;
+    if (team !== TEAM_SPECTATOR && this.teamFull(team, c)) {
+      return this.print(c, `The ${TEAM_NAMES[team]}s are full (mp_teamsize_max ${this.rules.teamSizeMax})`);
+    }
     if (this.bombCarrier === c) this.dropBomb(c, false);
     this.dropHostage(c);
     c.player.team = team;
@@ -996,6 +1056,15 @@ export class Game {
     if (this.phase === PHASE_WARMUP || this.phase === PHASE_FREEZE) this.respawn(c, false, this.phase === PHASE_WARMUP);
     else if (this.phase === PHASE_LIVE && this.respawns(c)) c.respawnTick = this.tick + DM_RESPAWN * TICK_RATE;
     console.log(`player ${c.id} "${c.name}" joined ${team === TEAM_SPECTATOR ? 'the spectators' : `the ${TEAM_NAMES[team]}s`}`);
+  }
+
+  // Has `team` its mp_teamsize_max players already (not counting `except`)?
+  teamFull(team, except = null) {
+    const max = this.rules.teamSizeMax;
+    if (!max) return false;
+    let n = 0;
+    for (const o of this.clients) if (o && o !== except && o.joined && o.playing && o.team === team) n++;
+    return n >= max;
   }
 
   // Drops a client from the server with a reason.

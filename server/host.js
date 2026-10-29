@@ -14,8 +14,12 @@ const CHANGELEVEL_CLOSE_MS = 500;
 // CS:GO game modes by game_type / game_mode. A mode is a cfg of mode convars run when a
 // map loads (cfg/gamemode_<name>.cfg, then cfg/gamemode_<name>_server.cfg for the
 // server's own overrides, as in CS:GO); deathmatch also switches to free weapons and
-// points instead of money.
-export const GAME_MODES = { '0/1': 'competitive', '1/2': 'deathmatch', '2/0': 'demo' };
+// points instead of money, wingman to one bomb site, arms race and demolition to weapons
+// earned by kills (shared/progression.js).
+export const GAME_MODES = {
+  '0/0': 'casual', '0/1': 'competitive', '0/2': 'wingman', '1/0': 'armsrace', '1/1': 'demolition', '1/2': 'deathmatch',
+  '2/0': 'demo',
+};
 
 export class Host {
   // opts: loadMap(name) -> parsed BSP (throws if missing), listMaps() -> names,
@@ -44,7 +48,11 @@ export class Host {
     num('sv_cheats', 0, 'Allow cheat commands (setpos)', 0, 1);
     // Game modes (cfg/gamemode_*.cfg set these).
     con.cvar('game_type', 0, { help: 'Game type (0 classic, 1 gun game family); applies on the next map', min: 0, max: 3 });
-    con.cvar('game_mode', 1, { help: 'Game mode (0/1 competitive, 1/2 deathmatch, 2/0 demo); applies on the next map', min: 0, max: 3 });
+    con.cvar('game_mode', 1, {
+      help: 'Game mode (game_type/game_mode: 0/0 casual, 0/1 competitive, 0/2 wingman, 1/0 arms race, 1/1 demolition, ' +
+        '1/2 deathmatch, 2/0 demo); applies on the next map',
+      min: 0, max: 3,
+    });
     num('mp_teammates_are_enemies', 0, 'Everyone is an enemy (free for all)', 0, 1);
     num('mp_respawn_on_death_t', 0, 'Terrorists respawn after dying', 0, 1);
     num('mp_respawn_on_death_ct', 0, 'Counter-Terrorists respawn after dying', 0, 1);
@@ -58,6 +66,9 @@ export class Host {
     num('mp_respawn_immunitytime', 0, 'Seconds a respawned player cannot be hurt (until he shoots)', 0, 60);
     num('mp_match_restart_delay', 15, 'Seconds between the end of a match and the next', 1, 300);
     num('mp_death_drop_gun', 1, 'The dead drop their best gun', 0, 1);
+    num('mp_halftime', 1, 'Teams swap sides after half the rounds', 0, 1);
+    // Ours (CS:GO's Wingman servers simply have 4 slots): players a team may have, 0 no limit.
+    num('mp_teamsize_max', 0, 'Most players on one team (0: no limit)', 0, MAX_PLAYERS);
     this.modeName = 'competitive'; // of the running map
     // Bots (server/bots.js).
     num('bot_quota', 0, 'Bots on the server (bot_add / bot_kick change it)', 0, MAX_PLAYERS);
@@ -174,6 +185,11 @@ export class Host {
       cheats: v('sv_cheats') !== 0,
       deathmatch: this.modeName === 'deathmatch',
       demo: this.modeName === 'demo',
+      wingman: this.modeName === 'wingman',
+      armsRace: this.modeName === 'armsrace',
+      demolition: this.modeName === 'demolition',
+      halftime: v('mp_halftime') !== 0,
+      teamSizeMax: v('mp_teamsize_max'),
       teammatesAreEnemies: v('mp_teammates_are_enemies') !== 0,
       respawnT: v('mp_respawn_on_death_t') !== 0,
       respawnCT: v('mp_respawn_on_death_ct') !== 0,

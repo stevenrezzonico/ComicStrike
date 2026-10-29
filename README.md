@@ -9,7 +9,7 @@ Everything is written from scratch in plain JavaScript: WebGL2 for the graphics,
 - **The comic print:** one full-screen pass draws ink lines on every silhouette, crease and part, shade as halftone dots, and a slightly misregistered color plate. Surfaces get flat colors and a few ink marks by material (bricks, planks, tiles), colored like the original textures.
 - **CS:GO gameplay:** the movement (acceleration, friction, air strafing, crouch jumps), the weapons with their real stats and spray patterns, bullet penetration, armor, competitive rounds and economy, the buy menu, planting and defusing the bomb, carrying hostages, all five grenades.
 - **Netcode:** a 64-tick server, client-side prediction that matches the server bit for bit, interpolation and lag compensation.
-- **Game modes:** competitive, deathmatch (free for all or teams), and a demo playground with free buys and infinite ammo.
+- **Game modes:** competitive, casual, wingman (2 against 2), deathmatch (free for all or teams), arms race and demolition (weapons earned by kills, the knife last), and a demo playground with free buys and infinite ammo.
 - **Bots** that navigate the maps, fight, plant, defuse and rescue, at four difficulties.
 - **Practice:** the real server runs inside the browser (a Web Worker), so you can play against bots with no server at all.
 - **A CS:GO-style console** (`` ` ``) with the familiar commands, cvars and binds, spectating, a radar built from the map, doors and breakables.
@@ -45,6 +45,7 @@ In PowerShell: `$env:MAP = "de_playground"; deno task start`.
 | URL | What it does |
 |---|---|
 | `/?practice&map=de_playground&mode=competitive&players=10&difficulty=2` | Practice game, 5 against 5 bots |
+| `/?practice&map=de_playground&mode=armsrace&players=4` | Arms Race against bots (`mode`: casual, competitive, wingman, deathmatch, armsrace, demolition) |
 | `/?practice&mode=demo&map=de_playground` | The demo playground |
 | `/?team=ct&primary=ak47&secondary=deagle` | Join the server straight away |
 | `/?offline&map=de_playground` | Alone in the map, no rules (noclip in the console) |

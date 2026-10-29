@@ -26,6 +26,7 @@ import {
   WS_EVENTS, WS_SIZE, WS_SLOTS, WS_ACTIVE, WS_ACTION, WS_ACTION_END, SLOT_C4, NUM_SLOTS, ACTION_PLANT, ACTION_DEFUSE,
   WS_ZOOM, WS_THROWN, WEV_THROW, WEV_FIRE, activeWeapon, silenced,
 } from '../shared/weapons.js';
+import { ARMS_RACE, DEMOLITION, levelWeapon } from '../shared/progression.js';
 import {
   BombSites, PLANT_TIME, DEFUSE_TIME, DEFUSE_TIME_KIT, C4_TIMER, BOMB_DROPPED, BOMB_PLANTED, BOMB_DEFUSED,
   BOMB_EXPLODED,
@@ -75,7 +76,7 @@ import { NetGraph } from './netgraph.js';
 import { createConsole, watch } from './settings.js';
 import { releaseOf, quote } from '../shared/cvars.js';
 import {
-  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_DM, GAME_DEMO, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
+  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_DM, GAME_DEMO, GAME_WINGMAN, GAME_ARMSRACE, GAME_DEMOLITION, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
 } from '../shared/economy.js';
 
 const DEG = Math.PI / 180;
@@ -482,6 +483,25 @@ function replayFrom(from) {
 const gameMode = () => (net ? net.own.round.mode : 0);
 const demo = () => (gameMode() & GAME_DEMO) !== 0;
 const freeBuys = () => (gameMode() & (GAME_DM | GAME_DEMO)) !== 0; // deathmatch and the demo: no money
+const gunGame = () => (gameMode() & (GAME_ARMSRACE | GAME_DEMOLITION)) !== 0; // weapons earned by kills: no money
+// Our place in the gun game modes' weapon list for the round bar ('' in the others), rebuilt
+// only when it changes.
+const progressKey = [-1, -1, -1];
+let progressText = '';
+function progress() {
+  const mode = gameMode() & (GAME_ARMSRACE | GAME_DEMOLITION);
+  const list = mode & GAME_ARMSRACE ? ARMS_RACE : mode & GAME_DEMOLITION ? DEMOLITION : null;
+  const level = list && net && selfId >= 0 ? Math.min(net.scores[selfId] || 0, list.length - 1) : -1;
+  const K = progressKey;
+  if (K[0] === mode && K[1] === level && K[2] === player.team) return progressText;
+  K[0] = mode;
+  K[1] = level;
+  K[2] = player.team;
+  if (level < 0) return (progressText = '');
+  const next = level + 1 < list.length ? `next: ${itemLabel(levelWeapon(list, level + 1, player.team === TEAM_CT))}`
+    : mode & GAME_ARMSRACE ? 'the knife: one kill to win' : 'the last weapon';
+  return (progressText = `level ${level + 1}/${list.length}   ${next}`);
+}
 
 // The top scorer (deathmatch): { name, score, self, tied } or null.
 // Per-frame arguments and callbacks, made once (no garbage per frame).
@@ -594,6 +614,11 @@ function applySnapshot() {
     }
   }
 
+  // Wingman plays one bomb site: predict planting (and draw the radar) with that one only.
+  if ((own.round.mode & GAME_WINGMAN) && world.bombSites.count > 1) {
+    world.bombSites.keepOnly(1);
+    radar.setSites(world.bombSites);
+  }
   if (own.round.serial !== roundSerial) {
     if (roundSerial >= 0) clearRoundMarks();
     roundSerial = own.round.serial;
@@ -1110,8 +1135,8 @@ function draw(now, alpha, dt) {
   radar.draw(playing, watched >= 0 ? interp[w + E_X] : eye[0], watched >= 0 ? interp[w + E_Y] : eye[1],
     watched >= 0 ? interp[w + E_Z] : eye[2], yaw, interpolated ? interp : null, selfId, watched, player.team,
     (gameMode() & GAME_FFA) !== 0, net ? net.own.bomb : null, net ? net.hostages : null, now);
-  hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now, leader());
-  document.body.classList.toggle('dm', freeBuys()); // no money in deathmatch and the demo
+  hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now, leader(), progress());
+  document.body.classList.toggle('dm', freeBuys() || gunGame()); // no money in deathmatch, the demo, the gun games
   const action = ws.f[WS_ACTION];
   const simTime = (tickCount - 1 + alpha) * TICK_DT;
   const actionTime = action === ACTION_PLANT ? PLANT_TIME : player.defuser ? DEFUSE_TIME_KIT : DEFUSE_TIME;
@@ -1231,6 +1256,7 @@ con.command('invprev', () => cycleSlot(-1), 'Previous weapon in the slot order')
 con.command('drop', () => input.pulse(IN_DROP), 'Drop the active weapon (the C4 for now)');
 con.command('buymenu', () => {
   if (hud.menuOpen) closeBuyMenu();
+  else if (gunGame()) hud.flash('No buying in this mode: kills earn the next weapon', 2500, performance.now());
   else if (playing && player.team !== TEAM_SPECTATOR) hud.toggleMenu(true);
 }, 'Opens the buy menu');
 con.command('teammenu', () => {

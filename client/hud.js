@@ -5,12 +5,13 @@
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, END_MATCH, GAME_FFA, GAME_DM,
-  GAME_DEMO,
+  GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION,
   BUY_MENU, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER, itemLabel, itemPrice,
 } from '../shared/economy.js';
 import { WEAPONS } from '../shared/weapons.js';
 import { BOMB_PLANTED } from '../shared/bomb.js';
 import { TICK_RATE } from '../shared/constants.js';
+import { ARMS_RACE } from '../shared/progression.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -29,7 +30,7 @@ export class Hud {
     this.shown = { money: '', round: '', banner: '', bomb: '', progress: '' };
     // What the round bar and banner were built from: rebuilt only when one changes.
     this.key = { money: -1, secs: -1, phase: -1, planted: false, ct: -1, t: -1, mode: -1, info: -1, notice: '',
-      lName: '', lScore: -1, lSelf: false, lTied: false };
+      lName: '', lScore: -1, lSelf: false, lTied: false, progress: '' };
     this.bombSite = false;
     this.progressShown = false;
     this.progressPct = -1;
@@ -53,8 +54,9 @@ export class Hud {
   }
 
   // rs: RoundState and bomb: BombState (null offline); now: ms; leader: the top scorer
-  // { name, score, self, tied } (deathmatch) or null.
-  update(rs, bomb, money, now, leader = null) {
+  // { name, score, self, tied } (deathmatch, arms race) or null; progress: our place in
+  // the gun game modes' weapon list ('' in the others).
+  update(rs, bomb, money, now, leader = null, progress = '') {
     const K = this.key;
     if (money !== K.money) {
       K.money = money;
@@ -73,7 +75,8 @@ export class Hud {
     const lTied = !!leader && leader.tied;
     if (secs === K.secs && rs.phase === K.phase && planted === K.planted && rs.scoreCT === K.ct && rs.scoreT === K.t &&
       rs.mode === K.mode && rs.info === K.info && notice === K.notice && lName === K.lName && lScore === K.lScore &&
-      lSelf === K.lSelf && lTied === K.lTied) return; // nothing to rebuild (the usual frame)
+      lSelf === K.lSelf && lTied === K.lTied && progress === K.progress) return; // nothing to rebuild (the usual frame)
+    K.progress = progress;
     K.secs = secs;
     K.phase = rs.phase;
     K.planted = planted;
@@ -89,15 +92,16 @@ export class Hud {
     this.elRound.classList.toggle('planted', planted && rs.phase !== PHASE_OVER);
     const clock = rs.ticksLeft > 0 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : '';
     const mid = rs.phase === PHASE_WARMUP ? 'WARMUP' : rs.phase === PHASE_FREEZE ? `buy ${clock}` : planted ? ' C4 ' : clock;
-    const dm = (rs.mode & GAME_DM) !== 0;
-    const lead = leader && leader.score > 0 && !leader.tied
-      ? `   lead: ${leader.self ? 'you' : leader.name} ${leader.score}` : '';
+    const dm = (rs.mode & GAME_DM) !== 0, armsRace = (rs.mode & GAME_ARMSRACE) !== 0;
+    const lead = leader && leader.score > 0 && !leader.tied ? `   lead: ${leader.self ? 'you' : leader.name} ` +
+      (armsRace ? `level ${Math.min(leader.score + 1, ARMS_RACE.length)}` : leader.score) : '';
     this.set(this.elRound, 'round', rs.mode & GAME_DEMO ? `DEMO   ${mid}`
-      : dm ? `DEATHMATCH   ${mid}${lead}` : `CT ${rs.scoreCT}   ${mid}   ${rs.scoreT} T`);
+      : dm ? `DEATHMATCH   ${mid}${lead}` : armsRace ? `ARMS RACE   ${mid}   ${progress}${lead}`
+      : `CT ${rs.scoreCT}   ${mid}   ${rs.scoreT} T${rs.mode & GAME_DEMOLITION ? `   ${progress}` : ''}`);
     let banner = '';
     if (rs.phase === PHASE_OVER && rs.info >> 2 === END_MATCH) {
       banner = !leader || leader.tied ? 'Match over: a draw'
-        : `${leader.self ? 'You win' : `${leader.name} wins`} the match (${leader.score} points)`;
+        : `${leader.self ? 'You win' : `${leader.name} wins`} the match` + (armsRace ? '' : ` (${leader.score} points)`);
     } else if (rs.phase === PHASE_OVER) {
       const winner = rs.info & 3, reason = rs.info >> 2;
       banner = winner === TEAM_CT ? 'Counter-Terrorists Win' : winner === TEAM_T ? 'Terrorists Win' : 'Round Draw';
@@ -141,19 +145,21 @@ export class Hud {
   scoreboard(show, net, selfId, alive) {
     this.elScore.style.display = show ? 'block' : 'none';
     if (!show || !net) return;
-    const mode = net.own.round.mode, dm = (mode & GAME_DM) !== 0;
+    const mode = net.own.round.mode, armsRace = (mode & GAME_ARMSRACE) !== 0;
+    const dm = (mode & GAME_DM) !== 0 || armsRace; // ranked by score (arms race: the level)
+    const ranked = (id) => armsRace ? Math.min(net.scores[id] + 1, ARMS_RACE.length) : net.scores[id];
     const groups = mode & GAME_FFA ? [[[TEAM_CT, TEAM_T], 'Players', 'ffa']]
       : [[[TEAM_CT], 'Counter-Terrorists', 'ct'], [[TEAM_T], 'Terrorists', 't']];
     const lines = [];
     for (const [teams, title, cls] of groups) {
-      lines.push(dm ? [cls, title, 'Score', 'K', 'D'] : [cls, title, 'K', 'D']);
+      lines.push(dm ? [cls, title, armsRace ? 'Level' : 'Score', 'K', 'D'] : [cls, title, 'K', 'D']);
       const ids = [];
       for (let id = 0; id < net.names.length; id++) if (net.names[id] && teams.includes(net.teams[id])) ids.push(id);
       ids.sort((a, b) => (dm ? net.scores[b] - net.scores[a] : 0) || net.kills[b] - net.kills[a] ||
         net.deaths[a] - net.deaths[b]);
       for (const id of ids) {
         const cls = `${id === selfId ? 'me' : ''}${alive(id) ? '' : ' dead'}`;
-        lines.push(dm ? [cls, net.names[id], net.scores[id], net.kills[id], net.deaths[id]]
+        lines.push(dm ? [cls, net.names[id], ranked(id), net.kills[id], net.deaths[id]]
           : [cls, net.names[id], net.kills[id], net.deaths[id]]);
       }
     }

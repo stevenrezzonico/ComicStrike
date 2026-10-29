@@ -19,7 +19,7 @@
 import { fileURLToPath } from 'node:url';
 import { ensureCert } from './cert.js';
 import { listen } from './transport.js';
-import { Host } from './host.js';
+import { Host, GAME_MODES } from './host.js';
 import { parseBSP } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
 
@@ -35,8 +35,8 @@ const REDIRECT_PORT = Number(Deno.env.get('REDIRECT_PORT') || 0);
 const STATIC_DIRS = ['client/', 'shared/', 'maps/'];
 // The game server code and mode cfgs, for Practice: the browser runs them in a Web Worker
 // (client/localserver.js). Not main.js, the transport, the certificate or server.cfg.
-const STATIC_FILES = new Set(['server/host.js', 'server/game.js', 'server/bots.js', 'cfg/gamemode_competitive.cfg',
-  'cfg/gamemode_deathmatch.cfg', 'cfg/gamemode_demo.cfg']);
+const STATIC_FILES = new Set(['server/host.js', 'server/game.js', 'server/bots.js',
+  ...Object.values(GAME_MODES).map((name) => `cfg/gamemode_${name}.cfg`)]);
 const MIME = {
   html: 'text/html; charset=utf-8',
   js: 'text/javascript; charset=utf-8',

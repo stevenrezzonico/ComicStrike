@@ -9,6 +9,11 @@ import { drawCrosshair2d } from './gl/crosshair.js';
 import { quote } from '../shared/cvars.js';
 
 const ESCAPE_GRACE_MS = 300; // the Escape that released the mouse must not resume at once
+// Game mode names (server/host.js GAME_MODES) as shown.
+const MODE_LABELS = {
+  casual: 'Casual', competitive: 'Competitive', wingman: 'Wingman', armsrace: 'Arms Race', demolition: 'Demolition',
+  deathmatch: 'Deathmatch', demo: 'Demo',
+};
 
 // Settings tabs. Rows: [kind, cvar, label, ...]: slider (min, max, step), toggle,
 // select (options), or a custom row (preview, invert).
@@ -290,7 +295,7 @@ export class Menu {
     body.append(el('h2', '', 'Play online'));
     const s = this.server;
     body.append(el('p', 'menu-server', s
-      ? `${s.hostname} · ${s.map} · ${s.mode || 'competitive'} · ${s.players}/${s.maxPlayers} players`
+      ? `${s.hostname} · ${s.map} · ${MODE_LABELS[s.mode] || s.mode || 'Competitive'} · ${s.players}/${s.maxPlayers} players`
       : 'No server answered.'));
     if (!s) return;
     this.renderTeam(body, (team) => this.onPlay(team), true);
@@ -361,12 +366,13 @@ export class Menu {
       body.append(row);
     };
     if (!demo) {
-      choice('Mode', [['competitive', 'Competitive'], ['deathmatch', 'Deathmatch']], this.practiceMode, (v) => {
+      choice('Mode', [['casual', 'Casual'], ['competitive', 'Competitive'], ['wingman', 'Wingman'],
+        ['deathmatch', 'Deathmatch'], ['armsrace', 'Arms Race'], ['demolition', 'Demolition']], this.practiceMode, (v) => {
         this.practiceMode = v;
       });
     }
     const players = demo ? this.demoPlayers : this.practicePlayers;
-    choice('Bots', [[0, 'None'], [2, '1 vs 1'], [6, '3 vs 3'], [10, '5 vs 5']], players, (v) => {
+    choice('Bots', [[0, 'None'], [2, '1 vs 1'], [4, '2 vs 2'], [6, '3 vs 3'], [10, '5 vs 5']], players, (v) => {
       if (demo) this.demoPlayers = v;
       else this.practicePlayers = v;
     });

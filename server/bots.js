@@ -46,6 +46,7 @@ const PERCEIVE_TICKS = 4; // how often a bot looks for enemies (staggered)
 const LOOKAHEAD_TICKS = 4; // how often it looks for a shortcut along its path
 const HEAR_RANGE = 1800; // gunfire heard this far (approx.)
 const MEMORY = 4 * TICK_RATE; // ticks a lost enemy's last place is hunted
+const KNIFE_REACH = 56; // units (2D, center to center) from which a bot slashes (approx.)
 const ARRIVE = 20; // units from a waypoint that count as there
 const PATH_MAX = 1024;
 
@@ -106,7 +107,8 @@ export class Bots {
     const r = this.game.rules;
     let humans = 0;
     for (const c of this.game.clients) if (c && c.joined && !c.bot && c.playing) humans++;
-    const want = Math.max(0, r.botQuotaMode === 'fill' ? r.botQuota - humans : r.botQuota);
+    let want = Math.max(0, r.botQuotaMode === 'fill' ? r.botQuota - humans : r.botQuota);
+    if (r.teamSizeMax) want = Math.min(want, Math.max(0, 2 * r.teamSizeMax - humans)); // Wingman: 2 a side
     if (this.list.length < want) this.add(teamFor(r.botJoinTeam), -1);
     else if (this.list.length > want) this.kick(null, this.largerTeam());
   }
@@ -240,7 +242,12 @@ class Bot {
       const clear = !this.hostageInLine(x, y, eye, ef[PS_ORIGIN], ef[PS_ORIGIN + 1], tz);
       move = !clear || g.rules.botDontShoot; // else stand still to shoot straight (CS:GO's bots stop too)
       if (clear && !g.rules.botDontShoot && g.tick >= this.reactAt && off < tolerance) buttons |= this.trigger(dist);
-      if (clear && dist < 300 && this.difficulty >= 2) { // close: strafe while spraying (approx.)
+      const knife = activeWeapon(p.ws)?.melee;
+      if (knife) { // only a knife (Arms Race's last level): run at him, slash in reach
+        move = false;
+        buttons |= IN_FORWARD;
+        if (clear && !g.rules.botDontShoot && g.tick >= this.reactAt && dist < KNIFE_REACH) buttons |= IN_ATTACK;
+      } else if (clear && dist < 300 && this.difficulty >= 2) { // close: strafe while spraying (approx.)
         move = true;
         buttons |= (g.tick >> 5) & 1 ? IN_MOVELEFT : IN_MOVERIGHT;
       }
