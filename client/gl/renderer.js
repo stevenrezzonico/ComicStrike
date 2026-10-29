@@ -23,15 +23,19 @@ const COMPOSITE_UNIFORMS = ['u_albedo', 'u_normal', 'u_depth', 'u_res', 'u_line'
   'u_lift', 'u_style', 'u_calm', 'u_soft'];
 
 export class Renderer {
-  constructor(canvas) {
+  // lowLatency (r_lowlatency): a desynchronized canvas, presented without the browser's
+  // compositor where the browser allows it (Chrome on Windows): a frame less between the
+  // mouse and the screen, but the display may scan out while the print is still being
+  // written (a tear during fast turns). Off by default. (Before the deferred print,
+  // when every pass drew into the canvas, its half-drawn frames flickered.)
+  constructor(canvas, lowLatency = false) {
     const gl = canvas.getContext('webgl2', {
       antialias: false,
       alpha: false,
       depth: false, // the G-buffer has its own; the canvas only gets the composite
       stencil: false,
       powerPreference: 'high-performance',
-      // No desynchronized: it lets the display scan out half-drawn frames, so late
-      // passes (sky fill, viewmodel) flicker.
+      desynchronized: lowLatency,
       preserveDrawingBuffer: false,
     });
     if (!gl) throw new Error('WebGL2 is not available');

@@ -112,7 +112,7 @@ const { con, binds, cv } = createConsole((s) => (conWin ? conWin.print(s) : cons
 conWin = new ConsoleWindow(con);
 const netGraph = new NetGraph();
 
-const renderer = new Renderer(canvas);
+const renderer = new Renderer(canvas, cv.r_lowlatency.bool);
 const decals = new Decals(renderer.gl);
 const debris = new Debris(renderer.gl);
 const players = new Players(renderer.gl);
