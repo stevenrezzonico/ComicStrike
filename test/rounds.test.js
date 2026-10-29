@@ -6,7 +6,7 @@ import { WEAPON_ID, WS_SLOTS, SLOT_PRIMARY, SLOT_SECONDARY } from '../shared/wea
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, START_MONEY, WIN_REWARD, LOSS_BONUS, END_ELIMINATION,
-  END_TIME, ITEM_KEVLAR, ITEM_ASSAULTSUIT, MAX_ROUNDS, lossBonus,
+  END_TIME, ITEM_KEVLAR, ITEM_ASSAULTSUIT, MAX_ROUNDS, OVERTIME_MONEY, lossBonus,
 } from '../shared/economy.js';
 import { Writer, CmdRing, writeHello, writeCmds, writeBuy } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
@@ -157,4 +157,38 @@ Deno.test('back to warmup when a team empties', async (t) => {
   game.disconnect(ct);
   run(1);
   assert.equal(game.phase, PHASE_WARMUP);
+});
+
+Deno.test('overtime: a 15-15 tie plays MR3 periods with $10000, swapping after 3, first to 4 wins', async (t) => {
+  const s = await setup(t);
+  if (!s) return;
+  const { game, t1, ct, run } = s;
+  run(1 + 64 + 2); // through the freeze
+  assert.equal(game.phase, PHASE_LIVE);
+  // Round 30 at 14-15 for the CTs: the Ts win it: 15-15.
+  game.roundsPlayed = MAX_ROUNDS - 1;
+  game.round.scoreT = 14;
+  game.round.scoreCT = 15;
+  const winRound = (p) => { // player p kills the other
+    game.kill(p, p === t1 ? ct : t1, WEAPON_ID.usp_silencer, false);
+    run(2 + 64 + 64 + 4); // the end delay and the freeze
+  };
+  winRound(t1);
+  assert.equal(game.overtime, 1, 'overtime started');
+  assert.equal(game.round.scoreT + game.round.scoreCT, 30);
+  assert.equal(t1.player.money, OVERTIME_MONEY);
+  assert.equal(t1.team, TEAM_T, 'sides kept');
+  // Three overtime rounds: swap, money again.
+  for (let i = 0; i < 3; i++) winRound(ct);
+  assert.equal(t1.team, TEAM_CT, 'swapped after 3');
+  assert.equal(ct.player.money, OVERTIME_MONEY);
+  assert.equal(game.overtime, 1);
+  // 3-3 in the period: another one.
+  for (let i = 0; i < 3; i++) winRound(t1);
+  assert.equal(game.overtime, 2, 'tied overtime: a second period');
+  assert.equal(game.round.scoreT + game.round.scoreCT, 36);
+  // Four wins in a period end the match (a new match starts: scores 0).
+  for (let i = 0; i < 4; i++) winRound(ct);
+  assert.equal(game.overtime, 0, 'match over');
+  assert.equal(game.round.scoreT + game.round.scoreCT, 0, 'a new match');
 });

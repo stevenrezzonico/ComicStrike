@@ -10,6 +10,7 @@ A read of `shared/` against CS:GO's rules (convars, `items_game.txt`, the SDK's 
 | Landing stamina cost | 0.02 per unit of landing speed | `sv_staminalandcost` 0.05 | 0.05 |
 | Knife backstab | none | swing 40 → 90, stab 65 → 180 when the victim faces away (dot of his view and the line of sight over 0.475) | `resolveShots` in `shared/player.js`, `backstab` / `backstab2` on the knife |
 | Hostage first touch | $300 | `cash_player_interact_with_hostage` 150 | $150 |
+| Overtime | none: a 15-15 match restarted | MR3 periods, $10000 each half, first to 4 of a period, 3-3 plays another | `startOvertime` in `server/game.js`, `mp_overtime_*` |
 
 ## Matches (checked)
 
@@ -34,5 +35,4 @@ Grenades and bomb: prices, limits (1, flashbang 2, 4 in all), throw speed formul
 | Plant time | 3.0 s | 3.0 s (some sources 3.2 with the animation) | *unsure* |
 | Defuse reach | eye to bomb 90 units, cone 0.8 | +use reach ~62 | approximation |
 | Hostage hit / kill money | −30 / −1000 | −30 / −1000 | *unsure* |
-| Overtime | none: a 15-15 match restarts | MR3 overtime, $10000 | not built yet |
 | Suicide | no kill change | −1 kill | *unsure* |

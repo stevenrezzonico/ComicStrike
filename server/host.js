@@ -87,6 +87,9 @@ export class Host {
     num('mp_match_restart_delay', 15, 'Seconds between the end of a match and the next', 1, 300);
     num('mp_death_drop_gun', 1, 'The dead drop their best gun', 0, 1);
     num('mp_halftime', 1, 'Teams swap sides after half the rounds', 0, 1);
+    num('mp_overtime_enable', 1, 'A tied match goes to overtime', 0, 1);
+    num('mp_overtime_maxrounds', DEFAULT_RULES.overtimeRounds, 'Rounds per overtime period (swap after half, first past half wins)', 2, 30);
+    num('mp_overtime_startmoney', DEFAULT_RULES.overtimeMoney, 'Money at the start of each overtime half', 0, 65535);
     // Ours (CS:GO's Wingman servers simply have 4 slots): players a team may have, 0 no limit.
     num('mp_teamsize_max', 0, 'Most players on one team (0: no limit)', 0, MAX_PLAYERS);
     this.modeName = 'competitive'; // of the running map
@@ -209,6 +212,9 @@ export class Host {
       armsRace: this.modeName === 'armsrace',
       demolition: this.modeName === 'demolition',
       halftime: v('mp_halftime') !== 0,
+      overtime: v('mp_overtime_enable') !== 0,
+      overtimeRounds: v('mp_overtime_maxrounds'),
+      overtimeMoney: v('mp_overtime_startmoney'),
       teamSizeMax: v('mp_teamsize_max'),
       teammatesAreEnemies: v('mp_teammates_are_enemies') !== 0,
       respawnT: v('mp_respawn_on_death_t') !== 0,

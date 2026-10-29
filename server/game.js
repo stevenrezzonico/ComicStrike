@@ -37,7 +37,7 @@ import { parse } from '../shared/cvars.js';
 import { Bots } from './bots.js';
 import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, FREEZE_TIME, ROUND_TIME, BUY_TIME, ROUND_END_DELAY,
-  MAX_ROUNDS, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD,
+  MAX_ROUNDS, OVERTIME_ROUNDS, OVERTIME_MONEY, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD,
   PLANT_LOSS_BONUS, LOSS_STREAK_MAX, TEAMKILL_PENALTY, END_ELIMINATION, END_TIME, END_DRAW, END_BOMB, END_DEFUSE,
   END_RESCUE, RESCUE_WIN_REWARD, RESCUE_REWARD, HOSTAGE_TOUCH_REWARD, HOSTAGE_HIT_PENALTY, HOSTAGE_KILL_PENALTY,
   END_MATCH, GAME_FFA, GAME_DM, GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION, GAME_WINGMAN, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
@@ -169,6 +169,9 @@ export const DEFAULT_RULES = {
   roundEndDelay: ROUND_END_DELAY,
   c4Timer: C4_TIMER,
   maxRounds: MAX_ROUNDS,
+  overtime: true, // mp_overtime_enable: a tied match goes to overtime periods of overtimeRounds
+  overtimeRounds: OVERTIME_ROUNDS,
+  overtimeMoney: OVERTIME_MONEY,
   startMoney: START_MONEY,
   maxMoney: MAX_MONEY,
   warmupTime: 0, // seconds of warmup once both teams have players (0: start at once)
@@ -819,11 +822,21 @@ export class Game {
         this.endRound(this.timeWinner, this.timeWinner ? END_TIME : END_DRAW);
       }
     } else if (rs.phase === PHASE_OVER && this.tick >= this.phaseEnd) {
+      // Regulation: first past half the rounds wins, a tie after all of them goes to
+      // overtime (CS:GO's MR3: periods of 6 rounds, swap after 3, first to 4 of them;
+      // 3-3 plays another period). Without overtime a tie restarts the match.
       const max = this.rules.maxRounds, half = Math.floor(max / 2);
-      if (rs.info >> 2 === END_MATCH || rs.scoreT > half || rs.scoreCT > half || this.roundsPlayed >= max) this.startMatch();
-      else {
-        const swap = this.roundsPlayed === half && this.rules.halftime;
-        if (swap) this.halftime();
+      const ot = this.overtime > 0, otMax = this.rules.overtimeRounds, otHalf = Math.floor(otMax / 2);
+      const played = ot ? this.roundsPlayed - max - (this.overtime - 1) * otMax : this.roundsPlayed;
+      const winsT = ot ? rs.scoreT - this.otScoreT : rs.scoreT, winsCT = ot ? rs.scoreCT - this.otScoreCT : rs.scoreCT;
+      const need = ot ? otHalf : half, limit = ot ? otMax : max;
+      if (rs.info >> 2 === END_MATCH || winsT > need || winsCT > need) this.startMatch();
+      else if (played >= limit) {
+        if (this.rules.overtime && this.rules.halftime) this.startOvertime();
+        else this.startMatch();
+      } else {
+        const swap = played === need && this.rules.halftime;
+        if (swap) this.halftime(ot ? this.rules.overtimeMoney : this.rules.startMoney);
         this.startRound(swap);
       }
     }
@@ -845,10 +858,28 @@ export class Game {
     this.phaseEnd = this.tick + seconds * TICK_RATE;
   }
 
+  // A tie: the next overtime period starts, on the same sides, everyone with the overtime
+  // money and no loss streak.
+  startOvertime() {
+    const rs = this.round;
+    this.overtime++;
+    this.otScoreT = rs.scoreT;
+    this.otScoreCT = rs.scoreCT;
+    this.lossStreak[TEAM_T] = this.lossStreak[TEAM_CT] = 0;
+    for (const c of this.clients) {
+      if (!c || !c.joined || !c.playing) continue;
+      c.player.money = this.rules.overtimeMoney;
+    }
+    console.log(`overtime ${this.overtime}: ${rs.scoreT}-${rs.scoreCT}`);
+    this.startRound(true);
+  }
+
   startMatch() {
     const rs = this.round;
     rs.scoreT = rs.scoreCT = rs.info = rs.round = 0;
     this.roundsPlayed = 0;
+    this.overtime = 0; // overtime periods started; otScoreT/CT: the scores when the current one began
+    this.otScoreT = this.otScoreCT = 0;
     this.lossStreak[TEAM_T] = this.lossStreak[TEAM_CT] = 0;
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
@@ -1438,15 +1469,17 @@ export class Game {
     if (this.phase === PHASE_LIVE && !this.rules.ignoreWinConditions) this.endRound(TEAM_T, END_BOMB);
   }
 
-  // After round 15: teams swap sides, scores follow them, money restarts.
-  halftime() {
+  // After round 15 (and after 3 rounds of an overtime): teams swap sides, scores follow
+  // them, money restarts at `money`.
+  halftime(money = this.rules.startMoney) {
     const rs = this.round;
     [rs.scoreT, rs.scoreCT] = [rs.scoreCT, rs.scoreT];
+    [this.otScoreT, this.otScoreCT] = [this.otScoreCT, this.otScoreT];
     [this.lossStreak[TEAM_T], this.lossStreak[TEAM_CT]] = [0, 0];
     for (const c of this.clients) {
       if (!c || !c.joined || !c.playing) continue;
       c.player.team = c.team === TEAM_CT ? TEAM_T : TEAM_CT;
-      c.player.money = this.rules.startMoney;
+      c.player.money = money;
     }
     this.rosterDirty = true;
     console.log('halftime: teams swap');

@@ -17,6 +17,8 @@ export const ROUND_TIME = 115; // mp_roundtime_defuse 1:55
 export const BUY_TIME = 20; // mp_buytime, counted from the end of the freeze
 export const ROUND_END_DELAY = 7; // mp_round_restart_delay
 export const MAX_ROUNDS = 30; // mp_maxrounds: halftime after 15, first to 16 wins
+export const OVERTIME_ROUNDS = 6; // mp_overtime_maxrounds: MR3, swap after 3, first to 4 of them; 3-3 plays another
+export const OVERTIME_MONEY = 10000; // mp_overtime_startmoney, at the start of each overtime half
 export const WARMUP_RESPAWN = 2;
 
 export const START_MONEY = 800; // mp_startmoney
