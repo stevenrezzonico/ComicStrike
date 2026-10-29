@@ -54,7 +54,7 @@ const TABS = [
     ['slider', 'r_shadowlift', 'Shadow brightness', 0, 1, 0.05],
     ['toggle', 'r_dynres', 'Automatic resolution (keeps 60 fps)'],
     ['select', 'r_inkfast', 'Ink lines', ['Full', 'Fast']],
-    ['slider', 'mat_viewportscale', 'Render resolution (most)', 0.5, 1, 0.05],
+    ['slider', 'mat_viewportscale', 'Render resolution (most; over 1: supersampling)', 0.5, 2, 0.05],
     ['select', 'r_hidpi', 'High-DPI screens', ['Page pixels', 'Sharp (screen pixels)']],
     ['toggle', 'r_lowlatency', 'Low-latency display (may tear; takes effect on reload)'],
     ['slider', 'viewmodel_fov', 'Weapon field of view', 54, 68, 1],

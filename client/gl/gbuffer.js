@@ -19,6 +19,8 @@ export class GBuffer {
   constructor(gl) {
     this.gl = gl;
     this.fb = gl.createFramebuffer();
+    this.inkFb = gl.createFramebuffer();
+    this.ink = null;
     this.tex = [null, null, null];
     this.z = null;
     this.width = 0;
@@ -54,7 +56,28 @@ export class GBuffer {
     gl.drawBuffers(this.all);
     const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
     if (status !== gl.FRAMEBUFFER_COMPLETE) throw new Error(`G-buffer incomplete (0x${status.toString(16)})`);
+    // The ink pass's target (INK_FS): the line coverage per texel, filtered when the
+    // composite reads it at another resolution.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.inkFb);
+    if (this.ink) gl.deleteTexture(this.ink);
+    const ink = this.ink = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, ink);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R8, w, h);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, ink, 0);
+    const inkStatus = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (inkStatus !== gl.FRAMEBUFFER_COMPLETE) throw new Error(`ink target incomplete (0x${inkStatus.toString(16)})`);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  // Binds the ink target for the ink pass (no depth test: a fullscreen triangle).
+  beginInk() {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.inkFb);
+    gl.viewport(0, 0, this.width, this.height);
   }
 
   // Binds it for drawing and clears the depth (the color targets get overwritten whole).
@@ -72,12 +95,14 @@ export class GBuffer {
     gl.colorMask(true, true, true, !only); // keep the light in alpha
   }
 
-  // Textures on units 0..2 for the composite.
+  // Textures on units 0..2 (the targets) and 3 (the ink) for the ink pass and the composite.
   bindTextures() {
     const gl = this.gl;
     for (let i = 0; i < 3; i++) {
       gl.activeTexture(gl.TEXTURE0 + i);
       gl.bindTexture(gl.TEXTURE_2D, this.tex[i]);
     }
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.ink);
   }
 }

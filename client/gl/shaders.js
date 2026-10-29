@@ -2,9 +2,9 @@
 //
 // Comic rendering: every scene shader writes the G-buffer (client/gl/gbuffer.js) through
 // GBUFFER's gbuffer(): flat albedo and how lit it is, the normal and an object id, linear
-// depth and flags. COMPOSITE_FS then prints the frame from it in one pass: ink lines on
-// silhouettes, creases and object boundaries, a halftone dot screen for shade, the sky's
-// dots, paper grain.
+// depth and flags. INK_FS then draws the ink (lines on silhouettes, creases and object
+// boundaries) at the G-buffer's resolution, and COMPOSITE_FS prints the frame to the
+// canvas from both: the lines, a halftone dot screen for shade, the sky's dots, paper grain.
 
 // Value noise, shared by the surfaces, the sky and the composite.
 const NOISE = `
@@ -648,27 +648,9 @@ void main() {
   o_color = vec4(texelFetch(u_img, ivec2(gl_FragCoord.xy), 0).rgb, u_alpha);
 }`;
 
-export const COMPOSITE_FS = `#version 300 es
-precision highp float;
-precision highp int;
-precision highp sampler2D;
-uniform sampler2D u_albedo;
-uniform sampler2D u_normal;
-uniform sampler2D u_depth;
-uniform vec2 u_res;    // the canvas (px)
-uniform vec2 u_gscale; // G-buffer texels per canvas pixel (1, or less at a lower render scale)
-uniform float u_line;  // ink line spacing (px); 0: no lines
-uniform float u_dot;   // halftone cell (px); 0: flat tones
-uniform float u_zoom;  // 90 / fov: distance fades follow the scope
-uniform float u_bands; // light posterized into this many bands (0: smooth)
-uniform float u_lift;  // share of the darkness taken away (r_shadowlift): dark corners stay readable
-uniform int u_style;   // 0: plain lit colors (r_comic 0)
-uniform vec3 u_calm;   // calm zone round the crosshair: center, radius (px; 0: none): dots there go flat
-uniform float u_soft;  // shade dots: 0 bold, 1 soft (a finer screen, a paler print, less ink)
-out vec4 o_color;
-${GBUFFER_CONSTS}
-${NOISE}
-
+// The ink and the composite share the G-buffer readers: a depth texel (DTEX) with its
+// flags, depth and 1 / depth, the normal texel, and the terms of the line tests.
+const INK_COMMON = `
 ivec2 gsize;
 ivec2 cl(ivec2 p) { return clamp(p, ivec2(0), gsize - 1); }
 // A depth texel (DTEX): its flags, its depth, and 1 / depth up to a constant (the
@@ -697,49 +679,31 @@ bool isChar(DTEX t) { return (flagsOf(t) & G_CHAR) != 0u; }
 // Crease between the line sample's normal c and a neighbor's normal texel n.
 float crease(vec3 c, vec4 n) { return 1.0 - dot(c, n.xyz * 2.0 - 1.0); }
 
-// Halftone: round dots on a screen at angle 'ang', area growing with 'dark' (they touch
-// at full dark: the paper always shows between them).
-// The screen's rotation is a constant (turn: cos, sin of the angle; see the callers).
-float dots(vec2 frag, float dark, float size, vec2 turn) {
-  if (dark < 0.02) return 0.0;
-  vec2 q = mat2(turn.x, -turn.y, turn.y, turn.x) * frag / size;
-  float d = length(fract(q) - 0.5);
-  float r = sqrt(clamp(dark, 0.0, 1.0)) * 0.6;
-  float aa = 0.9 / size;
-  return 1.0 - smoothstep(r - aa, r + aa, d);
-}
-// ... turning into its own average (flat) tone with distance (where it has turned all the
-// way, the dots are not computed).
-float tone(vec2 frag, float dark, float size, vec2 turn, float far) {
-  float cov = 1.13 * clamp(dark, 0.0, 1.0);
-  return far >= 1.0 ? cov : mix(dots(frag, dark, size, turn), cov, far);
-}
-const vec2 TURN_SHADE = vec2(0.70738827, 0.70682518); // 45 degrees (0.785 rad)
-const vec2 TURN_SKY = vec2(0.96638998, 0.25708055);   // 0.26 rad
+`;
 
+// The ink pass: the line coverage of every G-buffer texel (silhouettes, creases, object
+// boundaries, the far characters' rings) into an R8 texture at the G-buffer's resolution,
+// which the composite reads under each canvas pixel. At a lower render scale the lines
+// are then filtered up (a smooth ramp instead of a staircase: the ink's anti-aliasing),
+// and the dozen fetches a texel happen for the scene's pixels, not the screen's.
+export const INK_FS = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform sampler2D u_normal;
+uniform sampler2D u_depth;
+uniform float u_line;   // ink line spacing (canvas px); 0: no lines
+uniform float u_gscale; // G-buffer texels per canvas pixel
+uniform float u_zoom;   // 90 / fov: distance fades follow the scope
+out vec4 o_ink;
+${GBUFFER_CONSTS}
+${INK_COMMON}
 void main() {
-  vec2 frag = gl_FragCoord.xy;
+  ivec2 p = ivec2(gl_FragCoord.xy);
   gsize = textureSize(u_depth, 0);
-  // The G-buffer may be smaller than the canvas (a lower render scale): the ink and the
-  // dots are printed per canvas pixel, the depth and normals read from the texel under it,
-  // the colors filtered between texels (which smooths the edges of the flat colors).
-  ivec2 p = ivec2(frag * u_gscale);
   DTEX Dp = dtex(p);
   uint fl = flagsOf(Dp);
   float dP = depthOf(Dp);
-  // The color plate is printed 1 px off the ink plate; not on characters (on a small figure
-  // that left a pale sliver of the background inside its outline).
-  ivec2 off = ivec2((fl & G_CHAR) != 0u ? 0 : 1, 0);
-  vec4 C = u_gscale.x >= 1.0 ? texelFetch(u_albedo, cl(p + off), 0) : texture(u_albedo, (frag + vec2(off)) / u_res);
-  vec3 alb = C.rgb;
-  float light = C.a;
-  if (u_bands > 0.5) light = floor(light * u_bands + 0.5) / u_bands;
-  light = 1.0 - (1.0 - light) * (1.0 - u_lift);
-  if (u_style == 0) {
-    o_color = vec4(alb * mix(0.3, 1.15, light), 1.0);
-    return;
-  }
-
   // Ink, sampled at the pixel itself (pc; the ink plate holds still: a hand-drawn boil
   // shifting it 7 times a second was tiring to play with).
   float edge = 0.0;
@@ -747,7 +711,7 @@ void main() {
     ivec2 pc = p;
     DTEX Dc = Dp;
     fc = flagsOf(Dc);
-    int s = max(1, int((u_line + ((fc & (G_FLAT | G_VIEW)) != 0u ? 1.0 : 0.0)) * u_gscale.x + 0.5));
+    int s = max(1, int((u_line + ((fc & (G_FLAT | G_VIEW)) != 0u ? 1.0 : 0.0)) * u_gscale + 0.5));
     float dC = dP;
     wc = invOf(Dc);
     // Silhouettes: 2nd derivative of 1 / depth (zero on any plane), on the nearer side only:
@@ -826,7 +790,91 @@ void main() {
     float inner = (fc & G_CHAR) != 0u ? 1.0 - smoothstep(200.0 * u_zoom, 600.0 * u_zoom, dC) : 1.0 - farC;
     edge = max(sil, max(eN, eI) * fade * inner);
   }
+  o_ink = vec4(edge, 0.0, 0.0, 1.0);
+}`;
+// r_inkfast: lines from the four direct neighbors only (a slower GPU's print).
+export const INK_FAST_FS = INK_FS.replace('#version 300 es\n', '#version 300 es\n#define INK_FAST\n');
 
+export const COMPOSITE_FS = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform sampler2D u_albedo;
+uniform sampler2D u_depth;
+uniform sampler2D u_ink;
+uniform vec2 u_res;    // the canvas (px)
+uniform vec2 u_gscale; // G-buffer texels per canvas pixel (1; less at a lower render scale, more supersampling)
+uniform float u_line;  // ink line spacing (px); 0: no lines (the ink pass did not run)
+uniform float u_dot;   // halftone cell (px); 0: flat tones
+uniform float u_zoom;  // 90 / fov: distance fades follow the scope
+uniform float u_bands; // light posterized into this many bands (0: smooth)
+uniform float u_lift;  // share of the darkness taken away (r_shadowlift): dark corners stay readable
+uniform int u_style;   // 0: plain lit colors (r_comic 0)
+uniform vec3 u_calm;   // calm zone round the crosshair: center, radius (px; 0: none): dots there go flat
+uniform float u_soft;  // shade dots: 0 bold, 1 soft (a finer screen, a paler print, less ink)
+out vec4 o_color;
+${GBUFFER_CONSTS}
+${NOISE}
+
+ivec2 gsize;
+ivec2 cl(ivec2 p) { return clamp(p, ivec2(0), gsize - 1); }
+#ifdef DEPTH_PACKED
+#define DTEX uvec4
+DTEX dtex(ivec2 p) { return uvec4(texelFetch(u_depth, cl(p), 0) * 255.0 + 0.5); }
+uint flagsOf(DTEX t) { return t.a; }
+float depthOf(DTEX t) { return float((t.r << 16u) | (t.g << 8u) | t.b) * (DEPTH_FAR / 16777215.0); }
+#else
+#define DTEX vec2
+DTEX dtex(ivec2 p) { return texelFetch(u_depth, cl(p), 0).rg; }
+uint flagsOf(DTEX t) { return uint(t.g); }
+float depthOf(DTEX t) { return DEPTH_NEAR / t.r; }
+#endif
+
+// Halftone: round dots on a screen at angle 'ang', area growing with 'dark' (they touch
+// at full dark: the paper always shows between them).
+// The screen's rotation is a constant (turn: cos, sin of the angle; see the callers).
+float dots(vec2 frag, float dark, float size, vec2 turn) {
+  if (dark < 0.02) return 0.0;
+  vec2 q = mat2(turn.x, -turn.y, turn.y, turn.x) * frag / size;
+  float d = length(fract(q) - 0.5);
+  float r = sqrt(clamp(dark, 0.0, 1.0)) * 0.6;
+  float aa = 0.9 / size;
+  return 1.0 - smoothstep(r - aa, r + aa, d);
+}
+// ... turning into its own average (flat) tone with distance (where it has turned all the
+// way, the dots are not computed).
+float tone(vec2 frag, float dark, float size, vec2 turn, float far) {
+  float cov = 1.13 * clamp(dark, 0.0, 1.0);
+  return far >= 1.0 ? cov : mix(dots(frag, dark, size, turn), cov, far);
+}
+const vec2 TURN_SHADE = vec2(0.70738827, 0.70682518); // 45 degrees (0.785 rad)
+const vec2 TURN_SKY = vec2(0.96638998, 0.25708055);   // 0.26 rad
+
+void main() {
+  vec2 frag = gl_FragCoord.xy;
+  gsize = textureSize(u_depth, 0);
+  // The G-buffer may be smaller than the canvas (a lower render scale) or larger
+  // (supersampling): the dots are printed per canvas pixel, the depth and flags read from
+  // the texel under it, the colors and the ink filtered between texels (which smooths the
+  // edges of the flat colors and the lines); at the canvas's own size, texel for texel.
+  ivec2 p = ivec2(frag * u_gscale);
+  DTEX Dp = dtex(p);
+  uint fl = flagsOf(Dp);
+  float dP = depthOf(Dp);
+  bool exact = u_gscale.x == 1.0;
+  // The color plate is printed 1 px off the ink plate; not on characters (on a small figure
+  // that left a pale sliver of the background inside its outline).
+  ivec2 off = ivec2((fl & G_CHAR) != 0u ? 0 : 1, 0);
+  vec4 C = exact ? texelFetch(u_albedo, cl(p + off), 0) : texture(u_albedo, (frag + vec2(off)) / u_res);
+  vec3 alb = C.rgb;
+  float light = C.a;
+  if (u_bands > 0.5) light = floor(light * u_bands + 0.5) / u_bands;
+  light = 1.0 - (1.0 - light) * (1.0 - u_lift);
+  if (u_style == 0) {
+    o_color = vec4(alb * mix(0.3, 1.15, light), 1.0);
+    return;
+  }
+  float edge = u_line > 0.0 ? (exact ? texelFetch(u_ink, p, 0).r : texture(u_ink, frag / u_res).r) : 0.0;
   vec3 col;
   float size = max(u_dot, 1.0) * (1.0 - 0.25 * u_soft);
   // Round the crosshair the dots melt into their own average tone (same brightness, no
@@ -853,8 +901,6 @@ void main() {
   col *= 1.0 - dot(uv, uv) * 0.3;
   o_color = vec4(mix(col, INK, edge), 1.0);
 }`;
-// r_inkfast: lines from the four direct neighbors only (a slower GPU's print).
-export const COMPOSITE_FAST_FS = COMPOSITE_FS.replace('#version 300 es\n', '#version 300 es\n#define INK_FAST\n');
 
 // The G-buffer shaders, for test/comic.test.js.
 export const GBUFFER_SHADERS = { WORLD_FS, SKY_FS, DEBRIS_FS, SKINNED_FS };

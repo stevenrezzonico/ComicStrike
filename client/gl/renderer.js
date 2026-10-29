@@ -5,7 +5,7 @@
 // composite() prints the whole frame to the canvas in one pass (ink lines, halftone).
 
 import {
-  WORLD_VS, WORLD_FS, WORLD_SOLID_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS, COMPOSITE_VS, COMPOSITE_FS, COMPOSITE_FAST_FS,
+  WORLD_VS, WORLD_FS, WORLD_SOLID_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS, COMPOSITE_VS, COMPOSITE_FS, INK_FS, INK_FAST_FS,
   CLOUD_PERIOD,
 } from './shaders.js';
 import { VERTEX_STRIDE } from '../mapmesh.js';
@@ -20,8 +20,9 @@ import { WorldVis } from './worldvis.js';
 // The light that prints fully lit: this share of the map's lit lightmap texels is at or
 // below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
 const LIGHT_FULL_SHARE = 0.75;
-const COMPOSITE_UNIFORMS = ['u_albedo', 'u_normal', 'u_depth', 'u_res', 'u_gscale', 'u_line', 'u_dot', 'u_zoom',
+const COMPOSITE_UNIFORMS = ['u_albedo', 'u_depth', 'u_ink', 'u_res', 'u_gscale', 'u_line', 'u_dot', 'u_zoom',
   'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft'];
+const INK_UNIFORMS = ['u_normal', 'u_depth', 'u_line', 'u_gscale', 'u_zoom'];
 const CLOUD_TEX_SIZE = 512; // the sky's cloud noise (cloudNoise): CLOUD_PERIOD cells across
 
 export class Renderer {
@@ -66,8 +67,9 @@ export class Renderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-    this.compFull = this.comp = program(gl, COMPOSITE_VS, COMPOSITE_FS, COMPOSITE_UNIFORMS);
-    this.compFast = null; // r_inkfast's, built when first asked for
+    this.comp = program(gl, COMPOSITE_VS, COMPOSITE_FS, COMPOSITE_UNIFORMS);
+    this.inkFull = program(gl, COMPOSITE_VS, INK_FS, INK_UNIFORMS);
+    this.inkFast = null; // r_inkfast's, built when first asked for
     this.afterimage = new Afterimage(gl); // the flashbang's frozen frame
     this.timer = new GpuTimer(gl); // GPU time per pass (cl_showfps 3)
     this.emptyVao = gl.createVertexArray();
@@ -174,8 +176,9 @@ export class Renderer {
   }
 
   // pixels: canvas pixels per page pixel (r_hidpi); scale: the render (G-buffer) resolution
-  // relative to the canvas (mat_viewportscale, r_dynres). The print always runs at the
-  // canvas's resolution, so the ink and the dots stay crisp at a lower render scale.
+  // relative to the canvas (mat_viewportscale, r_dynres; over 1 supersamples). The print
+  // always runs at the canvas's resolution, so the dots stay crisp at any render scale and
+  // the ink is filtered from the G-buffer's.
   resize(scale = 1, pixels = 1) {
     const c = this.canvas;
     const w = Math.max(1, Math.round(this.cssWidth * pixels));
@@ -184,7 +187,7 @@ export class Renderer {
       c.width = w;
       c.height = h;
     }
-    const s = Math.min(1, scale);
+    const s = Math.min(2, scale);
     this.gbuf.resize(Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)));
     return w / h;
   }
@@ -310,26 +313,41 @@ export class Renderer {
     gl.bindVertexArray(null);
   }
 
-  // Prints the G-buffer to the canvas. Leaves the canvas bound (crosshair after it).
+  // Prints the G-buffer to the canvas: the ink pass at the G-buffer's resolution (INK_FS,
+  // skipped with no lines or r_comic 0), then the composite over the canvas. Leaves the
+  // canvas bound (crosshair after it).
   composite() {
     const gl = this.gl, st = this.style;
     const h = this.canvas.height;
+    const gscale = this.gbuf.width / this.canvas.width;
+    const line = st.comic && st.ink > 0 ? Math.max(1, Math.round(h / 540 * st.ink)) : 0;
     this.timer.mark(PASS.PRINT);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, this.canvas.width, h);
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
-    if (st.fast && !this.compFast) this.compFast = program(gl, COMPOSITE_VS, COMPOSITE_FAST_FS, COMPOSITE_UNIFORMS);
-    this.comp = st.fast ? this.compFast : this.compFull;
+    gl.bindVertexArray(this.emptyVao);
+    this.gbuf.bindTextures();
+    if (line > 0) {
+      if (st.fast && !this.inkFast) this.inkFast = program(gl, COMPOSITE_VS, INK_FAST_FS, INK_UNIFORMS);
+      const ink = st.fast ? this.inkFast : this.inkFull, k = ink.loc;
+      this.gbuf.beginInk();
+      gl.useProgram(ink.p);
+      gl.uniform1i(k.u_normal, 1);
+      gl.uniform1i(k.u_depth, 2);
+      gl.uniform1f(k.u_line, line);
+      gl.uniform1f(k.u_gscale, gscale);
+      gl.uniform1f(k.u_zoom, this.zoom);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.canvas.width, h);
     const c = this.comp.loc;
     gl.useProgram(this.comp.p);
-    this.gbuf.bindTextures();
     gl.uniform1i(c.u_albedo, 0);
-    gl.uniform1i(c.u_normal, 1);
     gl.uniform1i(c.u_depth, 2);
+    gl.uniform1i(c.u_ink, 3);
     gl.uniform2f(c.u_res, this.canvas.width, h);
-    gl.uniform2f(c.u_gscale, this.gbuf.width / this.canvas.width, this.gbuf.height / h);
-    gl.uniform1f(c.u_line, st.ink > 0 ? Math.max(1, Math.round(h / 540 * st.ink)) : 0);
+    gl.uniform2f(c.u_gscale, gscale, this.gbuf.height / h);
+    gl.uniform1f(c.u_line, line);
     gl.uniform1f(c.u_dot, this.dotSize());
     gl.uniform1f(c.u_zoom, this.zoom);
     gl.uniform1f(c.u_bands, st.bands);
@@ -337,7 +355,6 @@ export class Renderer {
     gl.uniform1i(c.u_style, st.comic ? 1 : 0);
     gl.uniform3f(c.u_calm, this.canvas.width / 2, h / 2, st.calm);
     gl.uniform1f(c.u_soft, st.soft ? 1 : 0);
-    gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
     gl.enable(gl.CULL_FACE);

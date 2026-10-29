@@ -4,7 +4,7 @@
 // bulk of the world draws with a shader that never discards.
 import assert from 'node:assert/strict';
 import {
-  GBUFFER_SHADERS, WORLD_FS, WORLD_SOLID_FS, DECAL_FS, SHADOW_FS, COMPOSITE_FS, COMPOSITE_FAST_FS, G_FLAGS,
+  GBUFFER_SHADERS, WORLD_FS, WORLD_SOLID_FS, DECAL_FS, SHADOW_FS, COMPOSITE_FS, INK_FS, INK_FAST_FS, G_FLAGS,
   CLOUD_PERIOD,
 } from '../client/gl/shaders.js';
 import { FlashLights, MAX_FLASHES } from '../client/gl/flashes.js';
@@ -39,14 +39,23 @@ Deno.test('comic: every G-buffer shader writes all three targets through gbuffer
     const main = src.slice(src.lastIndexOf('void main()'));
     assert.match(main, /gbuffer\(/, `${name} never calls gbuffer()`);
   }
-  for (const src of [COMPOSITE_FS, COMPOSITE_FAST_FS]) {
+  for (const src of [COMPOSITE_FS, INK_FS, INK_FAST_FS]) {
     const main = src.slice(src.indexOf('void main()'));
     assert.doesNotMatch(main, /\.a & G_|uvec4/, 'the print reads depth texels through DTEX only');
-    // A lower render scale: the depth and normals from the texel under the canvas pixel,
-    // the color plate filtered between texels.
-    assert.match(main, /ivec2\(frag \* u_gscale\)/);
-    assert.match(main, /u_gscale\.x >= 1\.0 \? texelFetch\(u_albedo[^\n]*: texture\(u_albedo/);
   }
+  // The ink pass runs per G-buffer texel and reads the normals; the composite per canvas
+  // pixel: the depth and flags from the texel under it, the color plate and the ink
+  // filtered between texels at any other render scale (texel for texel at the canvas's).
+  const ink = INK_FS.slice(INK_FS.indexOf('void main()'));
+  assert.match(ink, /ivec2 p = ivec2\(gl_FragCoord\.xy\);/);
+  assert.match(ink, /ntex\(/);
+  assert.match(ink, /o_ink = vec4\(edge/);
+  const comp = COMPOSITE_FS.slice(COMPOSITE_FS.indexOf('void main()'));
+  assert.doesNotMatch(comp, /u_normal|ntex\(/, 'the composite needs no normals');
+  assert.match(comp, /ivec2\(frag \* u_gscale\)/);
+  assert.match(comp, /bool exact = u_gscale\.x == 1\.0;/);
+  assert.match(comp, /exact \? texelFetch\(u_albedo[^\n]*: texture\(u_albedo/);
+  assert.match(comp, /exact \? texelFetch\(u_ink[^\n]*: texture\(u_ink/);
 });
 
 Deno.test('comic: decals paint the albedo target only', () => {
@@ -130,7 +139,7 @@ Deno.test({ name: 'comic: alpha-tested faces draw apart; the opaque bulk never d
 } });
 
 Deno.test('comic: the fast ink (r_inkfast) is the print without the diagonal fetches', () => {
-  assert.ok(COMPOSITE_FAST_FS.startsWith('#version 300 es\n#define INK_FAST\n'));
+  assert.ok(INK_FAST_FS.startsWith('#version 300 es\n#define INK_FAST\n'));
   // The fetches the GLSL preprocessor keeps for each variant.
   const kept = (src, fast) => {
     const on = [true];
@@ -145,7 +154,7 @@ Deno.test('comic: the fast ink (r_inkfast) is the print without the diagonal fet
     }
     return n;
   };
-  assert.equal(kept(COMPOSITE_FS, false) - kept(COMPOSITE_FS, true), 5, 'four diagonal depths and one normal');
+  assert.equal(kept(INK_FS, false) - kept(INK_FS, true), 5, 'four diagonal depths and one normal');
 });
 
 Deno.test('comic: the sky cloud noise tiles and has the clouds and the gaps the shader had', () => {

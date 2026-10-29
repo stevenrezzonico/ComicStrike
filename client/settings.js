@@ -78,7 +78,7 @@ export function createConsole(print) {
   add('r_halftone_style', 1, 'Shade dots: 0 bold, 1 soft (finer, paler, less ink)', 0, 1);
   add('r_crosshair_clearzone', 1, 'Dots melt into flat tone round the crosshair: size of that zone (0: off)', 0, 3);
   add('r_inkfast', 0, 'Fast ink: lines from the four direct neighbors only (looks the same; saves little since the print fetches the diagonals only near edges)', 0, 1);
-  add('mat_viewportscale', 1, 'Render resolution of the scene, relative to the window (the most r_dynres uses); the ink and dots are always printed at full resolution', 0.25, 1);
+  add('mat_viewportscale', 1, 'Render resolution of the scene, relative to the window (the most r_dynres uses; over 1 supersamples: smoother edges and lines, for a strong GPU); the dots are always printed at the window resolution', 0.25, 2);
   add('r_dynres', 1, 'Automatic render resolution: lowers the scene resolution while frames come late (under 60 fps), raises it again when they keep up', 0, 1);
   add('r_hidpi', 0, 'Sharp: render at the screen pixel density on high-DPI screens (up to 2x; costs up to 4x the pixels)', 0, 1);
   add('r_lowlatency', 1, 'Low-latency display: frames go to the screen without the browser compositor (a frame less of mouse lag where the browser allows it; 0 if it tears during fast turns; takes effect on reload)', 0, 1);
