@@ -123,8 +123,69 @@ Deno.test('player animation: hands on the gun follow the aim; reload, plant and 
   const plant = run(new PlayerAnimator(), 16, () => [0, 0, 0], { anim: ANIM_PLANT, hold: HOLD_C4 });
   assert.ok(bone(plant, 'hand_R')[2] < 16, `planting: hands near the ground (${bone(plant, 'hand_R')[2]})`);
 
-  const dead = run(new PlayerAnimator(), 64, () => [0, 0, 0], { alive: false });
-  assert.ok(bone(dead, 'head_0')[2] < 12, `the dead lie down (head at ${bone(dead, 'head_0')[2]})`);
+  const dead = run(new PlayerAnimator(), 80, () => [0, 0, 0], { alive: false });
+  assert.ok(bone(dead, 'head_0')[2] < 14, `the dead lie down (head at ${bone(dead, 'head_0')[2]})`);
+});
+
+// Every joint at or above the ground (z >= -1), checked each frame.
+function aboveGround(a, n, opts) {
+  for (let k = 0; k < n; k++) {
+    run(a, 1, () => [0, 0, 0], opts);
+    for (let i = 0; i < S.count; i++) assert.ok(a.pose.wpos[i * 3 + 2] > -1, `${S.names[i]} under the ground at frame ${k}`);
+  }
+  return a;
+}
+
+Deno.test('player animation: a death collapses in place, knees first, then over to a side', () => {
+  const a = new PlayerAnimator();
+  run(a, 8, () => [0, 0, 0]);
+  const standing = bone(a, 'pelvis')[2];
+  aboveGround(a, 20, { alive: false }); // 0.31 s: the knees have given, the feet still planted
+  assert.ok(bone(a, 'pelvis')[2] < standing - 15, `hips dropped (${bone(a, 'pelvis')[2]})`);
+  assert.ok(bone(a, 'head_0')[2] > 30, 'still up, folding');
+  for (const side of ['L', 'R']) assert.ok(Math.abs(bone(a, `ankle_${side}`)[2] - 3.5) < 0.5, 'feet planted');
+  aboveGround(a, 60, { alive: false }); // 1.25 s: on the ground
+  assert.ok(bone(a, 'head_0')[2] < 14, `lying (head at ${bone(a, 'head_0')[2]})`);
+  assert.ok(bone(a, 'pelvis')[2] < 12);
+  // The seed picks the side: odd falls to the left (+y), even to the right.
+  const left = new PlayerAnimator(), right = new PlayerAnimator();
+  left.die(0, 0, false, 0, 0, 1);
+  right.die(0, 0, false, 0, 0, 2);
+  aboveGround(left, 80, { alive: false });
+  aboveGround(right, 80, { alive: false });
+  assert.ok(bone(left, 'head_0')[1] > 8, `left: head at y ${bone(left, 'head_0')[1]}`);
+  assert.ok(bone(right, 'head_0')[1] < -8, `right: head at y ${bone(right, 'head_0')[1]}`);
+  const again = new PlayerAnimator();
+  again.die(0, 0, false, 0, 0, 1);
+  aboveGround(again, 80, { alive: false });
+  assert.deepEqual(again.pose.skin, left.pose.skin, 'deterministic by seed');
+});
+
+Deno.test('player animation: a headshot throws the body back along the shot, onto its back', () => {
+  const a = new PlayerAnimator();
+  run(a, 8, () => [0, 0, 0]);
+  a.die(-1, 0, true, 40, 0, 7); // shot from the front (the shot travels -x), 40 units of room
+  aboveGround(a, 10, { alive: false }); // 0.16 s: head snapped back, body lifting and moving
+  assert.ok(bone(a, 'pelvis')[0] < -8, `moving back (${bone(a, 'pelvis')[0]})`);
+  assert.ok(bone(a, 'pelvis')[2] > 30, 'still up');
+  aboveGround(a, 70, { alive: false }); // 1.25 s: lying on the back beyond the throw
+  const pelvis = bone(a, 'pelvis'), head = bone(a, 'head_0');
+  assert.ok(pelvis[0] < -36 && pelvis[0] > -50, `thrown back ${pelvis[0]}`);
+  assert.ok(pelvis[2] < 10 && head[2] < 14, `on the ground (${pelvis[2]}, ${head[2]})`);
+  assert.ok(head[0] < pelvis[0] - 15, 'head further along the shot than the hips');
+  for (const side of ['L', 'R']) assert.ok(bone(a, `ankle_${side}`)[0] > pelvis[0] + 10, 'feet back where he stood');
+  // The shot in the world turns into the player's frame: facing +y (yaw 90), a shot
+  // travelling +x throws him to his right (-y in his frame... which is +x in the world).
+  const b = new PlayerAnimator();
+  run(b, 8, () => [0, 0, 0], { yaw: 90 });
+  b.die(1, 0, true, 40, 0, 7);
+  run(b, 80, () => [0, 0, 0], { yaw: 90, alive: false });
+  assert.ok(bone(b, 'pelvis')[1] < -30, `in his frame the shot goes -y (${bone(b, 'pelvis')[1]})`);
+  // No room (a wall at the back): tips over where he stands.
+  const c = new PlayerAnimator();
+  c.die(-1, 0, true, 0, 0, 7);
+  aboveGround(c, 80, { alive: false });
+  assert.ok(bone(c, 'pelvis')[0] > -12 && bone(c, 'head_0')[2] < 14);
 });
 
 Deno.test('player animation: a shot kicks, then settles', () => {

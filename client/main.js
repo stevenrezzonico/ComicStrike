@@ -722,6 +722,7 @@ function applyEvents() {
     seenKills[seenKillNext] = id;
     seenKillNext = (seenKillNext + 1) % seenKills.length;
     addKill(ev.killer[k], ev.victim[k], ev.weapon[k], (ev.killFlags[k] & KILL_HEADSHOT) !== 0);
+    killBody(ev.killer[k], ev.victim[k], (ev.killFlags[k] & KILL_HEADSHOT) !== 0, id);
     if (ev.killer[k] === selfId && (ev.killFlags[k] & KILL_HEADSHOT)) sounds.hit(true);
     if (ev.killer[k] === selfId && ev.victim[k] !== selfId) words.kill((ev.killFlags[k] & KILL_HEADSHOT) !== 0);
   }
@@ -752,6 +753,42 @@ function bombBeeps(now) {
 
 function teamClass(id) {
   return net.teams[id] === TEAM_CT ? 'ct' : 't';
+}
+
+// How the victim's body dies (client/anim/playeranim.js die): the shot's direction from
+// the killer (ours from the eye), and for a headshot how far it may be thrown back before
+// a wall (one trace at chest height) and how far down the floor is there (a second one;
+// no floor within 72 units: not thrown). A death without a shooter collapses in place.
+const bodyTrace = new Trace();
+function killBody(killer, victim, headshot, seed) {
+  if (victim === selfId || killer === victim || !world) return;
+  const r = victim * E_FIELDS, vx = interp[r + E_X], vy = interp[r + E_Y], vz = rowFeet(interp, r);
+  let kx, ky;
+  if (killer === selfId) {
+    kx = eye[0];
+    ky = eye[1];
+  } else {
+    const kr = killer * E_FIELDS;
+    if (!interp[kr + E_ACTIVE]) return;
+    kx = interp[kr + E_X];
+    ky = interp[kr + E_Y];
+  }
+  let dx = vx - kx, dy = vy - ky;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len < 1) return;
+  dx /= len;
+  dy /= len;
+  let dist = 0, drop = 0;
+  if (headshot) {
+    const reach = 48;
+    traceHull(world, HULL_POINT, vx, vy, vz + 36, vx + dx * reach, vy + dy * reach, vz + 36, bodyTrace);
+    dist = Math.max(0, bodyTrace.fraction * reach - 6);
+    const lx = vx + dx * dist, ly = vy + dy * dist;
+    traceHull(world, HULL_POINT, lx, ly, vz + 36, lx, ly, vz - 72, bodyTrace);
+    if (bodyTrace.fraction === 1) dist = 0;
+    else drop = Math.max(0, vz - bodyTrace.endz);
+  }
+  models.anim[victim].die(dx, dy, headshot, dist, drop, seed);
 }
 
 function addKill(killer, victim, weapon, headshot) {

@@ -82,6 +82,7 @@ export class PlayerAnimator {
   constructor() {
     this.pose = new Pose(S);
     this.reload = { take: 0, roll: 0, drop: 0, x: 0, y: 0, z: 0 }; // reloadPose's result
+    this.deathDir = new Float32Array(2); // die(): the shot's direction in the world
     this.reset();
   }
 
@@ -98,6 +99,11 @@ export class PlayerAnimator {
     this.toss = 0; // a weapon throw (G), 1 when it leaves the hand, down to 0
     this.shots = -1;
     this.dead = 0; // seconds since death (0 = alive)
+    this.deathDir[0] = this.deathDir[1] = 0;
+    this.headshot = false;
+    this.deathDist = 0;
+    this.deathDrop = 0;
+    this.deathSeed = 0;
     this.time = 0;
     this.reloadStart = -1; // time the reload bit came on (-1: not reloading)
     this.magOff = 0; // the gun's bones this frame: magazine out along magDir, bolt back
@@ -149,7 +155,7 @@ export class PlayerAnimator {
     const support = pts ? pts.support : null;
     const reload = this.reloadPose(anim, hold, pts, weapon);
     const p = this.pose.reset();
-    if (this.dead > 0) return this.deathPose(c);
+    if (this.dead > 0) return this.headshot ? this.headshotPose(c, yaw) : this.collapsePose(c);
 
     // Hips: crouch drop; standing, they sink when the feet are apart so both reach the
     // ground (lowest with both feet down, highest passing over the planted foot).
@@ -300,18 +306,173 @@ export class PlayerAnimator {
     return R;
   }
 
-  // Falls backward like a plank about the feet over 0.7 s, arms flung up.
-  deathPose(c) {
-    const p = this.pose;
-    const f = smoothstep(0, 0.7, this.dead);
-    const a = (-88 * f) * Math.PI / 180;
-    const pz = PELVIS_Z - CROUCH_DROP * c * (1 - f);
-    p.pos[PELVIS * 3] = Math.sin(a) * pz;
-    p.pos[PELVIS * 3 + 2] = Math.cos(a) * pz + 3 * f;
-    Q.fromEuler(tv, 0, -88 * f, 0, 0);
+  // This player was killed: how. (dx, dy): the shot's direction in the world (unit; 0, 0
+  // when nobody shot him), headshot: thrown back along it; dist: how far the body may fly
+  // before a wall; drop: how far the floor where it lands lies below the feet; seed: picks
+  // the collapse's side and fold. Without a call the death is a collapse.
+  die(dx, dy, headshot, dist, drop, seed) {
+    this.deathDir[0] = dx;
+    this.deathDir[1] = dy;
+    this.headshot = headshot;
+    this.deathDist = dist;
+    this.deathDrop = drop;
+    this.deathSeed = seed;
+  }
+
+  // Points leg s, straight (knee unbent), from its hip at the goal, then solves it. The
+  // solver bends the knee in the plane of the pole only when the limb already points
+  // near its target: a leg carried round by the pelvis of a falling body otherwise bent
+  // the knee into the ground. Call with world transforms current (after solve()).
+  reachLeg(s) {
+    const p = this.pose, g = p.goal, w = p.wpos, h = HIP[s];
+    Q.identity(p.rot, KNEE[s] * 4);
+    let dx = g[0] - w[h * 3], dy = g[1] - w[h * 3 + 1], dz = g[2] - w[h * 3 + 2];
+    const l = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+    dx /= l;
+    dy /= l;
+    dz /= l;
+    // The straight leg lies along -z: turn it onto d about (0, 0, -1) x d.
+    const al = Math.sqrt(dx * dx + dy * dy);
+    if (al > 1e-4) Q.fromAxisAngle(tq, 0, dy / al, -dx / al, 0, Math.acos(Math.max(-1, Math.min(1, -dz))));
+    else Q.identity(tq);
+    p.setWorldRotation(h, tq, 0);
+    p.reachGoal(h, KNEE[s], ANKLE[s]);
+  }
+
+  // The hands come off the gun and hang from the shoulders (world down), swinging a little,
+  // never below the ground. Call after solve(). k: 0 still holding .. 1 hanging.
+  hangArms(k, sway) {
+    const p = this.pose, w = p.wpos, cx = w[SPINE3 * 3], cy = w[SPINE3 * 3 + 1], cz = w[SPINE3 * 3 + 2];
+    for (let s = 0; s < 2; s++) {
+      const sx = w[ARM[s] * 3], sy = w[ARM[s] * 3 + 1], sz = w[ARM[s] * 3 + 2];
+      const hx = cx + 14, hy = cy + SIDE[s] * 4, hz = cz - 6; // about where the gun was held
+      const goal = p.goal;
+      goal[0] = hx + (sx + sway - hx) * k;
+      goal[1] = hy + (sy + SIDE[s] * 2 - hy) * k;
+      goal[2] = hz + (Math.max(3, sz - 23) - hz) * k;
+      goal[3] = -1;
+      goal[4] = SIDE[s] * 0.4;
+      goal[5] = 0.3; // elbows back, a little up: never into the ground once lying
+      p.reachGoal(ARM[s], ELBOW[s], HAND[s]);
+    }
+  }
+
+  // A marionette with its strings cut, over ~1 s: the knees give and the hips drop
+  // straight down, the spine folds and the head droops, the arms hang; then the folded
+  // body topples to one side (the seed picks which, how far forward, and a twist) and
+  // settles on the ground with a small bounce. Feet stay planted until it goes over.
+  collapsePose(c) {
+    const p = this.pose, t = this.dead, seed = this.deathSeed;
+    const side = seed & 1 ? 1 : -1;
+    const fwd = 0.4 + 0.5 * ((seed >> 1) & 3) / 3;
+    const twist = (((seed >> 3) & 7) / 7 - 0.5) * 40;
+    const buckle = ramp(t, 0, 0.35);
+    const fold = ramp(t, 0.05, 0.5);
+    const f = ramp(t, 0.3, 0.95);
+    const settle = bump(t, 0.85, 0.98, 0.98, 1.15);
+    const c0 = c * (1 - buckle);
+    const hUp = PELVIS_Z - CROUCH_DROP * c0 - 24 * buckle;
+    const px = -5 * c0 + 10 * fwd * f, py = side * 13 * f, pz = hUp + (7 - hUp) * f + 2.5 * settle;
+    p.pos[PELVIS * 3] = px;
+    p.pos[PELVIS * 3 + 1] = py;
+    p.pos[PELVIS * 3 + 2] = pz;
+    Q.fromEuler(tv, 0, 30 * fwd * f, twist * f, -side * 85 * f);
     for (let k = 0; k < 4; k++) p.rot[PELVIS * 4 + k] = tv[k];
-    for (let s = 0; s < 2; s++) p.turn(ARM[s], 0, 0, SIDE[s] * 30 * f);
+    p.turn(SPINE1, 22 * fold, 0, 0);
+    p.turn(SPINE2, 22 * fold, 0, 0);
+    p.turn(SPINE3, 18 * fold, 0, 0);
+    p.turn(NECK, 15 * fold, 0, 0);
+    p.turn(HEAD, 25 * fold, side * 10 * f, 0);
     p.solve();
+    for (let s = 0; s < 2; s++) {
+      const goal = p.goal;
+      const ax = 2 * c0 + 1 - 5 * buckle, ay = SIDE[s] * (4.5 + c0); // planted, the toes dragging back as he kneels
+      const lx = px - 24 + 4 * fwd, ly = py + SIDE[s] * 5 + side * 3; // legs trailing behind, knees bent
+      goal[0] = ax + (lx - ax) * f;
+      goal[1] = ay + (ly - ay) * f;
+      goal[2] = 3.5;
+      // Knees forward and down to the ground (kneeling), then swinging out and round to
+      // up as he goes over (never through the leg's own line: that popped the knee).
+      goal[3] = 1 - f;
+      goal[4] = SIDE[s] * (0.25 + 1.2 * Math.sin(Math.PI * f));
+      goal[5] = Math.min(1, -0.1 + 4 * f);
+      this.reachLeg(s);
+      p.setWorldRotation(ANKLE[s], tv, 0); // soles with the body
+    }
+    this.hangArms(ramp(t, 0, 0.3), Math.sin(t * 10) * 6 * Math.exp(-2 * t));
+    p.skinMatrices();
+    return p;
+  }
+
+  // A headshot: the head snaps back and the body is thrown along the shot (deathDir, in
+  // the world; dist units at most, decelerating over 0.5 s), tipping over onto its back,
+  // legs kicked up and arms flung, then lands (drop lower where the floor is) and slides
+  // to rest with the limbs flopping down. yaw: the player's, to take the shot into his frame.
+  headshotPose(c, yaw) {
+    const p = this.pose, t = this.dead;
+    const yr = yaw * Math.PI / 180, cy = Math.cos(yr), sy = Math.sin(yr);
+    let dx = this.deathDir[0] * cy + this.deathDir[1] * sy, dy = -this.deathDir[0] * sy + this.deathDir[1] * cy;
+    if (dx * dx + dy * dy < 0.5) { // nobody known to have shot: backwards
+      dx = -1;
+      dy = 0;
+    }
+    const u = Math.min(1, t / 0.5), travel = 1 - (1 - u) * (1 - u);
+    const tip = ramp(t, 0.02, 0.6);
+    const land = ramp(t, 0.5, 0.8);
+    const settle = bump(t, 0.6, 0.7, 0.7, 0.9);
+    const R = this.deathDist * travel + 6 * tip;
+    const h = PELVIS_Z - CROUCH_DROP * c;
+    const px = dx * R, py = dy * R;
+    const pz = h + (6 - h) * tip + 12 * Math.sin(Math.PI * u) * (1 - land) - this.deathDrop * land + 2 * settle;
+    p.pos[PELVIS * 3] = px;
+    p.pos[PELVIS * 3 + 1] = py;
+    p.pos[PELVIS * 3 + 2] = pz;
+    Q.fromAxisAngle(tv, 0, -dy, dx, 0, (85 * tip) * Math.PI / 180); // over about the axis across the shot
+    for (let k = 0; k < 4; k++) p.rot[PELVIS * 4 + k] = tv[k];
+    const arch = -6 * ramp(t, 0, 0.2) * (1 - land);
+    p.turn(SPINE1, arch, 0, 0);
+    p.turn(SPINE2, arch, 0, 0);
+    p.turn(SPINE3, arch, 0, 0);
+    p.turn(HEAD, -45 * bump(t, 0, 0.08, 0.1, 0.4) - 15 * ramp(t, 0, 0.2), 0, 0);
+    p.solve();
+    const lift = ramp(t, 0, 0.2), ex = -dy, ey = dx; // ex, ey: across the shot
+    for (let s = 0; s < 2; s++) {
+      const goal = p.goal;
+      // Planted, then trailing behind and kicked up, then stretched out along the ground.
+      const fx = px - dx * 8 + ex * SIDE[s] * 6, fy = py - dy * 8 + ey * SIDE[s] * 6;
+      const gx = px - dx * 22 + ex * SIDE[s] * 5, gy = py - dy * 22 + ey * SIDE[s] * 5;
+      let x = (fx) * lift, y = SIDE[s] * 4.5 + (fy - SIDE[s] * 4.5) * lift, z = 3.5 + (pz + 8 - 3.5) * lift;
+      x += (gx - x) * land;
+      y += (gy - y) * land;
+      z += (4 - z) * land;
+      goal[0] = x;
+      goal[1] = y;
+      goal[2] = z;
+      goal[3] = 1 - land;
+      goal[4] = SIDE[s] * 0.25 * (1 - land);
+      goal[5] = land;
+      this.reachLeg(s);
+      p.setWorldRotation(ANKLE[s], tv, 0);
+    }
+    const w = p.wpos, cx = w[SPINE3 * 3], cyy = w[SPINE3 * 3 + 1], cz = w[SPINE3 * 3 + 2];
+    for (let s = 0; s < 2; s++) {
+      const goal = p.goal;
+      // Holding the gun, then whipped out and up as the body goes, then flat on the ground.
+      const hx = cx + 14, hy = cyy + SIDE[s] * 4, hz = cz - 6;
+      const fx = cx - dx * 12 + ex * SIDE[s] * 14, fy = cyy - dy * 12 + ey * SIDE[s] * 14, fz = cz + 8;
+      const gx = px + dx * 4 + ex * SIDE[s] * 20, gy = py + dy * 4 + ey * SIDE[s] * 20;
+      let x = hx + (fx - hx) * lift, y = hy + (fy - hy) * lift, z = hz + (fz - hz) * lift;
+      x += (gx - x) * land;
+      y += (gy - y) * land;
+      z += (3 - z) * land;
+      goal[0] = x;
+      goal[1] = y;
+      goal[2] = z;
+      goal[3] = -0.2 * (1 - land);
+      goal[4] = SIDE[s] * 0.6 * (1 - land);
+      goal[5] = -1 + 2 * land;
+      p.reachGoal(ARM[s], ELBOW[s], HAND[s]);
+    }
     p.skinMatrices();
     return p;
   }
