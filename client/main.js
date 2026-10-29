@@ -364,6 +364,7 @@ function resetView(yaw) {
   prevOrigin.set(ps.f.subarray(PS_ORIGIN, PS_ORIGIN + 3));
   prevEye = eyeOffset(ps);
   smooth.fill(0);
+  weaponView.flashUntil = 0; // no muzzle flash carried over from before the respawn
 }
 
 // A new round wipes what the last one left on the map: bullet holes, scorches, shards
@@ -910,7 +911,10 @@ function tick() {
     storePrediction(t);
     net.sendCmds(cmds, t);
   }
-  weaponView.onTick(ws.f[WS_EVENTS], t * TICK_DT);
+  // The weapon's events of this tick: none when its tick did not run (dead: the state keeps
+  // the last command's events, and a shot there kept the muzzle flash lit until respawn).
+  const ran = alive || (noclip && !net);
+  weaponView.onTick(ran ? ws.f[WS_EVENTS] : 0, t * TICK_DT);
   if (alive) {
     scape.ownEvents(ws.f[WS_EVENTS], activeWeapon(ws), silenced(ws, ws.f[WS_ACTIVE]));
     const w = activeWeapon(ws);
