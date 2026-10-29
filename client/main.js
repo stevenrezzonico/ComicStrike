@@ -944,7 +944,7 @@ const bench = { until: 0, seconds: 0, gaps: new Float32Array(8192), n: 0, cpu: 0
 
 // The scene's render resolution relative to the canvas, as a percentage (r_dynres, mat_viewportscale).
 const renderScale = () =>
-  `${Math.round(100 * renderer.renderScale)}%${renderer.style.fast ? ', fast ink' : ''}`;
+  `${Math.round(100 * renderer.renderScale)}%${cv.r_dynres.bool && dynres.print < 1 ? `, print ${Math.round(100 * dynres.print)}%` : ''}${renderer.style.fast ? ', fast ink' : ''}`;
 
 function benchmarkReport() {
   const { gaps, n } = bench;
@@ -1162,7 +1162,7 @@ function draw(now, alpha, dt) {
   const most = cv.mat_viewportscale.number;
   dynres.min = Math.min(1, 0.5 / most);
   const aspect = renderer.resize(most * (cv.r_dynres.bool ? dynres.factor : 1),
-    cv.r_hidpi.bool ? Math.min(2, devicePixelRatio || 1) : 1);
+    (cv.r_hidpi.bool ? Math.min(2, devicePixelRatio || 1) : 1) * (cv.r_dynres.bool ? dynres.print : 1));
   const style = renderer.style;
   style.comic = cv.r_comic.bool;
   style.ink = cv.r_inkwidth.number;
