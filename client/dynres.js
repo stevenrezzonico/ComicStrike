@@ -1,11 +1,12 @@
 // Automatic render resolution (r_dynres): keeps the frame rate at 60 or more on a GPU that
 // cannot draw every pixel in time (an integrated GPU on battery). It watches the time
-// between frames: when too many come late it takes a step down (first the fast ink, which
-// looks the same and saves a third of the print, then the render scale, a tenth at a
-// time), and after a while with none late it tries a step back up, waiting twice as long
-// after each try that brought late frames back. Frame times work in every browser (GPU
-// timer queries do not). Scale steps change the canvas and G-buffer sizes, so steps are
-// rare: a second apart at least, and never for single stalls.
+// between frames: when too many come late it takes the render scale a step down (a tenth
+// at a time; the scene draws smaller under the full-resolution print, so the ink stays
+// crisp), and after a while with none late it tries a step back up, waiting twice as
+// long after each try that brought late frames back. Frame times work in every browser
+// (GPU timer queries do not). Scale steps resize the G-buffer, so steps are rare: a
+// second apart at least, and never for single stalls. (The fast ink used to be the first
+// step; since the print fetches its diagonals only near edges it saves nothing.)
 
 export const SLOW_MS = 21; // a frame later than this is slow (under ~48 fps; 60 Hz misses read 33)
 const STALL_MS = 250; // longer gaps are a hidden tab or a load, not the GPU: ignored
@@ -21,8 +22,7 @@ const PROBE_MS = 3000; // a lowering this soon after going up means the try fail
 
 export class DynamicResolution {
   constructor() {
-    this.factor = 1; // of the largest render scale (mat_viewportscale, r_hidpi)
-    this.fastInk = false; // the first step down (r_inkfast's print)
+    this.factor = 1; // of the largest render scale (mat_viewportscale)
     this.min = 0.5;
     this.upAfter = UP_AFTER_MS;
     this.reset(0);
@@ -31,7 +31,6 @@ export class DynamicResolution {
   // Starts over at full scale, judging nothing until `holdMs` from now (a map load).
   reset(now, holdMs = 2000) {
     this.factor = 1;
-    this.fastInk = false;
     this.upAfter = UP_AFTER_MS;
     this.raisedAt = -Infinity;
     this.startWindow(now + holdMs);
@@ -62,25 +61,18 @@ export class DynamicResolution {
       if (now - this.raisedAt < PROBE_MS) { // the try failed: back to the step that kept up
         this.upAfter = Math.min(this.upAfter * 2, UP_AFTER_MAX_MS);
         this.raisedAt = -Infinity;
-        return this.factor === 1 && !this.fastInk ? this.ink(true, now) : this.set(this.factor - STEP_UP, now);
+        return this.set(this.factor - STEP_UP, now);
       }
-      if (!this.fastInk) return this.ink(true, now);
       return this.factor > this.min && this.set(this.factor - STEP_DOWN, now);
     }
     if (share > CLEAN_SHARE) {
       this.cleanSince = now;
       return false;
     }
-    if ((this.factor >= 1 && !this.fastInk) || now - this.cleanSince < this.upAfter) return false;
+    if (this.factor >= 1 || now - this.cleanSince < this.upAfter) return false;
     this.raisedAt = now;
     this.cleanSince = now;
-    return this.factor < 1 ? this.set(this.factor + STEP_UP, now) : this.ink(false, now);
-  }
-
-  ink(fast, now) {
-    this.fastInk = fast;
-    this.startWindow(now + HOLD_MS);
-    return true;
+    return this.set(this.factor + STEP_UP, now);
   }
 
   set(f, now) {

@@ -942,9 +942,9 @@ const dynres = new DynamicResolution(); // r_dynres
 // benchmark: the gaps between frames over a few seconds, then a report in the console.
 const bench = { until: 0, seconds: 0, gaps: new Float32Array(8192), n: 0, cpu: 0, ctx: null };
 
-// The render resolution in page pixels, as a percentage (r_dynres, mat_viewportscale, r_hidpi).
+// The scene's render resolution relative to the canvas, as a percentage (r_dynres, mat_viewportscale).
 const renderScale = () =>
-  `${Math.round(100 * renderer.canvas.height / Math.max(1, renderer.cssHeight))}%${renderer.style.fast ? ', fast ink' : ''}`;
+  `${Math.round(100 * renderer.renderScale)}%${renderer.style.fast ? ', fast ink' : ''}`;
 
 function benchmarkReport() {
   const { gaps, n } = bench;
@@ -1157,10 +1157,12 @@ function draw(now, alpha, dt) {
 
   // r_hidpi: the screen's own pixels (up to 2 per page pixel) for crisp ink on high-DPI
   // screens; lines and dots keep their size (they scale with the canvas height).
-  // r_dynres: lower while frames come late, down to half the page's pixels.
-  const most = cv.mat_viewportscale.number * (cv.r_hidpi.bool ? Math.min(2, devicePixelRatio || 1) : 1);
+  // r_dynres: the render scale (the scene's resolution under the full-resolution print)
+  // lower while frames come late, down to half the canvas.
+  const most = cv.mat_viewportscale.number;
   dynres.min = Math.min(1, 0.5 / most);
-  const aspect = renderer.resize(most * (cv.r_dynres.bool ? dynres.factor : 1));
+  const aspect = renderer.resize(most * (cv.r_dynres.bool ? dynres.factor : 1),
+    cv.r_hidpi.bool ? Math.min(2, devicePixelRatio || 1) : 1);
   const style = renderer.style;
   style.comic = cv.r_comic.bool;
   style.ink = cv.r_inkwidth.number;
@@ -1170,7 +1172,7 @@ function draw(now, alpha, dt) {
   style.soft = cv.r_halftone_style.number >= 1;
   style.calm = calmRadius(canvas.height) * cv.r_crosshair_clearzone.number;
   renderer.novis = cv.r_novis.bool;
-  style.fast = cv.r_inkfast.bool || (cv.r_dynres.bool && dynres.fastInk);
+  style.fast = cv.r_inkfast.bool;
   renderer.zoom = 90 / fov;
   renderer.begin();
   const fovY = 2 * Math.atan(Math.tan(fov / 2 * DEG) * 0.75);

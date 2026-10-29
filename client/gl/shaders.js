@@ -35,6 +35,9 @@ const vec3 INK = vec3(0.09, 0.075, 0.06);`;
 // Fragment outputs of every scene shader. The depth target is a half-float RG (1 / depth,
 // read as it is by the print's dozen neighbor fetches); without half-float targets
 // (DEPTH_PACKED, client/gl/gbuffer.js) 24 bits of an RGBA8, decoded at every fetch.
+// (Tried and dropped: one RGBA16F target with depth, flags, id and an octahedral normal,
+// a single fetch per neighbor: the 8-byte texels and the normal decode made the ink a
+// third slower than the two 4-byte fetches on an Intel Iris Xe.)
 const GBUFFER = `
 layout(location = 0) out vec4 o_albedo; // rgb albedo, a: light 0..1
 layout(location = 1) out vec4 o_normal; // normal * 0.5 + 0.5, a: object id / 255
@@ -365,21 +368,25 @@ void main() {
 }`;
 
 // A pale sky the composite screens with blue dots, thicker toward the zenith, and flat
-// white clouds (their own id, so they get an ink outline).
+// white clouds (their own id, so they get an ink outline). The cloud noise is a tiling
+// texture made at load (cloudNoise in client/gl/renderer.js, CLOUD_PERIOD cells across):
+// one fetch, where two octaves of value noise (eight hashes a pixel) were a quarter of the
+// GPU frame on a map with a wide sky.
+export const CLOUD_PERIOD = 16;
 export const SKY_FS = `#version 300 es
 precision highp float;
 precision highp int;
 in vec3 v_dir;
 uniform vec3 u_horizon;
 uniform float u_time;
+uniform sampler2D u_clouds;
 ${GBUFFER}
-${NOISE}
 
 void main() {
   vec3 dir = normalize(v_dir);
   // Clouds on a dome rather than a plane: the lookup stays bounded at the horizon.
   vec2 p = dir.xy / max(dir.z + 0.3, 0.05) * 1.6 + u_time * 0.01;
-  float n = vnoise(p) * 0.65 + vnoise(p * 2.7) * 0.35;
+  float n = texture(u_clouds, p / ${CLOUD_PERIOD}.0).r;
   // Where one pixel spans a whole noise cell the shapes would alias and shimmer.
   float footprint = length(fwidth(p)) * 2.7;
   bool cloud = n > 0.66 && footprint < 0.5 && dir.z > 0.02;
@@ -524,8 +531,7 @@ layout(location=2) in uint a_bone;
 layout(location=3) in vec4 a_col; // rgb, finish / 255
 layout(location=4) in uvec2 a_blend; // second bone, its weight (0..255)
 uniform mat4 u_viewProj;
-uniform mat4 u_model;
-uniform mat4 u_bones[24];
+uniform mat4 u_bones[24]; // bone -> world (the model matrix folded in, client/gl/skinned.js)
 uniform uint u_id;
 out vec3 v_nrm;
 out vec3 v_col;
@@ -537,7 +543,7 @@ flat out uint v_fin;
 void main() {
   // Linear blend skinning between two bones (one when the weight is 0).
   float bw = float(a_blend.y) / 255.0;
-  mat4 m = u_model * (u_bones[a_bone] * (1.0 - bw) + u_bones[a_blend.x] * bw);
+  mat4 m = u_bones[a_bone] * (1.0 - bw) + u_bones[a_blend.x] * bw;
   v_nrm = mat3(m) * a_nrm;
   v_col = a_col.rgb;
   v_fin = uint(a_col.a * 255.0 + 0.5);
@@ -649,7 +655,8 @@ precision highp sampler2D;
 uniform sampler2D u_albedo;
 uniform sampler2D u_normal;
 uniform sampler2D u_depth;
-uniform vec2 u_res;
+uniform vec2 u_res;    // the canvas (px)
+uniform vec2 u_gscale; // G-buffer texels per canvas pixel (1, or less at a lower render scale)
 uniform float u_line;  // ink line spacing (px); 0: no lines
 uniform float u_dot;   // halftone cell (px); 0: flat tones
 uniform float u_zoom;  // 90 / fov: distance fades follow the scope
@@ -662,7 +669,8 @@ out vec4 o_color;
 ${GBUFFER_CONSTS}
 ${NOISE}
 
-ivec2 cl(ivec2 p) { return clamp(p, ivec2(0), ivec2(u_res) - 1); }
+ivec2 gsize;
+ivec2 cl(ivec2 p) { return clamp(p, ivec2(0), gsize - 1); }
 // A depth texel (DTEX): its flags, its depth, and 1 / depth up to a constant (the
 // silhouette test only compares them).
 #ifdef DEPTH_PACKED
@@ -691,30 +699,38 @@ float crease(vec3 c, vec4 n) { return 1.0 - dot(c, n.xyz * 2.0 - 1.0); }
 
 // Halftone: round dots on a screen at angle 'ang', area growing with 'dark' (they touch
 // at full dark: the paper always shows between them).
-float dots(vec2 frag, float dark, float size, float ang) {
+// The screen's rotation is a constant (turn: cos, sin of the angle; see the callers).
+float dots(vec2 frag, float dark, float size, vec2 turn) {
   if (dark < 0.02) return 0.0;
-  float c = cos(ang), s = sin(ang);
-  vec2 q = mat2(c, -s, s, c) * frag / size;
+  vec2 q = mat2(turn.x, -turn.y, turn.y, turn.x) * frag / size;
   float d = length(fract(q) - 0.5);
   float r = sqrt(clamp(dark, 0.0, 1.0)) * 0.6;
   float aa = 0.9 / size;
   return 1.0 - smoothstep(r - aa, r + aa, d);
 }
-// ... turning into its own average (flat) tone with distance.
-float tone(vec2 frag, float dark, float size, float ang, float far) {
+// ... turning into its own average (flat) tone with distance (where it has turned all the
+// way, the dots are not computed).
+float tone(vec2 frag, float dark, float size, vec2 turn, float far) {
   float cov = 1.13 * clamp(dark, 0.0, 1.0);
-  return mix(dots(frag, dark, size, ang), cov, far);
+  return far >= 1.0 ? cov : mix(dots(frag, dark, size, turn), cov, far);
 }
+const vec2 TURN_SHADE = vec2(0.70738827, 0.70682518); // 45 degrees (0.785 rad)
+const vec2 TURN_SKY = vec2(0.96638998, 0.25708055);   // 0.26 rad
 
 void main() {
   vec2 frag = gl_FragCoord.xy;
-  ivec2 p = ivec2(frag);
+  gsize = textureSize(u_depth, 0);
+  // The G-buffer may be smaller than the canvas (a lower render scale): the ink and the
+  // dots are printed per canvas pixel, the depth and normals read from the texel under it,
+  // the colors filtered between texels (which smooths the edges of the flat colors).
+  ivec2 p = ivec2(frag * u_gscale);
   DTEX Dp = dtex(p);
   uint fl = flagsOf(Dp);
   float dP = depthOf(Dp);
   // The color plate is printed 1 px off the ink plate; not on characters (on a small figure
   // that left a pale sliver of the background inside its outline).
-  vec4 C = texelFetch(u_albedo, cl(p + ivec2((fl & G_CHAR) != 0u ? 0 : 1, 0)), 0);
+  ivec2 off = ivec2((fl & G_CHAR) != 0u ? 0 : 1, 0);
+  vec4 C = u_gscale.x >= 1.0 ? texelFetch(u_albedo, cl(p + off), 0) : texture(u_albedo, (frag + vec2(off)) / u_res);
   vec3 alb = C.rgb;
   float light = C.a;
   if (u_bands > 0.5) light = floor(light * u_bands + 0.5) / u_bands;
@@ -731,7 +747,7 @@ void main() {
     ivec2 pc = p;
     DTEX Dc = Dp;
     fc = flagsOf(Dc);
-    int s = max(1, int(u_line + 0.5)) + ((fc & (G_FLAT | G_VIEW)) != 0u ? 1 : 0);
+    int s = max(1, int((u_line + ((fc & (G_FLAT | G_VIEW)) != 0u ? 1.0 : 0.0)) * u_gscale.x + 0.5));
     float dC = dP;
     wc = invOf(Dc);
     // Silhouettes: 2nd derivative of 1 / depth (zero on any plane), on the nearer side only:
@@ -819,13 +835,13 @@ void main() {
   float far = u_dot < 1.0 ? 1.0 : max(smoothstep(500.0 * u_zoom, 1300.0 * u_zoom, dP), calm);
   if ((fl & G_CHAR) != 0u) far = max(far, smoothstep(300.0 * u_zoom, 800.0 * u_zoom, dP)); // flat colors sooner
   if ((fl & G_SKY) != 0u) {
-    col = mix(alb, alb * vec3(0.43, 0.71, 0.89), tone(frag, 1.0 - light, size * 1.15, 0.26, u_dot < 1.0 ? 1.0 : calm));
+    col = mix(alb, alb * vec3(0.43, 0.71, 0.89), tone(frag, 1.0 - light, size * 1.15, TURN_SKY, u_dot < 1.0 ? 1.0 : calm));
   } else if ((fl & G_FLAT) != 0u) {
     col = alb * (0.62 + 0.38 * light);
   } else {
     float dark = 1.0 - light;
     // (A flat tone reads darker than the same tone in dots: the calm zone prints lighter.)
-    float m = tone(frag, dark, size, 0.785, far) * (1.0 - 0.15 * calm);
+    float m = tone(frag, dark, size, TURN_SHADE, far) * (1.0 - 0.15 * calm);
     vec3 base = alb * (0.84 + 0.16 * light);
     // Shade dots: a cool, darker print of the color, only a little ink even at full dark
     // (soft: paler still, and less ink).

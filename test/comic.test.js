@@ -5,25 +5,47 @@
 import assert from 'node:assert/strict';
 import {
   GBUFFER_SHADERS, WORLD_FS, WORLD_SOLID_FS, DECAL_FS, SHADOW_FS, COMPOSITE_FS, COMPOSITE_FAST_FS, G_FLAGS,
+  CLOUD_PERIOD,
 } from '../client/gl/shaders.js';
 import { FlashLights, MAX_FLASHES } from '../client/gl/flashes.js';
-import { fullLight } from '../client/gl/renderer.js';
+import { fullLight, cloudNoise } from '../client/gl/renderer.js';
 import { buildMapMesh, VERTEX_STRIDE } from '../client/mapmesh.js';
 import { parseBSP } from '../shared/bsp.js';
 import { MAT, FLAG_ALPHATEST } from '../shared/materials.js';
 
 const outputs = (src) => [...new Set([...src.matchAll(/layout\(location ?= ?(\d)\) out vec[24]/g)].map((m) => +m[1]))].sort();
 
+// The outputs a shader keeps with DEPTH_PACKED defined or not.
+const variant = (src, packed) => {
+  const on = [true];
+  const out = [];
+  for (const line of src.split('\n')) {
+    const t = line.trim();
+    if (t === '#ifdef DEPTH_PACKED') on.push(packed);
+    else if (t === '#ifndef DEPTH_PACKED') on.push(!packed);
+    else if (t === '#else' && on.length > 1) on.push(!on.pop());
+    else if (t === '#endif' && on.length > 1) on.pop();
+    else if (on.every(Boolean)) out.push(line);
+  }
+  return out.join('\n');
+};
+
 Deno.test('comic: every G-buffer shader writes all three targets through gbuffer()', () => {
   for (const [name, src] of Object.entries(GBUFFER_SHADERS)) {
-    assert.deepEqual(outputs(src), [0, 1, 2], name);
+    // The depth target: a half float, or 24 bits of an RGBA8 where those are missing.
+    for (const packed of [false, true]) assert.deepEqual(outputs(variant(src, packed)), [0, 1, 2], name);
+    assert.match(variant(src, false), /layout\(location = 2\) out vec2 o_depth;/, name);
+    assert.match(variant(src, true), /layout\(location = 2\) out vec4 o_depth;/, name);
     const main = src.slice(src.lastIndexOf('void main()'));
     assert.match(main, /gbuffer\(/, `${name} never calls gbuffer()`);
-    // The depth target: a half float, or 24 bits of an RGBA8 where those are missing.
-    assert.match(src, /#ifdef DEPTH_PACKED\nlayout\(location = 2\) out vec4 o_depth;[^\n]*\n#else\nlayout\(location = 2\) out vec2 o_depth;/, name);
   }
   for (const src of [COMPOSITE_FS, COMPOSITE_FAST_FS]) {
-    assert.doesNotMatch(src.slice(src.indexOf('void main()')), /\.a & G_|uvec4/, 'the print reads depth texels through DTEX only');
+    const main = src.slice(src.indexOf('void main()'));
+    assert.doesNotMatch(main, /\.a & G_|uvec4/, 'the print reads depth texels through DTEX only');
+    // A lower render scale: the depth and normals from the texel under the canvas pixel,
+    // the color plate filtered between texels.
+    assert.match(main, /ivec2\(frag \* u_gscale\)/);
+    assert.match(main, /u_gscale\.x >= 1\.0 \? texelFetch\(u_albedo[^\n]*: texture\(u_albedo/);
   }
 });
 
@@ -124,4 +146,22 @@ Deno.test('comic: the fast ink (r_inkfast) is the print without the diagonal fet
     return n;
   };
   assert.equal(kept(COMPOSITE_FS, false) - kept(COMPOSITE_FS, true), 5, 'four diagonal depths and one normal');
+});
+
+Deno.test('comic: the sky cloud noise tiles and has the clouds and the gaps the shader had', () => {
+  const size = 128;
+  const n = cloudNoise(size, CLOUD_PERIOD);
+  assert.equal(n.length, size * size);
+  assert.deepEqual(cloudNoise(size, CLOUD_PERIOD), n, 'deterministic');
+  // Tiling: the texture's edges continue into each other (a cell is size / period texels,
+  // the lattice wraps), so neighbors across the seam differ as little as neighbors inside.
+  let seam = 0, inside = 0;
+  for (let i = 0; i < size; i++) {
+    seam += Math.abs(n[i * size] - n[i * size + size - 1]) + Math.abs(n[i] - n[(size - 1) * size + i]);
+    inside += Math.abs(n[i * size + 1] - n[i * size + 2]) + Math.abs(n[size + i] - n[2 * size + i]);
+  }
+  assert.ok(seam < inside * 1.5, `seam ${seam} inside ${inside}`);
+  // Clouds where n > 0.66 (SKY_FS): some, not most.
+  const cloud = n.filter((v) => v > 0.66 * 255).length / n.length;
+  assert.ok(cloud > 0.05 && cloud < 0.4, `cloud share ${cloud}`);
 });

@@ -6,6 +6,7 @@
 
 import {
   WORLD_VS, WORLD_FS, WORLD_SOLID_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS, COMPOSITE_VS, COMPOSITE_FS, COMPOSITE_FAST_FS,
+  CLOUD_PERIOD,
 } from './shaders.js';
 import { VERTEX_STRIDE } from '../mapmesh.js';
 import { program } from './program.js';
@@ -19,8 +20,9 @@ import { WorldVis } from './worldvis.js';
 // The light that prints fully lit: this share of the map's lit lightmap texels is at or
 // below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
 const LIGHT_FULL_SHARE = 0.75;
-const COMPOSITE_UNIFORMS = ['u_albedo', 'u_normal', 'u_depth', 'u_res', 'u_line', 'u_dot', 'u_zoom', 'u_bands',
-  'u_lift', 'u_style', 'u_calm', 'u_soft'];
+const COMPOSITE_UNIFORMS = ['u_albedo', 'u_normal', 'u_depth', 'u_res', 'u_gscale', 'u_line', 'u_dot', 'u_zoom',
+  'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft'];
+const CLOUD_TEX_SIZE = 512; // the sky's cloud noise (cloudNoise): CLOUD_PERIOD cells across
 
 export class Renderer {
   // lowLatency (r_lowlatency): a desynchronized canvas, presented without the browser's
@@ -51,9 +53,19 @@ export class Renderer {
     this.world = program(gl, WORLD_VS, WORLD_FS, worldUniforms);
     this.broken = new Uint32Array(8); // bit per breakable slot
     this.movers = null; // shared/doors.js Doors: slots above slotBase are drawn moved
-    const skyUniforms = ['u_eye', 'u_horizon', 'u_time'];
+    const skyUniforms = ['u_eye', 'u_horizon', 'u_time', 'u_clouds'];
     this.skyMesh = program(gl, SKY_MESH_VS, SKY_FS, ['u_viewProj', ...skyUniforms]);
     this.skyFill = program(gl, SKY_FILL_VS, SKY_FS, ['u_invViewProj', ...skyUniforms]);
+    // The clouds' tiling noise, on unit 1 for the sky (the lightmap keeps unit 0).
+    this.cloudTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.cloudTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, CLOUD_TEX_SIZE, CLOUD_TEX_SIZE, 0, gl.RED, gl.UNSIGNED_BYTE,
+      cloudNoise(CLOUD_TEX_SIZE, CLOUD_PERIOD));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
     this.compFull = this.comp = program(gl, COMPOSITE_VS, COMPOSITE_FS, COMPOSITE_UNIFORMS);
     this.compFast = null; // r_inkfast's, built when first asked for
     this.afterimage = new Afterimage(gl); // the flashbang's frozen frame
@@ -161,17 +173,25 @@ export class Renderer {
     this.movers = doors && doors.count ? doors : null;
   }
 
-  // scale: render resolution relative to the page (mat_viewportscale).
-  resize(scale = 1) {
+  // pixels: canvas pixels per page pixel (r_hidpi); scale: the render (G-buffer) resolution
+  // relative to the canvas (mat_viewportscale, r_dynres). The print always runs at the
+  // canvas's resolution, so the ink and the dots stay crisp at a lower render scale.
+  resize(scale = 1, pixels = 1) {
     const c = this.canvas;
-    const w = Math.max(1, Math.round(this.cssWidth * scale));
-    const h = Math.max(1, Math.round(this.cssHeight * scale));
+    const w = Math.max(1, Math.round(this.cssWidth * pixels));
+    const h = Math.max(1, Math.round(this.cssHeight * pixels));
     if (c.width !== w || c.height !== h) {
       c.width = w;
       c.height = h;
     }
-    this.gbuf.resize(w, h);
+    const s = Math.min(1, scale);
+    this.gbuf.resize(Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)));
     return w / h;
+  }
+
+  // The render scale in effect: G-buffer rows per canvas row.
+  get renderScale() {
+    return this.gbuf.height / Math.max(1, this.canvas.height);
   }
 
   // Halftone cell in pixels (0: flat tones), from the screen height like the ink.
@@ -205,6 +225,9 @@ export class Renderer {
     gl.uniform3fv(s.loc.u_eye, eye);
     gl.uniform3fv(s.loc.u_horizon, this.horizon);
     gl.uniform1f(s.loc.u_time, time);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.cloudTex);
+    gl.uniform1i(s.loc.u_clouds, 1);
   }
 
   // Starts a frame in the G-buffer.
@@ -305,6 +328,7 @@ export class Renderer {
     gl.uniform1i(c.u_normal, 1);
     gl.uniform1i(c.u_depth, 2);
     gl.uniform2f(c.u_res, this.canvas.width, h);
+    gl.uniform2f(c.u_gscale, this.gbuf.width / this.canvas.width, this.gbuf.height / h);
     gl.uniform1f(c.u_line, st.ink > 0 ? Math.max(1, Math.round(h / 540 * st.ink)) : 0);
     gl.uniform1f(c.u_dot, this.dotSize());
     gl.uniform1f(c.u_zoom, this.zoom);
@@ -319,6 +343,37 @@ export class Renderer {
     gl.enable(gl.CULL_FACE);
     gl.enable(gl.DEPTH_TEST);
   }
+}
+
+// The sky's cloud noise (SKY_FS): two octaves of value noise, the same shape the shader
+// computed per pixel, as `size` x `size` bytes that tile every `period` cells (the second
+// octave at three cells per cell, so it tiles too). Deterministic.
+export function cloudNoise(size, period) {
+  const hash = (x, y) => { // a lattice value in 0..1 from its wrapped cell
+    let h = ((x * 374761393) ^ (y * 668265263)) >>> 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  };
+  const value = (px, py, cells) => { // value noise, `cells` lattice cells across the texture
+    const x = px * cells, y = py * cells;
+    const i = Math.floor(x), j = Math.floor(y);
+    let fx = x - i, fy = y - j;
+    fx = fx * fx * (3 - 2 * fx);
+    fy = fy * fy * (3 - 2 * fy);
+    const w = (a, b) => hash(((a % cells) + cells) % cells, ((b % cells) + cells) % cells);
+    const top = w(i, j) + (w(i + 1, j) - w(i, j)) * fx;
+    const bottom = w(i, j + 1) + (w(i + 1, j + 1) - w(i, j + 1)) * fx;
+    return top + (bottom - top) * fy;
+  };
+  const out = new Uint8Array(size * size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const px = x / size, py = y / size;
+      const n = value(px, py, period) * 0.65 + value(px + 0.37, py + 0.61, period * 3) * 0.35;
+      out[y * size + x] = Math.round(Math.min(1, Math.max(0, n)) * 255);
+    }
+  }
+  return out;
 }
 
 // The lifted light (WORLD_FS: pow(lm, 0.6) * 1.45) below which LIGHT_FULL_SHARE of the

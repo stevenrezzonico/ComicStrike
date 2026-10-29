@@ -1,7 +1,8 @@
 // The G-buffer every scene shader draws into (GBUFFER in client/gl/shaders.js), read
-// back by the composite pass: three color targets plus a depth renderbuffer, sized like
-// the canvas.
-//   0: albedo rgb, light (RGBA8)
+// back by the composite pass: three color targets plus a depth renderbuffer, at the
+// render resolution (the canvas's, or less: the print reads it per canvas pixel).
+//   0: albedo rgb, light (RGBA8; filtered: at a lower render scale the print reads it
+//      between texels)
 //   1: normal xyz, object id (RGBA8)
 //   2: DEPTH_NEAR / linear depth, G_ flags (RG16F: the print reads the depth of a dozen
 //      neighbors a pixel, and a float is read as it is; packed into 24 bits of an RGBA8
@@ -39,8 +40,8 @@ export class GBuffer {
       const t = this.tex[i] = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texStorage2D(gl.TEXTURE_2D, 1, i === 2 && !this.packed ? gl.RG16F : gl.RGBA8, w, h);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, i === 0 ? gl.LINEAR : gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, i === 0 ? gl.LINEAR : gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, t, 0);

@@ -76,8 +76,9 @@ export class SkinnedRenderer {
     this.white = 0;
     this.eye = new Float32Array(3);
     this.flags = 0; // G_FLAGS on every pixel drawn (G_FLAGS.VIEW: the first-person view)
-    this.prog = program(gl, SKINNED_VS, SKINNED_FS, ['u_viewProj', 'u_model', 'u_bones', 'u_light', 'u_lightDir',
+    this.prog = program(gl, SKINNED_VS, SKINNED_FS, ['u_viewProj', 'u_bones', 'u_light', 'u_lightDir',
       'u_emissive', 'u_white', 'u_id', 'u_lightFull', 'u_eye', 'u_flags']);
+    this.bones = new Float32Array(MAX_BONES * 16); // model x skin, per draw
   }
 
   // Changes the G_FLAGS of the next draws (between begin and end).
@@ -105,8 +106,20 @@ export class SkinnedRenderer {
     if (emissive !== this.emissive) gl.uniform1f(this.prog.loc.u_emissive, (this.emissive = emissive));
     if (white !== this.white) gl.uniform1f(this.prog.loc.u_white, (this.white = white));
     gl.uniform1ui(this.prog.loc.u_id, (nextId = (nextId + 1) & 1023));
-    gl.uniformMatrix4fv(this.prog.loc.u_model, false, model);
-    gl.uniformMatrix4fv(this.prog.loc.u_bones, false, skin, 0, mesh.bones * 16);
+    // The bones go up already in world space (model x skin): a mat4 product per bone here
+    // instead of one per vertex (the models pass is vertex-bound: 9 players are ~40,000
+    // vertices a frame).
+    const b = this.bones;
+    for (let i = 0; i < mesh.bones; i++) {
+      const o = i * 16;
+      for (let c = 0; c < 4; c++) {
+        const s0 = skin[o + c * 4], s1 = skin[o + c * 4 + 1], s2 = skin[o + c * 4 + 2], s3 = skin[o + c * 4 + 3];
+        for (let r = 0; r < 4; r++) {
+          b[o + c * 4 + r] = model[r] * s0 + model[4 + r] * s1 + model[8 + r] * s2 + model[12 + r] * s3;
+        }
+      }
+    }
+    gl.uniformMatrix4fv(this.prog.loc.u_bones, false, b, 0, mesh.bones * 16);
     gl.uniform3fv(this.prog.loc.u_light, light);
     gl.bindVertexArray(mesh.vao);
     gl.drawElements(gl.TRIANGLES, mesh.count, mesh.indexType, 0);
