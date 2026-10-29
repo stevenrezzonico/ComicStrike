@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ComicStrike</title>
-<link rel="icon" href="data:,">
+<link rel="icon" type="image/svg+xml" href="/client/favicon.svg">
 <style>
   /* Comic print: paper, ink and a few flat inks (the look of client/gl's composite). System
      fonts only, no font files: Impact-like display lettering, a comic hand for text. */
@@ -206,7 +206,9 @@
   #menu.open { display: flex; }
   #menu.pause { background: radial-gradient(circle, rgba(23, 19, 15, 0.4) 1.5px, transparent 2.2px) 0 0 / 8px 8px,
     rgba(23, 19, 15, 0.22); }
-  #menu h1 { margin: 0 0 26px; font: clamp(56px, 8vw, 92px)/0.9 var(--display); letter-spacing: 0.02em;
+  .menu-logo { display: flex; align-items: center; gap: 14px; margin: 0 0 26px; }
+  .menu-logo img { width: clamp(56px, 7vw, 84px); height: auto; flex: none; transform: rotate(-8deg); }
+  #menu h1 { margin: 0; font: clamp(56px, 8vw, 92px)/0.9 var(--display); letter-spacing: 0.02em;
     color: var(--yellow); -webkit-text-stroke: 3px var(--ink); paint-order: stroke fill; transform: rotate(-3deg);
     transform-origin: left; text-shadow: 1px 1px 0 var(--ink), 2px 2px 0 var(--ink), 3px 3px 0 var(--ink),
       4px 4px 0 var(--ink), 5px 5px 0 var(--ink), 6px 6px 0 var(--ink), 7px 7px 0 var(--ink); }
@@ -247,6 +249,15 @@
   .menu-settings, .menu-maps { scrollbar-color: var(--ink) transparent; }
   #menu .menu-bind button.key.waiting { background: var(--yellow); }
   .menu-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  /* The Video tab's window: the game canvas shows through a hole clipped out of #menu. */
+  .menu-window { aspect-ratio: 16 / 9; margin: 0 0 8px; border: 3px solid var(--ink); box-shadow: 4px 4px 0 var(--ink);
+    background: var(--paper-hi); position: relative; }
+  .menu-window .hole { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  .menu-window .hole.ready .note { display: none; }
+  .menu-window .note { font: 20px/1 var(--display); letter-spacing: 0.04em; opacity: 0.6; }
+  .menu-compare { gap: 14px; margin-bottom: 6px; }
+  #menu button.menu-hold { font-size: 14px; padding: 6px 10px 4px; }
+  #menu button.menu-hold:active { background: var(--red); color: var(--paper-hi); }
   .menu-settings { max-height: calc(100vh - 12vh - 180px); overflow-y: auto; padding-right: 8px; }
   .menu-preview canvas { display: block; width: 100%; height: 120px; border: 3px solid var(--ink); margin-bottom: 8px;
     box-sizing: border-box; }
@@ -266,11 +277,21 @@
     paint-order: stroke fill; text-shadow: 2px 2px 0 var(--ink); }
   #menu button.menu-reset { margin-top: 14px; font-size: 14px; }
   .menu-server { font-weight: 700; }
+  .menu-tagline { margin: 0 0 14px; font-size: 16px; }
+  .menu-shots { display: flex; gap: 14px; margin: 0 0 14px; }
+  .menu-shots img { flex: 1 1 0; min-width: 0; width: 50%; height: auto; border: 3px solid var(--ink);
+    box-shadow: 4px 4px 0 var(--ink); background: var(--sky); }
+  .menu-shots img:first-child { transform: rotate(-1deg); }
+  .menu-shots img:last-child { transform: rotate(1deg); }
+  .menu-features { margin: 0 0 12px; padding-left: 22px; }
+  .menu-features li { margin: 2px 0; }
   .menu-hint { font-size: 13px; opacity: 0.7; }
   @media (max-width: 720px) {
     #menu { flex-direction: column; padding: 16px; gap: 14px; }
     .menu-side { flex: none; }
-    #menu h1 { font-size: 48px; margin-bottom: 14px; }
+    #menu h1 { font-size: 48px; }
+    .menu-logo { margin-bottom: 14px; }
+    .menu-logo img { width: 48px; }
     .menu-nav { flex-direction: row; flex-wrap: wrap; }
     #menu .menu-nav button { font-size: 18px; }
     .menu-row { flex-wrap: wrap; }

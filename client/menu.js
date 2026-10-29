@@ -15,6 +15,19 @@ const MODE_LABELS = {
   deathmatch: 'Deathmatch', demo: 'Demo',
 };
 
+// The Bots row of the practice panel by mode: [label, [[bot_quota, text], ...]]. Team modes
+// fill both sides (bot_quota_mode fill: the player counts); Wingman is 2 a side
+// (mp_teamsize_max 2: more would sit as spectators); free-for-all modes count players, not
+// sides; the demo's bots are respawning targets on the enemy team.
+export function botOptions(mode) {
+  if (mode === 'demo') return ['Targets', [[0, 'None'], [2, '1 bot'], [3, '2 bots'], [6, '5 bots']]];
+  if (mode === 'wingman') return ['Bots', [[0, 'None'], [2, '1 vs 1'], [4, '2 vs 2']]];
+  if (mode === 'deathmatch' || mode === 'armsrace') {
+    return ['Bots', [[0, 'None'], [2, '2 players'], [4, '4 players'], [6, '6 players'], [10, '10 players']]];
+  }
+  return ['Bots', [[0, 'None'], [2, '1 vs 1'], [4, '2 vs 2'], [6, '3 vs 3'], [10, '5 vs 5']]];
+}
+
 // Settings tabs. Rows: [kind, cvar, label, ...]: slider (min, max, step), toggle,
 // select (options), or a custom row (preview, invert).
 const STYLES = ['Default', 'Default static', 'Classic', 'Classic dynamic', 'Classic static', 'Legacy'];
@@ -45,6 +58,8 @@ const TABS = [
     ['slider', 'cl_crosshairalpha', 'Alpha', 0, 255, 1],
   ]],
   ['Video', [
+    ['window'],
+    ['section', null, 'Print'],
     ['toggle', 'r_comic', 'Comic print'],
     ['slider', 'r_inkwidth', 'Ink line width', 0, 3, 0.25],
     ['slider', 'r_halftone', 'Halftone dot size', 0, 3, 0.1],
@@ -52,21 +67,25 @@ const TABS = [
     ['slider', 'r_crosshair_clearzone', 'No dots round the crosshair', 0, 3, 0.25],
     ['slider', 'r_shadebands', 'Shadow bands (0: smooth)', 0, 6, 1],
     ['slider', 'r_shadowlift', 'Shadow brightness', 0, 1, 0.05],
+    ['section', null, 'Resolution'],
     ['toggle', 'r_dynres', 'Automatic resolution (keeps 60 fps)'],
     ['select', 'r_inkfast', 'Ink lines', ['Full', 'Fast']],
     ['slider', 'mat_viewportscale', 'Render resolution (most; over 1: supersampling)', 0.5, 2, 0.05],
     ['select', 'r_hidpi', 'High-DPI screens', ['Page pixels', 'Sharp (screen pixels)']],
     ['toggle', 'r_lowlatency', 'Low-latency display (may tear; takes effect on reload)'],
+    ['section', null, 'Weapon'],
     ['slider', 'viewmodel_fov', 'Weapon field of view', 54, 68, 1],
     ['slider', 'viewmodel_offset_x', 'Weapon offset right', -2.5, 2.5, 0.1],
     ['slider', 'viewmodel_offset_y', 'Weapon offset forward', -2, 2, 0.1],
     ['slider', 'viewmodel_offset_z', 'Weapon offset up', -2, 2, 0.1],
+    ['section', null, 'HUD'],
     ['toggle', 'cl_drawhud', 'Show HUD'],
     ['toggle', 'cl_comicwords', 'Comic sound words'],
     ['slider', 'cl_hud_radar_scale', 'Radar size', 0.8, 1.3, 0.05],
     ['slider', 'cl_radar_scale', 'Radar zoom', 0.25, 1, 0.05],
     ['toggle', 'cl_radar_rotate', 'Rotate the radar'],
     ['toggle', 'cl_radar_always_centered', 'Radar always centered'],
+    ['section', null, 'Debug'],
     ['select', 'cl_showfps', 'Frame rate', ['Off', 'FPS', 'FPS and slowest frame', 'FPS and time per pass']],
     ['toggle', 'net_graph', 'Net graph'],
     ['toggle', 'cl_showpos', 'Show position'],
@@ -77,6 +96,11 @@ const TABS = [
   ]],
   ['Controls', null],
 ];
+
+// The print settings the Video tab's window compares against their defaults while the
+// compare button is held.
+const PRINT_CVARS = ['r_comic', 'r_inkwidth', 'r_halftone', 'r_halftone_style', 'r_crosshair_clearzone',
+  'r_shadebands', 'r_shadowlift', 'mat_viewportscale', 'r_inkfast'];
 
 // The controls tab: [label, command] per action, in groups.
 const ACTIONS = [
@@ -127,16 +151,31 @@ export class Menu {
     this.message = '';
     this.capture = null; // the key cell waiting for a key: { command, key }
     this.refreshers = []; // settings rows to update from their cvars
+    // The Video tab's window: a hole clipped through the menu over the game canvas, so the
+    // live print shows every setting as it changes (the game at the start menu is a backdrop
+    // scene the page draws while the window is open: `onWindow`).
+    this.hole = null; // the window's inner element while the Video tab is up
+    this.holeRect = ''; // the clip-path last set
+    this.holeBounds = null; // the hole's page rectangle while a scene shows through it
+    this.windowOpen = false;
+    this.windowReady = false; // a scene is drawn under it (else the note shows)
+    this.comparing = null; // the print cvar values put back when the compare button is released
     // Set by the game.
     this.onPlay = (_team) => {};
     this.onPractice = (_map, _team) => {};
     this.onResume = () => {};
     this.onLeave = () => {};
     this.onTeam = (_team) => {};
+    this.onWindow = (_open) => {}; // the Video tab's window opened or closed
 
     root.innerHTML = '';
     this.side = el('div', 'menu-side');
-    this.side.append(el('h1', '', 'ComicStrike'));
+    const logo = el('div', 'menu-logo');
+    const mark = el('img');
+    mark.src = '/client/favicon.svg';
+    mark.alt = '';
+    logo.append(mark, el('h1', '', 'ComicStrike'));
+    this.side.append(logo);
     this.nav = el('nav', 'menu-nav');
     this.side.append(this.nav);
     this.note = el('div', 'menu-note');
@@ -195,6 +234,52 @@ export class Menu {
   hide() {
     this.cancelCapture();
     this.root.classList.remove('open', 'pause');
+    this.updateWindow();
+  }
+
+  // Tells the game when the Video tab's window comes and goes.
+  updateWindow() {
+    const open = this.visible && this.panel === 'settings' && this.hole !== null && this.hole.isConnected;
+    if (open === this.windowOpen) return;
+    this.windowOpen = open;
+    if (!open) {
+      this.compare(false);
+      this.clip(null);
+    }
+    this.onWindow(open);
+  }
+
+  // Every frame while the menu is up: keeps the hole where the window is (the panel
+  // scrolls and the page resizes). `ready`: a scene is drawn under it.
+  frameWindow(ready) {
+    if (!this.windowOpen) return;
+    if (ready !== this.windowReady) {
+      this.windowReady = ready;
+      this.hole.classList.toggle('ready', ready);
+    }
+    this.clip(ready ? this.hole.getBoundingClientRect() : null);
+  }
+
+  clip(r) {
+    const path = r && r.width > 0 ? `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ` +
+      `${r.left}px ${r.top}px, ${r.left}px ${r.bottom}px, ${r.right}px ${r.bottom}px, ${r.right}px ${r.top}px, ` +
+      `${r.left}px ${r.top}px)` : '';
+    this.holeBounds = path ? { left: r.left, top: r.top, width: r.width, height: r.height } : null;
+    if (path === this.holeRect) return;
+    this.holeRect = path;
+    this.root.style.clipPath = path;
+  }
+
+  // Held: the print settings at their defaults, to see what the changes do.
+  compare(on) {
+    if (on && !this.comparing) {
+      this.comparing = PRINT_CVARS.map((n) => [this.cv[n], this.cv[n].value]);
+      for (const [cv] of this.comparing) cv.set(cv.defaultValue);
+    } else if (!on && this.comparing) {
+      for (const [cv, v] of this.comparing) cv.set(v);
+      this.comparing = null;
+    }
+    this.refresh();
   }
 
   // Busy text while connecting or loading (buttons stay, the note says what happens).
@@ -273,10 +358,39 @@ export class Menu {
     else if (this.panel === 'team') this.renderTeam(body, (team) => this.onTeam(team));
     else if (this.panel === 'settings') this.renderSettings(body);
     else if (!this.inGame) this.renderWelcome(body);
+    this.updateWindow();
   }
 
+  // The start page: what the game is, two panels of it, the server line, the name.
   renderWelcome(body) {
-    body.append(el('h2', '', 'Welcome'));
+    body.append(el('h2', '', 'A comic strip you can shoot in'));
+    body.append(el('p', 'menu-tagline', 'CS:GO’s movement, guns and economy on the classic CS 1.6 maps, ' +
+      'printed live as a comic: flat colors, ink lines, halftone dots. Nothing to install: it runs in this tab.'));
+    const shots = el('div', 'menu-shots');
+    for (const [file, alt] of [
+      ['terrorists', 'Three Terrorists with rifles beside a wooden gate, seen over an AK-47'],
+      ['counter-terrorists', 'Two Counter-Terrorists pushing through a passage of wooden panels'],
+    ]) {
+      const img = el('img');
+      img.src = `/client/img/${file}.jpg`;
+      img.alt = alt;
+      img.width = 1536;
+      img.height = 864;
+      shots.append(img);
+    }
+    body.append(shots);
+    const feats = el('ul', 'menu-features');
+    for (const t of [
+      'Play online against others, or practice against bots in your browser.',
+      'Competitive, casual, wingman, deathmatch, arms race, demolition and a demo playground.',
+      'Procedural everything: no textures, models or sounds are downloaded.',
+    ]) feats.append(el('li', '', t));
+    body.append(feats);
+    const s = this.server;
+    body.append(el('p', 'menu-server', s
+      ? `Server: ${s.hostname} · ${s.map} · ${MODE_LABELS[s.mode] || s.mode || 'Competitive'} · ` +
+        `${s.players}/${s.maxPlayers} players`
+      : this.server === null && this.maps ? 'No server answered: practice works offline.' : 'Looking for the server...'));
     const row = el('label', 'menu-row');
     row.append(el('span', '', 'Name'));
     const name = el('input');
@@ -289,8 +403,7 @@ export class Menu {
     });
     row.append(name);
     body.append(row);
-    body.append(el('p', 'menu-hint', 'Play joins the server; Practice runs a game with bots in this browser. ' +
-      'Esc in game brings this menu back; ` opens the console.'));
+    body.append(el('p', 'menu-hint', 'In a game: Esc opens this menu, B buys, Tab shows the scores, ` opens the console.'));
   }
 
   renderPlay(body) {
@@ -321,7 +434,7 @@ export class Menu {
     body.append(el('h2', '', demo ? 'Demo' : 'Practice'));
     if (demo) {
       body.append(el('p', 'menu-hint', 'Try everything out: buy anything for free, anywhere, infinite ammo and ' +
-        'grenades, you cannot die, plant and defuse the bomb yourself.'));
+        'grenades, you cannot die, plant and defuse the bomb yourself. Targets are enemy bots that respawn.'));
     }
     const maps = this.maps || [];
     if (!maps.length) {
@@ -375,14 +488,22 @@ export class Menu {
         this.practiceMode = v;
       });
     }
-    const players = demo ? this.demoPlayers : this.practicePlayers;
-    choice('Bots', [[0, 'None'], [2, '1 vs 1'], [4, '2 vs 2'], [6, '3 vs 3'], [10, '5 vs 5']], players, (v) => {
+    const [botLabel, botOpts] = botOptions(demo ? 'demo' : this.practiceMode);
+    let players = demo ? this.demoPlayers : this.practicePlayers;
+    if (!botOpts.some(([v]) => v === players)) { // the mode changed under a count it has not
+      players = botOpts[botOpts.length - 1][0];
+      if (demo) this.demoPlayers = players;
+      else this.practicePlayers = players;
+    }
+    choice(botLabel, botOpts, players, (v) => {
       if (demo) this.demoPlayers = v;
       else this.practicePlayers = v;
     });
-    choice('Difficulty', [[0, 'Easy'], [1, 'Normal'], [2, 'Hard'], [3, 'Expert']], this.practiceDifficulty, (v) => {
-      this.practiceDifficulty = v;
-    });
+    if (players) {
+      choice('Difficulty', [[0, 'Easy'], [1, 'Normal'], [2, 'Hard'], [3, 'Expert']], this.practiceDifficulty, (v) => {
+        this.practiceDifficulty = v;
+      });
+    }
     body.append(button('Start', () => this.onPractice(this.practiceMap, this.practiceTeam, {
       mode: demo ? 'demo' : this.practiceMode, players, difficulty: this.practiceDifficulty,
     }), 'menu-go'));
@@ -391,6 +512,7 @@ export class Menu {
   // --- Settings ------------------------------------------------------------------------
 
   renderSettings(body) {
+    this.hole = null;
     const tabs = el('div', 'menu-tabs');
     TABS.forEach(([name], i) => {
       const b = button(name, () => {
@@ -422,6 +544,23 @@ export class Menu {
 
   settingRow([kind, name, label, a, b, step]) {
     const cv = this.cv[name];
+    if (kind === 'section') return el('h3', '', label);
+    if (kind === 'window') {
+      const wrap = el('div', 'menu-window');
+      this.hole = el('div', 'hole');
+      this.hole.append(el('span', 'note', this.inGame ? 'Loading...' : 'Loading the preview scene...'));
+      wrap.append(this.hole);
+      const row = el('div', 'menu-row menu-compare');
+      const hold = button('Hold to compare with the defaults', () => {}, 'menu-hold');
+      for (const ev of ['mousedown', 'touchstart']) hold.addEventListener(ev, () => this.compare(true));
+      for (const ev of ['mouseup', 'mouseleave', 'touchend', 'touchcancel']) {
+        hold.addEventListener(ev, () => this.compare(false));
+      }
+      row.append(hold, el('span', 'menu-hint', 'The window shows the game as printed with the settings below.'));
+      const box = el('div');
+      box.append(wrap, row);
+      return box;
+    }
     if (kind === 'preview') {
       const wrap = el('div', 'menu-preview');
       this.preview = el('canvas');

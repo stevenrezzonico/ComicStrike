@@ -1015,9 +1015,11 @@ function frame(now) {
   // The next frame first: a frame that throws (a bug) then costs one frame, not the game
   // (the error still shows in the console).
   requestAnimationFrame(frame);
-  if (!playing) { // the start menu: nothing runs
+  if (menu.visible) menu.frameWindow(backdrop || playing);
+  if (!playing) { // the start menu: nothing runs; the settings window shows a backdrop scene
     last = now;
     accumulator = 0;
+    if (backdrop) drawBackdrop(now);
     return;
   }
   // Practice pauses with the pause menu, like a listen server: the worker's ticks stop
@@ -1196,26 +1198,15 @@ function draw(now, alpha, dt) {
   // screens; lines and dots keep their size (they scale with the canvas height).
   // r_dynres: the render scale (the scene's resolution under the full-resolution print)
   // lower while frames come late, down to half the canvas.
-  const most = cv.mat_viewportscale.number;
-  dynres.min = Math.min(1, 0.5 / most);
-  const aspect = renderer.resize(most * (cv.r_dynres.bool ? dynres.factor : 1),
-    (cv.r_hidpi.bool ? Math.min(2, devicePixelRatio || 1) : 1) * (cv.r_dynres.bool ? dynres.print : 1));
-  const style = renderer.style;
-  style.comic = cv.r_comic.bool;
-  style.ink = cv.r_inkwidth.number;
-  style.dots = cv.r_halftone.number;
-  style.bands = cv.r_shadebands.number;
-  style.lift = cv.r_shadowlift.number;
-  style.soft = cv.r_halftone_style.number >= 1;
-  style.calm = calmRadius(canvas.height) * cv.r_crosshair_clearzone.number;
-  renderer.novis = cv.r_novis.bool;
-  models.farLod = cv.r_lod_dist.number;
-  style.fast = cv.r_inkfast.bool;
+  const aspect = applyVideoSettings();
   renderer.zoom = 90 / fov;
   renderer.begin();
   const fovY = 2 * Math.atan(Math.tan(fov / 2 * DEG) * 0.75);
   weaponView.fovY = fovY; // the crosshair's spread circle
-  perspective(proj, fovY, aspect, 4, 16384);
+  // The pause menu's settings window: the view projected into it (no weapon or crosshair).
+  const windowed = menu.windowOpen && menu.holeBounds !== null;
+  perspective(proj, fovY, windowed ? windowAspect(aspect) : aspect, 4, 16384);
+  if (windowed) projectIntoWindow(proj);
   viewFromAngles(view, eye[0], eye[1], eye[2], pitch, yaw);
   multiply(viewProj, proj, view);
   invert(invViewProj, viewProj);
@@ -1248,7 +1239,7 @@ function draw(now, alpha, dt) {
   hud.refreshMenu(player, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, freeBuys());
   hud.scoreboard((input.buttons & IN_SCORE) !== 0 && input.locked, net, selfId, rowAlive);
 
-  weaponView.hidden = dead && !inEyes;
+  weaponView.hidden = (dead && !inEyes) || windowed;
   const target = spectator.target * E_FIELDS;
   weaponView.team = inEyes ? interp[target + E_TEAM] : player.team;
   // The held weapon is lit by the map under the player, eased like other models.
@@ -1290,7 +1281,91 @@ function draw(now, alpha, dt) {
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
   else showFlash(flash.left, flash.total);
   renderer.timer.mark(PASS.OVER);
-  weaponView.drawCrosshair(canvas.width, canvas.height);
+  if (!windowed) weaponView.drawCrosshair(canvas.width, canvas.height);
+}
+
+// The video cvars into the renderer, sizing the canvas and the G-buffer; returns the aspect.
+function applyVideoSettings() {
+  const most = cv.mat_viewportscale.number;
+  dynres.min = Math.min(1, 0.5 / most);
+  const aspect = renderer.resize(most * (cv.r_dynres.bool ? dynres.factor : 1),
+    (cv.r_hidpi.bool ? Math.min(2, devicePixelRatio || 1) : 1) * (cv.r_dynres.bool ? dynres.print : 1));
+  const style = renderer.style;
+  style.comic = cv.r_comic.bool;
+  style.ink = cv.r_inkwidth.number;
+  style.dots = cv.r_halftone.number;
+  style.bands = cv.r_shadebands.number;
+  style.lift = cv.r_shadowlift.number;
+  style.soft = cv.r_halftone_style.number >= 1;
+  style.calm = calmRadius(canvas.height) * cv.r_crosshair_clearzone.number;
+  renderer.novis = cv.r_novis.bool;
+  models.farLod = cv.r_lod_dist.number;
+  style.fast = cv.r_inkfast.bool;
+  return aspect;
+}
+
+// The Video tab's window at the start menu: a map drawn behind the menu from a spawn,
+// the view swaying slowly, nothing else running (no players, ticks or sounds). The map
+// stays loaded; a game loads its own. `backdrop` is set while the window is open.
+let backdrop = false;
+let backdropLoading = false;
+menu.onWindow = (open) => {
+  if (playing) return;
+  if (!open) {
+    backdrop = false;
+    return;
+  }
+  if (world) {
+    backdrop = true;
+    return;
+  }
+  if (backdropLoading) return;
+  backdropLoading = true;
+  const maps = menu.maps || [];
+  const map = maps.includes('de_playground') ? 'de_playground' : maps.includes('de_dust2') ? 'de_dust2' : maps[0];
+  (map ? loadMap(map) : Promise.reject(new Error('no maps'))).then(() => {
+    if (!playing && menu.windowOpen) backdrop = true;
+  }).catch((err) => console.warn(`no preview scene: ${err.message}`)).finally(() => {
+    backdropLoading = false;
+  });
+};
+// The settings window's aspect when it is open, else the canvas's.
+function windowAspect(aspect) {
+  const hb = menu.holeBounds;
+  return hb ? hb.width / hb.height : aspect;
+}
+// Moves and shrinks a perspective projection (made with the window's aspect) so the view
+// lands in the window's rectangle of the canvas.
+function projectIntoWindow(proj) {
+  const hb = menu.holeBounds;
+  if (!hb) return;
+  const cw = canvas.clientWidth || 1, ch = canvas.clientHeight || 1;
+  proj[0] *= hb.width / cw;
+  proj[5] *= hb.height / ch;
+  proj[8] = -((hb.left + hb.width / 2) / cw * 2 - 1);
+  proj[9] = (hb.top + hb.height / 2) / ch * 2 - 1;
+}
+function drawBackdrop(now) {
+  const s = spawns[TEAM_CT][0] || spawns[TEAM_T][0] || [0, 0, 0, 0];
+  const o = spawns[TEAM_T][0] || s; // looking toward the other spawn: the map, not a spawn wall
+  const toward = o === s ? s[3] : Math.atan2(o[1] - s[1], o[0] - s[0]) / DEG;
+  const aspect = applyVideoSettings();
+  renderer.zoom = 1;
+  renderer.begin();
+  // The window is a hole in the menu over part of the canvas: the view is projected into
+  // it (its own aspect, the frame's center moved to the hole's), so it sees the whole scene.
+  const fovY = 2 * Math.atan(Math.tan(45 * DEG) * 0.75);
+  perspective(proj, fovY, windowAspect(aspect), 4, 16384);
+  projectIntoWindow(proj);
+  eye[0] = s[0];
+  eye[1] = s[1];
+  eye[2] = s[2] + 28; // the spawn origin is the hull center: the eye 28 above it
+  const yaw = toward + 18 * Math.sin(now / 5000);
+  viewFromAngles(view, eye[0], eye[1], eye[2], 4, yaw);
+  multiply(viewProj, proj, view);
+  invert(invViewProj, viewProj);
+  renderer.render(viewProj, invViewProj, eye, now / 1000, null);
+  renderer.composite();
 }
 
 // Hidden tabs get no animation frames (and timers at most once a second): keep
@@ -1610,6 +1685,7 @@ async function startSandbox(map, team) {
 
 function enterGame() {
   playing = true;
+  backdrop = false;
   dynres.reset(performance.now()); // full resolution again, judged after the first seconds
   menu.online = net !== null && !localWorker; // Disconnect, or Quit practice
   menu.server = net !== null; // spectating needs server rules
@@ -1628,6 +1704,7 @@ function leaveGame(message = '') {
     localWorker = null;
   }
   playing = false;
+  backdrop = false;
   resetSession();
   if (document.pointerLockElement) document.exitPointerLock();
   menu.showStart(message);

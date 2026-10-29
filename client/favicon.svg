@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- ComicStrike's mark: a comic burst in the print's own inks (yellow, red, paper, ink) with a
+       crosshair over it. The favicon and the badge beside the menu title; no font, so it looks
+       the same everywhere. -->
+  <path d="M32 2l5 9 9-5-1 10 10 1-5 9 9 5-9 5 5 9-10 1 1 10-9-5-5 9-5-9-9 5 1-10-10-1 5-9-9-5 9-5-5-9 10-1-1-10 9 5z"
+    fill="#17130f" transform="translate(2.5 2.5)"/>
+  <path d="M32 2l5 9 9-5-1 10 10 1-5 9 9 5-9 5 5 9-10 1 1 10-9-5-5 9-5-9-9 5 1-10-10-1 5-9-9-5 9-5-5-9 10-1-1-10 9 5z"
+    fill="#ffd23a" stroke="#17130f" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="13" fill="#e2402a" stroke="#17130f" stroke-width="2.5"/>
+  <circle cx="32" cy="32" r="3" fill="#17130f"/>
+  <g stroke="#17130f" stroke-width="3" stroke-linecap="round">
+    <path d="M32 13v8M32 43v8M13 32h8M43 32h8"/>
+  </g>
+</svg>
