@@ -35,12 +35,12 @@ export function keyName(code, key = '') {
 // Mouse buttons (MouseEvent.button) -> Source names.
 export const MOUSE_NAMES = ['mouse1', 'mouse3', 'mouse2', 'mouse4', 'mouse5'];
 
-// CS:GO's default binds (config_default.cfg), plus the bunnyhop wheel jump this game
-// had from the start (CS:GO's default wheel is invprev / invnext).
+// CS:GO's default binds (config_default.cfg), the wheel cycling weapons as there (a saved
+// config keeps its own binds; binddefaults).
 export const DEFAULT_BINDS = {
   w: '+forward', s: '+back', a: '+moveleft', d: '+moveright', space: '+jump', ctrl: '+duck', shift: '+speed',
   e: '+use', r: '+reload', f: '+lookatweapon', g: 'drop', q: 'lastinv', b: 'buymenu', m: 'teammenu', tab: '+showscores',
-  '`': 'toggleconsole', mouse1: '+attack', mouse2: '+attack2', mwheelup: '+jump', mwheeldown: '+jump',
+  '`': 'toggleconsole', mouse1: '+attack', mouse2: '+attack2', mwheelup: 'invprev', mwheeldown: 'invnext',
   1: 'slot1', 2: 'slot2', 3: 'slot3', 4: 'slot4', 5: 'slot5',
 };
 

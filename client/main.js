@@ -983,10 +983,18 @@ function frame(now) {
     accumulator = 0;
     return;
   }
-  const elapsed = (now - last) / 1000;
-  frameMsMax = Math.max(frameMsMax, now - last);
-  if (cv.r_dynres.bool) dynres.frame(now - last, now);
-  if (bench.until && bench.n < bench.gaps.length) bench.gaps[bench.n++] = now - last;
+  // Practice pauses with the pause menu, like a listen server: the worker's ticks stop
+  // (bots, the round clock, timeouts) and so do ours; the frame still draws.
+  const paused = localWorker !== null && menu.visible && menu.inGame;
+  if (paused !== localPaused) {
+    localPaused = paused;
+    if (localWorker) localWorker.postMessage({ type: 'pause', on: paused });
+  }
+  const gap = now - last;
+  const elapsed = paused ? 0 : gap / 1000;
+  frameMsMax = Math.max(frameMsMax, gap);
+  if (cv.r_dynres.bool) dynres.frame(gap, now);
+  if (bench.until && bench.n < bench.gaps.length) bench.gaps[bench.n++] = gap;
   last = now;
 
   // Scopes: CS:GO fovs per zoom level; sensitivity scales with zoom_sensitivity_ratio_mouse.
@@ -1518,10 +1526,11 @@ async function startOnline(team) {
 // Practice: the game server in a Web Worker (client/localserver.js) on `map` in `mode`,
 // bots filling the teams to `players` at `difficulty` (bot_quota fill, bot_difficulty);
 // then join it like a server, on `team` (2 T, 3 CT, 1 spectators, 0 auto).
-let localWorker = null, localRcon = '';
+let localWorker = null, localRcon = '', localPaused = false;
 async function startPractice(map, team, { mode = 'competitive', players = 10, difficulty = 1 } = {}) {
   if (playing) leaveGame();
   resetSession();
+  localPaused = false; // the new worker starts running
   menu.busy(`Starting a practice game on ${map}...`);
   const worker = new Worker('/client/localserver.js', { type: 'module' });
   try {
@@ -1659,6 +1668,7 @@ globalThis.comicstrike = {
   interp,
   targets,
   hud,
+  menu,
   weaponView,
   spectator,
   radar,

@@ -79,7 +79,7 @@ export function createConsole(print) {
   add('mat_viewportscale', 1, 'Render resolution, relative to the window (the most r_dynres uses)', 0.25, 1);
   add('r_dynres', 1, 'Automatic render resolution: lowers it while frames come late (under 60 fps), raises it again when they keep up', 0, 1);
   add('r_hidpi', 0, 'Sharp: render at the screen pixel density on high-DPI screens (up to 2x; costs up to 4x the pixels)', 0, 1);
-  add('r_lowlatency', 0, 'Low-latency display: frames go to the screen without the browser compositor (a frame less of mouse lag where the browser allows it; may tear during fast turns; takes effect on reload)', 0, 1);
+  add('r_lowlatency', 1, 'Low-latency display: frames go to the screen without the browser compositor (a frame less of mouse lag where the browser allows it; 0 if it tears during fast turns; takes effect on reload)', 0, 1);
   // View.
   add('viewmodel_fov', 60, 'Weapon model field of view', 54, 68);
   add('viewmodel_offset_x', 1, 'Weapon model offset: right', -2.5, 2.5);
@@ -107,6 +107,11 @@ export function createConsole(print) {
     loading = true;
     con.exec(saved, { print: () => {} });
     loading = false;
+    // The wheel used to jump by default; a config that still has that gets the new default
+    // (weapon cycling, CS:GO's), saved.
+    if (binds.get('mwheelup') === '+jump' && binds.get('mwheeldown') === '+jump') {
+      con.exec('bind mwheelup invprev; bind mwheeldown invnext', { print: () => {} });
+    }
   }
   return { con, binds, cv, save };
 }

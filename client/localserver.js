@@ -6,7 +6,9 @@
 //
 // Messages in:  start { map, mode: a GAME_MODES name ('competitive', 'casual', 'wingman', 'armsrace',
 //                        'demolition', 'deathmatch', 'demo'), players, difficulty },
-//               open { id }, dgram { id, bytes }, close { id }
+//               open { id }, dgram { id, bytes }, close { id },
+//               pause { on }: the page's pause menu; the ticks stop (bots, the round clock,
+//                 timeouts) and go on from where they were
 // Messages out: ready { rcon } | failed { error }, dgram { id, bytes }, close { id, reason }
 
 import { Host, GAME_MODES } from '../server/host.js';
@@ -66,12 +68,19 @@ async function start({ map, mode, players: n, difficulty }) {
   postMessage({ type: 'ready', rcon });
 }
 
-// Drift-free fixed-rate loop on the monotonic clock (as server/main.js).
+// Drift-free fixed-rate loop on the monotonic clock (as server/main.js). Paused, it keeps
+// the epoch with the tick, so no ticks are owed when the game goes on.
 let epoch = 0;
+let paused = false;
 function loop() {
   epoch = performance.now();
   const step = () => {
     const game = host.game;
+    if (paused) {
+      epoch = performance.now() - game.tick * TICK_MS;
+      setTimeout(step, 50);
+      return;
+    }
     const due = Math.floor((performance.now() - epoch) / TICK_MS);
     let ran = 0;
     while (game.tick < due && ran < 8) {
@@ -113,5 +122,7 @@ onmessage = (e) => {
     const s = sessions.get(m.id);
     if (s) s.game.disconnect(s.client);
     sessions.delete(m.id);
+  } else if (m.type === 'pause') {
+    paused = m.on;
   }
 };
