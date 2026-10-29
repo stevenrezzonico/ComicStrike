@@ -1,0 +1,11 @@
+# Pulls the newest commit of the repository into /opt/comicstrike and restarts the game
+# (deploy/update.sh); run by comicstrike-update.timer. Install both in /etc/systemd/system.
+
+[Unit]
+Description=ComicStrike: deploy the newest commit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/comicstrike/deploy/update.sh

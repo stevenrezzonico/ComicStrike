@@ -103,5 +103,14 @@ Then open `https://cstrike.click/` in Chrome or Edge and click Play.
 ## Running it
 
 - **Console:** the server has no terminal under systemd. Use rcon from the game console (`rcon_password <password>`, then `rcon status`, `rcon map de_inferno`, `rcon mp_restartgame 1`). Startup settings go in `/opt/comicstrike/cfg/server.cfg` and `cfg/gamemode_<mode>_server.cfg`.
-- **Updating:** copy a new archive as in step 2, then `sudo systemctl restart comicstrike`.
+- **Updating:** the server follows the repository's `main` by itself: `/opt/comicstrike` is a `git clone` of it, and `comicstrike-update.timer` runs `deploy/update.sh` every minute, which fetches, resets to `origin/main` when a new commit is there and restarts the game (dropping whoever is playing, so commit with that in mind). `journalctl -u comicstrike-update` lists the deployments. To set it up on a fresh server, clone instead of unpacking an archive in step 2 (`sudo git clone https://github.com/stevenrezzonico/ComicStrike.git /opt/comicstrike`, then copy the maps in), and:
+
+  ```bash
+  sudo git config --global --add safe.directory /opt/comicstrike
+  sudo cp /opt/comicstrike/deploy/comicstrike-update.{service,timer} /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now comicstrike-update.timer
+  ```
+
+  (A push-triggered GitHub Actions deploy would need an SSH key stored as a repository secret; polling a public repository needs none.)
 - **Hosting control panels (Pterodactyl and similar):** run the same `deno run --unstable-net --allow-net --allow-read --allow-env server/main.js`. Set the variables from `comicstrike.env`, plus `TLS_CERT` and `TLS_KEY` pointing at the certificate files, and give the server TCP and UDP 443.
