@@ -3,7 +3,7 @@
 // draw calls per player), lit by the map's light under them. The dead stay where they
 // fell until they respawn or leave. Also draws the dropped bomb.
 
-import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN, modelLight } from './skinned.js';
+import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN, modelLight, eyeOf } from './skinned.js';
 import { G_FLAGS } from './shaders.js';
 import { buildPlayer, HOLD_TIED } from '../models/players.js';
 import { MAX_HOSTAGES, HS_IDLE, HS_CARRIED, HS_DEAD } from '../../shared/hostages.js';
@@ -34,6 +34,10 @@ const BODY_MID = 36, BODY_R = 84, ITEM_R = 48, BOMB_R = 16;
 // Contact shadow under a living character: radius and the light it takes at its middle,
 // growing fainter and wider with the height above the floor (a jump), gone at SHADOW_FADE.
 const SHADOW_R = 20, SHADOW_DARK = 0.75, SHADOW_FADE = 180;
+// Past FAR_LOD units from the eye (r_lod_dist) a character draws as its coarse mesh (a
+// third of the triangles), back to the full one nearer than FAR_LOD - LOD_BAND (so it
+// never flickers).
+const FAR_LOD = 520, LOD_BAND = 100;
 
 export class PlayerModels {
   // guns: GunMeshes (client/gl/gunmeshes.js).
@@ -41,9 +45,19 @@ export class PlayerModels {
     this.gl = gl;
     this.guns = guns;
     this.renderer = new SkinnedRenderer(gl);
+    // Each body in full detail and coarse (for players farther than FAR_LOD: the models
+    // pass is triangle-bound, and at that distance the detail is under a pixel).
     this.bodyT = new SkinnedMesh(gl, buildPlayer('T'));
     this.bodyCT = new SkinnedMesh(gl, buildPlayer('CT'));
     this.bodyCTHelmet = new SkinnedMesh(gl, buildPlayer('CT', true));
+    this.farOf = new Map([
+      [this.bodyT, new SkinnedMesh(gl, buildPlayer('T', false, true))],
+      [this.bodyCT, new SkinnedMesh(gl, buildPlayer('CT', false, true))],
+      [this.bodyCTHelmet, new SkinnedMesh(gl, buildPlayer('CT', true, true))],
+    ]);
+    this.far = new Uint8Array(MAX_PLAYERS + MAX_HOSTAGES); // drawn coarse (with hysteresis)
+    this.farLod = FAR_LOD; // r_lod_dist (0: always coarse)
+    this.eye = new Float32Array(3);
     this.weapon = new Int16Array(MAX_PLAYERS); // weapon id in hand (0: none drawn)
     this.silenced = new Uint8Array(MAX_PLAYERS);
     this.gunModel = new Float32Array(MAX_PLAYERS * 16);
@@ -90,6 +104,7 @@ export class PlayerModels {
     this.time = 0;
     // Hostages.
     this.bodyH = new SkinnedMesh(gl, buildPlayer('H'));
+    this.farOf.set(this.bodyH, new SkinnedMesh(gl, buildPlayer('H', false, true)));
     this.hostageAnim = Array.from({ length: MAX_HOSTAGES }, () => new PlayerAnimator());
     this.hostageModel = Array.from({ length: MAX_HOSTAGES }, () => new Float32Array(16));
     this.hostageLight = Array.from({ length: MAX_HOSTAGES }, () => new Float32Array([1, 1, 1]));
@@ -305,10 +320,21 @@ export class PlayerModels {
     if (surfaces && surfaces.lightAt(this.lm, x, y, z + 8)) modelLight(b.light, this.lm);
   }
 
+  // The mesh for character `slot` (players, then hostages) with its feet at m: `mesh`, or
+  // its coarse version when far from the eye, with a band of hysteresis.
+  lod(slot, mesh, m) {
+    const dx = m[12] - this.eye[0], dy = m[13] - this.eye[1], dz = m[14] + BODY_MID - this.eye[2];
+    const d2 = dx * dx + dy * dy + dz * dz;
+    const far = this.far[slot], near = Math.max(0, this.farLod - LOD_BAND);
+    if (far ? d2 < near * near : d2 > this.farLod * this.farLod) this.far[slot] = far ^ 1;
+    return this.far[slot] ? this.farOf.get(mesh) : mesh;
+  }
+
   draw(viewProj, gbuf) {
     this.drawShadows(viewProj, gbuf);
     const r = this.renderer;
     let begun = false;
+    eyeOf(this.eye, viewProj);
     r.flags = G_FLAGS.CHAR; // players and hostages (G_CHAR: far away their colors show)
     for (let id = 0; id < MAX_PLAYERS; id++) {
       if (!this.visible[id]) continue;
@@ -322,7 +348,7 @@ export class PlayerModels {
       // Spawn protection: a fast pulse toward white (approx. of CS:GO's).
       const white = this.immune[id] ? 0.3 + 0.3 * Math.sin(this.time * Math.PI * 6) : 0;
       const skin = this.anim[id].pose.skin;
-      r.draw(this.body[id], model, skin, light, 0, white);
+      r.draw(this.lod(id, this.body[id], model), model, skin, light, 0, white);
       if (this.weapon[id]) {
         r.draw(this.guns.meshOf(this.weapon[id], this.silenced[id]), this.gunOf[id], this.gunSkinOf[id], light, 0,
           white);
@@ -333,7 +359,7 @@ export class PlayerModels {
       if (!this.hostageShown[k] || !sphereInView(viewProj, hm[12], hm[13], hm[14] + BODY_MID, BODY_R)) continue;
       if (!begun) r.begin(viewProj);
       begun = true;
-      r.draw(this.bodyH, hm, this.hostageAnim[k].pose.skin, this.hostageLight[k]);
+      r.draw(this.lod(MAX_PLAYERS + k, this.bodyH, hm), hm, this.hostageAnim[k].pose.skin, this.hostageLight[k]);
     }
     if (begun) r.setFlags(0); // weapons on the ground and the bomb are things
     else r.flags = 0;

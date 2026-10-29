@@ -1172,6 +1172,7 @@ function draw(now, alpha, dt) {
   style.soft = cv.r_halftone_style.number >= 1;
   style.calm = calmRadius(canvas.height) * cv.r_crosshair_clearzone.number;
   renderer.novis = cv.r_novis.bool;
+  models.farLod = cv.r_lod_dist.number;
   style.fast = cv.r_inkfast.bool;
   renderer.zoom = 90 / fov;
   renderer.begin();

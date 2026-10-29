@@ -62,6 +62,7 @@ export function createConsole(print) {
   add('cl_drawhud', 1, 'Draw the HUD', 0, 1);
   add('cl_comicwords', 1, 'Comic sound words: BAM! on hits, BLAM! on your shots, KA-BOOM! on explosions', 0, 1);
   add('sv_pausable', 1, '0: practice keeps running while the pause menu is up (for testing; online games never pause)', 0, 1, 0);
+  add('r_lod_dist', 520, 'Players farther than this (units) draw as their coarse models (0: always; the models pass is triangle-bound)', 0, 100000, 0);
   add('cl_showhitboxes', 0, 'Draw other players as their hit boxes instead of their models', 0, 1);
   // Radar (client/radar.js).
   add('cl_radar_scale', 0.7, 'Radar zoom (smaller: more of the map)', 0.25, 1);

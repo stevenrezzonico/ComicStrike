@@ -25,6 +25,12 @@ Deno.test('player models: closed, under budget, team looks differ', () => {
     const m = buildPlayer(team, helmet);
     assert.ok(m.tris <= 6000, `${team} ${m.tris} triangles`);
     assert.ok(m.tris > 300);
+    // The coarse (far) version: a third of the triangles, the same bones, the same height.
+    const c = buildPlayer(team, helmet, true);
+    assert.ok(c.tris <= 1700 && c.tris < m.tris / 2.5, `${team} coarse ${c.tris} triangles`);
+    assert.equal(c.bones, m.bones);
+    const top = (mesh) => Math.max(...Array.from({ length: mesh.count }, (_, v) => mesh.positions[v * 3 + 2]));
+    assert.ok(Math.abs(top(c) - top(m)) < 0.5, 'as tall');
   }
   assert.ok(buildPlayer('CT', true).tris > buildPlayer('CT', false).tris, 'the helmet adds geometry');
   assert.equal(holdOf(WEAPON_ID.ak47), HOLD_RIFLE);
