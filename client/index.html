@@ -250,8 +250,10 @@
   .menu-settings { max-height: calc(100vh - 12vh - 180px); overflow-y: auto; padding-right: 8px; }
   .menu-preview canvas { display: block; width: 100%; height: 120px; border: 3px solid var(--ink); margin-bottom: 8px;
     box-sizing: border-box; }
-  #menu .menu-choice button { padding: 6px 10px 4px; }
-  #menu .menu-choice button + button { margin-left: 4px; }
+  .menu-row input:not([type]) { flex: 1 1 120px; min-width: 0; }
+  .menu-choice > span:first-child { flex-basis: 100px; }
+  .menu-opts { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+  #menu .menu-choice button { padding: 6px 10px 4px; white-space: nowrap; }
   .menu-teams { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
   #menu .menu-teams button { flex: 1 1 160px; padding: 16px 14px 12px; font-size: 24px; box-shadow: 5px 5px 0 var(--ink); }
   #menu .menu-teams button.t { color: var(--red); }

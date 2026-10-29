@@ -355,14 +355,16 @@ export class Menu {
     const choice = (label, options, value, set) => { // a row of buttons, one picked
       const row = el('div', 'menu-row menu-choice');
       row.append(el('span', '', label));
+      const opts = el('div', 'menu-opts'); // wraps onto more lines in a narrow panel
       for (const [v, text] of options) {
         const b = button(text, () => {
           set(v);
           this.render();
         });
         if (v === value) b.classList.add('active');
-        row.append(b);
+        opts.append(b);
       }
+      row.append(opts);
       body.append(row);
     };
     if (!demo) {
