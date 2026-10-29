@@ -4,7 +4,9 @@
 // (as a dot screen) into it; the first-person view goes in after a depth clear; then
 // composite() prints the whole frame to the canvas in one pass (ink lines, halftone).
 
-import { WORLD_VS, WORLD_FS, WORLD_SOLID_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS, COMPOSITE_VS, COMPOSITE_FS } from './shaders.js';
+import {
+  WORLD_VS, WORLD_FS, WORLD_SOLID_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS, COMPOSITE_VS, COMPOSITE_FS, COMPOSITE_FAST_FS,
+} from './shaders.js';
 import { VERTEX_STRIDE } from '../mapmesh.js';
 import { program } from './program.js';
 import { GBuffer } from './gbuffer.js';
@@ -12,10 +14,13 @@ import { mapLight } from './skinned.js';
 import { GpuTimer, PASS } from './gputimer.js';
 import { FlashLights } from './flashes.js';
 import { Afterimage } from './afterimage.js';
+import { WorldVis } from './worldvis.js';
 
 // The light that prints fully lit: this share of the map's lit lightmap texels is at or
 // below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
 const LIGHT_FULL_SHARE = 0.75;
+const COMPOSITE_UNIFORMS = ['u_albedo', 'u_normal', 'u_depth', 'u_res', 'u_line', 'u_dot', 'u_time', 'u_zoom', 'u_bands',
+  'u_lift', 'u_style', 'u_calm', 'u_soft'];
 
 export class Renderer {
   constructor(canvas) {
@@ -44,8 +49,8 @@ export class Renderer {
     const skyUniforms = ['u_eye', 'u_horizon', 'u_time'];
     this.skyMesh = program(gl, SKY_MESH_VS, SKY_FS, ['u_viewProj', ...skyUniforms]);
     this.skyFill = program(gl, SKY_FILL_VS, SKY_FS, ['u_invViewProj', ...skyUniforms]);
-    this.comp = program(gl, COMPOSITE_VS, COMPOSITE_FS, ['u_albedo', 'u_normal', 'u_depth', 'u_res', 'u_line',
-      'u_dot', 'u_time', 'u_zoom', 'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft']);
+    this.compFull = this.comp = program(gl, COMPOSITE_VS, COMPOSITE_FS, COMPOSITE_UNIFORMS);
+    this.compFast = null; // r_inkfast's, built when first asked for
     this.gbuf = new GBuffer(gl);
     this.afterimage = new Afterimage(gl); // the flashbang's frozen frame
     this.timer = new GpuTimer(gl); // GPU time per pass (cl_showfps 3)
@@ -60,7 +65,8 @@ export class Renderer {
     // size relative to the screen height, light bands, line boil.
     // calm: the radius (px) of the dot-free zone round the screen center (the crosshair);
     // soft: soft shade dots (r_halftone_style 1).
-    this.style = { comic: true, ink: 1, dots: 1, bands: 0, boil: true, lift: 0.3, calm: 0, soft: false };
+    this.style = { comic: true, ink: 1, dots: 1, bands: 0, boil: true, lift: 0.3, calm: 0, soft: false, fast: false };
+    this.novis = false; // r_novis: draw the whole world (no visibility culling)
     this.zoom = 1; // 90 / fov
     // The canvas's size on the page, kept by a ResizeObserver: reading clientWidth every
     // frame forces a layout whenever the DOM changed since the last one (a kill notice, a
@@ -79,7 +85,8 @@ export class Renderer {
     gl.frontFace(gl.CW); // GoldSrc faces wind clockwise seen from the front
   }
 
-  loadMap(mesh) {
+  // bsp: for the visible-world culling (WorldVis; without it everything is drawn).
+  loadMap(mesh, bsp = null) {
     const gl = this.gl;
     if (this.vao) gl.deleteVertexArray(this.vao);
     const vao = gl.createVertexArray();
@@ -102,10 +109,17 @@ export class Renderer {
     gl.enableVertexAttribArray(5);
     gl.vertexAttribIPointer(5, 4, gl.UNSIGNED_BYTE, S, 36);
 
+    // The map's ranges, then two regions taking the visible world's indices in turns
+    // (WorldVis): one is written while the GPU may still read last frame's.
     const ibo = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, (mesh.indices.length + 2 * mesh.worldOpaqueCount) * 4, gl.DYNAMIC_DRAW);
+    gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, mesh.indices);
     gl.bindVertexArray(null);
+    this.visBase = mesh.indices.length;
+    this.worldOpaque = mesh.worldOpaqueCount;
+    this.visTurn = 0;
+    this.vis = bsp ? new WorldVis(bsp, mesh) : null;
 
     const lm = mesh.lightmap;
     const tex = gl.createTexture();
@@ -209,7 +223,19 @@ export class Renderer {
       gl.bindTexture(gl.TEXTURE_2D, this.lightmapTex);
       gl.bindVertexArray(this.vao);
       this.setWorldUniforms(this.solid, viewProj, time);
-      gl.drawElements(gl.TRIANGLES, this.opaqueCount, gl.UNSIGNED_INT, 0);
+      // The visible world nearest first (r_novis 0), then the brush entities' opaque faces.
+      const n = this.vis && !this.novis ? this.vis.update(eye, viewProj) : -1;
+      if (n < 0) gl.drawElements(gl.TRIANGLES, this.opaqueCount, gl.UNSIGNED_INT, 0);
+      else {
+        const at = this.visBase + this.visTurn * this.worldOpaque;
+        this.visTurn ^= 1;
+        if (n > 0) {
+          gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, at * 4, this.vis.out, 0, n);
+          gl.drawElements(gl.TRIANGLES, n, gl.UNSIGNED_INT, at * 4);
+        }
+        const rest = this.opaqueCount - this.worldOpaque;
+        if (rest > 0) gl.drawElements(gl.TRIANGLES, rest, gl.UNSIGNED_INT, this.worldOpaque * 4);
+      }
       // Set either way: see-through faces draw with it too.
       this.setWorldUniforms(w, viewProj, time);
       if (this.cutoutCount > 0) gl.drawElements(gl.TRIANGLES, this.cutoutCount, gl.UNSIGNED_INT, this.opaqueCount * 4);
@@ -259,13 +285,16 @@ export class Renderer {
 
   // Prints the G-buffer to the canvas. Leaves the canvas bound (crosshair after it).
   composite(time) {
-    const gl = this.gl, c = this.comp.loc, st = this.style;
+    const gl = this.gl, st = this.style;
     const h = this.canvas.height;
     this.timer.mark(PASS.PRINT);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.canvas.width, h);
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
+    if (st.fast && !this.compFast) this.compFast = program(gl, COMPOSITE_VS, COMPOSITE_FAST_FS, COMPOSITE_UNIFORMS);
+    this.comp = st.fast ? this.compFast : this.compFull;
+    const c = this.comp.loc;
     gl.useProgram(this.comp.p);
     this.gbuf.bindTextures();
     gl.uniform1i(c.u_albedo, 0);

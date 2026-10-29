@@ -724,8 +724,15 @@ void main() {
     // every line twice as thick). There 1 / depth bulges above its neighbors' mean, behind
     // it dips below. Each neighbor is fetched once (an integrated GPU feels every fetch here).
     uvec4 tL = dtex(pc + ivec2(-s, 0)), tR = dtex(pc + ivec2(s, 0)), tD = dtex(pc + ivec2(0, -s));
-    uvec4 tU = dtex(pc + ivec2(0, s)), tDL = dtex(pc + ivec2(-s, -s)), tUR = dtex(pc + ivec2(s, s));
+    uvec4 tU = dtex(pc + ivec2(0, s));
+#ifdef INK_FAST
+    // r_inkfast: the four direct neighbors only (the diagonals read as the sample itself: no
+    // silhouette, crease or character term from them), 5 fetches fewer.
+    uvec4 tDL = Dc, tUR = Dc, tUL = Dc, tDR = Dc;
+#else
+    uvec4 tDL = dtex(pc + ivec2(-s, -s)), tUR = dtex(pc + ivec2(s, s));
     uvec4 tUL = dtex(pc + ivec2(-s, s)), tDR = dtex(pc + ivec2(s, -s));
+#endif
     float w2 = 2.0 * wc;
     float lap = max(w2 - invd(tL) - invd(tR), 0.0) + max(w2 - invd(tD) - invd(tU), 0.0)
       + 0.5 * (max(w2 - invd(tDL) - invd(tUR), 0.0) + max(w2 - invd(tUL) - invd(tDR), 0.0));
@@ -736,12 +743,14 @@ void main() {
     bool cc = (fc & G_CHAR) != 0u;
     bool ax = across(tR) || (cc && (tR.a & G_CHAR) == 0u), ay = across(tU) || (cc && (tU.a & G_CHAR) == 0u);
     bool ad = across(tUR) || (cc && (tUR.a & G_CHAR) == 0u);
-    vec4 nc = ntex(pc), nx = ntex(pc + ivec2(s, 0)), ny = ntex(pc + ivec2(0, s)), nxy = ntex(pc + ivec2(s, s));
+    vec4 nc = ntex(pc), nx = ntex(pc + ivec2(s, 0)), ny = ntex(pc + ivec2(0, s));
     vec3 c = nc.xyz * 2.0 - 1.0;
     float nd = 0.0;
     if (!ax) nd = max(nd, crease(c, nx));
     if (!ay) nd = max(nd, crease(c, ny));
-    if (!ad) nd = max(nd, crease(c, nxy));
+#ifndef INK_FAST
+    if (!ad) nd = max(nd, crease(c, ntex(pc + ivec2(s, s))));
+#endif
     float eN = smoothstep(0.22, 0.45, nd);
     float eI = (!ax && abs(nx.w - nc.w) > 0.002) || (!ay && abs(ny.w - nc.w) > 0.002) ? 1.0 : 0.0;
     float fade = 1.0 - 0.65 * smoothstep(1000.0 * u_zoom, 3400.0 * u_zoom, dC);
@@ -807,6 +816,8 @@ void main() {
   col *= 1.0 - dot(uv, uv) * 0.3;
   o_color = vec4(mix(col, INK, edge), 1.0);
 }`;
+// r_inkfast: lines from the four direct neighbors only (a slower GPU's print).
+export const COMPOSITE_FAST_FS = COMPOSITE_FS.replace('#version 300 es\n', '#version 300 es\n#define INK_FAST\n');
 
 // The G-buffer shaders, for test/comic.test.js.
 export const GBUFFER_SHADERS = { WORLD_FS, SKY_FS, DEBRIS_FS, SKINNED_FS };

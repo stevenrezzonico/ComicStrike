@@ -143,6 +143,11 @@ export function buildMapMesh(bsp) {
   const sArr = new Float32Array(64);
   const tArr = new Float32Array(64);
   let v = 0;
+  // Where each world face's opaque triangles start in the index buffer (-1: none), and how
+  // many indices they take: the visible world is drawn from these (client/gl/worldvis.js).
+  const faceFirst = new Int32Array(bsp.numFaces).fill(-1);
+  const faceCount = new Uint16Array(bsp.numFaces);
+  let worldOpaque = 0;
 
   for (const m of models) {
     const first = modelFirstFace(bsp, m.model);
@@ -275,8 +280,15 @@ export function buildMapMesh(bsp) {
       }
       if (translucent) nTrans = n;
       else if (cut) nCutout = n;
-      else nOpaque = n;
+      else {
+        if (m.model === 0) {
+          faceFirst[f] = nOpaque;
+          faceCount[f] = n - nOpaque;
+        }
+        nOpaque = n;
+      }
     }
+    if (m.model === 0) worldOpaque = nOpaque; // the world's opaque faces come first
   }
 
   // Normalize lightmap coordinates now that the atlas size is final.
@@ -304,6 +316,9 @@ export function buildMapMesh(bsp) {
     numVerts,
     indices,
     opaqueCount: nOpaque,
+    worldOpaqueCount: worldOpaque, // the first opaque indices are the world's (model 0)
+    faceFirst,
+    faceCount,
     cutoutCount: nCutout, // alpha-tested ('{' textures: holes)
     skyCount: nSky,
     transCount: nTrans,

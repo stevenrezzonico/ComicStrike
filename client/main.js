@@ -55,6 +55,7 @@ import { GunMeshes } from './gl/gunmeshes.js';
 import { GrenadeFx } from './gl/grenadefx.js';
 import { Blasts } from './gl/blast.js';
 import { PASS } from './gl/gputimer.js';
+import { DynamicResolution, SLOW_MS } from './dynres.js';
 import { modelLight } from './gl/skinned.js';
 import { crosshairLayout } from './gl/crosshair.js';
 import { perspective, viewFromAngles, multiply, invert } from './gl/mat4.js';
@@ -329,7 +330,7 @@ async function loadMap(name) {
   const t0 = performance.now();
   const bsp = parseBSP(await res.arrayBuffer());
   const mesh = buildMapMesh(bsp);
-  renderer.loadMap(mesh);
+  renderer.loadMap(mesh, bsp);
   decals.clear();
   debris.clear();
   world = CollisionWorld.fromBSP(bsp);
@@ -934,6 +935,41 @@ let frameMsMax = 0;
 let fps = 0;
 let cpuSim = 0, cpuDraw = 0; // ms summed over the readout's window (cl_showfps 3)
 let gpuText = '';
+const dynres = new DynamicResolution(); // r_dynres
+// benchmark: the gaps between frames over a few seconds, then a report in the console.
+const bench = { until: 0, seconds: 0, gaps: new Float32Array(8192), n: 0, cpu: 0, ctx: null };
+
+// The render resolution in page pixels, as a percentage (r_dynres, mat_viewportscale, r_hidpi).
+const renderScale = () =>
+  `${Math.round(100 * renderer.canvas.height / Math.max(1, renderer.cssHeight))}%${renderer.style.fast ? ', fast ink' : ''}`;
+
+function benchmarkReport() {
+  const { gaps, n } = bench;
+  const sorted = Array.from(gaps.subarray(0, n)).sort((a, b) => a - b);
+  const at = (q) => (n ? sorted[Math.min(n - 1, Math.floor(n * q))] : 0).toFixed(1);
+  let slow = 0;
+  for (let i = 0; i < n; i++) if (gaps[i] > SLOW_MS) slow++;
+  const gpu = renderer.timer.report();
+  con.out(bench.ctx, [
+    `benchmark ${bench.seconds} s: ${(n / bench.seconds).toFixed(1)} fps, ${(100 * slow / Math.max(1, n)).toFixed(0)}% slow ` +
+      `(over ${SLOW_MS} ms), res ${renderScale()}${cv.r_dynres.bool ? ' (r_dynres)' : ''}`,
+    `frame ms: median ${at(0.5)} · 95% ${at(0.95)} · 99% ${at(0.99)} · worst ${at(1)}`,
+    `cpu: ${(bench.cpu / Math.max(1, n)).toFixed(2)} ms a frame (ticks + building the frame)`,
+    gpu || 'gpu: no timings',
+  ].join('\n'));
+  bench.until = 0;
+}
+
+con.command('benchmark', (a, ctx) => {
+  if (!playing) return con.out(ctx, 'benchmark: start a game first');
+  bench.seconds = Math.min(60, Math.max(2, +a[1] || 10));
+  bench.until = performance.now() + bench.seconds * 1000;
+  bench.n = 0;
+  bench.cpu = 0;
+  bench.ctx = ctx;
+  renderer.timer.report(); // a fresh window for the GPU times
+  con.out(ctx, `benchmark: measuring ${bench.seconds} s...`);
+}, 'benchmark [seconds]: frame rate, slow frames, CPU and GPU time per pass over 10 s (or the given time)');
 
 function frame(now) {
   if (!playing) { // the start menu: nothing runs
@@ -944,6 +980,8 @@ function frame(now) {
   }
   const elapsed = (now - last) / 1000;
   frameMsMax = Math.max(frameMsMax, now - last);
+  if (cv.r_dynres.bool) dynres.frame(now - last, now);
+  if (bench.until && bench.n < bench.gaps.length) bench.gaps[bench.n++] = now - last;
   last = now;
 
   // Scopes: CS:GO fovs per zoom level; sensitivity scales with zoom_sensitivity_ratio_mouse.
@@ -976,7 +1014,7 @@ function frame(now) {
   if (ticks === MAX_TICKS_PER_FRAME) accumulator = 0; // fell far behind (tab was hidden)
 
   const t1 = performance.now();
-  renderer.timer.on = cv.cl_showfps.number >= 3;
+  renderer.timer.on = cv.cl_showfps.number >= 3 || bench.until > 0;
   draw(now, accumulator / TICK_DT, Math.min(elapsed, 0.1));
   renderer.timer.endFrame();
   // r_drawrepeat: the same frame again (no time passing), for the GPU readout.
@@ -986,6 +1024,10 @@ function frame(now) {
   }
   cpuSim += t1 - t0;
   cpuDraw += performance.now() - t1;
+  if (bench.until) {
+    bench.cpu += performance.now() - t0;
+    if (now >= bench.until) benchmarkReport();
+  }
 
   frames++;
   if (now - fpsTime >= 250) {
@@ -995,12 +1037,12 @@ function frame(now) {
     const fl = ps.i[PS_FLAGS];
     const lines = [];
     if (cv.cl_showfps.number) {
-      lines.push(`fps: ${fps.toFixed(0)}${cv.cl_showfps.number > 1 ? `  worst frame: ${frameMsMax.toFixed(1)} ms` : ''}`);
+      lines.push(`fps: ${fps.toFixed(0)}${cv.cl_showfps.number > 1 ? `  worst frame: ${frameMsMax.toFixed(1)} ms  res ${renderScale()}` : ''}`);
     }
     if (cv.cl_showfps.number >= 3) {
       // CPU: the simulation ticks, then building and sending the frame (the draw calls).
       lines.push(`cpu: sim ${(cpuSim / frames).toFixed(2)} ms · frame ${(cpuDraw / frames).toFixed(2)} ms`);
-      gpuText = renderer.timer.report() || gpuText;
+      if (!bench.until) gpuText = renderer.timer.report() || gpuText; // the benchmark reads its own window
       if (gpuText) lines.push(gpuText);
     }
     cpuSim = cpuDraw = 0;
@@ -1102,7 +1144,10 @@ function draw(now, alpha, dt) {
 
   // r_hidpi: the screen's own pixels (up to 2 per page pixel) for crisp ink on high-DPI
   // screens; lines and dots keep their size (they scale with the canvas height).
-  const aspect = renderer.resize(cv.mat_viewportscale.number * (cv.r_hidpi.bool ? Math.min(2, devicePixelRatio || 1) : 1));
+  // r_dynres: lower while frames come late, down to half the page's pixels.
+  const most = cv.mat_viewportscale.number * (cv.r_hidpi.bool ? Math.min(2, devicePixelRatio || 1) : 1);
+  dynres.min = Math.min(1, 0.5 / most);
+  const aspect = renderer.resize(most * (cv.r_dynres.bool ? dynres.factor : 1));
   const style = renderer.style;
   style.comic = cv.r_comic.bool;
   style.ink = cv.r_inkwidth.number;
@@ -1112,6 +1157,8 @@ function draw(now, alpha, dt) {
   style.soft = cv.r_halftone_style.number >= 1;
   style.calm = calmRadius(canvas.height) * cv.r_crosshair_clearzone.number;
   style.boil = cv.r_lineboil.bool && !reducedMotion.matches;
+  renderer.novis = cv.r_novis.bool;
+  style.fast = cv.r_inkfast.bool || (cv.r_dynres.bool && dynres.fastInk);
   renderer.zoom = 90 / fov;
   renderer.begin();
   const fovY = 2 * Math.atan(Math.tan(fov / 2 * DEG) * 0.75);
@@ -1510,6 +1557,7 @@ async function startSandbox(map, team) {
 
 function enterGame() {
   playing = true;
+  dynres.reset(performance.now()); // full resolution again, judged after the first seconds
   menu.online = net !== null && !localWorker; // Disconnect, or Quit practice
   menu.server = net !== null; // spectating needs server rules
   menu.busy('');

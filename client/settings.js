@@ -55,6 +55,7 @@ export function createConsole(print) {
   add('cl_crosshairalpha', 200, 'Crosshair opacity', 0, 255);
   // HUD and diagnostics.
   add('cl_showfps', 0, '1: frame rate, 2: plus the slowest frame, 3: plus CPU and GPU time per pass', 0, 3);
+  add('r_novis', 0, '1: draw the whole world, not only what the map visibility data says can be seen (for comparisons)', 0, 1, 0);
   add('r_drawrepeat', 1, 'Draws each frame this many times (a GPU benchmark for cl_showfps 3: keeps the GPU busy, also on a hidden page)', 1, 50, 0);
   add('cl_showpos', 0, 'Position, angles and speed', 0, 1);
   add('net_graph', 0, 'Network graph: ping, loss, rates, prediction', 0, 1);
@@ -74,8 +75,10 @@ export function createConsole(print) {
   add('r_shadowlift', 0.3, 'Share of the shade taken away: dark corners print lighter', 0, 1);
   add('r_halftone_style', 1, 'Shade dots: 0 bold, 1 soft (finer, paler, less ink)', 0, 1);
   add('r_crosshair_clearzone', 1, 'Dots melt into flat tone round the crosshair: size of that zone (0: off)', 0, 3);
+  add('r_inkfast', 0, 'Fast ink: lines from the four direct neighbors only (a third of the print pass saved, looks the same; r_dynres turns it on by itself first)', 0, 1);
   add('r_lineboil', 1, 'Hand-drawn wobble of the ink lines (off with reduced motion)', 0, 1);
-  add('mat_viewportscale', 1, 'Render resolution, relative to the window', 0.25, 1);
+  add('mat_viewportscale', 1, 'Render resolution, relative to the window (the most r_dynres uses)', 0.25, 1);
+  add('r_dynres', 1, 'Automatic render resolution: lowers it while frames come late (under 60 fps), raises it again when they keep up', 0, 1);
   add('r_hidpi', 0, 'Sharp: render at the screen pixel density on high-DPI screens (up to 2x; costs up to 4x the pixels)', 0, 1);
   // View.
   add('viewmodel_fov', 60, 'Weapon model field of view', 54, 68);

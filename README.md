@@ -48,6 +48,7 @@ Use `127.0.0.1` rather than `localhost`, because Chrome tries IPv6 first and the
   - armor, rounds and the economy, with the radial buy menu;
   - planting and defusing the bomb, carrying hostages, all five grenades.
 - **Netcode:** a 64-tick server, client-side prediction that matches the server bit for bit, interpolation and lag compensation.
+- **Light on hardware:** only the part of the map that can be seen is drawn, nearest first, and on a slower GPU (a laptop on battery) the game first switches to a cheaper ink pass, then lowers the render resolution step by step to hold 60 fps.
 - **Bots** that navigate any map, fight, plant, defuse and rescue hostages, at four difficulties.
 - **Practice anywhere:** the real server runs inside the browser in a Web Worker, so you can play against bots without running a server.
 - **A CS:GO-style console** (`` ` ``) with the familiar commands, cvars and binds.
@@ -116,6 +117,8 @@ In practice, server commands work without a password, typed with or without `rco
 | `mp_roundtime 5`, `mp_freezetime 0`, `mp_startmoney 16000` | Round rules, applied from the next round |
 | `sv_cheats 1`, then `setpos x y z` / `setang pitch yaw` | Move yourself (`setang` works without cheats) |
 | `cl_showfps 1`, `net_graph 1` | Frame rate, network graph |
+| `benchmark` | Measures 10 s: frame rate, slow frames, CPU and GPU time per pass |
+| `r_dynres 0`, `r_inkfast 1` | Fixed resolution; the cheaper ink always on |
 | `r_comic 0` | The plain render, without the print |
 
 ## Running a server
