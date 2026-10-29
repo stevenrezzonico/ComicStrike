@@ -1,6 +1,6 @@
 # Deploying ComicStrike on a dedicated server
 
-How to run ComicStrike at `https://comicstrike.bellissimo.io/` on a Linux server: Debian 12, Ubuntu 22.04 or newer, or DietPi on Bookworm. The server uses a Let's Encrypt certificate and port 443.
+How to run ComicStrike at `https://cstrike.click/` on a Linux server: Debian 12, Ubuntu 22.04 or newer, or DietPi on Bookworm. The server uses a Let's Encrypt certificate and port 443.
 
 - **TCP 443:** serves the game's pages over HTTPS.
 - **UDP 443:** carries the game itself (WebTransport over QUIC). Both use the same certificate.
@@ -10,7 +10,7 @@ With a real certificate, the browser checks it like any other site's. The pinned
 
 ## 1. DNS and firewall
 
-1. Add an `A` record: `comicstrike.bellissimo.io` → the server's IPv4 address.
+1. Add an `A` record: `cstrike.click` → the server's IPv4 address.
    - Leave out `AAAA` unless you set `BIND=::` and have tested IPv6.
 2. Open these ports, on the server and on any provider firewall or router in front of it:
 
@@ -20,7 +20,9 @@ With a real certificate, the browser checks it like any other site's. The pinned
    sudo ufw allow 443/udp
    ```
 
-   UDP 443 is the easy one to forget. Without it the page loads but the game never connects.
+   UDP 443 is the easy one to forget. Without it the page loads but the game never connects. A hosting provider's own firewall in front of the VPS (Infomaniak's Public Cloud panel, for one) must open the same three ports.
+
+   To serve `www.cstrike.click` too, give it an `A` record as well, add it to the certbot command (`-d www.cstrike.click`) and to `HOSTNAMES`.
 
 ## 2. Deno and the files
 
@@ -42,8 +44,8 @@ From the development machine, copy the committed code. Then copy the maps separa
 
 ```bash
 git archive --format=tar.gz -o comicstrike.tar.gz HEAD
-scp comicstrike.tar.gz you@comicstrike.bellissimo.io:/tmp/
-scp maps/*.bsp you@comicstrike.bellissimo.io:/tmp/maps/
+scp comicstrike.tar.gz you@cstrike.click:/tmp/
+scp maps/*.bsp you@cstrike.click:/tmp/maps/
 ```
 
 On the server:
@@ -63,7 +65,7 @@ Get the first certificate before the server runs, while port 80 is still free. T
 
 ```bash
 sudo apt install certbot
-sudo certbot certonly --standalone -d comicstrike.bellissimo.io \
+sudo certbot certonly --standalone -d cstrike.click \
   --pre-hook "systemctl stop comicstrike" --post-hook "systemctl start comicstrike"
 ```
 
@@ -87,11 +89,11 @@ To use a different domain, change it in `comicstrike.service` (two `LoadCredenti
 ```bash
 systemctl status comicstrike
 journalctl -u comicstrike -f        # the server's log (joins, rounds, errors)
-curl -I http://comicstrike.bellissimo.io/          # 301 to https://
-curl -s https://comicstrike.bellissimo.io/connect.json   # "certHash":null and the server info
+curl -I http://cstrike.click/          # 301 to https://
+curl -s https://cstrike.click/connect.json   # "certHash":null and the server info
 ```
 
-Then open `https://comicstrike.bellissimo.io/` in Chrome or Edge and click Play.
+Then open `https://cstrike.click/` in Chrome or Edge and click Play.
 
 | Symptom | Likely cause |
 |---|---|

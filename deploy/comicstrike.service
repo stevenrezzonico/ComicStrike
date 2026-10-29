@@ -15,8 +15,8 @@ EnvironmentFile=/etc/comicstrike/comicstrike.env
 
 # The Let's Encrypt certificate, read by systemd as root and handed to the server
 # (the private key stays readable by root only on disk).
-LoadCredential=fullchain.pem:/etc/letsencrypt/live/comicstrike.bellissimo.io/fullchain.pem
-LoadCredential=privkey.pem:/etc/letsencrypt/live/comicstrike.bellissimo.io/privkey.pem
+LoadCredential=fullchain.pem:/etc/letsencrypt/live/cstrike.click/fullchain.pem
+LoadCredential=privkey.pem:/etc/letsencrypt/live/cstrike.click/privkey.pem
 Environment=TLS_CERT=%d/fullchain.pem
 Environment=TLS_KEY=%d/privkey.pem
 
