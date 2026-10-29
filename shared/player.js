@@ -293,6 +293,12 @@ export function resolveShots(world, breakables, ws, shots, impacts, targets = nu
         const d = targets.dist;
         traveled += d;
         if (!w.melee) damage *= Math.pow(w.rangeModifier, traveled / 500);
+        else if (w.backstab) {
+          // A backstab: the victim faces away from the attacker (CS:GO: the dot of his view
+          // and the line of sight to him over 0.475). The stab is known by its damage.
+          const vy = targets.yaw[hit] * Math.PI / 180;
+          if (Math.cos(vy) * dx + Math.sin(vy) * dy > 0.475) damage = damage === w.damage2 ? w.backstab2 : w.backstab;
+        }
         const hx = x + dx * d, hy = y + dy * d, hz = z + dz * d;
         impacts.push(hx, hy, hz, -dx, -dy, -dz, 0, 0, hit, targets.group,
           damage * (w.melee ? 1 : hitgroupScale(targets.group, w)));

@@ -39,7 +39,7 @@ export const MOVE = {
   // sv_stamina* behaviour; tune by feel against CS:GO.
   staminaMax: 80, // sv_staminamax
   staminaJumpCost: 0.08, // sv_staminajumpcost, per unit of jump impulse
-  staminaLandCost: 0.02, // per unit of landing speed
+  staminaLandCost: 0.05, // sv_staminalandcost, per unit of landing speed
   staminaRecoveryRate: 60, // sv_staminarecoveryrate
   // Duck: amount 0..1 approaches its goal at duckSpeed/s; each new duck press costs
   // speed (anti duck-spam), recovering over time.
@@ -523,6 +523,13 @@ function categorizePosition() {
 function checkJump() {
   if (!onGround) return;
   if (oldButtons & IN_JUMP) return; // no auto-bhop: must release jump
+  // sv_enablebunnyhopping 0 (PreventBunnyJumping): a jump never carries more than 1.1 x the
+  // max speed, so strafe-jumping cannot keep building speed.
+  const lim = maxspeed * 1.1, sp = Math.sqrt(vx * vx + vy * vy);
+  if (sp > lim) {
+    vx *= lim / sp;
+    vy *= lim / sp;
+  }
   if (hull === HULL_DUCK || duckAmount > 0) vz = MOVE.jumpImpulse;
   else vz += MOVE.jumpImpulse;
   stamina += MOVE.staminaJumpCost * MOVE.jumpImpulse;

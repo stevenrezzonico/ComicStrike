@@ -297,3 +297,12 @@ Deno.test('de_dust2: every spawn settles on the ground and can walk', async (t) 
     assert.ok(ps.f[2] > -4096 && ps.f[2] < 4096, `left the map from ${s.origin}`);
   }
 });
+
+Deno.test('a jump never carries more than 1.1 x the max speed (sv_enablebunnyhopping 0)', () => {
+  const w = floorWorld();
+  const ps = settle(w, spawn(0, 0, 36));
+  ps.f.set([400, 0, 0], PS_VEL); // faster than any run (a conveyor, a boost)
+  run(w, ps, 1, IN_JUMP);
+  assert.ok(ps.f[PS_VEL + 2] > 0, 'jumped');
+  near(hspeed(ps), KNIFE * 1.1, 1, 'clamped to 275');
+});

@@ -33,7 +33,7 @@ export const TEAMKILL_PENALTY = 300;
 // Hostage maps.
 export const RESCUE_WIN_REWARD = 3500; // to every CT when a hostage is rescued (approx.)
 export const RESCUE_REWARD = 1000; // cash_player_rescued_hostage
-export const HOSTAGE_TOUCH_REWARD = 300; // first pick-up of a hostage in a round (approx.)
+export const HOSTAGE_TOUCH_REWARD = 150; // first pick-up of a hostage in a round (cash_player_interact_with_hostage)
 export const HOSTAGE_HIT_PENALTY = 30; // shooting a hostage (approx.)
 export const HOSTAGE_KILL_PENALTY = 1000; // cash_player_killed_hostage
 

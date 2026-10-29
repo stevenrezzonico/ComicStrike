@@ -160,3 +160,26 @@ Deno.test('de_dust2: almost every bullet hit finds the face (and texture) it lan
   assert.ok(found >= hits * 0.97, `found ${found} of ${hits}`);
   assert.ok(kinds.size >= 3, `only ${[...kinds]} surface types`);
 });
+
+Deno.test('knife: a backstab does 90 / 180, a hit from the front 40 / 65', () => {
+  const knife = WEAPONS[WEAPON_ID.knife];
+  const world = floorWorld();
+  const swing = (yaw, stab) => {
+    const ws = createWeaponState();
+    giveWeapon(ws, WEAPON_ID.knife);
+    ws.f[WS_ACTIVE] = knife.slot;
+    const shots = new ShotList();
+    shots.push(0, 0, 50, 1, 0, 0, stab ? knife.range2 : knife.range, WEAPON_ID.knife, stab ? knife.damage2 : knife.damage);
+    const impacts = new ImpactList();
+    const t = new HitTargets(4);
+    t.set(0, 30, 0, 36, yaw, FL_ONGROUND, 0, 2);
+    resolveShots(world, { slotOfEnt: new Uint8Array(8), material: new Uint8Array(1), damage: () => 0 }, ws, shots, impacts, t);
+    assert.equal(impacts.count, 1);
+    return impacts.damage[0];
+  };
+  assert.equal(swing(180, false), 40, 'facing the attacker');
+  assert.equal(swing(0, false), 90, 'facing away: backstab');
+  assert.equal(swing(180, true), 65);
+  assert.equal(swing(0, true), 180);
+  assert.equal(swing(90, false), 40, 'side on: no backstab');
+});
