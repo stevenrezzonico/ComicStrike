@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { TICK_DT, IN_ATTACK, IN_RELOAD, IN_SPEED } from '../shared/constants.js';
-import { createPlayerState, PS_VEL, PS_FLAGS, FL_ONGROUND, FL_DUCKING } from '../shared/pmove.js';
+import { createPlayerState, PS_VEL, PS_FLAGS, PS_EVENTS, FL_ONGROUND, FL_DUCKING, EV_JUMP, EV_APEX } from '../shared/pmove.js';
 import {
   WEAPONS, WEAPON_ID, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, ShotList, createWeaponState, giveWeapon,
   weaponTick, getInaccuracy, recoveryTime, UniformRandomStream, WS_ACTIVE, WS_SLOTS, WS_PUNCH, WS_EVENTS, WEV_FIRE, WEV_RELOADED,
-  WEV_SHELL, WS_RELOAD_END, WEV_DRYFIRE, refillAmmo,
+  WEV_SHELL, WS_RELOAD_END, WEV_DRYFIRE, WS_PENALTY, refillAmmo,
 } from '../shared/weapons.js';
 
 const DEG = Math.PI / 180;
@@ -143,9 +143,32 @@ Deno.test('switching weapons delays the first shot by the deploy time', () => {
   const ctx = setup('ak47', 'glock', 'knife');
   hold(ctx, 0, 1000, 1, SLOT_SECONDARY);
   assert.equal(ctx.ws.f[WS_ACTIVE], SLOT_SECONDARY);
-  assert.equal(hold(ctx, IN_ATTACK, 1001, 60).fired, 0, 'fired while deploying');
-  hold(ctx, 0, 1061, 1); // semi-auto: release before the next press
-  assert.equal(hold(ctx, IN_ATTACK, 1070, 1).fired, 1, 'could not fire after deploying');
+  const ticks = Math.ceil(WEAPONS[WEAPON_ID.glock].deployTime / TICK_DT); // the Glock draws in 1.1 s
+  assert.equal(hold(ctx, IN_ATTACK, 1001, ticks - 4).fired, 0, 'fired while deploying');
+  hold(ctx, 0, 1001 + ticks - 4, 1); // semi-auto: release before the next press
+  assert.equal(hold(ctx, IN_ATTACK, 1001 + ticks + 6, 1).fired, 1, 'could not fire after deploying');
+});
+
+Deno.test('jumping adds the takeoff penalty, and the Desert Eagle another at the apex', () => {
+  for (const [name, apex] of [['deagle', true], ['ak47', false]]) {
+    const ctx = setup(name);
+    const w = WEAPONS[WEAPON_ID[name]];
+    hold(ctx, 0, 1000, 64);
+    const rest = ctx.ws.f[WS_PENALTY];
+    ctx.ps.i[PS_FLAGS] = 0; // airborne, as pmove reports the jump tick
+    ctx.ps.i[PS_EVENTS] = EV_JUMP;
+    hold(ctx, 0, 1064, 1);
+    const takeoff = ctx.ws.f[WS_PENALTY] - rest;
+    assert.ok(Math.abs(takeoff - w.inaccuracyJumpInitial) < 1e-4, `${name} takeoff ${takeoff}`);
+    ctx.ps.i[PS_EVENTS] = EV_APEX;
+    const before = ctx.ws.f[WS_PENALTY];
+    hold(ctx, 0, 1065, 1);
+    const atApex = ctx.ws.f[WS_PENALTY] - before;
+    // The apex penalty (0.33 rad) less the tick's decay of the whole penalty.
+    if (apex) assert.ok(atApex > 0.25 && atApex <= w.inaccuracyJumpApex, `${name} apex ${atApex}`);
+    else assert.ok(atApex <= 0, `${name} apex added ${atApex}`);
+    ctx.ps.i[PS_EVENTS] = 0;
+  }
 });
 
 Deno.test('inaccuracy: standing < walking < running; crouching is best', () => {

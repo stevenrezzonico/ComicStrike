@@ -8,7 +8,7 @@
 import { TICK_DT, IN_ATTACK, IN_ATTACK2, IN_RELOAD, IN_SPEED, IN_DROP } from './constants.js';
 import {
   MOVE, eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_EVENTS, PS_LAND_SPEED,
-  FL_ONGROUND, FL_DUCKING, FL_ONLADDER, EV_JUMP, EV_LAND,
+  FL_ONGROUND, FL_DUCKING, FL_ONLADDER, EV_JUMP, EV_LAND, EV_APEX,
 } from './pmove.js';
 import { CSGO_WEAPONS } from './weapondata.js';
 
@@ -34,23 +34,26 @@ export const NUM_SLOTS = 5;
 
 const mr = (x) => x * 0.001; // milliradians -> radians
 
-// What items_game.txt lacks (it lives in model animations): HUD label, reload time
-// (approximate), and whether the weapon spawns in its alt mode (silencer attached).
+// What items_game.txt lacks (it lives in model animations): HUD label, reload time (until
+// the gun fires again) and deploy time, both measured from the game by the community
+// CS:GO weapon spreadsheet (the CZ75 draws slowly, the AWP too), and whether the weapon
+// spawns in its alt mode (silencer attached).
 const EXTRA = {
-  glock: ['Glock-18', 2.27], hkp2000: ['P2000', 2.2], usp_silencer: ['USP-S', 2.17, true],
-  p250: ['P250', 2.2], elite: ['Dual Berettas', 3.77], fiveseven: ['Five-SeveN', 2.2], tec9: ['Tec-9', 2.5],
-  cz75a: ['CZ75-Auto', 2.7], deagle: ['Desert Eagle', 2.2], revolver: ['R8 Revolver', 2.3],
-  mac10: ['MAC-10', 2.6], mp9: ['MP9', 2.1], mp7: ['MP7', 3.1], mp5sd: ['MP5-SD', 2.97], ump45: ['UMP-45', 3.5],
-  p90: ['P90', 3.3], bizon: ['PP-Bizon', 2.4],
-  galilar: ['Galil AR', 3.0], famas: ['FAMAS', 3.3], ak47: ['AK-47', 2.43], m4a1: ['M4A4', 3.07],
-  m4a1_silencer: ['M4A1-S', 3.07, true], sg556: ['SG 553', 2.8], aug: ['AUG', 3.8], ssg08: ['SSG 08', 3.7],
-  awp: ['AWP', 3.67], g3sg1: ['G3SG1', 4.7], scar20: ['SCAR-20', 3.1],
-  nova: ['Nova', 4.0], xm1014: ['XM1014', 3.0], sawedoff: ['Sawed-Off', 3.5], mag7: ['MAG-7', 2.5],
-  m249: ['M249', 5.7], negev: ['Negev', 5.7],
+  glock: ['Glock-18', 2.27, 1.1], hkp2000: ['P2000', 2.27], usp_silencer: ['USP-S', 2.17, 1, true],
+  p250: ['P250', 2.27], elite: ['Dual Berettas', 3.77], fiveseven: ['Five-SeveN', 2.27], tec9: ['Tec-9', 2.57],
+  cz75a: ['CZ75-Auto', 2.73, 1.83], deagle: ['Desert Eagle', 2.2], revolver: ['R8 Revolver', 2.27, 1.17],
+  mac10: ['MAC-10', 2.57], mp9: ['MP9', 2.13, 1.2], mp7: ['MP7', 3.13], mp5sd: ['MP5-SD', 2.94],
+  ump45: ['UMP-45', 3.43], p90: ['P90', 3.37], bizon: ['PP-Bizon', 2.43, 1.1],
+  galilar: ['Galil AR', 3.03, 1.1], famas: ['FAMAS', 3.3], ak47: ['AK-47', 2.43], m4a1: ['M4A4', 3.07, 1.13],
+  m4a1_silencer: ['M4A1-S', 3.07, 1.13, true], sg556: ['SG 553', 2.77], aug: ['AUG', 3.77, 1.17],
+  ssg08: ['SSG 08', 3.7], awp: ['AWP', 3.67, 1.25], g3sg1: ['G3SG1', 4.67], scar20: ['SCAR-20', 3.07],
+  nova: ['Nova', 4.74], xm1014: ['XM1014', 4.22], sawedoff: ['Sawed-Off', 4.22], mag7: ['MAG-7', 2.47],
+  m249: ['M249', 5.7, 1.1], negev: ['Negev', 5.7, 1.1],
 };
 // Shotguns loading shell by shell (CS:GO's Nova, XM1014, Sawed-Off): seconds before the
-// first shell, then per shell (approximations of the animations); the MAG-7 uses a magazine.
-const SHELL_RELOAD = { nova: [0.5, 0.5], xm1014: [0.5, 0.4], sawedoff: [0.5, 0.5] };
+// first shell, then per shell, so that a full reload takes the measured time above (the
+// game's end-of-reload animation is spread over the shells); the MAG-7 uses a magazine.
+const SHELL_RELOAD = { nova: [0.5, 0.53], xm1014: [0.5, 0.53], sawedoff: [0.5, 0.53] };
 const PISTOLS = new Set(['glock', 'hkp2000', 'usp_silencer', 'p250', 'elite', 'fiveseven', 'tec9', 'cz75a',
   'deagle', 'revolver']);
 
@@ -72,7 +75,7 @@ function modeStats(d, alt) {
 // (`modes` holds both, see weaponStats).
 function fromGameData(name) {
   const d = CSGO_WEAPONS[name];
-  const [label, reloadTime, alt = false] = EXTRA[name];
+  const [label, reloadTime, deployTime = 1.0, alt = false] = EXTRA[name];
   const [reloadStart, shellTime] = SHELL_RELOAD[name] || [0, 0];
   const modes = [modeStats(d, false), modeStats(d, true)];
   const altKind = d.zoomLevels > 0 ? 'scope' : d.hasSilencer ? 'silencer' : d.hasBurstMode ? 'burst'
@@ -83,11 +86,11 @@ function fromGameData(name) {
     penetration: d.penetration, range: d.range, rangeModifier: d.rangeModifier, headshotMult: d.headshotMultiplier,
     clip: d.primaryClipSize, reserve: d.primaryReserveAmmoMax,
     reloadTime: shellTime ? reloadStart + d.primaryClipSize * shellTime : reloadTime, reloadStart, shellTime,
-    deployTime: 1.0, price: d.inGamePrice, killAward: d.killAward,
+    deployTime, price: d.inGamePrice, killAward: d.killAward,
     ...modes[alt ? 1 : 0], modes, defaultAlt: alt, altKind, cycleAlt: d.cycletimeAlt,
     zoomLevels: d.zoomLevels, zoomFov: [90, d.zoomFov1, d.zoomFov2], boltAction: name === 'awp' || name === 'ssg08',
     burstCycle: d.cycletimeWhenInBurstMode, burstGap: d.timeBetweenBurstShots,
-    inaccuracyJumpInitial: mr(d.inaccuracyJumpInitial),
+    inaccuracyJumpInitial: mr(d.inaccuracyJumpInitial), inaccuracyJumpApex: mr(d.inaccuracyJumpApex),
     recoveryStand: d.recoveryTimeStand, recoveryStandFinal: d.recoveryTimeStandFinal,
     recoveryCrouch: d.recoveryTimeCrouch, recoveryCrouchFinal: d.recoveryTimeCrouchFinal,
     recoveryStartBullet: d.recoveryTransitionStartBullet, recoveryEndBullet: d.recoveryTransitionEndBullet,
@@ -488,7 +491,9 @@ function updateAccuracyPenalty(ws, ps, w, time) {
   if (time > f[WS_LAST_SHOT] + w.cycle * 1.1) f[WS_RECOIL_INDEX] *= decay;
 
   const events = ps.i[PS_EVENTS];
+  // Jumping adds a penalty at takeoff and (the Desert Eagle) again at the top of the jump.
   if (events & EV_JUMP) f[WS_PENALTY] += w.inaccuracyJumpInitial;
+  if (events & EV_APEX) f[WS_PENALTY] += w.inaccuracyJumpApex;
   if (events & EV_LAND) f[WS_PENALTY] += s.inaccuracyLand * Math.min(ps.f[PS_LAND_SPEED] / 600, 1);
 }
 

@@ -80,6 +80,7 @@ export const FL_ONLADDER = 4;
 
 export const EV_JUMP = 1;
 export const EV_LAND = 2;
+export const EV_APEX = 4; // the top of a jump: still airborne, rising before this tick and not after
 
 export function createPlayerState() {
   const buf = new ArrayBuffer(PS_SIZE * 4);
@@ -607,6 +608,7 @@ export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) 
   const f = ps.f, i = ps.i;
   ox = f[PS_ORIGIN]; oy = f[PS_ORIGIN + 1]; oz = f[PS_ORIGIN + 2];
   vx = f[PS_VEL]; vy = f[PS_VEL + 1]; vz = f[PS_VEL + 2];
+  const startVz = vz;
   duckAmount = f[PS_DUCK_AMOUNT];
   duckSpeed = f[PS_DUCK_SPEED];
   stamina = f[PS_STAMINA];
@@ -687,6 +689,7 @@ export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) 
       checkVelocity();
       if (waterLevel < 2) vz -= MOVE.gravity * 0.5 * dt; // FinishGravity
       if (onGround) vz = 0;
+      else if (startVz > 0 && vz <= 0) events |= EV_APEX;
     }
   }
 

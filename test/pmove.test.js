@@ -4,7 +4,7 @@ import { TICK_DT, IN_FORWARD, IN_JUMP, IN_DUCK, IN_SPEED, IN_MOVERIGHT } from '.
 import { CollisionWorld, Trace, traceHull, hullFits, HULL_POINT, HULL_STAND, ENT_LADDER, ENT_SOLID } from '../shared/trace.js';
 import {
   createPlayerState, playerMove, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_EVENTS, PS_WATERLEVEL,
-  FL_ONGROUND, FL_DUCKING, EV_JUMP, EV_LAND, MOVE, eyeOffset, VIEW_STAND, VIEW_DUCK,
+  FL_ONGROUND, FL_DUCKING, EV_JUMP, EV_LAND, EV_APEX, MOVE, eyeOffset, VIEW_STAND, VIEW_DUCK,
 } from '../shared/pmove.js';
 import { feetOffset } from '../shared/hitgroups.js';
 import { boxWorld, floorWorld, emptyWorld, FLOOR, WATER } from './worlds.js';
@@ -148,6 +148,24 @@ Deno.test('jump height matches CS:GO (~57 units)', () => {
 Deno.test('crouch-jump raises the feet ~9 more units', () => {
   const { peakFeet } = jumpPeak(IN_DUCK);
   assert.ok(peakFeet > 62 && peakFeet < 68, `peak ${peakFeet}`);
+});
+
+Deno.test('a jump raises EV_APEX once, at its top, and never on the ground', () => {
+  const w = floorWorld();
+  const ps = settle(w, spawn(0, 0, 36));
+  let apexes = 0, apexZ = 0, peak = 0, airborne = false;
+  run(w, ps, 128, IN_JUMP, 0, 0, (p) => {
+    peak = Math.max(peak, p.f[PS_ORIGIN + 2]);
+    if (p.i[PS_EVENTS] & EV_APEX) {
+      apexes++;
+      apexZ = p.f[PS_ORIGIN + 2];
+      airborne = !(p.i[PS_FLAGS] & FL_ONGROUND);
+    }
+    return 0; // release jump after the first tick
+  });
+  assert.equal(apexes, 1);
+  assert.ok(airborne, 'apex while on the ground');
+  near(apexZ, peak, 0.5, `apex at ${apexZ}, peak ${peak}`);
 });
 
 Deno.test('holding jump does not auto-bunnyhop', () => {
