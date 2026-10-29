@@ -47,6 +47,8 @@ const MIME = {
   css: 'text/css',
   bsp: 'application/octet-stream',
   cfg: 'text/plain; charset=utf-8',
+  svg: 'image/svg+xml',
+  jpg: 'image/jpeg',
 };
 
 if (!TLS_CERT !== !TLS_KEY) throw new Error('set both TLS_CERT and TLS_KEY, or neither');
@@ -108,18 +110,32 @@ function loop() {
 }
 loop();
 
-async function serveStatic(pathname) {
+// Static files are revalidated on every visit (no-cache with an ETag from the file's size
+// and time: a 304 when unchanged, so a deploy shows at once and ~1 MB of scripts and a
+// multi-megabyte map are not downloaded again), and gzipped on the fly for the types that
+// shrink (scripts ~4x, maps ~3x; Deno.serve does not compress a file stream by itself).
+const COMPRESSED = new Set(['html', 'js', 'json', 'css', 'bsp', 'cfg', 'svg']);
+async function serveStatic(pathname, req) {
   const rel = staticPath(pathname, STATIC_DIRS, STATIC_FILES);
   if (!rel) return null;
   try {
-    const file = await Deno.open(join(ROOT_PATH, rel), { read: true });
+    const path = join(ROOT_PATH, rel);
+    const stat = await Deno.stat(path);
+    if (!stat.isFile) return null;
+    const etag = `W/"${stat.size.toString(36)}-${(stat.mtime ? stat.mtime.getTime() : 0).toString(36)}"`;
     const ext = rel.slice(rel.lastIndexOf('.') + 1);
-    return new Response(file.readable, {
-      headers: {
-        'content-type': MIME[ext] || 'application/octet-stream',
-        'cache-control': 'no-store',
-      },
-    });
+    const headers = {
+      'content-type': MIME[ext] || 'application/octet-stream',
+      'cache-control': 'no-cache',
+      'etag': etag,
+      'vary': 'accept-encoding',
+    };
+    if (req.headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers });
+    const file = await Deno.open(path, { read: true });
+    const gzip = COMPRESSED.has(ext) && /\bgzip\b/.test(req.headers.get('accept-encoding') || '');
+    if (gzip) headers['content-encoding'] = 'gzip';
+    else headers['content-length'] = String(stat.size);
+    return new Response(gzip ? file.readable.pipeThrough(new CompressionStream('gzip')) : file.readable, { headers });
   } catch {
     return null;
   }
@@ -133,7 +149,7 @@ Deno.serve({ hostname: BIND, port: HTTP_PORT, ...tls, onListen: () => {} }, asyn
     return Response.json({ port: GAME_PORT, certHash, ...host.info() });
   }
   if (pathname === '/maps.json') return Response.json(host.opts.listMaps()); // for offline practice
-  return (await serveStatic(pathname)) || new Response('not found', { status: 404 });
+  return (await serveStatic(pathname, req)) || new Response('not found', { status: 404 });
 });
 
 // Plain HTTP to the HTTPS site (port 80: people typing the bare name).
