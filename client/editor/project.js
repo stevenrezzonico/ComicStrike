@@ -1,18 +1,37 @@
-// The map editor's document: a project of boxes and points, turned into a map by our box
+// The map editor's document: a project of shapes and points, turned into a map by our
 // compiler (shared/bspwriter.js). Pure data and functions (no DOM): the editor page, its
 // compile worker and the tests share them.
 //
-// A project (saved as JSON, format 'comicstrike-map' version 1):
-//   { name, brushes: [{ id, b: [x0, y0, z0, x1, y1, z1], tex: { top, bottom, side }, kind, keys }],
-//     points: [{ id, kind, o: [x, y, z] (the feet), yaw }], nextId }
-// A brush's kind is 'world' (solid) or a brush entity class (KINDS); each entity brush is an
-// entity of its own. The compiled map is closed in a sky box round everything, so it never
-// leaks into the void.
+// A project (saved as JSON, format 'comicstrike-map' version 2):
+//   { name, brushes: [{ id, b: [x0, y0, z0, x1, y1, z1], tex: { top, bottom, side }, kind, keys,
+//       shape, yaw, up, sides, step }], points: [{ id, kind, o: [x, y, z] (the feet), yaw }], nextId }
+// A brush's shape (SHAPES) fills its box b: a box (turned by `yaw` degrees about its
+// center: an angled wall), a ramp rising toward side `up`, a pillar of `sides` faces, stairs
+// of `step` high steps rising toward `up`, a ladder against side `up` (its board and the
+// climbable volume in front). Its kind is 'world' (solid) or a brush entity class (KINDS);
+// each entity brush is an entity of its own. Version 1 files read as boxes. The compiled
+// map is closed in a sky box round everything, so it never leaks into the void.
 
-import { MapBuilder, box, NONE, CONTENTS_WATER } from '../../shared/bspwriter.js';
+import {
+  MapBuilder, box, wedge, turnedBox, prism, brushPlanes, brushPolygons, NONE, CONTENTS_WATER,
+} from '../../shared/bspwriter.js';
 
 export const FORMAT = 'comicstrike-map';
-export const VERSION = 1;
+export const VERSION = 2;
+
+// Shapes: label; `turns` (takes yaw), `rises` (takes up: the high side).
+export const SHAPES = {
+  box: { label: 'Box', turns: true },
+  ramp: { label: 'Ramp', rises: true },
+  pillar: { label: 'Pillar', turns: true },
+  stairs: { label: 'Stairs', rises: true },
+  ladder: { label: 'Ladder', rises: true },
+};
+export const UPS = ['px', 'py', 'nx', 'ny']; // east, north, west, south: a quarter turn apart
+export const UP_LABELS = { px: 'east', nx: 'west', py: 'north', ny: 'south' };
+export const SIDE_COUNTS = [6, 8, 12, 16];
+export const MAX_SLOPE = 45; // degrees: steeper ramps cannot be walked up (GoldSrc's 0.7 normal)
+export const MAX_STEP = 18; // units: higher steps need a jump
 
 // The textures to paint with: [name, width, height, label]. Names are CS 1.6 textures, so
 // the print uses their measured colors and material patterns (client/texturedata.js).
@@ -66,10 +85,15 @@ export const POINTS = {
 export const LIMITS = { coord: 8192, brushes: 3000, points: 256 };
 const HULL = [16, 16, 36]; // standing player: half extents (the origin is the hull center)
 
+// A brush with the shape fields filled in.
+export function makeBrush(id, b, tex, kind = 'world', keys = {}, shape = {}) {
+  return { id, b, tex, kind, keys, shape: 'box', yaw: 0, up: 'px', sides: 8, step: 16, ...shape };
+}
+
 // A starter map: a sand yard walled in, crates, both spawns with buy zones.
 export function newProject(name = 'my_map') {
   const p = { format: FORMAT, version: VERSION, name, brushes: [], points: [], nextId: 1 };
-  const add = (b, tex, kind = 'world', keys = {}) => p.brushes.push({ id: p.nextId++, b, tex, kind, keys });
+  const add = (b, tex, kind = 'world', keys = {}) => p.brushes.push(makeBrush(p.nextId++, b, tex, kind, keys));
   const wall = { top: 'cssandwallbta', bottom: 'cssandwallbta', side: 'cssandwallbta' };
   add([-1024, -768, -32, 1024, 768, 0], { top: '-0sand', bottom: 'azwall_a', side: 'azwall_a' });
   add([-1056, -800, -32, -1024, 800, 192], wall);
@@ -104,7 +128,10 @@ export function readProject(text) {
     for (const s of ['top', 'bottom', 'side']) tex[s] = b.tex && TEXTURE_SIZE.has(b.tex[s]) ? b.tex[s] : null;
     const keys = {};
     for (const [k, v] of Object.entries(b.keys || {})) if (/^\w{1,32}$/.test(k)) keys[k] = String(v).replace(/"/g, "'").slice(0, 128);
-    out.brushes.push({ id: out.nextId++, b: (b.b || []).slice(0, 6).map(num), tex, kind, keys });
+    out.brushes.push(makeBrush(out.nextId++, (b.b || []).slice(0, 6).map(num), tex, kind, keys, {
+      shape: SHAPES[b.shape] ? b.shape : 'box', yaw: num(b.yaw) % 360, up: UPS.includes(b.up) ? b.up : 'px',
+      sides: SIDE_COUNTS.includes(+b.sides) ? +b.sides : 8, step: Math.max(4, Math.min(64, num(b.step) || 16)),
+    }));
   }
   for (const q of Array.isArray(p.points) ? p.points : []) {
     if (!POINTS[q.kind]) continue;
@@ -113,17 +140,104 @@ export function readProject(text) {
   return out;
 }
 
+// The brushes a project brush compiles to: [{ brush (shared/bspwriter.js), kind, keys }].
+// Zones and volumes stay boxes; a ladder is its board (world) and its climbable volume.
+export function piecesOf(br) {
+  const kind = KINDS[br.kind];
+  const keys = br.keys;
+  const [x0, y0, z0, x1, y1, z1] = br.b;
+  if (kind.trigger) return [{ brush: box(...br.b, { ...NONE }), kind: br.kind, keys }];
+  const tex = kind.water ? { top: br.tex.top || '!watergreen', bottom: null, side: null } : br.tex;
+  const one = (brush) => [{ brush, kind: br.kind, keys }];
+  const up = br.up || 'px', yaw = br.yaw || 0;
+  const along = up === 'px' || up === 'nx' ? 0 : 1, high = up[0] === 'p'; // the axis it rises along
+  switch (br.shape) {
+    case 'ramp':
+      return one(wedge(br.b, up, tex));
+    case 'pillar':
+      return one(prism(br.b, br.sides || 8, yaw, tex));
+    case 'stairs': {
+      // Each step reaches from its front edge to the high end (overlaps compile away).
+      const n = Math.max(1, Math.round((z1 - z0) / (br.step || 16))), lo = br.b[along], hi = br.b[along + 3];
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        const b = br.b.slice();
+        if (high) b[along] = Math.round(lo + (hi - lo) * i / n);
+        else b[along + 3] = Math.round(lo + (hi - lo) * (n - i) / n);
+        b[5] = Math.round(z0 + (z1 - z0) * (i + 1) / n);
+        out.push({ brush: box(...b, tex), kind: br.kind, keys });
+      }
+      return out;
+    }
+    case 'ladder': {
+      // The board: 4 thick against the wall on side `up`, the ladder texture facing the room;
+      // the volume: the rest in front of it, 16 higher than the board (to climb off the top).
+      const board = br.b.slice(), vol = br.b.slice();
+      if (high) {
+        board[along] = br.b[along + 3] - 4;
+        vol[along + 3] = board[along];
+      } else {
+        board[along + 3] = br.b[along] + 4;
+        vol[along] = board[along + 3];
+      }
+      vol[5] += 16;
+      const face = { top: null, bottom: null, side: '{ladder1', [up]: null };
+      return [{ brush: box(...board, face), kind: 'world', keys: {} },
+        { brush: box(...vol, { ...NONE }), kind: 'func_ladder', keys: {} }];
+    }
+    default:
+      return one(yaw % 360 ? turnedBox(br.b, yaw, tex) : box(x0, y0, z0, x1, y1, z1, tex));
+  }
+}
+
+// A piece's corners (for the views, bounds and checks).
+export const cornersOf = (piece) => brushPolygons(brushPlanes(piece.brush)).flat();
+
+// A ramp's slope in degrees.
+export function slopeOf(br) {
+  const along = br.up === 'px' || br.up === 'nx' ? 0 : 1;
+  return Math.atan2(br.b[5] - br.b[2], br.b[along + 3] - br.b[along]) * 180 / Math.PI;
+}
+
+// Is a standing player's hull with its center at c inside the piece? (The brush grown by
+// the hull, with axial bevels: as the compiler does it for collision.)
+function hullInside(piece, c) {
+  const ps = brushPlanes(piece.brush), corners = cornersOf(piece);
+  if (!corners.length) return false;
+  const reach = (n) => HULL[0] * Math.abs(n[0]) + HULL[1] * Math.abs(n[1]) + HULL[2] * Math.abs(n[2]);
+  for (const p of ps) if (p.n[0] * c[0] + p.n[1] * c[1] + p.n[2] * c[2] >= p.d + reach(p.n) - 0.5) return false;
+  for (let k = 0; k < 3; k++) {
+    let lo = Infinity, hi = -Infinity;
+    for (const v of corners) {
+      lo = Math.min(lo, v[k]);
+      hi = Math.max(hi, v[k]);
+    }
+    if (c[k] <= lo - HULL[k] + 0.5 || c[k] >= hi + HULL[k] - 0.5) return false;
+  }
+  return true;
+}
+
 // Problems that keep the map from compiling or playing: { errors, warnings } of
 // { text, id? } (id: the brush or point at fault).
 export function checkProject(p) {
   const errors = [], warnings = [];
-  if (!p.brushes.some((b) => b.kind === 'world')) errors.push({ text: 'The map has no solid boxes.' });
-  if (p.brushes.length > LIMITS.brushes) errors.push({ text: `Too many boxes (${LIMITS.brushes} at most).` });
+  if (!p.brushes.some((b) => b.kind === 'world')) errors.push({ text: 'The map has no solid shapes.' });
+  if (p.brushes.length > LIMITS.brushes) errors.push({ text: `Too many shapes (${LIMITS.brushes} at most).` });
   if (p.points.length > LIMITS.points) errors.push({ text: `Too many points (${LIMITS.points} at most).` });
+  const valid = [];
   for (const b of p.brushes) {
     const [x0, y0, z0, x1, y1, z1] = b.b;
-    if (b.b.length !== 6 || !(x1 > x0 && y1 > y0 && z1 > z0)) errors.push({ text: 'A box has no volume.', id: b.id });
-    else if (b.b.some((v) => Math.abs(v) > LIMITS.coord)) errors.push({ text: `A box is beyond ±${LIMITS.coord}.`, id: b.id });
+    if (b.b.length !== 6 || !(x1 > x0 && y1 > y0 && z1 > z0)) errors.push({ text: 'A shape has no volume.', id: b.id });
+    else if (b.b.some((v) => Math.abs(v) > LIMITS.coord)) errors.push({ text: `A shape is beyond ±${LIMITS.coord}.`, id: b.id });
+    else {
+      valid.push(b);
+      if (b.shape === 'ramp' && slopeOf(b) > MAX_SLOPE + 0.5) {
+        warnings.push({ text: `A ramp is ${Math.round(slopeOf(b))}° steep: players slide off above ${MAX_SLOPE}°.`, id: b.id });
+      } else if (b.shape === 'stairs') {
+        const n = Math.max(1, Math.round((z1 - z0) / b.step)), h = Math.round((z1 - z0) / n);
+        if (h > MAX_STEP) warnings.push({ text: `Stairs with ${h} high steps need a jump (${MAX_STEP} at most).`, id: b.id });
+      }
+    }
   }
   const t = p.points.filter((q) => q.kind === 'info_player_deathmatch').length;
   const ct = p.points.filter((q) => q.kind === 'info_player_start').length;
@@ -131,7 +245,7 @@ export function checkProject(p) {
   if (!ct) errors.push({ text: 'No CT spawn: add one with the CT spawn tool.' });
   if (t && t < 5) warnings.push({ text: `Only ${t} T spawn${t > 1 ? 's' : ''}: a full team needs 5.` });
   if (ct && ct < 5) warnings.push({ text: `Only ${ct} CT spawn${ct > 1 ? 's' : ''}: a full team needs 5.` });
-  const solids = p.brushes.filter((b) => !KINDS[b.kind].trigger && !KINDS[b.kind].water && b.b.length === 6);
+  const solids = valid.filter((b) => !KINDS[b.kind].water).flatMap(piecesOf).filter((pc) => !KINDS[pc.kind].trigger);
   for (const q of p.points) {
     const [x, y, z] = q.o;
     if (q.o.some((v) => Math.abs(v) > LIMITS.coord)) {
@@ -139,10 +253,10 @@ export function checkProject(p) {
       continue;
     }
     if (q.kind === 'hostage_entity') continue;
-    // The standing hull from the feet up must be free, and a floor under the feet.
-    const hull = [x - HULL[0], y - HULL[1], z + 1, x + HULL[0], y + HULL[1], z + 1 + HULL[2] * 2];
-    if (solids.some((s) => overlap(s.b, hull))) errors.push({ text: `A ${POINTS[q.kind].label} is inside a box.`, id: q.id });
-    else if (!solids.some((s) => s.b[2] < z + 1 && s.b[5] >= z - 64 && overlap2d(s.b, hull))) {
+    // The standing hull (center 37 over the feet) must be free, and a floor within 64 under it.
+    if (solids.some((pc) => hullInside(pc, [x, y, z + 37]))) {
+      errors.push({ text: `A ${POINTS[q.kind].label} is inside a shape.`, id: q.id });
+    } else if (![8, 16, 32, 48, 64].some((dz) => solids.some((pc) => hullInside(pc, [x, y, z + 37 - dz])))) {
       warnings.push({ text: `A ${POINTS[q.kind].label} has no floor under it: players fall at spawn.`, id: q.id });
     }
   }
@@ -156,28 +270,33 @@ export function checkProject(p) {
   return { errors, warnings };
 }
 
-const overlap = (a, b) => a[0] < b[3] && a[3] > b[0] && a[1] < b[4] && a[4] > b[1] && a[2] < b[5] && a[5] > b[2];
-const overlap2d = (a, b) => a[0] < b[3] && a[3] > b[0] && a[1] < b[4] && a[4] > b[1];
-
-// The bounds of everything in the project: [x0, y0, z0, x1, y1, z1].
+// The bounds of everything in the project (turned shapes by their corners):
+// [x0, y0, z0, x1, y1, z1].
 export function bounds(p) {
   const c = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
-  const grow = (x0, y0, z0, x1, y1, z1) => {
-    c[0] = Math.min(c[0], x0);
-    c[1] = Math.min(c[1], y0);
-    c[2] = Math.min(c[2], z0);
-    c[3] = Math.max(c[3], x1);
-    c[4] = Math.max(c[4], y1);
-    c[5] = Math.max(c[5], z1);
+  const grow = (x, y, z) => {
+    c[0] = Math.min(c[0], x);
+    c[1] = Math.min(c[1], y);
+    c[2] = Math.min(c[2], z);
+    c[3] = Math.max(c[3], x);
+    c[4] = Math.max(c[4], y);
+    c[5] = Math.max(c[5], z);
   };
-  for (const b of p.brushes) grow(...b.b);
-  for (const q of p.points) grow(q.o[0] - 16, q.o[1] - 16, q.o[2], q.o[0] + 16, q.o[1] + 16, q.o[2] + 72);
-  return c[0] === Infinity ? [0, 0, 0, 0, 0, 0] : c;
+  for (const b of p.brushes) {
+    grow(b.b[0], b.b[1], b.b[2]);
+    grow(b.b[3], b.b[4], b.b[5]);
+    if (b.yaw % 360 && SHAPES[b.shape]?.turns) for (const pc of piecesOf(b)) for (const v of cornersOf(pc)) grow(...v);
+  }
+  for (const q of p.points) {
+    grow(q.o[0] - 16, q.o[1] - 16, q.o[2]);
+    grow(q.o[0] + 16, q.o[1] + 16, q.o[2] + 72);
+  }
+  return c[0] === Infinity ? [0, 0, 0, 0, 0, 0] : c.map((v, k) => (k < 3 ? Math.floor(v) : Math.ceil(v)));
 }
 
 // The project as a map for the compiler (a MapBuilder), closed in a sky box.
 export function projectToBuilder(p) {
-  const used = new Set(['sky']);
+  const used = new Set(['sky', '{ladder1']);
   for (const b of p.brushes) for (const s of ['top', 'bottom', 'side']) if (b.tex[s]) used.add(b.tex[s]);
   const textures = {};
   for (const [name, w, h] of TEXTURES) if (used.has(name)) textures[name] = [w, h];
@@ -193,18 +312,22 @@ export function projectToBuilder(p) {
   );
 
   for (const b of p.brushes) {
-    const kind = KINDS[b.kind];
-    const tex = kind.trigger ? { ...NONE } : kind.water ? { top: b.tex.top || '!watergreen', bottom: null, side: null } : b.tex;
-    const brush = box(...b.b, tex);
-    if (b.kind === 'world') {
-      map.world.push(brush);
-      continue;
+    const pieces = piecesOf(b);
+    for (const pc of pieces) if (pc.kind === 'world') map.world.push(pc.brush);
+    // An entity shape is one entity (stairs that are a breakable break as one).
+    const byKind = new Map();
+    for (const pc of pieces) {
+      if (pc.kind === 'world') continue;
+      if (!byKind.has(pc.kind)) byKind.set(pc.kind, []);
+      byKind.get(pc.kind).push(pc);
     }
-    const keys = { classname: b.kind };
-    for (const [k, v] of Object.entries(b.keys)) if (v !== '' && k !== 'hinge') keys[k] = v;
-    if (b.kind === 'func_door_rotating') keys.origin = hingeOf(b).join(' ');
-    if (b.kind === 'func_water') Object.assign(keys, { skin: '-3', WaveHeight: '0' });
-    map.brushEntity(keys, [brush], kind.water ? { contents: CONTENTS_WATER } : {});
+    for (const [cls, list] of byKind) {
+      const keys = { classname: cls };
+      for (const [k, v] of Object.entries(list[0].keys)) if (v !== '' && k !== 'hinge') keys[k] = v;
+      if (cls === 'func_door_rotating') keys.origin = hingeOf(b).join(' ');
+      if (cls === 'func_water') Object.assign(keys, { skin: '-3', WaveHeight: '0' });
+      map.brushEntity(keys, list.map((pc) => pc.brush), KINDS[cls].water ? { contents: CONTENTS_WATER } : {});
+    }
   }
   for (const q of p.points) {
     const [x, y, z] = q.o;

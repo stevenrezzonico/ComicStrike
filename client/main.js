@@ -69,6 +69,7 @@ import { InkWords } from './inkwords.js';
 import { Spectator, SPEC_EYES, SPEC_ROAM } from './spectate.js';
 import { ConsoleWindow } from './console.js';
 import { takeHandoff } from './handoff.js';
+import { PreviewEditor } from './previewedit.js';
 import { Menu } from './menu.js';
 import { Radar } from './radar.js';
 import { Overview } from '../shared/overview.js';
@@ -1086,6 +1087,7 @@ function frame(now) {
   renderer.timer.on = cv.cl_showfps.number >= 3 || bench.until > 0;
   draw(now, accumulator / TICK_DT, Math.min(elapsed, 0.1));
   renderer.timer.endFrame();
+  if (previewEdit) previewEdit.draw();
   // r_drawrepeat: the same frame again (no time passing), for the GPU readout.
   for (let i = 1; i < cv.r_drawrepeat.number; i++) {
     draw(now, accumulator / TICK_DT, 0);
@@ -1862,12 +1864,17 @@ async function previewMap(name, bytes) {
   resetView(yaw);
   angles[0] = pitch;
 }
+let previewEdit = null; // picking and dragging shapes in the editor's 3D view (client/previewedit.js)
 function startPreview() {
   document.body.classList.add('nohud');
   menu.hide();
+  input.canLock = () => false; // a click picks; the right button held looks round and flies
+  previewEdit = new PreviewEditor(canvas, () => ({ viewProj, invViewProj }),
+    (msg) => parent.postMessage(msg, location.origin), () => input.lock().catch(() => {}), () => document.exitPointerLock());
   addEventListener('message', (e) => {
-    if (e.origin !== location.origin || e.source !== parent || !e.data || e.data.type !== 'preview-map') return;
-    previewMap(e.data.name, e.data.bytes).catch((err) => console.warn(`preview: ${err.message}`));
+    if (e.origin !== location.origin || e.source !== parent || !e.data) return;
+    if (e.data.type === 'preview-map') previewMap(e.data.name, e.data.bytes).catch((err) => console.warn(`preview: ${err.message}`));
+    else previewEdit.message(e.data);
   });
   parent.postMessage({ type: 'preview-ready' }, location.origin);
 }

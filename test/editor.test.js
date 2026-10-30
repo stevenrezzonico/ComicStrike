@@ -5,7 +5,7 @@ import {
   newProject, readProject, checkProject, compileProject, projectToBuilder, hingeOf, KINDS, TEXTURES,
 } from '../client/editor/project.js';
 import { parseUntrustedBSP } from '../shared/bsp.js';
-import { CollisionWorld, Trace, traceHull, pointContents, HULL_STAND } from '../shared/trace.js';
+import { CollisionWorld, Trace, traceHull, pointContents, entityContents, HULL_STAND, ENT_LADDER } from '../shared/trace.js';
 import { Game } from '../server/game.js';
 import { Host } from '../server/host.js';
 import { textureRecord } from '../client/texcolors.js';
@@ -108,7 +108,7 @@ Deno.test('problems: no spawns, a spawn in a wall or over nothing, flat boxes, a
   q.brushes.push({ id: 901, b: [0, 0, 0, 8, 8, 8], tex: { top: 'crate08', bottom: 'crate08', side: 'crate08' }, kind: 'func_button',
     keys: { target: 'nowhere' } });
   const { errors, warnings } = checkProject(q);
-  assert.ok(errors.some((e) => e.id === q.points[0].id && /inside a box/.test(e.text)));
+  assert.ok(errors.some((e) => e.id === q.points[0].id && /inside a shape/.test(e.text)));
   assert.ok(warnings.some((e) => e.id === q.points[1].id && /no floor/.test(e.text)));
   assert.ok(errors.some((e) => e.id === 900 && /no volume/.test(e.text)));
   assert.ok(warnings.some((e) => e.id === 901 && /nowhere/.test(e.text)));
@@ -138,4 +138,42 @@ Deno.test('the builder keeps the sky box out of the project bounds it is built f
   const map = projectToBuilder(newProject());
   const sky = map.world.filter((b) => b.sky);
   assert.equal(sky.length, 6);
+});
+
+Deno.test('shapes: ramps, angled walls, pillars, stairs and ladders compile and play', async () => {
+  const { makeBrush, piecesOf, slopeOf, SHAPES } = await import('../client/editor/project.js');
+  const p = newProject();
+  const T = { top: 'crete3_wall02', bottom: 'crete3_wall02', side: 'crete3_wall02' };
+  let id = 2000;
+  const add = (b, shape) => p.brushes.push(makeBrush(id++, b, T, 'world', {}, shape));
+  add([-400, 300, 0, -144, 500, 128], { shape: 'ramp', up: 'px' });
+  add([0, -500, 0, 400, -468, 160], { shape: 'box', yaw: 30 });
+  add([300, 300, 0, 400, 400, 200], { shape: 'pillar', sides: 12 });
+  add([-600, -500, 0, -344, -380, 128], { shape: 'stairs', up: 'nx', step: 16 });
+  add([-1000, 600, 0, -980, 664, 192], { shape: 'ladder', up: 'nx' });
+  assert.deepEqual(checkProject(p).errors, []);
+  assert.equal(Math.round(slopeOf(p.brushes.at(-5))), 27);
+  assert.equal(piecesOf(p.brushes.at(-2)).length, 8, 'eight 16-unit steps');
+  const ladder = piecesOf(p.brushes.at(-1));
+  assert.deepEqual(ladder.map((pc) => pc.kind), ['world', 'func_ladder']);
+  const bsp = compileToBsp(p);
+  assert.ok(bsp.entities.some((e) => e.classname === 'func_ladder'));
+  const world = CollisionWorld.fromBSP(bsp);
+  const t = new Trace();
+  // Down onto the stairs' third step from the low (east) end (x -440..-408): 3 · 16 high.
+  traceHull(world, HULL_STAND, -424, -440, 200, -424, -440, 0, t);
+  assert.ok(Math.abs(t.endz - 36 - 48) < 0.5, `on the third step (${t.endz - 36})`);
+  // The ladder's volume is a climbable entity in front of its board.
+  const li = world.ents.findIndex((e) => e.kind === ENT_LADDER);
+  assert.ok(li > 0, 'a ladder entity');
+  assert.notEqual(entityContents(world, li, HULL_STAND, -975, 632, 100), -1, 'touching it in front of the board');
+  for (const k of Object.keys(SHAPES)) assert.ok(p.brushes.some((b) => b.shape === k), k);
+  const steep = makeBrush(1, [0, 0, 0, 64, 64, 128], T, 'world', {}, { shape: 'ramp', up: 'px' });
+  const q = newProject();
+  q.brushes.push(steep);
+  assert.ok(checkProject(q).warnings.some((w) => /slide off/.test(w.text)), 'too steep');
+  // Version 1 files read as boxes.
+  const v1 = readProject({ format: 'comicstrike-map', version: 1, brushes: [{ b: [0, 0, 0, 8, 8, 8], tex: T, kind: 'world' }] });
+  assert.equal(v1.brushes[0].shape, 'box');
+  assert.equal(v1.brushes[0].yaw, 0);
 });

@@ -37,15 +37,48 @@
   aside.right { border-right: 0; border-left: 3px solid var(--ink); }
   h3 { margin: 10px 0 4px; font: 16px/1.1 var(--display); letter-spacing: 1px; text-transform: uppercase; }
   h3:first-child { margin-top: 0; }
-  .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
-  .tools button { padding: 5px 4px; }
+  .library { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .library .card { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px; font-size: 11px;
+    font-weight: 700; line-height: 1.1; box-shadow: 1px 1px 0 var(--ink); cursor: grab; }
+  .library .card svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round;
+    stroke-linecap: round; }
+  .library .card.active svg { stroke: var(--yellow); }
   .palette { display: grid; grid-template-columns: 1fr; gap: 3px; }
   .palette button { display: flex; align-items: center; gap: 6px; padding: 2px 6px; text-align: left; font-weight: 400;
     box-shadow: none; border-width: 1px; }
   .palette .swatch { width: 18px; height: 14px; border: 1px solid var(--ink); flex: none; }
   .slots { display: flex; gap: 3px; margin-bottom: 5px; }
   .slots button { flex: 1; padding: 2px; font-size: 12px; }
-  #views { display: grid; grid-template: 1fr 1fr / 1fr 1fr; gap: 3px; background: var(--ink); min-width: 0; min-height: 0; }
+  #views { position: relative; display: grid; grid-template: 1fr 1fr / 1fr 1fr; gap: 3px; background: var(--ink); min-width: 0;
+    min-height: 0; }
+  /* Simple: one big top view beside the 3D view. */
+  #views.simple { grid-template: 1fr / 1fr 1fr; }
+  #views.simple .view[data-view=front], #views.simple .view[data-view=side] { display: none; }
+  .view.max { position: absolute; inset: 0; z-index: 3; }
+  .view .label { pointer-events: auto; cursor: zoom-in; }
+  .view input.measure { position: absolute; z-index: 4; width: 76px; padding: 1px 4px; font: bold 12px sans-serif;
+    border: 2px solid var(--red); }
+  .ctxmenu { position: fixed; z-index: 20; min-width: 200px; padding: 4px; background: var(--paper-hi);
+    border: 2px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); }
+  .ctxmenu > button { display: flex; justify-content: space-between; gap: 16px; width: 100%; padding: 4px 8px;
+    border: 0; box-shadow: none; background: none; font-weight: 400; text-align: left; }
+  .ctxmenu > button:hover:not(:disabled) { background: var(--yellow); }
+  .ctxmenu kbd { border: 0; background: none; color: var(--muted); }
+  .ctxmenu hr { margin: 3px 0; border: 0; border-top: 1px solid var(--ink); opacity: 0.25; }
+  .ctxmenu .shapes { display: flex; flex-wrap: wrap; gap: 3px; padding: 3px 4px; }
+  .ctxmenu .shapes button { padding: 1px 6px; font-size: 12px; box-shadow: none; }
+  .props .buttons { display: flex; flex-wrap: wrap; gap: 4px; }
+  /* The introduction: the page dimmed round a cut-out, a comic caption box beside it. */
+  .tour { position: fixed; inset: 0; z-index: 30; }
+  .tour-hole { position: fixed; border: 3px solid var(--yellow); border-radius: 4px;
+    box-shadow: 0 0 0 9999px rgba(23, 19, 15, 0.55); transition: all 0.25s ease; pointer-events: none; }
+  .tour-bubble { position: fixed; width: min(340px, calc(100vw - 16px)); padding: 10px 14px 12px; background: var(--paper-hi);
+    border: 3px solid var(--ink); box-shadow: 6px 6px 0 var(--ink); transform: rotate(-0.5deg); transition: top 0.25s, left 0.25s; }
+  .tour-bubble h4 { margin: 0 0 4px; font: 22px/1.1 var(--display); letter-spacing: 1px; text-transform: uppercase; }
+  .tour-bubble p { margin: 0 0 10px; font-size: 14px; }
+  .tour-count { float: right; font: 13px var(--display); color: var(--muted); }
+  .tour-buttons { display: flex; gap: 6px; align-items: center; }
+  .tour-buttons span { flex: 1; }
   .view { position: relative; background: var(--paper-hi); min-width: 0; min-height: 0; overflow: hidden; }
   .view canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .view .label { position: absolute; left: 6px; top: 4px; padding: 0 5px; background: var(--ink); color: var(--yellow);
@@ -92,14 +125,16 @@
   <button id="export">Export .bsp</button>
   <button id="play" class="go">Play alone</button>
   <button id="host" class="go">Host for friends</button>
+  <span class="sep"></span>
+  <button id="layout">Four views</button>
+  <button id="help" title="The introduction (?)">?</button>
   <span id="status" class="status"></span>
   <input id="file" type="file" accept=".json,application/json" hidden>
 </header>
 <aside class="left">
-  <h3>Tools</h3>
-  <div class="tools" id="tools"></div>
-  <h3>New boxes</h3>
-  <select id="kind" style="width: 100%"></select>
+  <h3>Shapes</h3>
+  <div class="library" id="library"></div>
+  <p class="muted" style="margin: 4px 0 0">Drag one onto a view, or click it and draw.</p>
   <h3>Textures</h3>
   <div class="slots" id="slots"></div>
   <div class="palette" id="palette"></div>
@@ -107,7 +142,7 @@
 <main id="views">
   <div class="view" data-view="top"><canvas></canvas><span class="label">Top (X / Y)</span><span class="coords"></span></div>
   <div class="view" id="view3d"><iframe id="preview" title="3D preview" allow="pointer-lock"></iframe>
-    <span class="label">3D</span><span class="hint3d">Click to fly: WASD, mouse, Space up, Ctrl down. Esc lets go.</span></div>
+    <span class="label">3D</span><span class="hint3d">Click selects (Shift: add), drag moves (Alt: up and down). Hold the right button to look round and fly: WASD, Space, Ctrl.</span></div>
   <div class="view" data-view="front"><canvas></canvas><span class="label">Front (X / Z)</span><span class="coords"></span></div>
   <div class="view" data-view="side"><canvas></canvas><span class="label">Side (Y / Z)</span><span class="coords"></span></div>
 </main>
@@ -117,11 +152,11 @@
   <ul class="problems" id="problems"></ul>
   <h3>Keys</h3>
   <ul class="keys muted">
-    <li>Drag in a view to draw a box (Box tool) or select; drag a selection to move it, its handles to resize.</li>
-    <li>Wheel zooms, right or middle drag pans.</li>
-    <li><kbd>Del</kbd> delete, <kbd>Ctrl</kbd>+<kbd>D</kbd> duplicate, arrows move by the grid, <kbd>PgUp</kbd> <kbd>PgDn</kbd> up and down.</li>
-    <li><kbd>[</kbd> <kbd>]</kbd> grid size, <kbd>Q</kbd> <kbd>E</kbd> turn a spawn, <kbd>Esc</kbd> deselect.</li>
-    <li><kbd>1</kbd>-<kbd>5</kbd> tools: select, box, T spawn, CT spawn, hostage.</li>
+    <li>Right click or long press: the menu. Double click a shape: its settings. Tap a yellow measure to type it.</li>
+    <li>Wheel or pinch zooms; right, middle or two-finger drag pans. Alt drags without snapping.</li>
+    <li><kbd>Del</kbd> delete, <kbd>Ctrl</kbd>+<kbd>D</kbd> duplicate, <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>V</kbd> copy, paste.</li>
+    <li><kbd>R</kbd> rotate 90°, <kbd>M</kbd> mirror, <kbd>F</kbd> drop to floor, <kbd>Q</kbd> <kbd>E</kbd> turn 15°.</li>
+    <li>Arrows move by the grid, <kbd>PgUp</kbd> <kbd>PgDn</kbd> up and down, <kbd>[</kbd> <kbd>]</kbd> grid, <kbd>Home</kbd> frame all.</li>
   </ul>
 </aside>
 <script type="module" src="/client/editor/editor.js"></script>
