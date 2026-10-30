@@ -361,24 +361,11 @@ export class Menu {
     this.updateWindow();
   }
 
-  // The start page: what the game is, two panels of it, the server line, the name.
+  // The start page: what the game is, the server line, the name.
   renderWelcome(body) {
     body.append(el('h2', '', 'A comic strip you can shoot in'));
     body.append(el('p', 'menu-tagline', 'CS:GO’s movement, guns and economy on the classic CS 1.6 maps, ' +
       'printed live as a comic: flat colors, ink lines, halftone dots. Nothing to install: it runs in this tab.'));
-    const shots = el('div', 'menu-shots');
-    for (const [file, alt] of [
-      ['terrorists', 'Three Terrorists with rifles beside a wooden gate, seen over an AK-47'],
-      ['counter-terrorists', 'Two Counter-Terrorists pushing through a passage of wooden panels'],
-    ]) {
-      const img = el('img');
-      img.src = `/client/img/${file}.jpg`;
-      img.alt = alt;
-      img.width = 1536;
-      img.height = 864;
-      shots.append(img);
-    }
-    body.append(shots);
     const feats = el('ul', 'menu-features');
     for (const t of [
       'Play online against others, or practice against bots in your browser.',
