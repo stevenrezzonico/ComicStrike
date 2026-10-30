@@ -1555,16 +1555,18 @@ function updateOverlay() {
   if (document.pointerLockElement) menu.hide();
   else if (!conWin.isOpen && !hud.menuOpen) menu.showPause();
 }
+// The overlay is decided once the lock request settles: asked at once, the mouse was not
+// back yet and the pause menu flashed up for a frame.
 function closeBuyMenu() {
   hud.toggleMenu(false);
-  input.lock().catch(() => input.clear()); // no mouse back (Escape): the held keys let go
-  updateOverlay();
+  input.lock().catch(() => input.clear()).finally(updateOverlay); // no mouse back (Escape): the held keys let go
 }
+// At the start menu the console opens over the menu (hiding it bared the empty canvas).
 conWin.onToggle = (open) => {
-  if (!open && playing && !hud.menuOpen) input.lock().catch(() => {});
+  if (!playing) return;
   if (open) menu.hide();
-  else if (playing) updateOverlay();
-  else menu.showStart();
+  else if (!hud.menuOpen) input.lock().catch(() => {}).finally(updateOverlay);
+  else updateOverlay();
 };
 document.addEventListener('pointerlockchange', updateOverlay);
 document.addEventListener('pointerdown', () => sounds.resume()); // audio may only start after a user gesture
