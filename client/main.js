@@ -12,7 +12,7 @@
 // &offline&map=de_dust2 opens the sandbox.
 // Keys are CS:GO binds (client/binds.js); ` opens the console (client/settings.js).
 
-import { parseBSP, parseVec3 } from '../shared/bsp.js';
+import { parseBSP, parseUntrustedBSP, parseVec3, mapNameOf } from '../shared/bsp.js';
 import {
   TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED, IN_SCORE,
   IN_ATTACK, IN_ATTACK2, IN_USE, IN_RELOAD, IN_DROP,
@@ -319,15 +319,30 @@ overlays.push(blasts);
 const viewProj = new Float32Array(16);
 const invViewProj = new Float32Array(16);
 
+// Maps that are not the server's maps/: files picked from the disk (name -> ArrayBuffer;
+// they go nowhere unless hosted as a room), and the room (server/rooms.js) we play in or
+// host: its code, and when we host it, its rcon password and console catalog.
+const ownMaps = new Map();
+let roomCode = (params.get('room') || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+let roomRcon = '', roomNames = null;
+
 let currentMap = '';
 async function loadMap(name) {
   if (!/^[\w-]+$/.test(name)) throw new Error(`bad map name: ${name}`);
   currentMap = name;
   status.textContent = `loading ${name}...`;
-  const res = await fetch(`/maps/${name}.bsp`);
-  if (!res.ok) throw new Error(`map ${name}: HTTP ${res.status}`);
+  // Our own file, a room's map (from the server's memory) or the server's maps/; the first
+  // two come from outside, so they are checked (parseUntrustedBSP).
+  let buffer = ownMaps.get(name), untrusted = true;
+  if (!buffer) {
+    const room = net && net.room;
+    const res = await fetch(room ? `/rooms/${room}/map.bsp` : `/maps/${name}.bsp`);
+    if (!res.ok) throw new Error(`map ${name}: HTTP ${res.status}`);
+    buffer = await res.arrayBuffer();
+    untrusted = !!room;
+  }
   const t0 = performance.now();
-  const bsp = parseBSP(await res.arrayBuffer());
+  const bsp = untrusted ? parseUntrustedBSP(buffer) : parseBSP(buffer);
   const mesh = buildMapMesh(bsp);
   renderer.loadMap(mesh, bsp);
   decals.clear();
@@ -1571,7 +1586,17 @@ conWin.onToggle = (open) => {
 document.addEventListener('pointerlockchange', updateOverlay);
 document.addEventListener('pointerdown', () => sounds.resume()); // audio may only start after a user gesture
 
-menu.onPlay = (team) => run(() => startOnline(team));
+menu.onPlay = (team) => {
+  if (menu.roomGone) setRoom(''); // the link's room closed: the Play panel shows the server's own game
+  run(() => startOnline(team));
+};
+menu.onMapFile = (file) => addOwnMap(file);
+menu.onHost = (map, team, opts) => run(() => hostRoom(map, team, opts));
+menu.onLeaveRoom = () => {
+  setRoom('');
+  menu.fetchServer();
+};
+menu.room = roomCode;
 menu.onPractice = (map, team, opts) => run(() => startPractice(map, team, opts));
 menu.onResume = () => input.lock().catch(() => {});
 menu.onLeave = () => leaveGame();
@@ -1600,7 +1625,10 @@ async function joinServer(team) {
   menu.busy('Connecting...');
   net = new NetClient();
   if (localWorker) net.connectLocal(localWorker, localRcon);
-  else await net.connect();
+  else {
+    await net.connect(roomCode);
+    if (roomCode && roomRcon) net.localRcon = roomRcon; // our room: its console is ours, like practice
+  }
   const welcome = await net.join(team, primary, secondary, cv.name.value);
   selfId = welcome.playerId;
   menu.busy(`Loading ${welcome.map}...`);
@@ -1649,8 +1677,58 @@ async function startOnline(team) {
     net = null;
     throw new Error(`could not connect (${err.message})`);
   }
-  conWin.print(`connected: ${currentMap}`);
+  if (roomCode && roomNames) { // our room: its console's cvars and commands join the suggestions
+    con.remote = new Map(roomNames.map(([name, help, value, hint]) => [name, { help, value, hint }]));
+  }
+  conWin.print(roomCode ? `connected: room ${roomCode}, ${currentMap}` : `connected: ${currentMap}`);
+  if (roomCode && roomRcon) conWin.print('your room: its console is yours (bot_add, mp_restartgame, ... no rcon needed)');
   enterGame();
+}
+
+// A map file picked in the menu (Your map): checked here first (parseUntrustedBSP), so a
+// file that is not a playable map is refused before anything starts. Returns its name.
+async function addOwnMap(file) {
+  const buffer = await file.arrayBuffer();
+  if (buffer.byteLength > OWN_MAP_MAX) throw new Error(`${file.name} is too large (${OWN_MAP_MAX >> 20} MB at most)`);
+  try {
+    parseUntrustedBSP(buffer);
+  } catch (err) {
+    throw new Error(`${file.name} is not a map this game can play (${err.message})`);
+  }
+  const name = mapNameOf(file.name);
+  ownMaps.clear(); // one at a time
+  ownMaps.set(name, buffer);
+  return name;
+}
+const OWN_MAP_MAX = 24 << 20; // the server's room limit (server/rooms.js ROOM_LIMITS.bytes)
+
+// Host for friends: uploads our own map to the server, which runs a room on it (held in
+// its memory only, server/rooms.js), then joins it. The page's address becomes the
+// invite link.
+async function hostRoom(map, team, { mode = 'competitive', players = 0, difficulty = 1 } = {}) {
+  const bytes = ownMaps.get(map);
+  if (!bytes) throw new Error('pick a map file first');
+  if (playing) leaveGame();
+  menu.busy(`Uploading ${map}...`);
+  const q = new URLSearchParams({ file: `${map}.bsp`, mode, players: String(players), difficulty: String(difficulty) });
+  const res = await fetch(`/rooms?${q}`, { method: 'POST', body: bytes, headers: { 'content-type': 'application/octet-stream' } });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(out.error || `the upload failed (HTTP ${res.status})`);
+  setRoom(out.code, out.rcon, out.names);
+  await startOnline(team);
+}
+
+// The room the Play panel and the next join go to ('' the server's own game), kept in the
+// page's address (the link to share; a reload joins it again).
+function setRoom(code, rcon = '', names = null) {
+  roomCode = code;
+  roomRcon = rcon;
+  roomNames = names;
+  menu.room = code;
+  const url = new URL(location.href);
+  if (code) url.searchParams.set('room', code);
+  else url.searchParams.delete('room');
+  history.replaceState(null, '', url);
 }
 
 // Practice: the game server in a Web Worker (client/localserver.js) on `map` in `mode`,
@@ -1674,7 +1752,7 @@ async function startPractice(map, team, { mode = 'competitive', players = 10, di
         else if (e.data.type === 'failed') reject(new Error(e.data.error));
       };
       worker.onerror = (e) => reject(new Error(e.message || 'the practice server did not start'));
-      worker.postMessage({ type: 'start', map, mode, players, difficulty });
+      worker.postMessage({ type: 'start', map, mode, players, difficulty, bytes: ownMaps.get(map) }); // bytes: copied
     });
   } catch (err) {
     worker.terminate();
@@ -1720,8 +1798,8 @@ function leaveGame(message = '') {
   if (localWorker) {
     localWorker.terminate();
     localWorker = null;
-    con.remote = new Map();
   }
+  con.remote = new Map();
   playing = false;
   backdrop = false;
   resetSession();
@@ -1766,7 +1844,8 @@ async function start() {
   requestAnimationFrame(frame);
   // URL parameters skip the menu (testing): join at once (the sandbox if no server
   // answers), practice, or the sandbox.
-  if (!['team', 'offline', 'map', 'practice'].some((p) => params.has(p))) return menu.showStart();
+  // A room link (?room=code) opens on the Play panel: that room's teams.
+  if (!['team', 'offline', 'map', 'practice'].some((p) => params.has(p))) return menu.showStart('', roomCode ? 'play' : '');
   const team = { spec: 1, t: 2, ct: 3 }[params.get('team')] || 0;
   const map = params.get('map') || 'de_dust2';
   if (params.has('practice')) {

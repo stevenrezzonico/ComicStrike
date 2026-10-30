@@ -5,14 +5,16 @@
 // reads them synchronously), and handles `map` / `changelevel` by fetching first.
 //
 // Messages in:  start { map, mode: a GAME_MODES name ('competitive', 'casual', 'wingman', 'armsrace',
-//                        'demolition', 'deathmatch', 'demo'), players, difficulty },
+//                        'demolition', 'deathmatch', 'demo'), players, difficulty,
+//                        bytes: the map file itself (a player's own map, checked as untrusted:
+//                        parseUntrustedBSP), else fetched from maps/ },
 //               open { id }, dgram { id, bytes }, close { id },
 //               pause { on }: the page's pause menu; the ticks stop (bots, the round clock,
 //                 timeouts) and go on from where they were
 // Messages out: ready { rcon, names: the server console's catalog() } | failed { error }, dgram { id, bytes }, close { id, reason }
 
 import { Host, GAME_MODES } from '../server/host.js';
-import { parseBSP } from '../shared/bsp.js';
+import { parseBSP, parseUntrustedBSP } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
 
 const CFGS = Object.values(GAME_MODES).map((name) => `gamemode_${name}.cfg`);
@@ -21,10 +23,12 @@ const TICK_MS = 1000 / TICK_RATE;
 let host = null;
 let players = 0; // bot_quota (fill) once the player is in
 const maps = new Map(); // name -> parsed BSP
+let own = null; // a player's own map, from its bytes: { name, bsp } (kept across map changes)
 const cfgs = {};
 const sessions = new Map(); // id -> { game, client }
 
 async function fetchMap(name) {
+  if (own && name === own.name) return own.bsp;
   if (!/^[\w-]+$/.test(name)) throw new Error(`bad map name: ${name}`);
   if (!maps.has(name)) {
     const res = await fetch(`/maps/${name}.bsp`);
@@ -35,7 +39,8 @@ async function fetchMap(name) {
   return maps.get(name);
 }
 
-async function start({ map, mode, players: n, difficulty }) {
+async function start({ map, mode, players: n, difficulty, bytes }) {
+  if (bytes) own = { name: map, bsp: parseUntrustedBSP(bytes) };
   const [list] = await Promise.all([
     fetch('/maps.json').then((r) => r.json()).catch(() => []),
     ...CFGS.map((name) => fetch(`/cfg/${name}`).then((r) => (r.ok ? r.text() : null)).then((t) => {
@@ -45,10 +50,11 @@ async function start({ map, mode, players: n, difficulty }) {
   ]);
   host = new Host({
     loadMap: (name) => {
+      if (own && name === own.name) return own.bsp;
       if (!maps.has(name)) throw new Error('not loaded');
       return maps.get(name);
     },
-    listMaps: () => list,
+    listMaps: () => (own ? [own.name, ...list.filter((m) => m !== own.name)] : list),
     readCfg: (name) => cfgs[name] ?? null,
     print: (s) => console.log(s),
   });

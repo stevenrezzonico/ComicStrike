@@ -24,7 +24,8 @@ export class NetClient {
     this.wt = null;
     this.local = null; // the practice worker, when connected to it
     this.localId = 0;
-    this.localRcon = '';
+    this.localRcon = ''; // an rcon password the page holds (practice, a room we host): the console uses it
+    this.room = ''; // the room (a hosted map) this session is in; '' the server's own game
     this.onLocal = null;
     this.writer = null;
     this.closed = false;
@@ -75,8 +76,12 @@ export class NetClient {
 
   // Opens the WebTransport session: with the server's pinned certificate hash (its own
   // self-signed one), or none (a real certificate, checked like any site's).
-  async connect(timeoutMs = 3000) {
-    const info = await (await fetch('/connect.json')).json();
+  // `room`: a room's code (server/rooms.js): the session joins that room's game.
+  async connect(room = '', timeoutMs = 3000) {
+    const res = await fetch(room ? `/connect.json?room=${encodeURIComponent(room)}` : '/connect.json');
+    const info = await res.json();
+    if (!res.ok) throw new Error(info.error || `HTTP ${res.status}`);
+    this.room = room;
     // Chrome resolves "localhost" to ::1 first; the server listens on IPv4.
     const host = location.hostname === 'localhost' ? '127.0.0.1' : location.hostname;
     const url = `https://${host.includes(':') ? `[${host}]` : host}:${info.port}`;
@@ -215,7 +220,7 @@ export class NetClient {
       if (this.rejected) throw new Error(`server rejected us: ${this.rejected}`);
       if (this.closed) throw new Error(`connection closed: ${this.closeReason}`);
       if (performance.now() - start > JOIN_TIMEOUT_MS) throw new Error('no answer from the server');
-      this.send(writeHello(this.nextWriter(), team, primary, secondary, name));
+      this.send(writeHello(this.nextWriter(), team, primary, secondary, name, this.room));
       await new Promise((r) => setTimeout(r, HELLO_RETRY_MS));
       this.poll();
     }

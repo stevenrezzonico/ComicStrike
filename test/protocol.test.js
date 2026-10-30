@@ -11,9 +11,9 @@ import {
 
 Deno.test('hello and welcome round-trip', () => {
   const w = new Writer(), r = new Reader();
-  r.set(writeHello(w, 2, 7, 3, 'gabe'));
+  r.set(writeHello(w, 2, 7, 3, 'gabe', 'abc234'));
   assert.equal(r.u8v(), C2S_HELLO);
-  assert.deepEqual(readHello(r), { version: PROTOCOL_VERSION, team: 2, primary: 7, secondary: 3, name: 'gabe' });
+  assert.deepEqual(readHello(r), { version: PROTOCOL_VERSION, team: 2, primary: 7, secondary: 3, name: 'gabe', room: 'abc234' });
   r.set(writeWelcome(w, 5, 123456, 64, 'de_dust2'));
   assert.equal(r.u8v(), S2C_WELCOME);
   assert.deepEqual(readWelcome(r), { version: PROTOCOL_VERSION, playerId: 5, serverTick: 123456, tickRate: 64, map: 'de_dust2' });

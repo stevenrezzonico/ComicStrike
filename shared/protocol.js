@@ -3,7 +3,8 @@
 // buffers.
 //
 // Client -> server
-//   HELLO    u8 type, u16 version, u8 team, u8 primary, u8 secondary, str name
+//   HELLO    u8 type, u16 version, u8 team, u8 primary, u8 secondary, str name, str room (the
+//            room code of a hosted map, server/rooms.js; empty: the server's own game)
 //   BYE      u8 type (leaving: free my player now; sent best-effort on page hide)
 //   BUY      u8 type, u16 buyId, u8 item (sent 3 times; the server acts once per buyId)
 //   COMMAND  u8 type, u16 cmdId, lstr text (a console command for the server: name, jointeam,
@@ -49,7 +50,7 @@ import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 import { MAX_MOVERS } from './doors.js';
 
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -179,7 +180,7 @@ export class Reader {
 
 // --- Handshake ---------------------------------------------------------------
 
-export function writeHello(w, team, primary, secondary, name) {
+export function writeHello(w, team, primary, secondary, name, room = '') {
   w.reset();
   w.u8v(C2S_HELLO);
   w.u16v(PROTOCOL_VERSION);
@@ -187,11 +188,26 @@ export function writeHello(w, team, primary, secondary, name) {
   w.u8v(primary);
   w.u8v(secondary);
   w.str(name);
+  w.str(room);
   return w.view();
 }
 
 export function readHello(r) { // after the type byte
-  return { version: r.u16v(), team: r.u8v(), primary: r.u8v(), secondary: r.u8v(), name: r.str() };
+  const h = { version: r.u16v(), team: r.u8v(), primary: r.u8v(), secondary: r.u8v(), name: r.str(), room: '' };
+  if (r.remaining > 0) h.room = r.str();
+  return h;
+}
+
+// The room a datagram asks for if it is a HELLO (the server routes a new session by it),
+// else null.
+export function helloRoom(bytes) {
+  const r = new Reader().set(bytes);
+  if (r.remaining < 1 || r.u8v() !== C2S_HELLO) return null;
+  try {
+    return readHello(r).room;
+  } catch {
+    return null;
+  }
 }
 
 export function writeWelcome(w, playerId, serverTick, tickRate, map) {

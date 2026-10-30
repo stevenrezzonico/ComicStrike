@@ -114,4 +114,5 @@ Then open `https://cstrike.click/` in Chrome or Edge and click Play.
   ```
 
   (A push-triggered GitHub Actions deploy would need an SSH key stored as a repository secret; polling a public repository needs none.)
+- **Rooms (players' own maps):** players can upload a map and play it with friends in a room of its own (`server/rooms.js`). Nothing is written to disk: each room holds its map (up to 24 MB) and a game in memory (measured: ~12 MB of heap, ~26 MB of process memory a room with 10 bots on de_dust2, css_overpass and cs_office), and closes 2 minutes after its last player leaves. At most 8 rooms at once and one per address (`ROOM_LIMITS`); a restart (an update) closes them all.
 - **Hosting control panels (Pterodactyl and similar):** run the same `deno run --unstable-net --allow-net --allow-read --allow-env server/main.js`. Set the variables from `comicstrike.env`, plus `TLS_CERT` and `TLS_KEY` pointing at the certificate files, and give the server TCP and UDP 443.

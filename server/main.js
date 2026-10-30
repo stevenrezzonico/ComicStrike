@@ -22,8 +22,10 @@ import { ensureCert } from './cert.js';
 import { staticPath } from './static.js';
 import { listen } from './transport.js';
 import { Host, GAME_MODES } from './host.js';
+import { Rooms, RoomError } from './rooms.js';
 import { parseBSP } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
+import { Writer, writeReject, helloRoom } from '../shared/protocol.js';
 
 const ROOT = new URL('../', import.meta.url);
 const ROOT_PATH = fileURLToPath(ROOT);
@@ -78,35 +80,70 @@ const envPassword = Deno.env.get('RCON_PASSWORD');
 if (envPassword) host.password.set(envPassword);
 host.start(MAP);
 
+// Rooms: games on maps players upload (server/rooms.js), held in memory only.
+const rooms = new Rooms({ readCfg: (name) => readText(new URL(`cfg/${name}`, ROOT)) });
+
+// A session belongs to the game its first HELLO asks for: the server's own (no room code)
+// or a room's. Datagrams before it are dropped.
 listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key }, (session) => {
-  const game = host.game; // a map change replaces the game; this session stays with its own
-  const client = game.connect(session);
-  if (!client) return { onDatagram() {}, onClose() {} };
+  let game = null, client = null, refused = false;
   return {
     onDatagram(bytes) {
+      if (!client) {
+        if (refused) return;
+        const code = helloRoom(bytes);
+        if (code === null) return;
+        const room = code ? rooms.get(code) : null;
+        if (code && !room) {
+          refused = true;
+          session.send(writeReject(new Writer(), 'no such room: it may have closed').slice());
+          session.close('no such room');
+          return;
+        }
+        game = (room ? room.host : host).game; // a map change replaces the game; this session stays with its own
+        client = game.connect(session);
+        if (!client) {
+          refused = true;
+          return;
+        }
+        if (room) rooms.joined(room);
+      }
       game.receive(client, bytes);
     },
     onClose() {
+      if (!client) return;
       if (client.joined) console.log(`player ${client.id} "${client.name}" left`);
       game.disconnect(client);
     },
   };
 });
 
-// Fixed-rate loop on the monotonic clock: each wakeup runs every tick that is due, so
-// timer jitter never accumulates into drift. After a long stall it skips ahead.
+// Fixed-rate loops on the monotonic clock, one per game (the server's own and each room's):
+// each wakeup runs every tick that is due, so timer jitter never accumulates into drift.
+// After a long stall a game skips ahead.
 const TICK_MS = 1000 / TICK_RATE;
-let epoch = performance.now();
-function loop() {
-  const game = host.game;
-  const due = Math.floor((performance.now() - epoch) / TICK_MS);
+const main = { host, epoch: performance.now() };
+let sweptAt = 0;
+function runDue(entry, now) {
+  const game = entry.host.game;
+  const due = Math.floor((now - entry.epoch) / TICK_MS);
   let ran = 0;
   while (game.tick < due && ran < 8) {
-    host.step(game);
+    entry.host.step(game);
     ran++;
   }
-  if (game.tick < due) epoch = performance.now() - game.tick * TICK_MS; // fell behind: resync
-  setTimeout(loop, Math.max(0, epoch + (game.tick + 1) * TICK_MS - performance.now()));
+  if (game.tick < due) entry.epoch = performance.now() - game.tick * TICK_MS; // fell behind: resync
+  return entry.epoch + (game.tick + 1) * TICK_MS;
+}
+function loop() {
+  const now = performance.now();
+  let next = runDue(main, now);
+  for (const room of rooms.rooms.values()) next = Math.min(next, runDue(room, now));
+  if (now - sweptAt > 1000) {
+    sweptAt = now;
+    rooms.sweep();
+  }
+  setTimeout(loop, Math.max(0, next - performance.now()));
 }
 loop();
 
@@ -142,11 +179,71 @@ async function serveStatic(pathname, req) {
 }
 
 const tls = TLS_CERT ? { cert: certInfo.cert, key: certInfo.key } : {};
-Deno.serve({ hostname: BIND, port: HTTP_PORT, ...tls, onListen: () => {} }, async (req) => {
-  const { pathname } = new URL(req.url);
+// A request body, refused past `max` bytes (whatever content-length says).
+async function readBody(req, max) {
+  const declared = Number(req.headers.get('content-length') || 0);
+  if (declared > max) throw new RoomError(`the map is too large (${max >> 20} MB at most)`, 413);
+  const parts = [];
+  let size = 0;
+  for await (const chunk of req.body || []) {
+    size += chunk.byteLength;
+    if (size > max) throw new RoomError(`the map is too large (${max >> 20} MB at most)`, 413);
+    parts.push(chunk);
+  }
+  const out = new Uint8Array(size);
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.byteLength;
+  }
+  return out;
+}
+
+// POST /rooms?file=<name>&mode=<mode>&players=<n>&difficulty=<0-3>, the map file as the
+// body: a new room; answers its code, the map name, the room's rcon password (the uploader's
+// console uses it) and the room console's catalog (the console's suggestions).
+async function createRoom(req, url, address) {
+  try {
+    const bytes = await readBody(req, rooms.limits.bytes);
+    const q = url.searchParams;
+    const room = rooms.create(bytes, {
+      fileName: q.get('file') || '', mode: q.get('mode') || 'competitive', players: +q.get('players') || 0,
+      difficulty: +(q.get('difficulty') ?? 1), address,
+    });
+    return Response.json({ code: room.code, map: room.name, rcon: room.rcon, names: room.host.con.catalog() });
+  } catch (err) {
+    if (!(err instanceof RoomError)) console.warn('room upload failed:', err);
+    return Response.json({ error: err instanceof RoomError ? err.message : 'the upload failed' },
+      { status: err instanceof RoomError ? err.status : 500 });
+  }
+}
+
+async function serveRoomMap(room, req) {
+  const headers = { 'content-type': 'application/octet-stream', 'cache-control': 'no-store', 'vary': 'accept-encoding' };
+  if (/\bgzip\b/.test(req.headers.get('accept-encoding') || '')) {
+    return new Response(await rooms.gzipped(room), { headers: { ...headers, 'content-encoding': 'gzip' } });
+  }
+  return new Response(room.bytes, { headers });
+}
+
+Deno.serve({ hostname: BIND, port: HTTP_PORT, ...tls, onListen: () => {} }, async (req, info) => {
+  const url = new URL(req.url);
+  const { pathname } = url;
   if (pathname === '/connect.json') {
     const certHash = certInfo.hash && Array.from(certInfo.hash);
+    const code = url.searchParams.get('room');
+    if (code) {
+      const room = rooms.get(code);
+      if (!room) return Response.json({ error: 'no such room: it may have closed' }, { status: 404 });
+      return Response.json({ port: GAME_PORT, certHash, ...room.host.info(), room: room.code });
+    }
     return Response.json({ port: GAME_PORT, certHash, ...host.info() });
+  }
+  if (pathname === '/rooms' && req.method === 'POST') return createRoom(req, url, info.remoteAddr.hostname);
+  const roomMap = /^\/rooms\/([a-z0-9]+)\/map\.bsp$/.exec(pathname);
+  if (roomMap) {
+    const room = rooms.get(roomMap[1]);
+    return room ? serveRoomMap(room, req) : new Response('no such room', { status: 404 });
   }
   if (pathname === '/maps.json') return Response.json(host.opts.listMaps()); // for offline practice
   return (await serveStatic(pathname, req)) || new Response('not found', { status: 404 });

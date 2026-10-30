@@ -141,7 +141,11 @@ export class Menu {
     this.practicePlayers = 10; // bot_quota fill: bots make up the rest
     this.demoPlayers = 0; // the demo: no bots unless asked for (targets)
     this.practiceDifficulty = 1;
-    this.panel = ''; // open panel: '', 'play', 'practice', 'demo', 'team', 'settings'
+    this.panel = ''; // open panel: '', 'play', 'practice', 'demo', 'own', 'team', 'settings'
+    this.room = ''; // a room's code (a hosted map, server/rooms.js): Play joins it
+    this.roomGone = false; // the room's code did not answer (it closed)
+    this.ownMap = ''; // the map file picked in Your map (its name; the page holds the bytes)
+    this.ownError = '';
     this.tab = 0;
     this.shownAt = 0;
     this.server = null; // connect.json, once fetched
@@ -166,6 +170,9 @@ export class Menu {
     this.onResume = () => {};
     this.onLeave = () => {};
     this.onTeam = (_team) => {};
+    this.onMapFile = (_file) => Promise.resolve(''); // a map file picked: its name, or rejects with why not
+    this.onHost = (_map, _team, _opts) => {};
+    this.onLeaveRoom = () => {};
     this.onWindow = (_open) => {}; // the Video tab's window opened or closed
 
     root.innerHTML = '';
@@ -214,10 +221,10 @@ export class Menu {
   }
 
   // The start menu (no game running); `message` explains why we are here (an error).
-  showStart(message = '') {
+  showStart(message = '', panel = '') {
     this.inGame = false;
     this.message = message;
-    this.panel = '';
+    this.panel = panel;
     this.open();
     this.fetchServer();
   }
@@ -307,9 +314,13 @@ export class Menu {
   }
 
   async fetchServer() {
+    const room = this.room;
     try {
       const [server, maps] = await Promise.all([
-        fetch('/connect.json').then((r) => r.json()),
+        fetch(room ? `/connect.json?room=${room}` : '/connect.json').then((r) => {
+          this.roomGone = !!room && r.status === 404;
+          return this.roomGone ? fetch('/connect.json').then((m) => m.json()) : r.json();
+        }),
         fetch('/maps.json').then((r) => r.json()),
       ]);
       this.server = server;
@@ -344,6 +355,7 @@ export class Menu {
       item('Play', 'play');
       item('Practice', 'practice');
       item('Demo', 'demo');
+      item('Your map', 'own');
       item('Settings', 'settings');
     }
     this.note.textContent = this.message;
@@ -351,13 +363,15 @@ export class Menu {
 
     const body = this.body;
     body.innerHTML = '';
-    body.classList.toggle('empty', !this.panel && this.inGame);
     if (this.panel === 'play') this.renderPlay(body);
     else if (this.panel === 'practice') this.renderPractice(body);
-    else if (this.panel === 'demo') this.renderPractice(body, true);
+    else if (this.panel === 'demo') this.renderPractice(body, 'demo');
+    else if (this.panel === 'own') this.renderPractice(body, 'own');
     else if (this.panel === 'team') this.renderTeam(body, (team) => this.onTeam(team));
     else if (this.panel === 'settings') this.renderSettings(body);
     else if (!this.inGame) this.renderWelcome(body);
+    else if (this.room && this.online) this.renderInvite(body);
+    body.classList.toggle('empty', !this.panel && this.inGame && !(this.room && this.online));
     this.updateWindow();
   }
 
@@ -394,7 +408,13 @@ export class Menu {
   }
 
   renderPlay(body) {
-    body.append(el('h2', '', 'Play online'));
+    body.append(el('h2', '', this.room && !this.roomGone ? `Room ${this.room}` : 'Play online'));
+    if (this.room) {
+      body.append(el('p', 'menu-hint', this.roomGone
+        ? `Room ${this.room} has closed (rooms close once nobody plays in them). This is the server's own game.`
+        : 'A game on a map someone brought, on this server. Share this page\'s address to invite more players.'));
+      body.append(button(this.roomGone ? 'OK' : 'Play the server\'s own game instead', () => this.onLeaveRoom()));
+    }
     const s = this.server;
     body.append(el('p', 'menu-server', s
       ? `${s.hostname} · ${s.map} · ${MODE_LABELS[s.mode] || s.mode || 'Competitive'} · ${s.players}/${s.maxPlayers} players`
@@ -415,15 +435,80 @@ export class Menu {
     body.append(row);
   }
 
-  // Practice, or (demo) the demo mode: the same panel without the mode choice, bots
-  // optional (targets).
-  renderPractice(body, demo = false) {
-    body.append(el('h2', '', demo ? 'Demo' : 'Practice'));
+  // In a room: the link that brings friends in.
+  renderInvite(body) {
+    body.append(el('h2', '', `Room ${this.room}`));
+    body.append(el('p', 'menu-hint', 'Friends who open this link join your room:'));
+    const row = el('div', 'menu-row menu-invite');
+    const link = el('input');
+    link.readOnly = true;
+    link.value = `${location.origin}/?room=${this.room}`;
+    link.addEventListener('focus', () => link.select());
+    const copy = button('Copy', () => {
+      link.select();
+      const done = () => {
+        copy.textContent = 'Copied';
+      };
+      if (navigator.clipboard) navigator.clipboard.writeText(link.value).then(done, () => {});
+      else if (document.execCommand('copy')) done();
+    });
+    row.append(link, copy);
+    body.append(row);
+    body.append(el('p', 'menu-hint', 'The server holds the map in memory only and drops it a couple of minutes ' +
+      'after the last player leaves.'));
+  }
+
+  // Your map: a .bsp from the disk, played alone (practice: nothing leaves the page) or
+  // hosted for friends (a room on the server).
+  renderOwn(body) {
+    body.append(el('p', 'menu-hint', 'Play any GoldSrc map (CS 1.6, BSP version 30) you have: alone against bots, ' +
+      'all in this page, or host it for friends. Hosting sends the file to this server, which keeps it in memory ' +
+      'only while people play.'));
+    const pick = el('label', 'menu-drop');
+    const input = el('input');
+    input.type = 'file';
+    input.accept = '.bsp';
+    const take = (file) => {
+      if (!file) return;
+      this.ownError = '';
+      pick.classList.add('busy');
+      this.onMapFile(file).then((name) => {
+        this.ownMap = name;
+      }, (err) => {
+        this.ownError = err.message || String(err);
+      }).finally(() => this.render());
+    };
+    input.addEventListener('change', () => take(input.files[0]));
+    pick.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      pick.classList.add('over');
+    });
+    pick.addEventListener('dragleave', () => pick.classList.remove('over'));
+    pick.addEventListener('drop', (e) => {
+      e.preventDefault();
+      pick.classList.remove('over');
+      take(e.dataTransfer.files[0]);
+    });
+    pick.append(input, el('span', '', this.ownMap ? `${this.ownMap}.bsp (drop or click for another)` :
+      'Drop a .bsp file here, or click to choose one'));
+    body.append(pick);
+    if (this.ownError) body.append(el('p', 'menu-hint menu-error', this.ownError));
+  }
+
+  // Practice, (demo) the demo mode: the same panel without the mode choice, bots optional
+  // (targets), or (own) a map of the player's own: a file instead of the list of maps.
+  renderPractice(body, kind = 'practice') {
+    const demo = kind === 'demo', own = kind === 'own';
+    body.append(el('h2', '', demo ? 'Demo' : own ? 'Your map' : 'Practice'));
     if (demo) {
       body.append(el('p', 'menu-hint', 'Try everything out: buy anything for free, anywhere, infinite ammo and ' +
         'grenades, you cannot die, plant and defuse the bomb yourself. Targets are enemy bots that respawn.'));
     }
-    const maps = this.maps || [];
+    if (own) {
+      this.renderOwn(body);
+      if (!this.ownMap) return;
+    }
+    const maps = own ? [this.ownMap] : this.maps || [];
     if (!maps.length) {
       body.append(el('p', 'menu-hint', this.maps ? 'No maps found in maps/.' : 'Loading maps...'));
       return;
@@ -432,9 +517,9 @@ export class Menu {
       this.practiceMap = 'de_playground';
       this.demoMapPicked = true;
     }
-    if (!maps.includes(this.practiceMap)) this.practiceMap = maps.includes('de_dust2') ? 'de_dust2' : maps[0];
+    if (!own && !maps.includes(this.practiceMap)) this.practiceMap = maps.includes('de_dust2') ? 'de_dust2' : maps[0];
     const grid = el('div', 'menu-maps');
-    for (const m of maps) {
+    for (const m of own ? [] : maps) {
       const b = button(m, () => {
         this.practiceMap = m;
         this.render();
@@ -443,7 +528,7 @@ export class Menu {
       if (m === this.practiceMap) b.classList.add('active');
       grid.append(b);
     }
-    body.append(grid);
+    if (!own) body.append(grid);
     const teams = el('div', 'menu-teams');
     for (const [n, label, cls] of [[2, 'Terrorists', 't'], [3, 'Counter-Terrorists', 'ct']]) {
       const b = button(label, () => {
@@ -491,9 +576,18 @@ export class Menu {
         this.practiceDifficulty = v;
       });
     }
-    body.append(button('Start', () => this.onPractice(this.practiceMap, this.practiceTeam, {
-      mode: demo ? 'demo' : this.practiceMode, players, difficulty: this.practiceDifficulty,
-    }), 'menu-go'));
+    const opts = { mode: demo ? 'demo' : this.practiceMode, players, difficulty: this.practiceDifficulty };
+    if (!own) {
+      body.append(button('Start', () => this.onPractice(this.practiceMap, this.practiceTeam, opts), 'menu-go'));
+      return;
+    }
+    const go = el('div', 'menu-teams');
+    go.append(button('Play alone', () => this.onPractice(this.ownMap, this.practiceTeam, opts), 'menu-go'));
+    const host = button('Host for friends', () => this.onHost(this.ownMap, this.practiceTeam, opts), 'menu-go');
+    host.disabled = !this.server;
+    if (!this.server) host.title = 'Hosting needs the server, which did not answer';
+    go.append(host);
+    body.append(go);
   }
 
   // --- Settings ------------------------------------------------------------------------

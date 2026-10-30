@@ -303,6 +303,15 @@
   .menu-features { margin: 0 0 12px; padding-left: 22px; }
   .menu-features li { margin: 2px 0; }
   .menu-hint { font-size: 13px; opacity: 0.7; }
+  #menu button.menu-go:disabled { opacity: 0.45; cursor: not-allowed; }
+  /* Your map: a drop zone for a .bsp file; an error under it; the room's invite link. */
+  .menu-drop { display: block; margin: 10px 0; padding: 22px 16px; text-align: center; font-weight: 700;
+    border: 3px dashed var(--ink); background: var(--paper-hi); cursor: pointer; }
+  .menu-drop:hover, .menu-drop.over { background: var(--yellow); }
+  .menu-drop.busy { opacity: 0.6; }
+  .menu-drop input { display: none; }
+  .menu-error { background: var(--red); color: var(--paper-hi); opacity: 1; padding: 4px 8px; }
+  .menu-invite input { font-family: Consolas, monospace; }
   @media (max-width: 720px) {
     #menu { flex-direction: column; padding: 16px; gap: 14px; }
     .menu-side { flex: none; }
