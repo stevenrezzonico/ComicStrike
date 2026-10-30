@@ -250,7 +250,7 @@
   #menu .menu-bind button.key.waiting { background: var(--yellow); }
   .menu-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
   /* The Video tab's window: the game canvas shows through a hole clipped out of #menu. */
-  .menu-window { aspect-ratio: 16 / 9; margin: 0 0 8px; border: 3px solid var(--ink); box-shadow: 4px 4px 0 var(--ink);
+  .menu-window { aspect-ratio: 16 / 9; width: min(100%, 53.3vh); margin: 0 auto 8px; border: 3px solid var(--ink); box-shadow: 4px 4px 0 var(--ink);
     background: var(--paper-hi); position: relative; }
   .menu-window .hole { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
   .menu-window .hole.ready .note { display: none; }
@@ -259,6 +259,7 @@
   #menu button.menu-hold { font-size: 14px; padding: 6px 10px 4px; }
   #menu button.menu-hold:active { background: var(--red); color: var(--paper-hi); }
   .menu-settings { max-height: calc(100vh - 12vh - 180px); overflow-y: auto; padding-right: 8px; }
+  .menu-window-box ~ .menu-settings { max-height: calc(100vh - 12vh - 215px - min(30vh, 0.5625 * min(612px, 88vw - 48px))); }
   .menu-preview canvas { display: block; width: 100%; height: 120px; border: 3px solid var(--ink); margin-bottom: 8px;
     box-sizing: border-box; }
   .menu-row input:not([type]) { flex: 1 1 120px; min-width: 0; }

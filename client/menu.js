@@ -511,6 +511,8 @@ export class Menu {
     });
     body.append(tabs);
     const [, rows] = TABS[this.tab];
+    // The Video tab's window stays put above the list, which scrolls under it.
+    if (rows) for (const row of rows) if (row[0] === 'window') body.append(this.settingRow(row));
     const list = el('div', 'menu-settings');
     body.append(list);
     if (!rows) {
@@ -521,7 +523,7 @@ export class Menu {
       }, 'menu-reset'));
       return;
     }
-    for (const row of rows) list.append(this.settingRow(row));
+    for (const row of rows) if (row[0] !== 'window') list.append(this.settingRow(row));
     body.append(button('Restore defaults', () => {
       for (const row of rows) if (row[1]) this.cv[row[1]].set(this.cv[row[1]].defaultValue);
       this.refresh();
@@ -544,7 +546,7 @@ export class Menu {
         hold.addEventListener(ev, () => this.compare(false));
       }
       row.append(hold, el('span', 'menu-hint', 'The window shows the game as printed with the settings below.'));
-      const box = el('div');
+      const box = el('div', 'menu-window-box');
       box.append(wrap, row);
       return box;
     }
