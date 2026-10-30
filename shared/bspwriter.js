@@ -452,39 +452,95 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
     }
   });
 
+  // Does the ray from p along d (unit) hit brush o within `far`?
+  function hits(o, p, d, far) {
+    const b = o.b;
+    let t0 = 0, t1 = far;
+    for (let k = 0; k < 3 && t0 <= t1; k++) { // the bounds first
+      if (Math.abs(d[k]) < 1e-9) {
+        if (p[k] < b[k] || p[k] > b[k + 3]) t0 = Infinity;
+        continue;
+      }
+      let ta = (b[k] - p[k]) / d[k], tb = (b[k + 3] - p[k]) / d[k];
+      if (ta > tb) [ta, tb] = [tb, ta];
+      t0 = Math.max(t0, ta);
+      t1 = Math.min(t1, tb);
+    }
+    if (t0 > t1) return false;
+    t0 = 0;
+    t1 = far;
+    for (const pl of o.planes) {
+      const den = dot3(pl.n, d), dist = pl.d - dot3(pl.n, p);
+      if (Math.abs(den) < 1e-9) {
+        if (dist < 0) return false;
+        continue;
+      }
+      const t = dist / den;
+      if (den > 0) t1 = Math.min(t1, t);
+      else t0 = Math.max(t0, t);
+      if (t0 > t1) return false;
+    }
+    return true;
+  }
+
+  // The occluders binned by their top-down bounds on a grid of RAY_CELL squares, so a ray
+  // tests only the brushes in the cells it crosses (walked in order, a 2D DDA, each brush
+  // once: `stamp`), up to the highest brush top. A big map's light took minutes testing
+  // every brush for every ray.
+  const RAY_CELL = 256;
+  const gb = occluders.length ? boundsOf(occluders.flatMap((o) => [o.b.slice(0, 3), o.b.slice(3)])) : [0, 0, 0, 1, 1, 1];
+  const gx0 = gb[0], gy0 = gb[1], gw = Math.max(1, Math.ceil((gb[3] - gx0) / RAY_CELL));
+  const gh = Math.max(1, Math.ceil((gb[4] - gy0) / RAY_CELL));
+  const grid = Array.from({ length: gw * gh }, () => []);
+  for (const o of occluders) {
+    o.stamp = 0;
+    const i0 = Math.floor((o.b[0] - gx0) / RAY_CELL), i1 = Math.min(gw - 1, Math.floor((o.b[3] - gx0) / RAY_CELL));
+    const j0 = Math.floor((o.b[1] - gy0) / RAY_CELL), j1 = Math.min(gh - 1, Math.floor((o.b[4] - gy0) / RAY_CELL));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) grid[j * gw + i].push(o);
+  }
+  let stamp = 0;
+
   // Does the ray from p along d (unit) hit a brush within `far`?
   function blocked(p, d, far = 8192) {
-    for (const o of occluders) {
-      const b = o.b;
-      let t0 = 0, t1 = far;
-      for (let k = 0; k < 3 && t0 <= t1; k++) { // the bounds first
-        if (Math.abs(d[k]) < 1e-9) {
-          if (p[k] < b[k] || p[k] > b[k + 3]) t0 = Infinity;
-          continue;
-        }
-        let ta = (b[k] - p[k]) / d[k], tb = (b[k + 3] - p[k]) / d[k];
-        if (ta > tb) [ta, tb] = [tb, ta];
-        t0 = Math.max(t0, ta);
-        t1 = Math.min(t1, tb);
+    // The part of the ray over the grid and under the tops.
+    let t0 = 0, t1 = far;
+    for (let k = 0; k < 3; k++) {
+      if (Math.abs(d[k]) < 1e-9) {
+        if (p[k] < gb[k] || p[k] > gb[k + 3]) return false;
+        continue;
       }
-      if (t0 > t1) continue;
-      t0 = 0;
-      t1 = far;
-      for (const pl of o.planes) {
-        const den = dot3(pl.n, d), dist = pl.d - dot3(pl.n, p);
-        if (Math.abs(den) < 1e-9) {
-          if (dist < 0) {
-            t0 = Infinity;
-            break;
-          }
-          continue;
-        }
-        const t = dist / den;
-        if (den > 0) t1 = Math.min(t1, t);
-        else t0 = Math.max(t0, t);
-        if (t0 > t1) break;
+      let ta = (gb[k] - p[k]) / d[k], tb = (gb[k + 3] - p[k]) / d[k];
+      if (ta > tb) [ta, tb] = [tb, ta];
+      t0 = Math.max(t0, ta);
+      t1 = Math.min(t1, tb);
+    }
+    if (t0 > t1) return false;
+    stamp++;
+    const x = p[0] + d[0] * t0, y = p[1] + d[1] * t0;
+    let i = Math.min(gw - 1, Math.max(0, Math.floor((x - gx0) / RAY_CELL)));
+    let j = Math.min(gh - 1, Math.max(0, Math.floor((y - gy0) / RAY_CELL)));
+    const si = d[0] > 0 ? 1 : -1, sj = d[1] > 0 ? 1 : -1;
+    const dti = Math.abs(d[0]) < 1e-9 ? Infinity : RAY_CELL / Math.abs(d[0]);
+    const dtj = Math.abs(d[1]) < 1e-9 ? Infinity : RAY_CELL / Math.abs(d[1]);
+    let ti = Math.abs(d[0]) < 1e-9 ? Infinity : (gx0 + (i + (si > 0 ? 1 : 0)) * RAY_CELL - p[0]) / d[0];
+    let tj = Math.abs(d[1]) < 1e-9 ? Infinity : (gy0 + (j + (sj > 0 ? 1 : 0)) * RAY_CELL - p[1]) / d[1];
+    for (;;) {
+      for (const o of grid[j * gw + i]) {
+        if (o.stamp === stamp) continue;
+        o.stamp = stamp;
+        if (hits(o, p, d, far)) return true;
       }
-      if (t0 <= t1) return true;
+      if (ti < tj) {
+        if (ti > t1) break;
+        ti += dti;
+        i += si;
+        if (i < 0 || i >= gw) break;
+      } else {
+        if (tj > t1) break;
+        tj += dtj;
+        j += sj;
+        if (j < 0 || j >= gh) break;
+      }
     }
     return false;
   }

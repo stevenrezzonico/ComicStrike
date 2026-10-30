@@ -657,21 +657,19 @@ class Editor {
       this.fitAll();
     });
     $('open').addEventListener('click', () => $('file').click());
-    $('file').addEventListener('change', async () => {
+    $('file').addEventListener('change', () => {
       const f = $('file').files[0];
       $('file').value = '';
-      if (!f) return;
-      try {
-        const p = readProject(await f.text());
-        this.commit();
-        this.project = p;
-        this.selection.clear();
-        this.changed();
-        this.fitAll();
-        this.status(`Opened ${f.name}`);
-      } catch (err) {
-        this.status(`${f.name}: ${err.message}`, true);
-      }
+      if (f) this.openText(f.name, () => f.text());
+    });
+    // The example: de_inkwell, our own defusal map (tools/gen_inkwell.js writes it).
+    $('example').addEventListener('click', () => {
+      if (!confirm('Open the example map, de_inkwell? Save this one first if you want to keep it.')) return;
+      this.openText('de_inkwell', async () => {
+        const r = await fetch('/maps/de_inkwell.cmap.json');
+        if (!r.ok) throw new Error(`not found (${r.status})`);
+        return r.text();
+      });
     });
     $('save').addEventListener('click', () => {
       this.download(new Blob([JSON.stringify(this.project, null, 1)], { type: 'application/json' }), `${this.project.name}.cmap.json`);
@@ -979,6 +977,21 @@ class Editor {
     }
     if (!errors.length && !warnings.length) list.append(el('li', '', 'None: ready to play.'));
     this.refreshChrome();
+  }
+
+  // Replaces the project with one read from text() (a file, the example), undoably.
+  async openText(name, text) {
+    try {
+      const p = readProject(await text());
+      this.commit();
+      this.project = p;
+      this.selection.clear();
+      this.changed();
+      this.fitAll();
+      this.status(`Opened ${name}`);
+    } catch (err) {
+      this.status(`${name}: ${err.message}`, true);
+    }
   }
 
   status(text, error = false) {
