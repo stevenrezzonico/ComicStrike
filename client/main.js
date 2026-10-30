@@ -1015,7 +1015,7 @@ function frame(now) {
   // The next frame first: a frame that throws (a bug) then costs one frame, not the game
   // (the error still shows in the console).
   requestAnimationFrame(frame);
-  if (menu.visible) menu.frameWindow(backdrop || playing);
+  if (menu.visible) menu.frameWindow(backdrop);
   if (!playing) { // the start menu: nothing runs; the settings window shows a backdrop scene
     last = now;
     accumulator = 0;
@@ -1203,10 +1203,7 @@ function draw(now, alpha, dt) {
   renderer.begin();
   const fovY = 2 * Math.atan(Math.tan(fov / 2 * DEG) * 0.75);
   weaponView.fovY = fovY; // the crosshair's spread circle
-  // The pause menu's settings window: the view projected into it (no weapon or crosshair).
-  const windowed = menu.windowOpen && menu.holeBounds !== null;
-  perspective(proj, fovY, windowed ? windowAspect(aspect) : aspect, 4, 16384);
-  if (windowed) projectIntoWindow(proj);
+  perspective(proj, fovY, aspect, 4, 16384);
   viewFromAngles(view, eye[0], eye[1], eye[2], pitch, yaw);
   multiply(viewProj, proj, view);
   invert(invViewProj, viewProj);
@@ -1239,7 +1236,7 @@ function draw(now, alpha, dt) {
   hud.refreshMenu(player, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, freeBuys());
   hud.scoreboard((input.buttons & IN_SCORE) !== 0 && input.locked, net, selfId, rowAlive);
 
-  weaponView.hidden = (dead && !inEyes) || windowed;
+  weaponView.hidden = dead && !inEyes;
   const target = spectator.target * E_FIELDS;
   weaponView.team = inEyes ? interp[target + E_TEAM] : player.team;
   // The held weapon is lit by the map under the player, eased like other models.
@@ -1281,7 +1278,7 @@ function draw(now, alpha, dt) {
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
   else showFlash(flash.left, flash.total);
   renderer.timer.mark(PASS.OVER);
-  if (!windowed) weaponView.drawCrosshair(canvas.width, canvas.height);
+  weaponView.drawCrosshair(canvas.width, canvas.height);
 }
 
 // The video cvars into the renderer, sizing the canvas and the G-buffer; returns the aspect.
@@ -1309,6 +1306,7 @@ function applyVideoSettings() {
 // stays loaded; a game loads its own. `backdrop` is set while the window is open.
 let backdrop = false;
 let backdropLoading = false;
+input.canLock = () => !menu.visible; // a click in the window (a hole in the menu) stays a menu click
 menu.onWindow = (open) => {
   if (playing) return;
   if (!open) {

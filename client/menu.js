@@ -511,8 +511,9 @@ export class Menu {
     });
     body.append(tabs);
     const [, rows] = TABS[this.tab];
-    // The Video tab's window stays put above the list, which scrolls under it.
-    if (rows) for (const row of rows) if (row[0] === 'window') body.append(this.settingRow(row));
+    // The Video tab's window (the start menu only: in a game the print is right there)
+    // stays put above the list, which scrolls under it.
+    if (rows && !this.inGame) for (const row of rows) if (row[0] === 'window') body.append(this.settingRow(row));
     const list = el('div', 'menu-settings');
     body.append(list);
     if (!rows) {
@@ -537,7 +538,7 @@ export class Menu {
     if (kind === 'window') {
       const wrap = el('div', 'menu-window');
       this.hole = el('div', 'hole');
-      this.hole.append(el('span', 'note', this.inGame ? 'Loading...' : 'Loading the preview scene...'));
+      this.hole.append(el('span', 'note', 'Loading the preview scene...'));
       wrap.append(this.hole);
       const row = el('div', 'menu-row menu-compare');
       const hold = button('Hold to compare with the defaults', () => {}, 'menu-hold');
