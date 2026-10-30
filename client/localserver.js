@@ -9,7 +9,7 @@
 //               open { id }, dgram { id, bytes }, close { id },
 //               pause { on }: the page's pause menu; the ticks stop (bots, the round clock,
 //                 timeouts) and go on from where they were
-// Messages out: ready { rcon } | failed { error }, dgram { id, bytes }, close { id, reason }
+// Messages out: ready { rcon, names: the server console's catalog() } | failed { error }, dgram { id, bytes }, close { id, reason }
 
 import { Host, GAME_MODES } from '../server/host.js';
 import { parseBSP } from '../shared/bsp.js';
@@ -65,7 +65,7 @@ async function start({ map, mode, players: n, difficulty }) {
   }
   players = n;
   loop();
-  postMessage({ type: 'ready', rcon });
+  postMessage({ type: 'ready', rcon, names: host.con.catalog() }); // names: the console's suggestions
 }
 
 // Drift-free fixed-rate loop on the monotonic clock (as server/main.js). Paused, it keeps

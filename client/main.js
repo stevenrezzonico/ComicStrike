@@ -1444,6 +1444,7 @@ con.command('buy', (a, ctx) => {
   if (err) return con.out(ctx, `${itemLabel(item)}: ${err}`);
   buy(item);
 }, 'buy <item>: buys a weapon or gear');
+con.hint('buy', (i) => (i === 1 ? [...Object.keys(BUY_NAMES), ...Object.keys(WEAPON_ID).filter((n) => n !== 'none')] : []));
 con.command('toggleconsole', () => conWin.toggle(), 'Opens or closes the console');
 con.command('drawradar', () => {
   radar.hidden = false;
@@ -1470,6 +1471,7 @@ con.command('setang', (a, ctx) => {
   angles[0] = Math.max(-89, Math.min(89, +a[1] || 0));
   angles[1] = +a[2] || 0;
 }, 'setang <pitch> <yaw>: sets your view angles');
+con.hint('jointeam', [['1', 'Spectators'], ['2', 'Terrorists'], ['3', 'Counter-Terrorists']]);
 con.command('jointeam', (a, ctx) => {
   const n = +a[1];
   if (n !== 1 && n !== 2 && n !== 3) {
@@ -1513,6 +1515,18 @@ con.command('map', (a, ctx) => {
   if (playing) run(() => startSandbox(a[1], player.team === TEAM_CT ? 3 : 2));
   else run(() => startPractice(a[1], 2));
 }, 'map <name>: changes the practice map (online: rcon map <name>)');
+// The map names for its suggestions, fetched the first time they are asked for (the list
+// shows them from the next key on).
+let mapNames = null;
+con.hint('map', (i) => {
+  if (i !== 1) return [];
+  if (!mapNames) {
+    mapNames = [];
+    fetch('/maps.json').then((r) => r.json()).then((l) => { mapNames = l; }, () => { mapNames = null; });
+  }
+  return mapNames;
+});
+con.prefixes.add('rcon'); // rcon <server command>: suggested like the command itself
 // Server settings and commands (mp_*, bot_*, ...) typed into the console: in practice the
 // server is ours, so they go to it (as on a CS:GO listen server); online they need rcon.
 con.unknown = (args, ctx) => {
@@ -1650,7 +1664,11 @@ async function startPractice(map, team, { mode = 'competitive', players = 10, di
   try {
     localRcon = await new Promise((resolve, reject) => {
       worker.onmessage = (e) => {
-        if (e.data.type === 'ready') resolve(e.data.rcon);
+        if (e.data.type === 'ready') {
+          // The practice server's cvars and commands join the console's suggestions.
+          con.remote = new Map((e.data.names || []).map(([name, help, value, hint]) => [name, { help, value, hint }]));
+          resolve(e.data.rcon);
+        }
         else if (e.data.type === 'failed') reject(new Error(e.data.error));
       };
       worker.onerror = (e) => reject(new Error(e.message || 'the practice server did not start'));
@@ -1700,6 +1718,7 @@ function leaveGame(message = '') {
   if (localWorker) {
     localWorker.terminate();
     localWorker = null;
+    con.remote = new Map();
   }
   playing = false;
   backdrop = false;

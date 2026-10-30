@@ -100,6 +100,14 @@ export class Console {
     // unknown(args, ctx) -> true if it took a command no cvar or command here knows (the
     // client hands those to a practice server, like a listen server's console).
     this.unknown = null;
+    // Argument suggestions per command or cvar name: an array of options or fn(index, args)
+    // -> options, an option being 'text' or ['text', 'note'] (see suggest).
+    this.hints = new Map();
+    // Names another console knows (a practice server's), offered after ours: name ->
+    // { help, value, hint } (hint: options as above).
+    this.remote = new Map();
+    // Words that hand the rest of the line to another console (rcon): suggestions skip them.
+    this.prefixes = new Set();
 
     this.command('echo', (a, ctx) => this.out(ctx, a.slice(1).join(' ')), 'Prints its arguments');
     this.command('alias', (a, ctx) => {
@@ -140,6 +148,9 @@ export class Console {
       if (this.cvars.has(name)) return this.describe(this.cvars.get(name), ctx);
       this.out(ctx, this.commands.has(name) ? `${name} - ${this.helpOf(name)}` : `no such cvar or command: ${name}`);
     }, 'help <name>: describes a cvar or command');
+    this.hint('help', (i) => (i === 1 ? this.names() : []));
+    this.hint('toggle', (i) => (i === 1 ? [...this.cvars.keys()].sort() : []));
+    this.hint('incrementvar', (i) => (i === 1 ? [...this.cvars.keys()].sort() : []));
     this.command('cvarlist', (_a, ctx) => {
       for (const cv of [...this.cvars.values()].sort((x, y) => x.name.localeCompare(y.name))) {
         this.out(ctx, `${cv.name} = ${cv.flags & FCVAR_PROTECTED ? '***' : quote(cv.value)}`);
@@ -179,6 +190,89 @@ export class Console {
   complete(prefix) {
     const p = prefix.toLowerCase();
     return this.names().filter((n) => n.startsWith(p));
+  }
+
+  // Argument suggestions for a command or cvar (see hints).
+  hint(name, options) {
+    this.hints.set(name.toLowerCase(), options);
+  }
+
+  // What the console's suggestion list shows for `line` as typed: the token under the
+  // caret (the end of the line) begins at `start`; each item replaces it with `text`.
+  // Command names: those starting with the typed text, then (from 2 letters) those
+  // containing it, ours before a remote console's; arguments: the command's hints, else a
+  // cvar's current and default values (0 / 1 for a switch). Items: { text, value, help }
+  // (value: a cvar's current value, *** when protected).
+  suggest(line, max = 12) {
+    let seg = 0, quoted = false;
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '"') quoted = !quoted;
+      else if (line[i] === ';' && !quoted) seg = i + 1;
+    }
+    const toks = [...line.slice(seg).matchAll(/\S+/g)];
+    const typing = toks.length > 0 && !/\s$/.test(line);
+    const start = typing ? seg + toks.at(-1).index : line.length;
+    const word = typing ? toks.at(-1)[0].toLowerCase() : '';
+    const at = typing ? toks.length - 1 : toks.length; // index of the token being typed
+    let first = 0;
+    while (first < at && this.prefixes.has(toks[first][0].toLowerCase())) first++;
+    const items = [];
+    if (at === first) {
+      if (!word) return { start, items };
+      const names = [...new Set([...this.names(), ...[...this.remote.keys()].sort()])];
+      for (const n of names) if (n.startsWith(word)) items.push(this.item(n));
+      if (word.length >= 2) for (const n of names) if (!n.startsWith(word) && n.includes(word)) items.push(this.item(n));
+      return { start, items: items.slice(0, max) };
+    }
+    const name = toks[first][0].toLowerCase();
+    const index = at - first;
+    const args = toks.slice(first).map((m) => m[0]);
+    for (const opt of this.optionsFor(name, index, args)) {
+      const [text, note] = Array.isArray(opt) ? opt : [String(opt), ''];
+      if (!text.toLowerCase().startsWith(word)) continue;
+      const it = note ? { text, value: '', help: note } : this.item(text);
+      if (!items.some((x) => x.text === text)) items.push(it);
+      if (items.length >= max) break;
+    }
+    return { start, items };
+  }
+
+  optionsFor(name, index, args) {
+    const hint = this.hints.get(name) ?? this.remote.get(name)?.hint;
+    if (typeof hint === 'function') return hint(index, args) || [];
+    if (hint) return hint;
+    const cv = this.cvars.get(name);
+    const rv = this.remote.get(name);
+    if (index !== 1 || (!cv && !(rv && rv.value != null))) return [];
+    if (cv && cv.flags & FCVAR_PROTECTED) return [];
+    if (cv && cv.min === 0 && cv.max === 1) return [['0', 'off'], ['1', 'on']];
+    const value = cv ? cv.value : rv.value;
+    const out = [[value, 'current']];
+    if (cv && cv.defaultValue !== value) out.push([cv.defaultValue, 'default']);
+    return out;
+  }
+
+  // A suggestion item for a name (with its value and help when it is a cvar or command).
+  item(name) {
+    const cv = this.cvars.get(name), rv = this.remote.get(name);
+    if (cv) return { text: name, value: cv.flags & FCVAR_PROTECTED ? '***' : cv.value, help: cv.help };
+    if (this.commands.has(name)) return { text: name, value: '', help: this.commands.get(name).help };
+    if (this.aliases.has(name)) return { text: name, value: '', help: `alias: ${this.aliases.get(name)}` };
+    if (rv) return { text: name, value: rv.value ?? '', help: rv.help || '' };
+    return { text: name, value: '', help: '' };
+  }
+
+  // Every name with its help, current value and argument options, for another console's
+  // suggestions (remote): function hints are asked for their first argument's options.
+  catalog() {
+    const out = [];
+    for (const n of this.names()) {
+      const cv = this.cvars.get(n);
+      let hint = this.hints.get(n);
+      if (typeof hint === 'function') hint = hint(1, [n]);
+      out.push([n, this.helpOf(n), cv && !(cv.flags & FCVAR_PROTECTED) ? cv.value : null, hint || null]);
+    }
+    return out;
   }
 
   describe(cv, ctx) {

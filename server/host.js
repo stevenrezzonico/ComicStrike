@@ -157,6 +157,23 @@ export class Host {
     con.command('exec', (a, ctx) => this.execCfg(a[1], ctx), 'exec <file>: runs cfg/<file>.cfg');
     con.command('quit', () => opts.quit && opts.quit(), 'Stops the server');
     con.command('exit', () => opts.quit && opts.quit(), 'Stops the server');
+
+    // Argument suggestions (the client console's list; a practice server sends them over).
+    const levels = Object.keys(DIFFICULTY);
+    const botNames = (i) => (i === 1 ? ['all', 't', 'ct', ...(this.game ? this.game.bots.list.map((b) => b.c.name.replace(/^BOT /, '')) : [])] : []);
+    con.hint('bot_add', ['t', 'ct', ...levels]);
+    con.hint('bot_add_t', levels);
+    con.hint('bot_add_ct', levels);
+    con.hint('bot_kick', botNames);
+    con.hint('bot_kill', botNames);
+    con.hint('bot_join_team', [['any', 'either team'], ['t', 'Terrorists'], ['ct', 'Counter-Terrorists']]);
+    con.hint('bot_quota_mode', [['normal', 'bot_quota bots'], ['fill', 'bots fill up to bot_quota players']]);
+    con.hint('bot_difficulty', levels.map((l, i) => [String(i), l]));
+    con.hint('game_type', [['0', 'classic'], ['1', 'gun game, deathmatch'], ['2', 'demo']]);
+    con.hint('game_mode', [['0', 'casual / arms race / demo'], ['1', 'competitive / demolition'], ['2', 'wingman / deathmatch']]);
+    const mapNames = (i) => (i === 1 ? opts.listMaps() : []);
+    con.hint('map', mapNames);
+    con.hint('changelevel', mapNames);
   }
 
   // bot_add / bot_kick change bot_quota to what is there now (fill: bots and the humans

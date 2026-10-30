@@ -35,6 +35,12 @@ export function keyName(code, key = '') {
 // Mouse buttons (MouseEvent.button) -> Source names.
 export const MOUSE_NAMES = ['mouse1', 'mouse3', 'mouse2', 'mouse4', 'mouse5'];
 
+// Every key name bind takes, for the console's suggestions.
+export const KEY_LIST = [...new Set([
+  ...'abcdefghijklmnopqrstuvwxyz0123456789'.split(''), ...Array.from({ length: 12 }, (_, i) => `f${i + 1}`),
+  ...Object.values(CODE_NAMES), ...MOUSE_NAMES, 'mwheelup', 'mwheeldown',
+])];
+
 // CS:GO's default binds (config_default.cfg), the wheel cycling weapons as there (a saved
 // config keeps its own binds; binddefaults).
 export const DEFAULT_BINDS = {
@@ -75,6 +81,12 @@ export class Binds {
       this.map.delete((a[1] || '').toLowerCase());
       onChange();
     }, 'unbind <key>');
+    // Suggestions: the key, then for bind the commands (with what the key does now).
+    con.hint('bind', (i) => {
+      if (i === 1) return KEY_LIST.map((k) => (this.map.has(k) ? [k, this.map.get(k)] : k));
+      return i === 2 ? con.names() : [];
+    });
+    con.hint('unbind', (i) => (i === 1 ? [...this.map].sort().map(([k, v]) => [k, v]) : []));
     con.command('unbindall', () => {
       this.map.clear();
       onChange();
