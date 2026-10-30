@@ -68,6 +68,7 @@ import { SoundScape, gunProfile } from './soundscape.js';
 import { InkWords } from './inkwords.js';
 import { Spectator, SPEC_EYES, SPEC_ROAM } from './spectate.js';
 import { ConsoleWindow } from './console.js';
+import { takeHandoff } from './handoff.js';
 import { Menu } from './menu.js';
 import { Radar } from './radar.js';
 import { Overview } from '../shared/overview.js';
@@ -1282,7 +1283,7 @@ function draw(now, alpha, dt) {
     spectator.syncWeapon(interp, now / 1000, dt, weaponView);
     weaponView.draw(canvas.height, aspect, spectator.ws, spectator.ps, 0, now / 1000, dt,
       interp[target + E_HEALTH], player.armor);
-  } else {
+  } else if (!preview) { // the editor's 3D view shows the map alone
     weaponView.draw(canvas.height, aspect, ws, ps, lastButtons, simTime, dt, Math.max(player.health, 0),
       player.armor);
   }
@@ -1293,7 +1294,7 @@ function draw(now, alpha, dt) {
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
   else showFlash(flash.left, flash.total);
   renderer.timer.mark(PASS.OVER);
-  weaponView.drawCrosshair(canvas.width, canvas.height);
+  if (!preview) weaponView.drawCrosshair(canvas.width, canvas.height);
 }
 
 // The video cvars into the renderer, sizing the canvas and the G-buffer; returns the aspect.
@@ -1566,6 +1567,7 @@ applyDrawHud();
 // In a game, releasing the mouse (Escape) opens the pause menu, unless the console or
 // the buy menu took it; closing those takes the mouse back (the key press allows it).
 function updateOverlay() {
+  if (preview) return menu.hide(); // the editor's 3D view: Escape only lets the mouse go
   if (!playing) return;
   if (document.pointerLockElement) menu.hide();
   else if (!conWin.isOpen && !hud.menuOpen) menu.showPause();
@@ -1788,7 +1790,7 @@ function enterGame() {
   menu.busy('');
   menu.hide();
   input.lock().catch(() => {});
-  if (!document.pointerLockElement) menu.showPause(); // locking may need a click: Resume
+  if (!document.pointerLockElement && !preview) menu.showPause(); // locking may need a click: Resume
 }
 
 // Back to the start menu (disconnect, quit practice, or the server went away).
@@ -1838,10 +1840,54 @@ async function reconnect() {
   }
 }
 
+// The map editor (client/editor.html) and this page:
+//  * ?preview: the editor's 3D view, in an iframe. The sandbox flies (noclip) through the
+//    map the editor sends ('preview-map' { name, bytes }), keeping the camera when a rebuilt
+//    map comes in; no menus, no HUD.
+//  * ?fromeditor: a tab the editor opened for Play alone / Host for friends; it takes the
+//    map the editor handed over (client/handoff.js) and starts as the menu's Your map would.
+const preview = params.has('preview');
+async function previewMap(name, bytes) {
+  ownMaps.clear();
+  ownMaps.set(name, bytes);
+  if (!playing) {
+    await startSandbox(name, 2);
+    noclip = true;
+    return;
+  }
+  const keep = ps.f.slice(PS_ORIGIN, PS_ORIGIN + 3), pitch = angles[0], yaw = angles[1];
+  await loadMap(name);
+  ps.f.set(keep, PS_ORIGIN);
+  ps.f[PS_VEL] = ps.f[PS_VEL + 1] = ps.f[PS_VEL + 2] = 0;
+  resetView(yaw);
+  angles[0] = pitch;
+}
+function startPreview() {
+  document.body.classList.add('nohud');
+  menu.hide();
+  addEventListener('message', (e) => {
+    if (e.origin !== location.origin || e.source !== parent || !e.data || e.data.type !== 'preview-map') return;
+    previewMap(e.data.name, e.data.bytes).catch((err) => console.warn(`preview: ${err.message}`));
+  });
+  parent.postMessage({ type: 'preview-ready' }, location.origin);
+}
+async function startFromEditor() {
+  history.replaceState(null, '', '/'); // a reload opens the menu
+  const m = await takeHandoff().catch(() => null);
+  if (!m) return menu.showStart('The map from the editor was not found: press Play in the editor again.');
+  ownMaps.clear();
+  ownMaps.set(m.name, m.bytes);
+  menu.ownMap = m.name;
+  const opts = { mode: m.mode, players: m.players, difficulty: m.difficulty };
+  await run(() => (m.action === 'host' ? hostRoom(m.name, m.team, opts) : startPractice(m.name, m.team, opts)));
+}
+
 async function start() {
   if (params.get('name')) cv.name.set(params.get('name').slice(0, 31));
   status.style.display = 'none';
   requestAnimationFrame(frame);
+  if (preview && parent !== globalThis) return startPreview();
+  if (params.has('fromeditor')) return startFromEditor();
   // URL parameters skip the menu (testing): join at once (the sandbox if no server
   // answers), practice, or the sandbox.
   // A room link (?room=code) opens on the Play panel: that room's teams.

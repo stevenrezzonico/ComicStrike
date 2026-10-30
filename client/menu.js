@@ -356,6 +356,7 @@ export class Menu {
       item('Practice', 'practice');
       item('Demo', 'demo');
       item('Your map', 'own');
+      item('Map editor', '', () => open('/client/editor.html', '_blank'));
       item('Settings', 'settings');
     }
     this.note.textContent = this.message;
