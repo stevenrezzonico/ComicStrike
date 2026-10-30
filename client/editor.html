@@ -101,6 +101,13 @@
   kbd { padding: 0 4px; border: 1px solid var(--ink); border-radius: 3px; background: var(--paper-hi); font: 11px Consolas, monospace; }
   .keys { margin: 4px 0 0; padding-left: 16px; }
   .keys li { margin: 2px 0; }
+  /* Tips: what a control does and its keys, in an ink caption (installTips in editor.js). */
+  .tip { position: fixed; z-index: 40; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; max-width: 280px;
+    padding: 4px 8px; background: var(--ink); color: var(--paper-hi); font-size: 12px; box-shadow: 3px 3px 0 var(--yellow);
+    pointer-events: none; opacity: 0; transition: opacity 0.1s; }
+  .tip.show { opacity: 1; }
+  .tip .tipkeys { white-space: nowrap; color: var(--yellow); }
+  .tip kbd { color: var(--ink); }
   @media (max-width: 900px) {
     body { grid-template: auto 1fr auto / 1fr; overflow: auto; }
     aside { border: 0; border-top: 3px solid var(--ink); }
@@ -111,24 +118,24 @@
 <body>
 <header>
   <a class="title" href="/" title="Back to the game"><img src="/client/favicon.svg" alt="">Map editor</a>
-  <button id="new">New</button>
-  <button id="open">Open</button>
+  <button id="new" title="Start a new, empty map">New</button>
+  <button id="open" title="Open a map project (.cmap.json)">Open</button>
   <button id="example" title="Open de_inkwell, a complete defusal map, to see how one is built">Example</button>
-  <button id="save">Save</button>
+  <button id="save" title="Save the project as a file (.cmap.json)">Save</button>
   <span class="sep"></span>
-  <button id="undo" title="Ctrl+Z">Undo</button>
-  <button id="redo" title="Ctrl+Y">Redo</button>
-  <label>Grid <select id="grid"></select></label>
+  <button id="undo" title="Undo the last change">Undo</button>
+  <button id="redo" title="Redo what was undone">Redo</button>
+  <label title="The grid shapes snap to: [ finer, ] coarser">Grid <select id="grid"></select></label>
   <span class="sep"></span>
-  <label>Mode <select id="mode"></select></label>
-  <label>Bots <select id="bots"></select></label>
-  <label>Team <select id="team"><option value="2">T</option><option value="3">CT</option></select></label>
-  <button id="export">Export .bsp</button>
-  <button id="play" class="go">Play alone</button>
-  <button id="host" class="go">Host for friends</button>
+  <label title="The game mode for Play alone and Host">Mode <select id="mode"></select></label>
+  <label title="How many bots join">Bots <select id="bots"></select></label>
+  <label title="Your team">Team <select id="team"><option value="2">T</option><option value="3">CT</option></select></label>
+  <button id="export" title="Download the compiled map (.bsp)">Export .bsp</button>
+  <button id="play" class="go" title="Play the map with bots in a new tab">Play alone</button>
+  <button id="host" class="go" title="Host the map on the server for friends, in a new tab">Host for friends</button>
   <span class="sep"></span>
-  <button id="layout">Four views</button>
-  <button id="help" title="The introduction (?)">?</button>
+  <button id="layout" title="Switch between the top and 3D views and all four views">Four views</button>
+  <button id="help" title="The introduction">?</button>
   <span id="status" class="status"></span>
   <input id="file" type="file" accept=".json,application/json" hidden>
 </header>
@@ -155,9 +162,13 @@
   <ul class="keys muted">
     <li>Right click or long press: the menu. Double click a shape: its settings. Tap a yellow measure to type it.</li>
     <li>Wheel or pinch zooms; right, middle or two-finger drag pans. Alt drags without snapping.</li>
-    <li><kbd>Del</kbd> delete, <kbd>Ctrl</kbd>+<kbd>D</kbd> duplicate, <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>V</kbd> copy, paste.</li>
+    <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Y</kbd> undo, redo, <kbd>Del</kbd> delete, <kbd>Ctrl</kbd>+<kbd>D</kbd> duplicate,
+      <kbd>Ctrl</kbd>+<kbd>X</kbd> / <kbd>C</kbd> / <kbd>V</kbd> cut, copy, paste, <kbd>Ctrl</kbd>+<kbd>A</kbd> select all.</li>
+    <li><kbd>1</kbd>-<kbd>9</kbd> <kbd>0</kbd> the first shapes, <kbd>Esc</kbd> back to Select.</li>
     <li><kbd>R</kbd> rotate 90°, <kbd>M</kbd> mirror, <kbd>F</kbd> drop to floor, <kbd>Q</kbd> <kbd>E</kbd> turn 15°.</li>
-    <li>Arrows move by the grid, <kbd>PgUp</kbd> <kbd>PgDn</kbd> up and down, <kbd>[</kbd> <kbd>]</kbd> grid, <kbd>Home</kbd> frame all.</li>
+    <li>Arrows move by the grid, <kbd>PgUp</kbd> <kbd>PgDn</kbd> up and down, <kbd>[</kbd> <kbd>]</kbd> grid, <kbd>Home</kbd> frame all,
+      <kbd>L</kbd> layout.</li>
+    <li>Rest the mouse on a button for what it does and its keys.</li>
   </ul>
 </aside>
 <script type="module" src="/client/editor/editor.js"></script>

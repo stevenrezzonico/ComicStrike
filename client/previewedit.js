@@ -2,11 +2,15 @@
 // click picks the shape under the pointer (a ray against each shape's planes, as the
 // editor sends them), a drag moves the selection along the floor (Shift: up and down),
 // and the selection is outlined over the print. The editor owns the project: this only
-// reports picks and drag deltas ('preview-pick', 'preview-move'), and the rebuilt map
-// comes back when the drag ends. Holding the right button looks round and flies instead.
+// reports picks and drag deltas ('preview-pick', 'preview-move') and keys ('preview-key':
+// the editor's shortcuts work with this view focused), and the rebuilt map comes back
+// when the drag ends. Holding the right button looks round and flies instead.
 //
 // In:  preview-shapes { shapes: [{ id, zone, pieces: [{ planes: [[nx, ny, nz, d]], polys }] }] },
 //      preview-select { ids, grid }
+
+// Ctrl + these keys are the editor's (client/editor/editor.js `key`), not the browser's.
+const EDITOR_CTRL_KEYS = ['a', 'c', 'd', 'e', 'o', 's', 'v', 'x', 'y', 'z', 'enter'];
 
 export class PreviewEditor {
   // canvas: the game canvas; camera() -> { viewProj, invViewProj } (this frame's);
@@ -71,6 +75,13 @@ export class PreviewEditor {
     canvas.addEventListener('pointercancel', end);
     addEventListener('mouseup', (e) => {
       if (e.button === 2 && document.pointerLockElement) unlock();
+    });
+    // Keys are the editor's shortcuts while this view has the focus, except while flying.
+    addEventListener('keydown', (e) => {
+      if (document.pointerLockElement || e.code === 'Space' || ['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+      const ctrl = e.ctrlKey || e.metaKey;
+      if (ctrl ? EDITOR_CTRL_KEYS.includes(e.key.toLowerCase()) : e.altKey || e.key.startsWith('Page')) e.preventDefault();
+      this.post({ type: 'preview-key', key: e.key, code: e.code, ctrl, shift: e.shiftKey, alt: e.altKey });
     });
   }
 

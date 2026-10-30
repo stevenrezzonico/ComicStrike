@@ -65,6 +65,15 @@ export const CARDS = [
 ];
 const CARD = new Map(CARDS.map((c) => [c.id, c]));
 
+// Shortcuts of the header's controls, shown in their tips (alternatives split by '|');
+// the library's first ten cards take 1-9, 0. Ctrl+N is the browser's own, so New is Alt+N.
+const KEYS = {
+  new: 'Alt+N', open: 'Ctrl+O', save: 'Ctrl+S', undo: 'Ctrl+Z', redo: 'Ctrl+Y|Ctrl+Shift+Z', export: 'Ctrl+E',
+  play: 'Ctrl+Enter', host: 'Ctrl+Shift+Enter', layout: 'L', help: '?',
+};
+const MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+const keyLabel = (k) => MAC ? k.replace(/Ctrl\+/g, '⌘').replace(/Alt\+/g, '⌥') : k;
+
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
@@ -541,7 +550,7 @@ class Editor {
     const menu = el('div', 'ctxmenu');
     const item = (label, key, fn, enabled = true) => {
       const b = el('button');
-      b.append(el('span', '', label), el('kbd', '', key));
+      b.append(el('span', '', label), el('kbd', '', keyLabel(key)));
       b.disabled = !enabled;
       b.addEventListener('click', () => {
         this.closeMenu();
@@ -556,6 +565,7 @@ class Editor {
     } catch { /* this page's copy */ }
     if (sel.length) {
       item('Duplicate', 'Ctrl+D', () => this.duplicate());
+      item('Cut', 'Ctrl+X', () => this.cut());
       item('Copy', 'Ctrl+C', () => this.copy());
       item('Paste here', 'Ctrl+V', () => this.paste(view.ax, u, v), !!clip);
       item('Delete', 'Del', () => this.remove());
@@ -584,6 +594,7 @@ class Editor {
         item(`Add ${CARD.get(card).label.toLowerCase()} here`, '', () => this.placeCard(card, view.ax, u, v));
       }
       sep();
+      item('Select all', 'Ctrl+A', () => this.selectAll(), this.items().length > 0);
       item('Frame everything', 'Home', () => this.fitAll());
     }
     document.body.append(menu);
@@ -604,14 +615,17 @@ class Editor {
     const lib = $('library');
     const selectCard = el('button', 'card', '');
     selectCard.dataset.tool = 'select';
+    selectCard.title = 'Select: pick, move and resize shapes';
+    selectCard.dataset.keys = 'Esc';
     selectCard.append(svgIcon('M5 3l14 9-6 1-3 6z'), el('span', '', 'Select'));
     selectCard.addEventListener('click', () => this.setTool('select'));
     lib.append(selectCard);
-    for (const c of CARDS) {
+    for (const [i, c] of CARDS.entries()) {
       const b = el('button', 'card');
       b.dataset.tool = c.id;
       b.draggable = true;
       b.title = c.point ? `${c.label}: click in a view` : `${c.label}: drag onto a view, or click it then draw`;
+      if (i < 10) b.dataset.keys = String((i + 1) % 10);
       b.append(svgIcon(c.icon), el('span', '', c.label));
       b.addEventListener('click', () => this.setTool(this.tool === c.id ? 'select' : c.id));
       b.addEventListener('dragstart', (e) => {
@@ -648,14 +662,8 @@ class Editor {
     for (const [v, l] of MODES) $('mode').append(new Option(l, v));
     for (const [v, l] of BOTS) $('bots').append(new Option(l, String(v)));
     $('bots').value = '10';
-    $('new').addEventListener('click', () => {
-      if (!confirm('Start a new map? Save this one first if you want to keep it.')) return;
-      this.commit();
-      this.project = newProject();
-      this.selection.clear();
-      this.changed();
-      this.fitAll();
-    });
+    for (const [id, k] of Object.entries(KEYS)) $(id).dataset.keys = keyLabel(k);
+    $('new').addEventListener('click', () => this.newMap());
     $('open').addEventListener('click', () => $('file').click());
     $('file').addEventListener('change', () => {
       const f = $('file').files[0];
@@ -700,6 +708,26 @@ class Editor {
     } catch { /* default */ }
     this.setLayout(layout);
     this.refreshChrome();
+    installTips();
+  }
+
+  newMap() {
+    if (!confirm('Start a new map? Save this one first if you want to keep it.')) return;
+    this.commit();
+    this.project = newProject();
+    this.selection.clear();
+    this.changed();
+    this.fitAll();
+  }
+
+  selectAll() {
+    this.select(this.items().map((it) => it.id));
+  }
+
+  cut() {
+    if (!this.selection.size) return;
+    this.copy();
+    this.remove();
   }
 
   setLayout(layout) {
@@ -751,19 +779,29 @@ class Editor {
     this.refreshChrome();
   }
 
+  // A key: from this page, or from the 3D view's (forwarded as 'preview-key').
   key(e) {
     const t = e.target;
     if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement) return;
     const ctrl = e.ctrlKey || e.metaKey;
-    const k = e.key;
+    const k = e.key, lk = k.length === 1 ? k.toLowerCase() : k;
+    const card = /^[0-9]$/.test(k) ? CARDS[(+k + 9) % 10] : null;
     let used = true;
-    if (ctrl && (k === 'z' || k === 'Z')) this.undo(e.shiftKey);
-    else if (ctrl && (k === 'y' || k === 'Y')) this.undo(true);
-    else if (ctrl && (k === 'd' || k === 'D')) this.duplicate();
-    else if (ctrl && (k === 'c' || k === 'C')) this.copy();
-    else if (ctrl && (k === 'v' || k === 'V')) this.paste();
-    else if (ctrl && (k === 's' || k === 'S')) $('save').click();
+    if (ctrl && lk === 'z') this.undo(e.shiftKey);
+    else if (ctrl && lk === 'y') this.undo(true);
+    else if (ctrl && lk === 'd') this.duplicate();
+    else if (ctrl && lk === 'c') this.copy();
+    else if (ctrl && lk === 'x') this.cut();
+    else if (ctrl && lk === 'v') this.paste();
+    else if (ctrl && lk === 'a') this.selectAll();
+    else if (ctrl && lk === 's') $('save').click();
+    else if (ctrl && lk === 'o') $('open').click();
+    else if (ctrl && lk === 'e') this.exportBsp();
+    else if (ctrl && k === 'Enter') this.play(e.shiftKey ? 'host' : 'practice');
     else if (ctrl) used = false;
+    else if (e.altKey && lk === 'n') this.newMap();
+    else if (card && !e.altKey) this.setTool(this.tool === card.id ? 'select' : card.id);
+    else if (lk === 'l') this.setLayout(this.layout === 'simple' ? 'four' : 'simple');
     else if (k === 'Delete' || k === 'Backspace') this.remove();
     else if (k === 'Escape') {
       this.closeMenu();
@@ -1126,6 +1164,9 @@ class Editor {
       if (m.id === null) this.select([]);
       else if (m.add) this.toggle(m.id);
       else this.select([m.id]);
+    } else if (m.type === 'preview-key') {
+      this.key({ key: m.key, code: m.code, ctrlKey: m.ctrl, metaKey: false, shiftKey: m.shift, altKey: m.alt, target: null,
+        preventDefault() {} });
     } else if (m.type === 'preview-move') { // dragged in the 3D view: by whole grid steps from where it began
       if (m.phase === 'start') {
         this.drag3d = this.selected().map((it) => [it, (it.b || it.o).slice()]);
@@ -1158,6 +1199,58 @@ function groupBounds(list) {
   const g = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
   for (const b of list) for (let k = 0; k < 3; k++) (g[k] = Math.min(g[k], b[k])), (g[k + 3] = Math.max(g[k + 3], b[k + 3]));
   return g;
+}
+
+// Tips: a control with a title (or a shortcut, data-keys) shows it in an ink caption under
+// it once the mouse rests there, the shortcut as keys; the browser's own tooltip is held
+// back (the title moves to data-tip).
+function installTips() {
+  const tip = el('div', 'tip');
+  document.body.append(tip);
+  let target = null, timer = 0;
+  const hide = () => {
+    clearTimeout(timer);
+    tip.classList.remove('show');
+    target = null;
+  };
+  const show = (t) => {
+    if (!t.isConnected) return;
+    tip.replaceChildren();
+    if (t.dataset.tip) tip.append(el('span', '', t.dataset.tip));
+    if (t.dataset.keys) {
+      const keys = el('span', 'tipkeys');
+      t.dataset.keys.split('|').forEach((alt, i) => {
+        if (i) keys.append(' or ');
+        alt.split(/\+(?=.)/).forEach((part, j) => {
+          if (j) keys.append('+');
+          keys.append(el('kbd', '', part));
+        });
+      });
+      tip.append(keys);
+    }
+    const r = t.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+    const below = r.bottom + 6 + h < innerHeight;
+    tip.style.left = `${Math.max(4, Math.min(innerWidth - w - 4, r.left + r.width / 2 - w / 2))}px`;
+    tip.style.top = `${below ? r.bottom + 6 : r.top - h - 6}px`;
+    tip.classList.add('show');
+  };
+  addEventListener('pointerover', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    const t = e.target instanceof Element ? e.target.closest('[title], [data-tip], [data-keys]') : null;
+    if (t === target) return;
+    hide();
+    if (!t) return;
+    if (t.title) {
+      t.dataset.tip = t.title;
+      t.setAttribute('aria-description', t.title);
+      t.removeAttribute('title');
+    }
+    target = t;
+    timer = setTimeout(() => show(t), 350);
+  });
+  addEventListener('pointerdown', hide, true);
+  addEventListener('keydown', hide, true);
+  addEventListener('blur', hide);
 }
 
 globalThis.editor = new Editor();
