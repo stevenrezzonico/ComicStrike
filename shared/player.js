@@ -11,6 +11,7 @@ import {
 } from './pmove.js';
 import {
   createWeaponState, copyWeaponState, giveWeapon, weaponTick, infiniteAmmo, activeWeapon, weaponStats, removeWeapon, refillAmmo,
+  deploy, WS_THROW,
   WEAPON_ID,
   SLOT_PRIMARY,
   SLOT_SECONDARY, SLOT_C4, NUM_SLOTS, WS_ACTIVE, WS_SLOTS, WS_EVENTS, WS_ACTION, WS_ACTION_END, WEV_PLANTED, WEV_DEFUSED,
@@ -133,21 +134,30 @@ export function canReachBomb(world, ps, pitch, yaw, bomb) {
   return useTrace.fraction >= 1 || Math.hypot(useTrace.endx - bomb.x, useTrace.endy - bomb.y) < 12;
 }
 
-// CS:GO C4 arming and defusing. Planting: C4 in hand, attack held, on the ground,
-// touching a bomb site, for PLANT_TIME; then the C4 leaves the inventory (WEV_PLANTED,
-// the server places the bomb). Defusing: a CT (in the demo anyone) holding use, on the
-// ground, who started next to the planted bomb looking at it, for 10 s (5 s with a kit);
-// WEV_DEFUSED tells the server. Letting go, leaving the site or the ground cancels.
+// Standing in a bomb site: the hull (crouched or not) touches one.
+export function inBombSite(world, ps) {
+  if (!world.bombSites) return false;
+  const hz = (ps.i[PS_FLAGS] & FL_DUCKING) ? 18 : 36;
+  return world.bombSites.touches(ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1], ps.f[PS_ORIGIN + 2], 16, 16, hz);
+}
+
+// CS:GO C4 arming and defusing. Planting: on the ground in a bomb site, attack or use held
+// with the C4 in hand, or use with it anywhere in the inventory (CS:GO: E in a site takes
+// the bomb out and plants it; not with a grenade's pin out), for PLANT_TIME; then the C4
+// leaves the inventory (WEV_PLANTED, the server places the bomb). Defusing: a CT (in the
+// demo anyone) holding use, on the ground, who started next to the planted bomb looking at
+// it, for 10 s (5 s with a kit); WEV_DEFUSED tells the server. Letting go, leaving the
+// site or the ground cancels.
 function bombAction(world, p, buttons, pitch, yaw, tick, bomb, demo) {
   const f = p.ws.f, ps = p.ps, time = tick * TICK_DT;
   const onGround = (ps.i[PS_FLAGS] & FL_ONGROUND) !== 0;
   const w = activeWeapon(p.ws);
+  const plantKey = w && w.c4 ? (buttons & (IN_ATTACK | IN_USE)) !== 0
+    : (buttons & IN_USE) !== 0 && f[WS_SLOTS + SLOT_C4 * 3] > 0 && !f[WS_THROW] && f[WS_ACTION] !== ACTION_DEFUSE;
   let want = 0;
-  if (w && w.c4 && (buttons & IN_ATTACK) && onGround && world.bombSites) {
-    const hz = (ps.i[PS_FLAGS] & FL_DUCKING) ? 18 : 36;
-    if (world.bombSites.touches(ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1], ps.f[PS_ORIGIN + 2], 16, 16, hz)) {
-      want = ACTION_PLANT;
-    }
+  if (plantKey && onGround && inBombSite(world, ps)) {
+    want = ACTION_PLANT;
+    if (!w || !w.c4) deploy(p.ws, SLOT_C4, time); // E: out comes the bomb
   } else if ((p.team === TEAM_CT || demo) && (buttons & IN_USE) && onGround && bomb && bomb.state === BOMB_PLANTED &&
     (f[WS_ACTION] === ACTION_DEFUSE || canReachBomb(world, ps, pitch, yaw, bomb))) {
     want = ACTION_DEFUSE;

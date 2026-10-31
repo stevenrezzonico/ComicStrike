@@ -555,7 +555,8 @@ export function infiniteAmmo(ws, slot, clip, time) {
   }
 }
 
-function deploy(ws, slot, time) {
+// Takes the weapon in `slot` out (its deploy time before it fires).
+export function deploy(ws, slot, time) {
   const f = ws.f;
   f[WS_LAST_SLOT] = f[WS_ACTIVE];
   f[WS_ACTIVE] = slot;

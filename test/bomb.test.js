@@ -3,7 +3,9 @@ import { parseBSP } from '../shared/bsp.js';
 import { IN_ATTACK, IN_USE, IN_DROP, IN_FORWARD } from '../shared/constants.js';
 import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
 import { traceHull, hullFits, Trace, HULL_POINT, HULL_STAND } from '../shared/trace.js';
-import { WEAPON_ID, WS_SLOTS, WS_ACTION, SLOT_C4, ACTION_PLANT, ACTION_DEFUSE } from '../shared/weapons.js';
+import {
+  WEAPON_ID, WS_SLOTS, WS_ACTION, WS_ACTIVE, SLOT_C4, SLOT_SECONDARY, ACTION_PLANT, ACTION_DEFUSE,
+} from '../shared/weapons.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import {
   BombSites, bombDamage, PLANT_TIME, BOMB_CARRIED, BOMB_DROPPED, BOMB_PLANTED, BOMB_DEFUSED, BOMB_EXPLODED,
@@ -148,6 +150,32 @@ Deno.test('planting: one T carries the C4, plants in a site in 3 s rooted in pla
   assert.equal(game.phase, PHASE_OVER);
   assert.equal(game.round.info, TEAM_T | (END_BOMB << 2));
   assert.equal(terro.player.money, START_MONEY + PLANT_REWARD + BOMB_WIN_REWARD);
+});
+
+Deno.test('planting with E: in a site use takes the C4 out and plants it; outside one it does nothing', async (t) => {
+  const bsp = await loadDust2(t);
+  if (!bsp) return;
+  const s = setup(bsp, { terro: TEAM_T, ceetee: TEAM_CT });
+  const { game, players: { terro }, run, live } = s;
+  live();
+  const active = () => terro.player.ws.f[WS_ACTIVE];
+  assert.equal(active(), SLOT_SECONDARY, 'the pistol in hand');
+  terro.input.buttons = IN_USE;
+  run(64);
+  assert.equal(terro.player.ws.f[WS_ACTION], 0, 'not in a bomb site');
+  assert.equal(active(), SLOT_SECONDARY);
+
+  teleport(terro, siteSpot(game, 1));
+  terro.input.buttons = 0;
+  run(8);
+  terro.input.buttons = IN_USE;
+  run(1);
+  assert.equal(terro.player.ws.f[WS_ACTION], ACTION_PLANT);
+  assert.equal(active(), SLOT_C4, 'the bomb comes out at once');
+  run(PLANT_TIME * 64 + 2);
+  assert.equal(game.bomb.state, BOMB_PLANTED);
+  assert.equal(slotId(terro, SLOT_C4), 0);
+  assert.equal(active(), SLOT_SECONDARY, 'back to the pistol');
 });
 
 Deno.test('defusing: a CT on the bomb, looking at it, holds use for 10 s; the Ts keep their plant bonus', async (t) => {

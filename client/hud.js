@@ -27,7 +27,8 @@ export class Hud {
     this.elProgress = $('progress');
     this.elProgressBar = this.elProgress.firstElementChild;
     this.elProgressLabel = this.elProgress.lastElementChild;
-    this.shown = { money: '', round: '', banner: '', bomb: '', progress: '' };
+    this.elUseHint = $('usehint');
+    this.shown = { money: '', round: '', banner: '', bomb: '', progress: '', hint: '' };
     this.scoreShown = false; // the scoreboard (Tab), and when its rows were last built
     this.scoreAt = -Infinity;
     // What the round bar and banner were built from: rebuilt only when one changes.
@@ -138,6 +139,13 @@ export class Hud {
       this.progressPct = pct;
       this.elProgressBar.style.width = `${pct}%`;
     }
+  }
+
+  // The E prompt (CS:GO's hints: plant, defuse, pick up); '' hides it.
+  useHint(text) {
+    if (text === this.shown.hint) return;
+    this.elUseHint.style.display = text ? 'block' : 'none';
+    this.set(this.elUseHint, 'hint', text);
   }
 
   // --- Scoreboard (hold Tab) -----------------------------------------------------

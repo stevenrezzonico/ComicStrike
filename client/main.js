@@ -37,6 +37,7 @@ import { HitTargets, feetOffset } from '../shared/hitgroups.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import {
   Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT, TEAM_SPECTATOR, TEAM_NAMES,
+  inBombSite, canReachBomb,
 } from '../shared/player.js';
 import { Grenades, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE } from '../shared/grenades.js';
 import { HITGROUP_CHEST, HITGROUP_LEGS } from '../shared/hitgroups.js';
@@ -512,6 +513,39 @@ function replayFrom(from) {
 // Buy menu: the server decides online; offline it is instant (anywhere, $16000).
 // The server's game mode (GAME_* bits; offline: none).
 const gameMode = () => (net ? net.own.round.mode : 0);
+// CS:GO's E prompts: what holding or pressing use does here (plant, defuse, pick up a
+// hostage, pick up or swap a weapon lying in front of us); the text rebuilt only when
+// what it says changes.
+let hintKey = 0, hintText = '';
+function useHint(off) {
+  let k = 0;
+  if (!off && world) {
+    const f = ps.f, ex = f[PS_ORIGIN], ey = f[PS_ORIGIN + 1], ez = f[PS_ORIGIN + 2] + eyeOffset(ps);
+    const onGround = (ps.i[PS_FLAGS] & FL_ONGROUND) !== 0, bomb = simBomb();
+    if (ws.f[WS_SLOTS + SLOT_C4 * 3] > 0 && onGround && inBombSite(world, ps)) k = 1;
+    else if ((player.team === TEAM_CT || demo()) && onGround && bomb && bomb.state === BOMB_PLANTED &&
+      canReachBomb(world, ps, angles[0], angles[1], bomb)) k = 2;
+    else if (net && player.team === TEAM_CT && !player.carrying &&
+      net.hostages.inReach(ex, ey, ez, angles[0], angles[1]) >= 0) k = 3;
+    else if (net && !gunGame()) {
+      const i = net.items.inReach(ex, ey, ez, angles[0], angles[1]);
+      if (i >= 0) {
+        const id = net.items.weapon[i];
+        k = 4 + id * 2 + (ws.f[WS_SLOTS + WEAPONS[id].slot * 3] > 0 ? 1 : 0);
+      }
+    }
+  }
+  if (k !== hintKey) {
+    hintKey = k;
+    let key = 'use';
+    for (const [name, cmd] of binds.map) if (cmd === '+use') key = name.toUpperCase();
+    hintText = k === 0 ? '' : k === 1 ? `Hold ${key}  plant the bomb` : k === 2 ? `Hold ${key}  defuse the bomb`
+      : k === 3 ? `Hold ${key}  pick up the hostage`
+      : `${key}  ${k & 1 ? 'swap for' : 'pick up'} ${WEAPONS[(k - 4) >> 1].label}`;
+  }
+  return hintText;
+}
+
 const demo = () => (gameMode() & GAME_DEMO) !== 0;
 const freeBuys = () => (gameMode() & (GAME_DM | GAME_DEMO)) !== 0; // deathmatch and the demo: no money
 const gunGame = () => (gameMode() & (GAME_ARMSRACE | GAME_DEMOLITION)) !== 0; // weapons earned by kills: no money
@@ -1356,6 +1390,7 @@ function draw(now, alpha, dt) {
     action === ACTION_PLANT ? 'Planting the bomb' : action === ACTION_DEFUSE ? 'Defusing the bomb'
     : picking > 0 ? 'Picking up the hostage' : '',
     picking > 0 ? picking : 1 - (ws.f[WS_ACTION_END] - simTime) / actionTime);
+  hud.useHint(useHint(dead || specTeam || !!action || preview || frozen()));
   hud.refreshMenu(player, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, freeBuys());
   hud.scoreboard((input.buttons & IN_SCORE) !== 0 && input.locked, net, selfId, rowAlive);
 

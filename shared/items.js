@@ -9,8 +9,11 @@
 
 import { traceHull, Trace, HULL_POINT } from './trace.js';
 import { TICK_DT, TICK_RATE } from './constants.js';
+import { WEAPONS } from './weapons.js';
 
 export const MAX_ITEMS = 48; // the oldest goes when a new one needs room
+export const USE_RANGE = 96; // E picks up a weapon on the ground this close to the eyes
+export const USE_CONE = 0.8; // cos of the largest angle off the view it may be at
 export const THROW_SPEED = 300; // G: units/s along the view (approx. of CS:GO's)
 export const LET_GO_SPEED = 60; // dying or buying over it: it falls just ahead
 const ITEM_GRAVITY = 800; // sv_gravity: guns fall like players
@@ -134,5 +137,21 @@ export class Items {
     }
     this.vel.copyWithin(i * 3, (i + 1) * 3, this.count * 3);
     this.count--;
+  }
+
+  // E: the nearest weapon lying still in front of eyes at (ex, ey, ez) looking along
+  // (pitch, yaw), within USE_RANGE and USE_CONE; -1 for none. Grenades are walked over.
+  inReach(ex, ey, ez, pitch, yaw) {
+    const cp = Math.cos(pitch * DEG);
+    const dx = cp * Math.cos(yaw * DEG), dy = cp * Math.sin(yaw * DEG), dz = -Math.sin(pitch * DEG);
+    let best = -1, bestD = USE_RANGE;
+    for (let i = 0; i < this.count; i++) {
+      if (this.flying[i] || WEAPONS[this.weapon[i]]?.grenade) continue;
+      const vx = this.x[i] - ex, vy = this.y[i] - ey, vz = this.z[i] + 2 - ez, d = Math.sqrt(vx * vx + vy * vy + vz * vz);
+      if (d >= bestD || (vx * dx + vy * dy + vz * dz) / d < USE_CONE) continue;
+      best = i;
+      bestD = d;
+    }
+    return best;
   }
 }

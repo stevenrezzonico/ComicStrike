@@ -147,6 +147,9 @@
     text-align: center; -webkit-text-stroke: 1px var(--ink); paint-order: stroke fill; text-shadow: 2px 2px 0 var(--ink); }
   #progress > div:first-child { height: 12px; width: 0; background: var(--yellow); border: 2px solid var(--ink);
     box-shadow: 3px 3px 0 var(--ink); }
+  #usehint { position: fixed; left: 50%; top: 70%; transform: translateX(-50%); display: none; pointer-events: none;
+    padding: 2px 10px; background: var(--paper); color: var(--ink); border: 2px solid var(--ink);
+    box-shadow: 3px 3px 0 var(--ink); font: 17px/1.4 var(--display); letter-spacing: 0.04em; white-space: nowrap; }
   #console { position: fixed; left: 0; top: 0; width: min(960px, 100vw); height: 48vh; display: none;
     flex-direction: column; box-sizing: border-box; padding: 0 8px 8px; background: rgba(23, 19, 15, 0.94);
     border-right: 3px solid var(--yellow); border-bottom: 3px solid var(--yellow); z-index: 10;
@@ -393,6 +396,7 @@
 <div id="hud-money"></div>
 <div id="hud-bomb"></div>
 <div id="progress"><div></div><div></div></div>
+<div id="usehint"></div>
 <div id="scoreboard"></div>
 <div id="buymenu"></div>
 <div id="death"></div>

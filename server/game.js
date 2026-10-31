@@ -63,8 +63,6 @@ const THROW_DISTANCE = 64; // a dropped (G) bomb lands this far ahead (weapons f
 const PICKUP_DELAY = TICK_RATE; // ticks before a thrown bomb or weapon can be picked up
 const DEMO_RESTOCK = 2; // the demo: seconds from a bomb going off or being defused to the next one
 const DEMO_HEAL = 2; // the demo: seconds from the last hurt to full health
-const USE_RANGE = 96; // E picks up a weapon on the ground this close to the eyes
-const USE_CONE = 0.8; // cos of the largest angle off the view it may be at
 
 // Radar spotting (approx. of CS:GO's: how often, how wide a view, how long a shot shows).
 const SPOT_TICKS = 4;
@@ -1207,22 +1205,11 @@ export class Game {
     }
   }
 
-  // E: the nearest weapon on the ground in front of c's eyes (within USE_RANGE and
-  // USE_CONE) replaces the one in its slot, which drops at c's feet.
+  // E: the nearest weapon on the ground in front of c's eyes (Items.inReach) replaces the
+  // one in its slot, which drops at c's feet.
   useItem(c) {
     const it = this.items, f = c.player.ps.f;
-    const ex = f[PS_ORIGIN], ey = f[PS_ORIGIN + 1], ez = f[PS_ORIGIN + 2] + eyeOffset(c.player.ps);
-    const cp = Math.cos(c.pitch * Math.PI / 180);
-    const dx = cp * Math.cos(c.yaw * Math.PI / 180), dy = cp * Math.sin(c.yaw * Math.PI / 180);
-    const dz = -Math.sin(c.pitch * Math.PI / 180);
-    let best = -1, bestD = USE_RANGE;
-    for (let i = 0; i < it.count; i++) {
-      if (WEAPONS[it.weapon[i]].grenade || it.flying[i]) continue; // grenades are walked over
-      const vx = it.x[i] - ex, vy = it.y[i] - ey, vz = it.z[i] + 2 - ez, d = Math.hypot(vx, vy, vz);
-      if (d >= bestD || (vx * dx + vy * dy + vz * dz) / d < USE_CONE) continue;
-      best = i;
-      bestD = d;
-    }
+    const best = it.inReach(f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2] + eyeOffset(c.player.ps), c.pitch, c.yaw);
     if (best < 0) return;
     const o = WS_SLOTS + WEAPONS[it.weapon[best]].slot * 3, ws = c.player.ws.f;
     const old = ws[o], oldClip = ws[o + 1], oldReserve = ws[o + 2];
