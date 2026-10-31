@@ -319,33 +319,107 @@ function carryHandle(b, x0, x1, z, color, k = 1) {
   return z + 1.75 * k;
 }
 
-// Pistol: slide (GUN_BOLT) from x = -1.4 forward with its front top cut, grip serrations,
-// the ejection port and the bore; frame and grip; mag base in the grip.
+// The slide's side outline from x0 to x1 over z sz..sz + h, by shape: 'box' (Glock: square,
+// a short cut at the front top), 'round' (P2000: the front sloping off, the edges rounded
+// by the caller), 'step' (P250: the front lower than the back), 'taper' (Five-seveN: a long
+// slope down to the muzzle), 'deagle' (only the back half: the fixed barrel is the front).
+function slideOutline(shape, x0, x1, sz, h) {
+  const t = sz + h;
+  switch (shape) {
+    case 'round': return [[x0, sz], [x1, sz], [x1, t - h * 0.4], [x1 - 0.7, t], [x0 + 0.25, t], [x0, t - 0.3]];
+    case 'step': return [[x0, sz], [x1, sz], [x1, t - h * 0.35], [x1 - 0.3, t - h * 0.15], [x1 - 2.4, t - h * 0.15],
+      [x1 - 2.7, t], [x0, t]];
+    case 'taper': return [[x0, sz], [x1 - 0.2, sz], [x1, sz + 0.25], [x1, t - h * 0.5], [x1 - 2.6, t], [x0, t]];
+    default: return [[x0, sz], [x1, sz], [x1, t - h * 0.3], [x1 - 0.45, t], [x0, t]];
+  }
+}
+
+// An exposed hammer behind the slide's back at x, its pivot at height z: 'spur' (a ring
+// spur sweeping back, USP, Beretta, CZ, Deagle) or 'bob' (a rounded stub, P2000, P250).
+function hammer(b, kind, x, z, color) {
+  if (kind === 'bob') {
+    b.color(color).rbox(0.45, 0.4, 0.55, 0.15, x - 0.15, 0, z + 0.15);
+    return;
+  }
+  withBevel(b, 0.06, () => b.color(color).extrude([[x + 0.1, z - 0.3], [x - 0.25, z - 0.25], [x - 0.6, z + 0.35],
+    [x - 0.85, z + 0.5], [x - 0.75, z + 0.68], [x - 0.35, z + 0.55], [x + 0.1, z + 0.3]], 0.38));
+}
+
+// Grip panels over the pistol grip's sides (same rake and size as grip()), in their own
+// color; `grooves`: ribs across them (the Desert Eagle's rubber wrap).
+function gripPanels(b, len, w, rake, d, color, grooves = 0) {
+  b.push().rotate(rake);
+  b.color(color).rbox(d * 0.82, w + 0.14, len * 0.66, 0.22, -0.12, 0, -len * 0.52);
+  withBevel(b, 0, () => {
+    for (let i = 0; i < grooves; i++) b.color(shade(color, 1.8)).box(d * 0.6, w + 0.18, 0.1, -0.12, 0, -len * (0.3 + i * 0.44 / Math.max(1, grooves - 1)));
+  });
+  b.pop();
+}
+
+// Pistol from a spec: the slide (GUN_BOLT) from x = -1.4 forward (shape by `shape`, see
+// slideOutline), rear serrations, the ejection port and the bore; frame and grip; the
+// magazine's base plate in the grip. Signature parts by spec, so each pistol reads as its
+// own gun from the shooter's eye too: `hammer` ('spur' / 'bob'), `open` (the Beretta's open
+// top: the slide cut away over the barrel, a bridge at the muzzle), `inset` (the CZ's slide
+// riding inside the frame's rails), `deagle` (the fixed barrel the whole length, the frame
+// sloping up to the muzzle), `rail` (an accessory rail under the dust cover), `hook` (a
+// hooked trigger guard), `panels` (grip panels' color), `grooves`, `spareMag` (the CZ75-Auto's
+// spare magazine upside down ahead of the trigger guard), `selector` (the Glock-18's
+// switch), `baseplate` (an extended one).
 function pistol(b, s) {
   const { len, h = 1.25, w = 1.0, slide = DARK, frame = POLY, gripLen = 4.2, rake = 18, barrel = 0 } = s;
-  const x0 = -1.4, x1 = x0 + len, sz = 0.35;
-  // The slide; the Desert Eagle's covers only the back, its fixed barrel running the whole
-  // length on top: a long block, flat on top, its sides narrowing to the bottom.
-  const sx1 = s.deagle ? x0 + len * 0.5 : x1;
-  b.bone(GUN_BOLT).color(slide).extrude([[x0, sz], [sx1, sz], [sx1, sz + h * 0.7], [sx1 - 0.45, sz + h], [x0, sz + h]], w);
+  const x0 = -1.4, x1 = x0 + len, sz = 0.35, top = sz + h;
+  const shape = s.deagle ? 'deagle' : s.shape || 'box';
+  const sw = s.inset ? w * 0.76 : w; // the CZ's slide is narrower than its frame
+  b.bone(GUN_BOLT);
+  if (s.open) { // Beretta 92: a full-height back half, then wings over the barrel up to a bridge at the muzzle
+    const xr = x0 + len * 0.47, lip = sz + h * 0.38;
+    b.color(slide).extrude([[x0, sz], [x1, sz], [x1, top - 0.15], [x1 - 0.85, top - 0.15], [x1 - 1.25, lip],
+      [xr + 0.9, lip], [xr + 0.2, top], [x0, top]], sw);
+  } else if (shape === 'deagle') {
+    b.color(slide).extrude([[x0, sz], [x0 + len * 0.5, sz], [x0 + len * 0.5, top], [x0, top]], sw);
+  } else {
+    withBevel(b, shape === 'round' ? 0.32 : BEVEL, () => b.color(slide).extrude(slideOutline(shape, x0, x1, sz, h), sw));
+  }
   withBevel(b, 0, () => {
-    for (let i = 0; i < 5; i++) b.color(shade(slide, 1.6)).box(0.08, w + 0.04, h * 0.62, x0 + 0.35 + i * 0.22, 0, sz + h * 0.5);
-    b.color(BLACK).box(Math.min(1.6, len * 0.22), 0.06, h * 0.45, x0 + len * 0.45, -w / 2, sz + h * 0.62); // ejection port
+    const n = s.deagle ? 7 : 5, k = s.deagle ? 0.24 : 0.22;
+    for (let i = 0; i < n; i++) b.color(shade(slide, 1.6)).box(0.08, sw + 0.04, h * 0.62, x0 + 0.35 + i * k, 0, sz + h * 0.5);
+    b.color(BLACK).box(Math.min(1.6, len * 0.22), 0.06, h * 0.45, x0 + len * 0.45, -sw / 2, sz + h * 0.62); // ejection port
+    if (s.selector) b.color(BLACK).box(0.35, 0.14, 0.25, x0 + 0.3, sw / 2 + 0.05, sz + h * 0.35);
   });
   b.bone(GUN_ROOT);
+  if (s.open) tube(b, x0 + len * 0.47, x1 - 0.6, 0.36, sz + h * 0.58, DARK); // the barrel in the open top
   if (s.deagle) {
-    const zt = sz + h, zb = sz + 0.05, hw = w / 2;
+    const zb = sz + 0.05, hw = w / 2;
     b.color(shade(slide, 0.9)).push().translate(x0 + len * 0.71, 0, 0).rotate(0, 90)
-      .extrude([[-hw * 0.45, zb], [hw * 0.45, zb], [hw * 1.02, zt - 0.3], [hw * 0.9, zt], [-hw * 0.9, zt], [-hw * 1.02, zt - 0.3]], len * 0.58)
+      .extrude([[-hw * 0.45, zb], [hw * 0.45, zb], [hw * 1.02, top - 0.3], [hw * 0.9, top], [-hw * 0.9, top], [-hw * 1.02, top - 0.3]], len * 0.58)
       .pop();
-    withBevel(b, 0, () => b.color(shade(slide, 1.3)).box(len * 0.5, w * 0.5, 0.1, x0 + len * 0.7, 0, zt + 0.04)); // the rib on top
+    withBevel(b, 0, () => { // the slotted rail along the barrel's top
+      b.color(BLACK).box(len * 0.52, w * 0.62, 0.22, x0 + len * 0.73, 0, top + 0.09);
+      for (let x = x0 + len * 0.49; x < x1 - 0.3; x += 0.42) b.color(shade(slide, 1.35)).box(0.2, w * 0.66, 0.1, x, 0, top + 0.2);
+    });
   }
-  turned(b, x1 - 0.02, 0.95, [[0.22, 0], [0.22, 0.05]], BLACK, 10); // the bore
-  pistolSights(b, x0 + 0.3, x1 - 0.4, sz + h);
-  // The frame: the dust cover under the slide's front (an accessory rail's notch on it).
-  b.color(frame).extrude([[x0 + 0.4, -0.25], [x1 - 0.9, -0.25], [x1 - 0.5, 0.05], [x1 - 0.5, sz + 0.05], [x0 + 0.4, sz + 0.05]], w * 0.9);
-  withBevel(b, 0, () => b.color(shade(frame, 1.7)).box(Math.min(2, len * 0.22), w * 0.92, 0.08, x1 - 1.9, 0, -0.12));
+  turned(b, x1 - 0.02, 0.95, [[s.deagle ? 0.3 : 0.22, 0], [s.deagle ? 0.3 : 0.22, 0.05]], BLACK, 10); // the bore
+  pistolSights(b, x0 + 0.3, x1 - (s.open ? 0.45 : 0.4), shape === 'step' ? top - h * 0.15 : shape === 'taper' ? top - 0.35 : top);
+  if (s.hammer) hammer(b, s.hammer, x0 + 0.05, sz + h * 0.35, s.hammerColor || BLACK);
+  // The frame: the dust cover under the slide's front; the Deagle's slopes up to the muzzle,
+  // the CZ's rises in rails beside the slide.
+  const fz = s.inset ? sz + h * 0.5 : sz + 0.05, fb = s.rail ? -0.45 : -0.25;
+  if (s.deagle) b.color(frame).extrude([[x0 + 0.4, -0.35], [2.6, -0.35], [x1 - 0.5, sz - 0.1], [x1 - 0.5, sz + 0.05], [x0 + 0.4, sz + 0.05]], w * 0.9);
+  else b.color(frame).extrude([[x0 + 0.4, fb], [x1 - 0.9, fb], [x1 - 0.5, fb + 0.3], [x1 - 0.5, fz], [x0 + 0.4, fz]], s.inset ? w : w * 0.9);
+  withBevel(b, 0, () => {
+    if (s.rail) for (let x = 2.9; x < x1 - 1.2; x += 0.45) b.color(shade(frame, 1.8)).box(0.18, w * 0.92, 0.1, x, 0, fb + 0.08);
+    else if (!s.deagle) b.color(shade(frame, 1.7)).box(Math.min(2, len * 0.22), w * 0.92, 0.08, x1 - 1.9, 0, -0.12);
+  });
   grip(b, gripLen, w * 1.05, frame, rake, 1.8);
+  if (s.hook) withBevel(b, 0.05, () => b.color(frame).extrude([[2.3, -1.36], [2.95, -1.5], [2.75, -1.15], [2.5, -1.05]], w * 0.35));
+  if (s.panels) gripPanels(b, gripLen, w * 1.05, rake, 1.8, s.panels, s.grooves || 0);
+  if (s.spareMag) { // upside down under the dust cover, its base plate at the bottom
+    b.color(BLACK).push().translate(3.35, 0, 0).rotate(-6);
+    b.box(1.05, w * 0.72, 3.4, 0, 0, fb - 1.6);
+    withBevel(b, 0.08, () => b.color(shade(BLACK, 2.2)).box(1.3, w * 0.82, 0.38, 0, 0, fb - 3.35));
+    b.pop();
+  }
   // Magazine base plate at the bottom of the grip (extended on the Glock).
   const bx = -Math.tan(rake * Math.PI / 180) * gripLen;
   b.bone(GUN_MAG).color(BLACK).box(s.baseplate ? 1.95 : 1.75, w * 1.1, s.baseplate ? 0.6 : 0.4, bx, 0, -gripLen - (s.baseplate ? 0.2 : 0.1))
@@ -479,16 +553,16 @@ function norm(v) {
 // rearSight x.
 
 const GUNS = {
-  // Pistols: slide length, colors, extras.
-  glock: { pistol: { len: 7.2, slide: DARK, frame: POLY, rake: 22, baseplate: true } },
-  hkp2000: { pistol: { len: 7.1, slide: BLACK, frame: POLY } },
-  usp_silencer: { pistol: { len: 7.6, slide: BLACK, frame: POLY }, silencer: 7.2 },
-  p250: { pistol: { len: 7.0, slide: DARK, frame: POLY } },
-  elite: { pistol: { len: 8.4, slide: SILVER, frame: SILVER, h: 1.3 } },
-  fiveseven: { pistol: { len: 7.8, slide: DARK, frame: [0.25, 0.27, 0.25] } },
+  // Pistols: slide length, colors, signature parts (see pistol()).
+  glock: { pistol: { len: 7.2, slide: DARK, frame: POLY, rake: 22, baseplate: true, selector: true } },
+  hkp2000: { pistol: { len: 7.1, slide: BLACK, frame: POLY, shape: 'round', hammer: 'bob' } },
+  usp_silencer: { pistol: { len: 7.6, slide: BLACK, frame: POLY, hammer: 'spur', rail: true }, silencer: 7.2 },
+  p250: { pistol: { len: 7.0, slide: DARK, frame: POLY, shape: 'step', hammer: 'bob' } },
+  elite: { pistol: { len: 8.4, slide: SILVER, frame: SILVER, h: 1.3, open: true, hammer: 'spur', hook: true, panels: [0.12, 0.12, 0.12] } },
+  fiveseven: { pistol: { len: 7.8, h: 1.35, slide: DARK, frame: [0.25, 0.27, 0.25], shape: 'taper', rail: true, gripLen: 4.5 } },
   tec9: { long: { receiver: [-3, 6], height: 2.0, width: 1.2, barrel: 3, barrelR: 0.4, handguard: [3.5, 1.6], mag: { x: 3.3, len: 7, depth: 1.1 }, gripLen: 3.4, sights: true, support: [...PISTOL_SUPPORT], grasp: [...PISTOL_GRASP] } },
-  cz75a: { pistol: { len: 7.6, slide: DARK, frame: WOOD_DARK } },
-  deagle: { pistol: { len: 10.6, h: 1.55, w: 1.25, slide: [0.42, 0.42, 0.44], frame: BLACK, gripLen: 4.6, deagle: true } },
+  cz75a: { pistol: { len: 7.6, slide: BLACK, frame: shade(STEEL, 0.72), inset: true, hammer: 'spur', panels: WOOD_DARK, spareMag: true } },
+  deagle: { pistol: { len: 10.6, h: 1.75, w: 1.25, slide: [0.42, 0.42, 0.44], frame: BLACK, gripLen: 4.6, deagle: true, hammer: 'spur', hook: true, panels: POLY, grooves: 4 } },
   revolver: { revolver: true },
   // SMGs.
   mac10: { long: { receiver: [-3.5, 5], height: 2.6, width: 1.5, barrel: 1.5, mag: { x: 0.55, len: 6.5, depth: 1.1, rake: -5 }, stock: 'skeleton', stockLen: 1.4, gripLen: 3.4, rake: 5 } },
