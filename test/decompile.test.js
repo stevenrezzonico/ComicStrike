@@ -5,6 +5,7 @@ import { Nav, NAV_CELL } from '../shared/nav.js';
 import { decompileBSP } from '../client/editor/decompile.js';
 import {
   readProject, checkProject, compileProject, bounds, withProject, projectIn, piecesOf, cornersOf, turnFaces, mirrorFaces, LIMITS,
+  newProject, connectedTo, mainTexture,
 } from '../client/editor/project.js';
 
 // A .bsp opened in the map editor (client/editor/decompile.js): turned back into shapes that
@@ -136,3 +137,18 @@ for (const name of ['de_dust2', 'cs_office', 'de_nuke']) {
     },
   });
 }
+
+Deno.test('select connected: touching shapes of one kind and texture, nothing apart', () => {
+  // The starter map: three crates in a stack touch, the fourth stands apart.
+  const q = newProject();
+  const crates = q.brushes.filter((b) => b.tex.side === 'crate08');
+  assert.deepEqual(connectedTo(q, [crates[0].id]).sort(), crates.slice(0, 3).map((b) => b.id).sort());
+  assert.deepEqual(connectedTo(q, [crates[3].id]), [crates[3].id]);
+  // An opened map's slices: each one found touches another and wears the same texture.
+  const { p } = open('de_inkwell');
+  const wall = p.brushes.find((b) => b.kind === 'world' && b.shape === 'convex' && b.tex.side && b.tex.side !== 'sky' &&
+    connectedTo(p, [b.id]).length > 3);
+  assert.ok(wall, 'a wall in slices');
+  const ids = connectedTo(p, [wall.id]);
+  for (const id of ids) assert.equal(mainTexture(p.brushes.find((b) => b.id === id)), mainTexture(wall));
+});

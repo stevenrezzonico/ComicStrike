@@ -241,6 +241,35 @@ export const slotOf = (n) => (n[2] * n[2] > 0.49 * (n[0] * n[0] + n[1] * n[1] + 
 // A piece's corners (for the views, bounds and checks).
 export const cornersOf = (piece) => brushPolygons(brushPlanes(piece.brush)).flat();
 
+// The main texture of a brush: its sides', else its top's (a wall by its face, a floor by
+// its top).
+export const mainTexture = (br) => br.tex.side || br.tex.top || null;
+
+// The brushes touching those in `ids` with the same kind and main texture, and those
+// touching them, and so on: a wall an opened map brought back in slices, whole again for
+// selecting (Select connected). Two shapes touch when no face of a piece of either has
+// every corner of a piece of the other more than half a unit in front of it.
+export function connectedTo(p, ids) {
+  const parts = new Map(); // brush -> [{ planes, corners, lo, hi }]
+  const of = (br) => {
+    if (!parts.has(br)) parts.set(br, piecesOf(br).map(solidOf).filter((s) => s.corners.length));
+    return parts.get(br);
+  };
+  const apart = (s, t) => s.planes.some((pl) => t.corners.every((v) => pl.n[0] * v[0] + pl.n[1] * v[1] + pl.n[2] * v[2] > pl.d + 0.5));
+  const near = (s, t) => [0, 1, 2].every((k) => s.lo[k] <= t.hi[k] + 0.5 && t.lo[k] <= s.hi[k] + 0.5);
+  const touch = (a, b) => of(a).some((s) => of(b).some((t) => near(s, t) && !apart(s, t) && !apart(t, s)));
+  const out = new Set(ids), queue = p.brushes.filter((b) => out.has(b.id));
+  while (queue.length) {
+    const a = queue.pop(), tex = mainTexture(a);
+    for (const b of p.brushes) {
+      if (out.has(b.id) || b.kind !== a.kind || mainTexture(b) !== tex || !touch(a, b)) continue;
+      out.add(b.id);
+      queue.push(b);
+    }
+  }
+  return [...out];
+}
+
 // A ramp's slope in degrees.
 export function slopeOf(br) {
   const along = br.up === 'px' || br.up === 'nx' ? 0 : 1;

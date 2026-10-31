@@ -9,7 +9,7 @@
 
 import {
   TEXTURES, KINDS, POINTS, SHAPES, UPS, UP_LABELS, SIDE_COUNTS, MAX_SLOPE, newProject, readProject, checkProject,
-  bounds, makeBrush, piecesOf, cornersOf, slopeOf, turnFaces, mirrorFaces, slotOf, withProject, projectIn,
+  bounds, makeBrush, piecesOf, cornersOf, slopeOf, turnFaces, mirrorFaces, slotOf, withProject, projectIn, connectedTo,
 } from './project.js';
 import { box, brushPlanes, brushPolygons } from '../../shared/bspwriter.js';
 import { View2D } from './view2d.js';
@@ -492,6 +492,16 @@ class Editor {
     this.changed();
   }
 
+  // G: the selected shapes and every shape touching them with the same kind and texture
+  // (a wall an opened map brought back in slices, picked whole).
+  selectConnected() {
+    const sel = this.selected().filter((it) => it.b);
+    if (!sel.length) return;
+    const ids = connectedTo(this.project, sel.map((it) => it.id));
+    this.select([...ids, ...this.selected().filter((it) => it.o).map((it) => it.id)]);
+    this.status(`Selected ${ids.length} connected shape${ids.length > 1 ? 's' : ''}`);
+  }
+
   selectSameTexture() {
     const one = this.selected().find((it) => it.b);
     if (!one) return;
@@ -586,6 +596,7 @@ class Editor {
           row.append(b);
         }
         menu.append(row);
+        item('Select connected', 'G', () => this.selectConnected());
         item('Select same texture', '', () => this.selectSameTexture());
         item('Properties', 'dbl-click', () => this.focusProps());
       }
@@ -845,6 +856,7 @@ class Editor {
     else if (k === 'r') this.rotate90();
     else if (k === 'm') this.mirror();
     else if (k === 'f') this.dropToFloor();
+    else if (lk === 'g') this.selectConnected();
     else if (k === 'Home') this.fitAll();
     else if (k === '?') this.tour.start();
     else if (e.code === 'Space') this.spaceHeld = true;
