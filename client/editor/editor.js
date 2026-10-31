@@ -726,7 +726,7 @@ class Editor {
   setLayout(layout) {
     this.layout = layout;
     $('views').classList.toggle('simple', layout === 'simple');
-    $('layout').textContent = layout === 'simple' ? 'Four views' : 'Simple view';
+    $('layout').textContent = layout === 'simple' ? 'Advanced view' : 'Simple view';
     try {
       localStorage.setItem(LAYOUT_KEY, layout);
     } catch { /* not kept */ }
