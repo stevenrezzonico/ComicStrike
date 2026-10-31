@@ -67,6 +67,10 @@ function inPolygon(poly, x, y, slack = 0) {
   return false;
 }
 
+// A solid shape wearing only sky (an opened map's sky brushes).
+const skyOnly = (br) => br.kind === 'world' && (br.tex.top || br.tex.side || br.tex.bottom) === 'sky' &&
+  ['top', 'side', 'bottom'].every((s) => !br.tex[s] || br.tex[s] === 'sky');
+
 export class View2D {
   constructor(el, name, app) {
     this.el = el;
@@ -217,7 +221,7 @@ export class View2D {
     drawn.sort((a, b) => a.near - b.near); // farther first
     for (const { br, pieces } of drawn) {
       for (const pc of pieces) this.drawPiece(br, pc);
-      if (br.kind !== 'world' || br.shape !== 'box') this.drawLabel(br, pieces);
+      if (br.kind !== 'world' || (br.shape !== 'box' && br.shape !== 'convex')) this.drawLabel(br, pieces);
     }
     for (const q of p.points) this.drawPoint(q);
     if (this.hover && !app.selection.has(this.hover.id)) {
@@ -277,7 +281,10 @@ export class View2D {
     const ctx = this.ctx;
     const kind = KINDS[pc.kind];
     this.path(pc.poly);
-    if (kind.trigger || kind.water) {
+    if (skyOnly(br)) { // an opened map's sky: an outline, so it hides nothing under it
+      ctx.strokeStyle = '#6fb3d6';
+      ctx.setLineDash([2, 4]);
+    } else if (kind.trigger || kind.water) {
       const col = ZONE_COLORS[pc.kind] || '#888';
       ctx.fillStyle = col + '33';
       ctx.fill();
@@ -785,7 +792,7 @@ export class View2D {
         const zone = KINDS[pc.kind].trigger || KINDS[pc.kind].water;
         const xs = pc.poly.map((q) => q[0]), ys = pc.poly.map((q) => q[1]);
         const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys)) / (this.scale * this.scale);
-        const key = (zone ? -1e15 : 0) + pc.near * 1e6 - area / 1e6; // solid first, nearer, then the smaller
+        const key = (skyOnly(br) ? -2e15 : zone ? -1e15 : 0) + pc.near * 1e6 - area / 1e6; // solid first, nearer, then the smaller
         if (key > bestKey) {
           bestKey = key;
           best = br;

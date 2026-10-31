@@ -2,22 +2,27 @@
 // compiler (shared/bspwriter.js). Pure data and functions (no DOM): the editor page, its
 // compile worker and the tests share them.
 //
-// A project (saved as JSON, format 'comicstrike-map' version 2):
+// A project (saved as JSON, format 'comicstrike-map' version 3):
 //   { name, brushes: [{ id, b: [x0, y0, z0, x1, y1, z1], tex: { top, bottom, side }, kind, keys,
-//       shape, yaw, up, sides, step }], points: [{ id, kind, o: [x, y, z] (the feet), yaw }], nextId }
+//       shape, yaw, up, sides, step, faces? }], points: [{ id, kind, o: [x, y, z] (the feet), yaw }],
+//     textures?: { name: [width, height] }, nextId }
 // A brush's shape (SHAPES) fills its box b: a box (turned by `yaw` degrees about its
 // center: an angled wall), a ramp rising toward side `up`, a pillar of `sides` faces, stairs
 // of `step` high steps rising toward `up`, a ladder against side `up` (its board and the
-// climbable volume in front). Its kind is 'world' (solid) or a brush entity class (KINDS);
-// each entity brush is an entity of its own. Version 1 files read as boxes. The compiled
-// map is closed in a sky box round everything, so it never leaks into the void.
+// climbable volume in front), or a convex piece (a .bsp opened in the editor: shared/
+// bspdecompile.js) whose `faces` are planes [nx, ny, nz, d, texture] in its box's own
+// coordinates (0..1 along each axis: n·u <= d inside), so moving and resizing the box
+// carry it along. Its kind is 'world' (solid) or a brush entity class (KINDS); each entity
+// brush is an entity of its own. Textures are the palette's (TEXTURES) or the project's own
+// (`textures`: those of an opened map). Versions 1 and 2 read too. The compiled map is
+// closed in a sky box round everything, so it never leaks into the void.
 
 import {
-  MapBuilder, box, wedge, turnedBox, prism, brushPlanes, brushPolygons, NONE, CONTENTS_WATER,
+  MapBuilder, box, wedge, turnedBox, prism, convex, brushPlanes, brushPolygons, NONE, CONTENTS_WATER,
 } from '../../shared/bspwriter.js';
 
 export const FORMAT = 'comicstrike-map';
-export const VERSION = 2;
+export const VERSION = 3;
 
 // Shapes: label; `turns` (takes yaw), `rises` (takes up: the high side).
 export const SHAPES = {
@@ -26,6 +31,7 @@ export const SHAPES = {
   pillar: { label: 'Pillar', turns: true },
   stairs: { label: 'Stairs', rises: true },
   ladder: { label: 'Ladder', rises: true },
+  convex: { label: 'Piece', made: true }, // made: only opening a .bsp makes one
 };
 export const UPS = ['px', 'py', 'nx', 'ny']; // east, north, west, south: a quarter turn apart
 export const UP_LABELS = { px: 'east', nx: 'west', py: 'north', ny: 'south' };
@@ -53,6 +59,10 @@ export const TEXTURES = [
   ['{ladder1', 64, 64, 'Ladder'], ['scroll_conv', 64, 64, 'Conveyor belt'], ['sky', 256, 256, 'Sky'],
 ];
 const TEXTURE_SIZE = new Map(TEXTURES.map(([n, w, h]) => [n, [w, h]]));
+export const TEXTURE_NAME = /^[\w!{}+~-]{1,15}$/; // a GoldSrc texture name (16 bytes with its end)
+
+// A texture's size: the palette's, else the project's own table (null: unknown).
+export const textureSize = (p, name) => TEXTURE_SIZE.get(name) || (p.textures && p.textures[name]) || null;
 
 // Brush kinds: label, default keys, `trigger` (no faces, no collision: zones and volumes),
 // `water` (a water volume: only its top shows).
@@ -73,6 +83,7 @@ export const KINDS = {
   func_buyzone: { label: 'Buy zone', keys: { team: '1' }, trigger: true, help: 'team: 1 Terrorists, 2 Counter-Terrorists' },
   func_bomb_target: { label: 'Bomb site', trigger: true, help: 'the first is site A, the second B' },
   func_hostage_rescue: { label: 'Rescue zone', trigger: true },
+  func_illusionary: { label: 'Decoration', help: 'drawn but not solid: players and bullets pass through it' },
 };
 
 // Point kinds: label, short mark for the 2D views.
@@ -121,17 +132,32 @@ export function readProject(text) {
   if (p.version > VERSION) throw new Error('made by a newer editor');
   const num = (x) => (Number.isFinite(+x) ? Math.round(+x) : 0);
   const out = { format: FORMAT, version: VERSION, name: String(p.name || 'my_map').replace(/[^\w-]/g, '_').slice(0, 31) || 'my_map',
-    brushes: [], points: [], nextId: 1 };
+    brushes: [], points: [], textures: {}, nextId: 1 };
+  let extra = 0;
+  for (const [name, size] of Object.entries(p.textures && typeof p.textures === 'object' ? p.textures : {})) {
+    if (!TEXTURE_NAME.test(name) || TEXTURE_SIZE.has(name) || !Array.isArray(size) || ++extra > 1024) continue;
+    out.textures[name] = [0, 1].map((k) => Math.max(1, Math.min(1024, num(size[k]) || 64)));
+  }
+  const texOf = (name) => (typeof name === 'string' && textureSize(out, name) ? name : null);
   for (const b of Array.isArray(p.brushes) ? p.brushes : []) {
     const kind = KINDS[b.kind] ? b.kind : 'world';
     const tex = {};
-    for (const s of ['top', 'bottom', 'side']) tex[s] = b.tex && TEXTURE_SIZE.has(b.tex[s]) ? b.tex[s] : null;
+    for (const s of ['top', 'bottom', 'side']) tex[s] = b.tex ? texOf(b.tex[s]) : null;
     const keys = {};
     for (const [k, v] of Object.entries(b.keys || {})) if (/^\w{1,32}$/.test(k)) keys[k] = String(v).replace(/"/g, "'").slice(0, 128);
-    out.brushes.push(makeBrush(out.nextId++, (b.b || []).slice(0, 6).map(num), tex, kind, keys, {
-      shape: SHAPES[b.shape] ? b.shape : 'box', yaw: num(b.yaw) % 360, up: UPS.includes(b.up) ? b.up : 'px',
+    let shape = SHAPES[b.shape] ? b.shape : 'box', faces;
+    if (shape === 'convex') {
+      faces = (Array.isArray(b.faces) ? b.faces : []).slice(0, 64)
+        .filter((f) => Array.isArray(f) && f.slice(0, 4).every((x) => Number.isFinite(+x) && Math.abs(+x) < 1e6))
+        .map((f) => [...f.slice(0, 4).map((x) => Math.round(+x * 1e6) / 1e6), texOf(f[4])]);
+      if (faces.length < 4) shape = 'box';
+    }
+    const br = makeBrush(out.nextId++, (b.b || []).slice(0, 6).map(num), tex, kind, keys, {
+      shape, yaw: num(b.yaw) % 360, up: UPS.includes(b.up) ? b.up : 'px',
       sides: SIDE_COUNTS.includes(+b.sides) ? +b.sides : 8, step: Math.max(4, Math.min(64, num(b.step) || 16)),
-    }));
+    });
+    if (shape === 'convex') br.faces = faces;
+    out.brushes.push(br);
   }
   for (const q of Array.isArray(p.points) ? p.points : []) {
     if (!POINTS[q.kind]) continue;
@@ -185,10 +211,32 @@ export function piecesOf(br) {
       return [{ brush: box(...board, face), kind: 'world', keys: {} },
         { brush: box(...vol, { ...NONE }), kind: 'func_ladder', keys: {} }];
     }
+    case 'convex':
+      return one(convex(convexPlanes(br, kind.water ? tex.top : undefined)));
     default:
       return one(yaw % 360 ? turnedBox(br.b, yaw, tex) : box(x0, y0, z0, x1, y1, z1, tex));
   }
 }
+
+// A convex piece's planes in world coordinates: [{ n, d, tex }] (water: only faces turned
+// up show, with `water` as their texture where they have none).
+export function convexPlanes(br, water) {
+  const b = br.b, s = [b[3] - b[0], b[4] - b[1], b[5] - b[2]];
+  return br.faces.map(([nx, ny, nz, d, tex]) => {
+    // n·(p - b0) / s <= d  =>  (n / s)·p <= d + (n / s)·b0
+    const n = [nx / s[0], ny / s[1], nz / s[2]];
+    const t = water === undefined ? tex : n[2] > 0 && n[2] * n[2] > 0.49 * (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) ? tex || water : null;
+    return { n, d: d + n[0] * b[0] + n[1] * b[1] + n[2] * b[2], tex: t };
+  });
+}
+
+// Faces of a convex piece turned a quarter counter-clockwise (seen from the top) or mirrored
+// east to west within its box: the box itself turns or flips round them (editor.js).
+export const turnFaces = (faces) => faces.map(([nx, ny, nz, d, t]) => [-ny, nx, nz, d - ny, t]);
+export const mirrorFaces = (faces) => faces.map(([nx, ny, nz, d, t]) => [-nx, ny, nz, d - nx, t]);
+
+// Which slot (top, bottom or side) a face turned along n paints.
+export const slotOf = (n) => (n[2] * n[2] > 0.49 * (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) ? (n[2] > 0 ? 'top' : 'bottom') : 'side');
 
 // A piece's corners (for the views, bounds and checks).
 export const cornersOf = (piece) => brushPolygons(brushPlanes(piece.brush)).flat();
@@ -199,21 +247,26 @@ export function slopeOf(br) {
   return Math.atan2(br.b[5] - br.b[2], br.b[along + 3] - br.b[along]) * 180 / Math.PI;
 }
 
-// Is a standing player's hull with its center at c inside the piece? (The brush grown by
-// the hull, with axial bevels: as the compiler does it for collision.)
-function hullInside(piece, c) {
-  const ps = brushPlanes(piece.brush), corners = cornersOf(piece);
-  if (!corners.length) return false;
-  const reach = (n) => HULL[0] * Math.abs(n[0]) + HULL[1] * Math.abs(n[1]) + HULL[2] * Math.abs(n[2]);
-  for (const p of ps) if (p.n[0] * c[0] + p.n[1] * c[1] + p.n[2] * c[2] >= p.d + reach(p.n) - 0.5) return false;
-  for (let k = 0; k < 3; k++) {
-    let lo = Infinity, hi = -Infinity;
-    for (const v of corners) {
-      lo = Math.min(lo, v[k]);
-      hi = Math.max(hi, v[k]);
+// A piece for the hull tests: its planes, corners and bounds (made once per check: an
+// opened map has thousands).
+function solidOf(piece) {
+  const planes = brushPlanes(piece.brush), corners = brushPolygons(planes).flat();
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for (const v of corners) {
+    for (let k = 0; k < 3; k++) {
+      lo[k] = Math.min(lo[k], v[k]);
+      hi[k] = Math.max(hi[k], v[k]);
     }
-    if (c[k] <= lo - HULL[k] + 0.5 || c[k] >= hi + HULL[k] - 0.5) return false;
   }
+  return { planes, corners, lo, hi };
+}
+
+// Is a standing player's hull with its center at c inside the piece (solidOf)? (The brush
+// grown by the hull, with axial bevels: as the compiler does it for collision.)
+function hullInside(s, c) {
+  for (let k = 0; k < 3; k++) if (c[k] <= s.lo[k] - HULL[k] + 0.5 || c[k] >= s.hi[k] + HULL[k] - 0.5) return false;
+  const reach = (n) => HULL[0] * Math.abs(n[0]) + HULL[1] * Math.abs(n[1]) + HULL[2] * Math.abs(n[2]);
+  for (const p of s.planes) if (p.n[0] * c[0] + p.n[1] * c[1] + p.n[2] * c[2] >= p.d + reach(p.n) - 0.5) return false;
   return true;
 }
 
@@ -245,7 +298,8 @@ export function checkProject(p) {
   if (!ct) errors.push({ text: 'No CT spawn: add one with the CT spawn tool.' });
   if (t && t < 5) warnings.push({ text: `Only ${t} T spawn${t > 1 ? 's' : ''}: a full team needs 5.` });
   if (ct && ct < 5) warnings.push({ text: `Only ${ct} CT spawn${ct > 1 ? 's' : ''}: a full team needs 5.` });
-  const solids = valid.filter((b) => !KINDS[b.kind].water).flatMap(piecesOf).filter((pc) => !KINDS[pc.kind].trigger);
+  const solids = valid.filter((b) => !KINDS[b.kind].water).flatMap(piecesOf).filter((pc) => !KINDS[pc.kind].trigger)
+    .map(solidOf).filter((s) => s.corners.length);
   for (const q of p.points) {
     const [x, y, z] = q.o;
     if (q.o.some((v) => Math.abs(v) > LIMITS.coord)) {
@@ -297,9 +351,13 @@ export function bounds(p) {
 // The project as a map for the compiler (a MapBuilder), closed in a sky box.
 export function projectToBuilder(p) {
   const used = new Set(['sky', '{ladder1']);
-  for (const b of p.brushes) for (const s of ['top', 'bottom', 'side']) if (b.tex[s]) used.add(b.tex[s]);
-  const textures = {};
+  for (const b of p.brushes) {
+    for (const s of ['top', 'bottom', 'side']) if (b.tex[s]) used.add(b.tex[s]);
+    if (b.shape === 'convex') for (const f of b.faces) if (f[4]) used.add(f[4]);
+  }
+  const textures = {}; // the palette's in its order, then the project's own
   for (const [name, w, h] of TEXTURES) if (used.has(name)) textures[name] = [w, h];
+  for (const name of used) if (!textures[name]) textures[name] = textureSize(p, name) || [64, 64];
   const map = new MapBuilder(textures, { wad: '', mapversion: '220', skyname: 'desert', message: p.name });
 
   // The sky box: 32 thick, 64 out from everything, 256 over the highest point.
@@ -345,6 +403,50 @@ export function hingeOf(b) {
   const zc = (z0 + z1) / 2;
   if (x1 - x0 >= y1 - y0) return [end ? x1 : x0, (y0 + y1) / 2, zc];
   return [(x0 + x1) / 2, end ? y1 : y0, zc];
+}
+
+// An exported map carries its project after the BSP's lumps, where no engine reads, so the
+// editor opens our own maps again exactly (any other .bsp is decompiled: decompile.js):
+// ...lumps | the project's JSON, deflated | its length (u32) | 'CSPROJ01'.
+const TRAILER = 'CSPROJ01';
+const MAX_PROJECT = 16 << 20; // bytes of JSON at most (a file from outside could claim more)
+
+export async function withProject(bytes, project) {
+  const packed = new Uint8Array(await new Response(new Blob([JSON.stringify(project)]).stream()
+    .pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer());
+  const out = new Uint8Array(bytes.length + packed.length + 12);
+  out.set(bytes);
+  out.set(packed, bytes.length);
+  new DataView(out.buffer).setUint32(bytes.length + packed.length, packed.length, true);
+  for (let i = 0; i < 8; i++) out[out.length - 8 + i] = TRAILER.charCodeAt(i);
+  return out;
+}
+
+// The project a map carries (withProject), read as JSON (null: none, or not readable).
+export async function projectIn(bytes) {
+  const n = bytes.length;
+  if (n < 12 || String.fromCharCode(...bytes.subarray(n - 8)) !== TRAILER) return null;
+  const len = new DataView(bytes.buffer, bytes.byteOffset).getUint32(n - 12, true);
+  if (len > n - 12) return null;
+  try {
+    const reader = new Blob([bytes.subarray(n - 12 - len, n - 12)]).stream()
+      .pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+    const parts = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > MAX_PROJECT) {
+        reader.cancel();
+        return null;
+      }
+      parts.push(value);
+    }
+    return JSON.parse(await new Blob(parts).text());
+  } catch {
+    return null;
+  }
 }
 
 // The compiled map: { bytes, stats } (throws when the project has errors).

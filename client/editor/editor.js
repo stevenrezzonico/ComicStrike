@@ -9,7 +9,7 @@
 
 import {
   TEXTURES, KINDS, POINTS, SHAPES, UPS, UP_LABELS, SIDE_COUNTS, MAX_SLOPE, newProject, readProject, checkProject,
-  bounds, makeBrush, piecesOf, cornersOf, slopeOf,
+  bounds, makeBrush, piecesOf, cornersOf, slopeOf, turnFaces, mirrorFaces, slotOf, withProject, projectIn,
 } from './project.js';
 import { box, brushPlanes, brushPolygons } from '../../shared/bspwriter.js';
 import { View2D } from './view2d.js';
@@ -145,7 +145,7 @@ class Editor {
 
   // A shape's pieces with their corners (cached by what makes them).
   outline(br) {
-    const key = JSON.stringify([br.b, br.shape, br.yaw, br.up, br.sides, br.step, br.kind, br.tex]);
+    const key = JSON.stringify([br.b, br.shape, br.yaw, br.up, br.sides, br.step, br.kind, br.tex, br.faces]);
     let o = this.outlines.get(key);
     if (!o) {
       o = piecesOf(br).map((pc) => ({ corners: cornersOf(pc), kind: pc.kind, tex: pieceTex(pc, br) }));
@@ -211,6 +211,7 @@ class Editor {
   changed(final = true) {
     this.redraw();
     if (!final) return;
+    this.renderPalette();
     this.renderProps();
     this.renderProblems();
     this.save();
@@ -423,6 +424,7 @@ class Editor {
       b[1] = Math.round(my - hy);
       b[4] = b[1] + hy * 2;
       it.up = UPS[(UPS.indexOf(it.up) + 1) % 4];
+      if (it.shape === 'convex') it.faces = turnFaces(it.faces);
       if (it.kind === 'func_button' || it.kind === 'func_door') {
         const a = +it.keys.angle;
         if (a >= 0) it.keys.angle = String((a + 90) % 360);
@@ -446,6 +448,7 @@ class Editor {
       }
       [it.b[0], it.b[3]] = [c2 - it.b[3], c2 - it.b[0]];
       it.yaw = ((360 - it.yaw) % 360 + 360) % 360;
+      if (it.shape === 'convex') it.faces = mirrorFaces(it.faces);
       if (it.up === 'px' || it.up === 'nx') it.up = it.up === 'px' ? 'nx' : 'px';
     }
     this.changed();
@@ -574,6 +577,7 @@ class Editor {
         sep();
         const row = el('div', 'shapes');
         for (const [id, s] of Object.entries(SHAPES)) {
+          if (s.made) continue;
           const b = el('button', sel.every((it) => !it.b || it.shape === id) ? 'active' : '', s.label);
           b.addEventListener('click', () => {
             this.closeMenu();
@@ -642,17 +646,7 @@ class Editor {
       });
       slots.append(b);
     }
-    const pal = $('palette');
-    for (const [name, , , label] of TEXTURES) {
-      const b = el('button');
-      b.dataset.tex = name;
-      b.title = name;
-      const sw = el('span', 'swatch');
-      sw.style.background = this.colorOf(name);
-      b.append(sw, el('span', '', label));
-      b.addEventListener('click', () => this.paint(name));
-      pal.append(b);
-    }
+    this.renderPalette();
     const grid = $('grid');
     for (const g of GRIDS) grid.append(new Option(String(g), String(g)));
     grid.addEventListener('change', () => this.setGrid(+grid.value));
@@ -662,7 +656,7 @@ class Editor {
     $('file').addEventListener('change', () => {
       const f = $('file').files[0];
       $('file').value = '';
-      if (f) this.openText(f.name, () => f.text());
+      if (f) this.openFile(f);
     });
     // The example: de_inkwell, our own defusal map (tools/gen_inkwell.js writes it).
     $('example').addEventListener('click', () => {
@@ -764,11 +758,50 @@ class Editor {
       for (const b of brushes) {
         for (const s of this.slot === 'all' ? ['top', 'bottom', 'side'] : [this.slot]) {
           if (KINDS[b.kind].water && s !== 'top') continue;
-          b.tex[s] = name;
+          this.texFaces(b, s, name);
         }
       }
       this.changed();
     }
+    this.refreshChrome();
+  }
+
+  // Texture `name` on slot s (top, bottom, side) of brush b: a convex piece's faces turned
+  // that way too.
+  texFaces(b, s, name) {
+    b.tex[s] = name;
+    if (b.shape !== 'convex') return;
+    const z = [b.b[3] - b.b[0], b.b[4] - b.b[1], b.b[5] - b.b[2]]; // faces are in the box's own units
+    for (const f of b.faces) if (slotOf([f[0] / z[0], f[1] / z[1], f[2] / z[2]]) === s) f[4] = name;
+  }
+
+  // The textures to pick from: the palette's, then the opened map's own.
+  textureChoices() {
+    return [...TEXTURES.map(([name, , , label]) => [name, label]), ...Object.keys(this.project.textures || {}).map((n) => [n, n])];
+  }
+
+  // The palette: the editor's textures, then (under its own heading) the project's own,
+  // rebuilt when those change.
+  renderPalette() {
+    const own = Object.keys(this.project.textures || {}).sort();
+    const key = own.join();
+    if (key === this.paletteKey) return;
+    this.paletteKey = key;
+    const pal = $('palette');
+    pal.replaceChildren();
+    const add = (name, label) => {
+      const b = el('button');
+      b.dataset.tex = name;
+      b.title = name;
+      const sw = el('span', 'swatch');
+      sw.style.background = this.colorOf(name);
+      b.append(sw, el('span', '', label));
+      b.addEventListener('click', () => this.paint(name));
+      pal.append(b);
+    };
+    for (const [name, , , label] of TEXTURES) add(name, label);
+    if (own.length) pal.append(el('h3', '', 'This map\'s textures'));
+    for (const name of own) add(name, name);
     this.refreshChrome();
   }
 
@@ -947,7 +980,7 @@ class Editor {
       else for (const s of ['top', 'bottom', 'side']) it.tex[s] = it.tex[s] || this.texture;
     });
     if (!KINDS[it.kind].trigger) {
-      choice('Shape', Object.entries(SHAPES).map(([id, s]) => [id, s.label]), it.shape, (v) => {
+      choice('Shape', Object.entries(SHAPES).filter(([id, s]) => !s.made || id === it.shape).map(([id, s]) => [id, s.label]), it.shape, (v) => {
         it.shape = v;
       });
     }
@@ -980,8 +1013,8 @@ class Editor {
     if (!kind.trigger && it.shape !== 'ladder') {
       for (const s of kind.water ? ['top'] : ['top', 'side', 'bottom']) {
         choice(s === 'side' ? 'Sides' : s[0].toUpperCase() + s.slice(1),
-          [['', '(none)'], ...TEXTURES.map(([name, , , label]) => [name, label])], it.tex[s] || '', (v) => {
-            it.tex[s] = v || null;
+          [['', '(none)'], ...this.textureChoices()], it.tex[s] || '', (v) => {
+            this.texFaces(it, s, v || null);
           });
       }
     }
@@ -1121,12 +1154,35 @@ class Editor {
     if (this.previewReady) this.toPreview({ type: 'preview-select', ids: [...this.selection], grid: this.grid });
   }
 
+  // The compiled map, carrying its project (withProject: the editor opens it again exactly).
   async exportBsp() {
     this.status('Compiling...');
     const r = await this.compile('full');
     if (r.error) return this.status(r.error, true);
-    this.download(new Blob([r.bytes], { type: 'application/octet-stream' }), `${this.project.name}.bsp`);
-    this.status(`Exported ${this.project.name}.bsp (${Math.round(r.bytes.byteLength / 1024)} KB)`);
+    const bytes = await withProject(new Uint8Array(r.bytes), this.project);
+    this.download(new Blob([bytes], { type: 'application/octet-stream' }), `${this.project.name}.bsp`);
+    this.status(`Exported ${this.project.name}.bsp (${Math.round(bytes.length / 1024)} KB)`);
+  }
+
+  // A file picked with Open: a project (.cmap.json), or a map (.bsp, version 30): one the
+  // editor exported opens as its project, any other is decompiled in the worker.
+  async openFile(f) {
+    const buf = await f.arrayBuffer();
+    if (buf.byteLength < 4 || new DataView(buf).getInt32(0, true) !== 30) return this.openText(f.name, () => new TextDecoder().decode(buf));
+    const own = await projectIn(new Uint8Array(buf));
+    if (own) return this.openText(f.name, () => own);
+    this.status(`Opening ${f.name}...`);
+    const id = ++this.jobId;
+    const r = await new Promise((resolve) => {
+      this.jobs.set(id, resolve);
+      this.worker.postMessage({ id, open: buf, name: f.name }, [buf]);
+    });
+    if (r.error) return this.status(`${f.name}: ${r.error}`, true);
+    await this.openText(f.name, () => r.project);
+    const left = Object.entries(r.report.dropped).sort((a, b) => b[1] - a[1]);
+    const count = left.reduce((n, [, k]) => n + k, 0);
+    this.status(`Opened ${f.name}: ${r.report.shapes} shapes, ${r.report.points} points` +
+      (count ? `; left out ${count} entities the editor does not make (${left.slice(0, 4).map(([c]) => c).join(', ')}${left.length > 4 ? ', ...' : ''})` : ''));
   }
 
   // Hands the map over and opens the game in a new tab, which takes it (client/handoff.js).

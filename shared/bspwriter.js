@@ -22,6 +22,7 @@ export const CONTENTS_EMPTY = -1, CONTENTS_SOLID = -2, CONTENTS_WATER = -3;
 
 const EPS = 0.01; // plane side tolerance (units)
 const HUGE = 65536;
+const SCORE_SAMPLE = 128; // brushes a split candidate is scored against at most
 
 // --- Brushes ---------------------------------------------------------------------------
 
@@ -117,7 +118,7 @@ const norm = (v) => {
 };
 
 // A big square on plane (n, d), counter-clockwise round n.
-function planeSquare(n, d) {
+export function planeSquare(n, d) {
   const up = Math.abs(n[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1];
   const u = norm(cross(up, n)), v = cross(n, u);
   const c = [n[0] * d, n[1] * d, n[2] * d];
@@ -126,7 +127,7 @@ function planeSquare(n, d) {
 }
 
 // The part of convex polygon `poly` behind plane (n, d) (n·p <= d), or in front (front).
-function clip(poly, n, d, front = false) {
+export function clip(poly, n, d, front = false) {
   const out = [];
   const s = front ? -1 : 1;
   for (let i = 0; i < poly.length; i++) {
@@ -258,7 +259,8 @@ function hullBrush(planes, h, origin, contents, index) {
     if (!grown.some((q) => Math.abs(dot3(q.n, p.n) - 1) < 1e-9 && Math.abs(q.d - p.d) < EPS)) grown.push(p);
   }
   const all = h === 0 ? local : grown;
-  return { planes: all, verts: h === 0 ? verts : brushPolygons(all).flat(), contents, index };
+  const vs = h === 0 ? verts : brushPolygons(all).flat();
+  return { planes: all, verts: vs, b: boundsOf(vs), contents, index };
 }
 
 // BSP tree over brushes inside `cell`: a node { n, d (canonical), type, front, back, cell
@@ -266,12 +268,21 @@ function hullBrush(planes, h, origin, contents, index) {
 function buildTree(brushes, rootBounds) {
   const split = (cell, list) => {
     const verts = cell.verts, bounds = boundsOf(verts);
-    const inside = list.filter((i) => !brushes[i].planes.some((p) => sideOf(verts, p.n, p.d) === 1));
+    const apart = (o) => { // bounds apart: the brush is wholly outside the cell
+      for (let k = 0; k < 3; k++) if (o[k] > bounds[k + 3] + EPS || o[k + 3] < bounds[k] - EPS) return true;
+      return false;
+    };
+    const inside = list.filter((i) => !apart(brushes[i].b) && !brushes[i].planes.some((p) => sideOf(verts, p.n, p.d) === 1));
     if (!inside.length) return { contents: CONTENTS_EMPTY, bounds };
     const full = inside.find((i) => brushes[i].planes.every((p) => sideOf(verts, p.n, p.d) === -1));
     if (full !== undefined) return { contents: brushes[full].contents, bounds };
     let best = null, bestScore = Infinity;
     const tried = new Set();
+    // Candidates are scored against every brush here, or an even sample of SCORE_SAMPLE of
+    // them in a crowded cell (a map opened from a .bsp has over a thousand: every plane
+    // against every brush at each node took most of its compile).
+    const step = Math.ceil(inside.length / SCORE_SAMPLE);
+    const sample = step > 1 ? inside.filter((_, k) => k % step === 0) : inside;
     for (const i of inside) {
       for (const p of brushes[i].planes) {
         const c = canonical(p.n, p.d);
@@ -280,7 +291,7 @@ function buildTree(brushes, rootBounds) {
         tried.add(key);
         if (sideOf(verts, c.n, c.d) !== 0) continue; // does not cut this cell
         let front = 0, back = 0, cross = 0;
-        for (const j of inside) {
+        for (const j of sample) {
           const s = sideOf(brushes[j].verts, c.n, c.d);
           if (s < 0) back++;
           else if (s > 0) front++;
@@ -295,7 +306,11 @@ function buildTree(brushes, rootBounds) {
     }
     if (!best) return { contents: brushes[inside[0]].contents, bounds }; // (within the tolerance: call it inside)
     const [b, f] = splitCell(cell, best.n, best.d);
-    return { n: best.n, d: best.d, type: best.type, bounds, front: split(f, inside), back: split(b, inside) };
+    const front = split(f, inside), back = split(b, inside);
+    // Two leaves alike need no node between them (a cell inside two overlapping brushes, cut
+    // where one ends: a fifth of the clipnodes of a map opened from a .bsp).
+    if (front.n === undefined && back.n === undefined && front.contents === back.contents) return { contents: front.contents, bounds };
+    return { n: best.n, d: best.d, type: best.type, bounds, front, back };
   };
   return split(boxCell(rootBounds), brushes.map((_, i) => i));
 }
@@ -661,14 +676,19 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
     return emit(tree);
   }
 
+  // Hulls 1-3 -> clipnodes; returns the head. Alike subtrees are written once and shared
+  // (GoldSrc's traces only follow child indices): the clipnodes are the first limit a map
+  // opened from a .bsp meets (32767), and sharing takes a quarter of them away.
+  const sharedClipnodes = new Map();
   function emitClipnodes(tree) {
     const emit = (n) => {
       if (n.n === undefined) return n.contents;
-      const i = clipnodes.length, rec = { plane: plane(n) };
-      clipnodes.push(rec);
-      rec.front = emit(n.front);
-      rec.back = emit(n.back);
-      return i;
+      const pl = plane(n), front = emit(n.front), back = emit(n.back);
+      const key = `${pl}:${front}:${back}`;
+      if (sharedClipnodes.has(key)) return sharedClipnodes.get(key);
+      sharedClipnodes.set(key, clipnodes.length);
+      clipnodes.push({ plane: pl, front, back });
+      return clipnodes.length - 1;
     };
     return emit(tree);
   }
@@ -728,7 +748,7 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
 
   if (vertices.length > 65535 || nodes.length > 32767 || clipnodes.length > 32767 || leaves.length > 32767 ||
     faces.length > 65535 || planes.length > 32767) {
-    throw new Error('the map is too big for BSP 30');
+    throw new Error(`the map is too big for BSP 30 (${vertices.length} corners, ${nodes.length} nodes, ${clipnodes.length} clipnodes, ${leaves.length} leaves, ${faces.length} faces, ${planes.length} planes)`);
   }
 
   const entText = ents.map((e) => `{\n${Object.entries(e).map(([k, v]) => `"${k}" "${v}"`).join('\n')}\n}\n`).join('') +

@@ -67,7 +67,7 @@ Deno.test('a game with bots runs on an editor map', () => {
   for (const c of host.game.clients) if (c && c.alive) assert.ok(c.player.ps.f[2] > 30 && c.player.ps.f[2] < 60, 'bots on the floor');
 });
 
-Deno.test('every kind compiles into its entity: doors, button, breakable, water, ladder, zones', () => {
+Deno.test('every kind compiles into its entity: doors, button, breakable, water, ladder, zones, decoration', () => {
   const p = newProject();
   let id = 1000;
   const add = (kind, b, tex = { top: 'crate08', bottom: 'crate08', side: 'crate08' }, keys = {}) =>
@@ -81,6 +81,7 @@ Deno.test('every kind compiles into its entity: doors, button, breakable, water,
   add('func_bomb_target', [-300, 400, 0, 0, 700, 128], { top: null, bottom: null, side: null });
   add('func_conveyor', [0, 500, 0, 300, 560, 8], { top: 'scroll_conv', bottom: null, side: 'steel' });
   add('func_hostage_rescue', [700, -700, 0, 960, -500, 128], { top: null, bottom: null, side: null });
+  add('func_illusionary', [-700, -700, 120, -600, -600, 136]);
   p.points.push({ id: id++, kind: 'hostage_entity', o: [500, 0, 0], yaw: 90 });
   assert.deepEqual(checkProject(p).errors, []);
   const bsp = compileToBsp(p);
@@ -167,7 +168,7 @@ Deno.test('shapes: ramps, angled walls, pillars, stairs and ladders compile and 
   const li = world.ents.findIndex((e) => e.kind === ENT_LADDER);
   assert.ok(li > 0, 'a ladder entity');
   assert.notEqual(entityContents(world, li, HULL_STAND, -975, 632, 100), -1, 'touching it in front of the board');
-  for (const k of Object.keys(SHAPES)) assert.ok(p.brushes.some((b) => b.shape === k), k);
+  for (const k of Object.keys(SHAPES)) if (!SHAPES[k].made) assert.ok(p.brushes.some((b) => b.shape === k), k);
   const steep = makeBrush(1, [0, 0, 0, 64, 64, 128], T, 'world', {}, { shape: 'ramp', up: 'px' });
   const q = newProject();
   q.brushes.push(steep);
