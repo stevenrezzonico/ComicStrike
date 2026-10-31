@@ -1,33 +1,34 @@
 // Comic sound words (cl_comicwords): BAM! on our hits, HEADSHOT! and KAPOW! on our kills,
-// BLAM! / RAT-TAT-TAT! for our own gunfire, PAK! on walls we hit, KA-BOOM! on explosions,
+// BLAM! / RATA-TA-TA! for our own gunfire, PAK! on walls we hit, KA-BOOM! on explosions,
 // SMOKE! on smoke grenades, FIRE! and CRACKLE! on fires. Nothing covers the crosshair:
 // our own hits land under it, so their words go beside it (they hid the target in a fight).
 // A fixed pool of DOM elements, reused oldest first; the pop animation is CSS (#fx in
 // index.html). Spawning happens on events, never per frame; update() only hides the
-// expired ones and fades the gunfire ticker.
+// expired ones and fades the gunfire lines.
 
 import { GUN_SOUNDS } from './audio.js';
 
 const POOL = 24;
 const TICKER_GAP_MS = 260; // no shot for this long ends a burst's word
-const TICKER_MAX = 4; // words in one burst line ("RAT-TAT-TAT-TAT!"), then a new line
+const LINE_BEATS = 6; // shots in one line of a spray ("RATA-TA-TA-TA-TA!"), then a new line above it
+const LINES = 3; // lines of one spray on screen at once, the oldest fading
 const CLEAR = 0.15; // radius round the crosshair, of the window height, kept free of words and sparks
 const pick = (a) => a[(Math.random() * a.length) | 0];
 const rnd = (a, b) => a + Math.random() * (b - a);
 
 const HIT = ['BAM!', 'POW!', 'WHAP!', 'THWAK!', 'BLAM!'];
 const WALL = ['PAK!', 'TIK!', 'ZING!', 'PTANG!'];
-// Gunfire words by gunshot voice (client/soundscape.js gunProfile): single words, or a
-// ticker of beats for automatic fire.
+// Gunfire words by gunshot voice (client/soundscape.js gunProfile): single words, or for
+// automatic fire a line that grows with each shot (text(n): the line after n shots).
 const SHOTS = new Map([
   [GUN_SOUNDS.pistol, { words: ['BANG!', 'BLAM!', 'PAM!'], size: 44 }],
   [GUN_SOUNDS.heavy, { words: ['KA-BLAM!', 'BLAM!'], size: 54, big: true }],
   [GUN_SOUNDS.sniper, { words: ['KRA-KOOM!', 'KA-BLAM!', 'THOOM!'], size: 60, big: true }],
   [GUN_SOUNDS.shotgun, { words: ['KA-CHOW!', 'BOOM!'], size: 58, big: true }],
   [GUN_SOUNDS.silenced, { words: ['THWIP!', 'PFFT!'], size: 36 }],
-  [GUN_SOUNDS.rifle, { beat: ['RAT', 'TAT'], size: 50 }],
-  [GUN_SOUNDS.smg, { beat: ['BRR', 'RRT'], size: 46 }],
-  [GUN_SOUNDS.mg, { beat: ['BUDD', 'BUDD'], size: 52 }],
+  [GUN_SOUNDS.rifle, { text: (n) => (n === 1 ? 'RA' : `RATA${'-TA'.repeat(n - 2)}`), size: 52 }],
+  [GUN_SOUNDS.smg, { text: (n) => `B${'R'.repeat(n + 1)}AP`, size: 46 }],
+  [GUN_SOUNDS.mg, { text: (n) => `BUDDA${'-DA'.repeat(n - 1)}`, size: 52 }],
 ]);
 
 // Jagged burst outlines behind hit words, made once.
@@ -39,6 +40,16 @@ const STARS = Array.from({ length: 6 }, () => {
   }
   return `polygon(${pts.join(',')})`;
 });
+// A long jagged balloon behind a spray's line: many small spikes, so it stays jagged
+// however far the line stretches it.
+const BANNER = (() => {
+  const n = 34, pts = [];
+  for (let i = 0; i < n * 2; i++) {
+    const a = i / (n * 2) * Math.PI * 2, r = i % 2 ? 0.87 : 1;
+    pts.push(`${(50 + Math.cos(a) * r * 50).toFixed(1)}% ${(50 + Math.sin(a) * r * 50).toFixed(1)}%`);
+  }
+  return `polygon(${pts.join(',')})`;
+})();
 
 export class InkWords {
   constructor(root) {
@@ -57,16 +68,22 @@ export class InkWords {
       this.items.push({ el, inner: el.firstChild, bk: el.querySelector('.bk'), fg: el.querySelector('.fg'),
         b: el.querySelector('b'), end: 0 });
     }
-    // The gunfire ticker: one line that grows with each shot of a burst.
-    this.ticker = document.createElement('div');
-    this.ticker.className = 'pop ticker';
-    this.ticker.innerHTML = '<div class="in"><b></b></div>';
-    this.ticker.hidden = true;
-    this.tickerText = this.ticker.querySelector('b');
-    root.append(this.ticker);
-    this.beats = 0;
+    // Automatic fire: a line that grows with each shot of a spray; a long spray stacks new
+    // lines above it, tilted the other way, the older ones fading.
+    this.lines = Array.from({ length: LINES }, () => {
+      const el = document.createElement('div');
+      el.className = 'pop ticker';
+      el.innerHTML = '<div class="in"><i class="bk"></i><i class="fg"></i><b></b></div>';
+      el.hidden = true;
+      for (const i of el.querySelectorAll('i')) i.style.clipPath = BANNER;
+      root.append(el);
+      return { el, b: el.querySelector('b'), x: 0, y: 0 };
+    });
+    this.line = 0; // the line growing now
+    this.beats = 0; // shots in it
+    this.lineCount = 0; // lines this spray
     this.lastBeat = 0;
-    this.beatWords = null;
+    this.burst = null; // the SHOTS entry of the spray
   }
 
   // Shows `text` at screen (x, y) (CSS px): cls is the look (hit, big, wall, spark, shot),
@@ -175,25 +192,42 @@ export class InkWords {
       this.spawn(pick(s.words), s.big ? 'shot big' : 'shot', x, y, s.size * rnd(0.9, 1.1), 650);
       return;
     }
-    const t = this.ticker;
-    if (this.beatWords !== s.beat || this.beats >= TICKER_MAX || now - this.lastBeat > TICKER_GAP_MS) {
-      this.beats = 0;
-      this.beatWords = s.beat;
-      t.style.setProperty('--s', `${(s.size * innerHeight / 720).toFixed(1)}px`);
-      t.style.setProperty('--r', `${rnd(-9, 3).toFixed(1)}deg`);
-      t.style.transform = `translate(${(x - innerWidth * 0.1).toFixed(1)}px, ${y.toFixed(1)}px)`;
-      t.classList.remove('out');
+    const size = s.size * innerHeight / 720;
+    if (this.burst !== s || now - this.lastBeat > TICKER_GAP_MS) { // a new spray
+      for (const l of this.lines) l.el.hidden = true;
+      this.burst = s;
+      this.lineCount = 0;
+      this.beats = LINE_BEATS;
     }
+    if (this.beats >= LINE_BEATS) { // a new line above the others (the oldest reused)
+      for (const l of this.lines) {
+        if (l.el.hidden) continue;
+        l.y -= size * 0.95;
+        l.el.classList.add('old');
+        l.el.style.transform = `translate(${l.x.toFixed(1)}px, ${l.y.toFixed(1)}px)`;
+      }
+      this.line = this.lineCount++ % LINES;
+      const l = this.lines[this.line];
+      l.x = innerWidth * 0.5 + (this.lineCount % 2 ? 0 : size * 0.8) + rnd(-10, 10);
+      l.y = innerHeight * 0.8 + rnd(-6, 6);
+      l.el.className = 'pop ticker';
+      l.el.style.setProperty('--s', `${size.toFixed(1)}px`);
+      l.el.style.setProperty('--r', `${((this.lineCount % 2 ? -1 : 1) * rnd(3, 8)).toFixed(1)}deg`);
+      l.el.style.transform = `translate(${l.x.toFixed(1)}px, ${l.y.toFixed(1)}px)`;
+      this.beats = 0;
+    }
+    const l = this.lines[this.line];
     this.beats++;
     this.lastBeat = now;
-    let text = s.beat[0];
-    for (let i = 1; i < this.beats; i++) text += `-${s.beat[1]}`;
-    this.tickerText.textContent = `${text}!`;
-    t.hidden = false;
-    this.tickerText.animate?.([{ transform: 'scale(1.22)' }, { transform: 'scale(1)' }], { duration: 110 });
+    l.b.textContent = `${s.text(this.beats)}!`;
+    l.el.hidden = false;
+    // Each shot kicks the line: a jolt and a little shake.
+    const j = rnd(-3, 3).toFixed(1);
+    l.b.animate?.([{ transform: `scale(1.28) translate(${j}px, ${-Math.abs(j)}px) rotate(${j}deg)` },
+      { transform: 'scale(1)' }], { duration: 120 });
   }
 
-  // Every frame: hides expired words and fades the ticker after a burst.
+  // Every frame: hides expired words and fades a spray's lines after it.
   update(now) {
     for (let i = 0; i < POOL; i++) {
       const it = this.items[i];
@@ -202,12 +236,14 @@ export class InkWords {
         it.el.hidden = true;
       }
     }
-    if (!this.ticker.hidden && now - this.lastBeat > TICKER_GAP_MS) {
-      if (!this.ticker.classList.contains('out')) this.ticker.classList.add('out');
-      else if (now - this.lastBeat > TICKER_GAP_MS + 320) {
-        this.ticker.hidden = true;
-        this.beats = 0;
+    if (this.burst && now - this.lastBeat > TICKER_GAP_MS) {
+      const gone = now - this.lastBeat > TICKER_GAP_MS + 320;
+      for (const l of this.lines) {
+        if (l.el.hidden) continue;
+        if (gone) l.el.hidden = true;
+        else if (!l.el.classList.contains('out')) l.el.classList.add('out');
       }
+      if (gone) this.burst = null;
     }
   }
 
@@ -216,7 +252,7 @@ export class InkWords {
       it.end = 0;
       it.el.hidden = true;
     }
-    this.ticker.hidden = true;
-    this.beats = 0;
+    for (const l of this.lines) l.el.hidden = true;
+    this.burst = null;
   }
 }

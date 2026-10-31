@@ -66,7 +66,8 @@ import { Hud } from './hud.js';
 import { Sounds } from './audio.js';
 import { SoundScape, gunProfile } from './soundscape.js';
 import { InkWords } from './inkwords.js';
-import { Spectator, SPEC_EYES, SPEC_ROAM } from './spectate.js';
+import { Spectator, SPEC_EYES, SPEC_ROAM, SPEC_DELAY } from './spectate.js';
+import { DeathPanel } from './deathpanel.js';
 import { ConsoleWindow } from './console.js';
 import { takeHandoff } from './handoff.js';
 import { PreviewEditor } from './previewedit.js';
@@ -124,6 +125,7 @@ const fx = new GrenadeFx(renderer.gl, guns);
 models.pass = PASS.MODELS; // its GPU time apart from the effects' (cl_showfps 3)
 const overlays = [decals, debris, players, models, fx];
 const words = new InkWords(document.getElementById('fx'));
+const deathPanel = new DeathPanel(document.getElementById('deathpanel'));
 const weaponView = new WeaponView(renderer.gl, FOV_Y, cv, guns);
 const input = new Input(canvas);
 const hud = new Hud((item) => { // a buy from the menu closes it
@@ -829,6 +831,7 @@ function addKill(killer, victim, weapon, headshot) {
   while (killfeed.children.length > 5) killfeed.firstChild.remove();
   setTimeout(() => row.remove(), KILLFEED_MS);
   if (victim === selfId) {
+    deathPanel.killed(killer === victim ? null : name(killer), WEAPONS[weapon] || null, headshot, killer === victim);
     deathNotice.textContent = WEAPONS[weapon]?.c4 ? 'Killed by the bomb'
       : killer === victim ? 'You died' : `Killed by ${name(killer)}${headshot ? ' (headshot)' : ''}`;
   }
@@ -1265,6 +1268,12 @@ function draw(now, alpha, dt) {
     const k = 1 - Math.exp(-dt * 8);
     for (let c = 0; c < 3; c++) weaponView.light[c] += (lightTarget[c] - weaponView.light[c]) * k;
   }
+  // Our death as a comic panel until the camera goes to someone (at most a second past
+  // the spectating delay: with nobody to watch it would stay), the print easing to red.
+  const dying = dead && !!net && !spectating && !specTeam && !preview && now - deadAt < (SPEC_DELAY + 1) * 1000;
+  deathPanel.show(dying);
+  renderer.style.dead += ((dying ? 1 : 0) - renderer.style.dead) * Math.min(1, dt * (dying ? 6 : 10));
+  if (renderer.style.dead < 0.005) renderer.style.dead = 0;
   const deathDisplay = dead && net ? 'block' : 'none';
   if (deathDisplay !== deathShown) deathNotice.style.display = deathShown = deathDisplay;
   // The spectator notice, rebuilt only when what it says changes.
@@ -1647,6 +1656,8 @@ function resetSession() {
   roundSerial = -1;
   words.clear();
   blasts.clear();
+  deathPanel.show(false);
+  renderer.style.dead = 0;
   serverClock = -1;
   predictedTick.fill(-1);
   serverBroken.fill(0);

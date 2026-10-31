@@ -812,6 +812,7 @@ uniform float u_lift;  // share of the darkness taken away (r_shadowlift): dark 
 uniform int u_style;   // 0: plain lit colors (r_comic 0)
 uniform vec3 u_calm;   // calm zone round the crosshair: center, radius (px; 0: none): dots there go flat
 uniform float u_soft;  // shade dots: 0 bold, 1 soft (a finer screen, a paler print, less ink)
+uniform float u_dead;  // 0..1: our death (client/deathpanel.js): a red-brown duotone, a darker vignette
 out vec4 o_color;
 ${GBUFFER_CONSTS}
 ${NOISE}
@@ -896,9 +897,13 @@ void main() {
     vec3 shade = mix(alb * vec3(0.52, 0.53, 0.62), base, 0.3 * u_soft);
     col = mix(base, mix(shade, INK, (0.12 + 0.28 * smoothstep(0.5, 0.9, dark)) * (1.0 - 0.6 * u_soft)), m);
   }
+  if (u_dead > 0.0) {
+    float g = dot(col, vec3(0.3, 0.59, 0.11));
+    col = mix(col, vec3(0.08, 0.0, 0.0) + g * vec3(1.15, 0.7, 0.58), u_dead * 0.8);
+  }
   col *= 0.965 + 0.035 * h21(frag); // paper grain
   vec2 uv = frag / u_res - 0.5;
-  col *= 1.0 - dot(uv, uv) * 0.3;
+  col *= 1.0 - dot(uv, uv) * (0.3 + 0.9 * u_dead);
   o_color = vec4(mix(col, INK, edge), 1.0);
 }`;
 

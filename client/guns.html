@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ComicStrike Gun Gallery</title>
+<link rel="icon" type="image/svg+xml" href="/client/favicon.svg">
+<style>
+  /* Every gun model side by side, printed like the game (client/gallery.js). */
+  :root {
+    --paper: #f6eedb; --paper-hi: #fffaf0; --ink: #17130f; --yellow: #ffd23a;
+    --display: Impact, 'Haettenschweiler', 'Arial Narrow Bold', sans-serif;
+    --body: 'Comic Sans MS', 'Comic Neue', 'Chalkboard SE', sans-serif;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper); color: var(--ink); }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+  #labels { position: fixed; inset: 0; pointer-events: none; }
+  #labels div { position: absolute; transform: translateX(-50%); padding: 1px 6px; background: var(--yellow);
+    border: 2px solid var(--ink); font: 13px/1.2 var(--body); font-weight: 700; white-space: nowrap; }
+  #help { position: fixed; right: 8px; bottom: 8px; padding: 4px 8px; background: var(--paper-hi);
+    border: 2px solid var(--ink); font: 12px/1.3 var(--body); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="labels"></div>
+<div id="help">Drag: turn every gun · Double click: side view · ?only=ak47,m4a1 · ?bare (silencers off)</div>
+<script type="module" src="/client/gallery.js"></script>
+</body>
+</html>

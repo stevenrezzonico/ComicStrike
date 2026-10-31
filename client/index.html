@@ -190,6 +190,43 @@
     padding: 8px 14px 6px; background: var(--yellow); border: 3px solid var(--ink); box-shadow: 4px 4px 0 var(--ink);
     color: var(--ink); font: 700 18px/1.4 var(--body); text-align: center; pointer-events: none;
   }
+  /* Our death: a comic panel (client/deathpanel.js). The view tilts inside a frame of
+     paper and ink, focus lines rush in, a big word bursts, a narration box names the killer. */
+  #view { transition: transform 0.45s cubic-bezier(0.2, 1.4, 0.4, 1); }
+  body.dying #view { transform: rotate(-3deg) scale(1.12); image-rendering: auto; }
+  body.dying #death, body.nohud #deathpanel, body.dying .hud, body.dying #hud-money, body.dying #hud-bomb,
+  body.dying #radar, body.dying #roundbar, body.dying #killfeed { display: none !important; }
+  #deathpanel { position: fixed; inset: 0; pointer-events: none; visibility: hidden; overflow: hidden; }
+  #deathpanel.on { visibility: visible; }
+  .dp-frame { position: absolute; inset: 0; box-shadow: inset 0 0 0 0 var(--paper), inset 0 0 0 0 var(--ink);
+    transition: box-shadow 0.35s cubic-bezier(0.2, 1.3, 0.4, 1); }
+  #deathpanel.on .dp-frame { box-shadow: inset 0 0 0 3vh var(--paper), inset 0 0 0 3.8vh var(--ink); }
+  .dp-lines { position: absolute; inset: 0; opacity: 0; transform: scale(1.5);
+    background: repeating-conic-gradient(from 0deg at 50% 45%, rgba(23, 19, 15, 0.8) 0deg 0.6deg, transparent 0.6deg 4.1deg),
+      repeating-conic-gradient(from 1.7deg at 50% 45%, rgba(23, 19, 15, 0.6) 0deg 0.35deg, transparent 0.35deg 6.7deg);
+    -webkit-mask: radial-gradient(ellipse at 50% 45%, transparent 30%, #000 75%);
+    mask: radial-gradient(ellipse at 50% 45%, transparent 30%, #000 75%);
+    transition: opacity 0.2s, transform 0.5s ease-out; }
+  #deathpanel.on .dp-lines { opacity: 0.55; transform: scale(1); }
+  .dp-word { position: absolute; left: 50%; top: 42%; display: grid; place-items: center;
+    transform: translate(-50%, -50%) rotate(-8deg) scale(0); }
+  #deathpanel.on .dp-word { animation: dpword 0.5s cubic-bezier(0.2, 1.6, 0.4, 1) 0.08s forwards; }
+  @keyframes dpword { to { transform: translate(-50%, -50%) rotate(-8deg) scale(1); } }
+  .dp-word .bk, .dp-word .fg { position: absolute; inset: -60% -26%; }
+  .dp-word .bk { background: var(--ink); transform: translate(0.8vh, 0.8vh) scale(1.06); }
+  .dp-word .fg { background: var(--red); }
+  .dp-word b { position: relative; font: 15vh/1 var(--display); color: var(--yellow); letter-spacing: 0.02em;
+    -webkit-text-stroke: 0.8vh var(--ink); paint-order: stroke fill; text-shadow: 0.06em 0.06em 0 var(--ink); }
+  .dp-word small { position: relative; margin-top: 0.6vh; font: 4.2vh/1 var(--display); color: var(--paper-hi);
+    letter-spacing: 0.12em; -webkit-text-stroke: 0.3vh var(--ink); paint-order: stroke fill; }
+  .dp-word small:empty { display: none; }
+  .dp-caption { position: absolute; left: 7vh; top: 7vh; max-width: 60vw; padding: 1vh 1.6vh;
+    background: var(--yellow); border: 0.45vh solid var(--ink); box-shadow: 0.7vh 0.7vh 0 var(--ink);
+    transform: translateX(-120%) rotate(-1.5deg); transition: transform 0.35s cubic-bezier(0.2, 1.3, 0.4, 1) 0.15s; }
+  #deathpanel.on .dp-caption { transform: translateX(0) rotate(-1.5deg); }
+  .dp-caption span { display: block; font: 700 3.2vh/1.15 var(--body); text-transform: uppercase; }
+  .dp-caption em { display: block; font: 2.4vh/1.2 var(--body); }
+  .dp-caption em:empty { display: none; }
   /* Comic sound words (client/inkwords.js). */
   #fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
   .pop { position: absolute; left: 0; top: 0; will-change: transform; }
@@ -209,8 +246,14 @@
   .pop.spark .bk, .pop.spark .fg { inset: 0; }
   .pop.spark .bk { transform: scale(1.25); }
   .pop.shot b, .pop.ticker b { color: var(--yellow); text-shadow: 0.05em 0.05em 0 var(--red), 0.1em 0.1em 0 var(--ink); }
-  .pop.ticker .in { animation: none; transition: opacity 0.3s, transform 0.3s; }
-  .pop.ticker.out .in { opacity: 0; transform: translate(-50%, calc(-50% - 30px)) rotate(var(--r)); }
+  /* A spray's growing line: it grows to the right from where it starts, on a jagged balloon. */
+  .pop.ticker { transition: transform 0.12s; }
+  .pop.ticker .in { animation: none; transform: translate(0, -50%) rotate(var(--r)); transition: opacity 0.3s, transform 0.3s; }
+  .pop.ticker .bk, .pop.ticker .fg { inset: -38% -9%; }
+  .pop.ticker .fg { background: var(--red); }
+  .pop.ticker b { transform-origin: 0 50%; }
+  .pop.ticker.old .in { opacity: 0.45; }
+  .pop.ticker.out .in { opacity: 0; transform: translate(0, calc(-50% - 30px)) rotate(var(--r)); }
   @keyframes pop {
     0% { transform: translate(-50%, -50%) rotate(var(--r)) scale(0.2); opacity: 1; }
     14% { transform: translate(-50%, -50%) rotate(var(--r)) scale(1.18); }
@@ -345,6 +388,7 @@
 <div id="scoreboard"></div>
 <div id="buymenu"></div>
 <div id="death"></div>
+<div id="deathpanel"></div>
 <div id="fx"></div>
 <div id="menu"></div>
 <div id="hud-left" class="hud">
