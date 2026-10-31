@@ -31,9 +31,9 @@ const STEPS = [
     'and Ctrl.'],
   ['#problems', 'Problems', 'What would keep the map from playing well, such as missing spawns or a spawn stuck in a ' +
     'wall. Click one to select the shape at fault.'],
-  ['#play', 'Play it', 'Play alone against bots in a new tab, host it for friends (the server keeps your map in memory ' +
-    'while people play and gives you a link), or export the .bsp. Your work saves itself in this browser; Save ' +
-    'writes a file.'],
+  ['#try', 'Try it', 'Walk your map in a new tab in demo mode: any gun for free, endless ammo, no dying. Export ' +
+    'the .bsp to play it with bots or host it for friends from the game’s Your map. Your work saves itself in ' +
+    'this browser; Save writes a file.'],
 ];
 
 export class Tour {

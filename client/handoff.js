@@ -1,4 +1,4 @@
-// Hands a compiled map from the map editor to a game page (Play alone, Host for friends):
+// Hands a compiled map from the map editor to a game page (Try it):
 // the editor stores it here, then opens `/?fromeditor`, which takes it out. IndexedDB, not
 // a message to the opened tab: it works whether the browser opens a new tab or reuses this
 // one, and holds maps of any size (localStorage keeps a few MB of text).
@@ -29,7 +29,7 @@ function request(mode, fn) {
   }));
 }
 
-// value: { action: 'practice' | 'host', name, bytes, mode, players, difficulty, team }
+// value: { name, bytes, mode, players, difficulty, team }
 export const putHandoff = (value) => request('readwrite', (s) => s.put({ ...value, at: Date.now() }, KEY));
 
 // The waiting map, taken out (null if none, or older than a minute: a stale one).

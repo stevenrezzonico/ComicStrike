@@ -1846,8 +1846,8 @@ async function reconnect() {
 //  * ?preview: the editor's 3D view, in an iframe. The sandbox flies (noclip) through the
 //    map the editor sends ('preview-map' { name, bytes }), keeping the camera when a rebuilt
 //    map comes in; no menus, no HUD.
-//  * ?fromeditor: a tab the editor opened for Play alone / Host for friends; it takes the
-//    map the editor handed over (client/handoff.js) and starts as the menu's Your map would.
+//  * ?fromeditor: a tab the editor's Try it opened; it takes the map the editor handed
+//    over (client/handoff.js) and starts a practice game on it (the demo mode).
 const preview = params.has('preview');
 async function previewMap(name, bytes) {
   ownMaps.clear();
@@ -1881,12 +1881,12 @@ function startPreview() {
 async function startFromEditor() {
   history.replaceState(null, '', '/'); // a reload opens the menu
   const m = await takeHandoff().catch(() => null);
-  if (!m) return menu.showStart('The map from the editor was not found: press Play in the editor again.');
+  if (!m) return menu.showStart('The map from the editor was not found: press Try it in the editor again.');
   ownMaps.clear();
   ownMaps.set(m.name, m.bytes);
   menu.ownMap = m.name;
   const opts = { mode: m.mode, players: m.players, difficulty: m.difficulty };
-  await run(() => (m.action === 'host' ? hostRoom(m.name, m.team, opts) : startPractice(m.name, m.team, opts)));
+  await run(() => startPractice(m.name, m.team, opts));
 }
 
 async function start() {

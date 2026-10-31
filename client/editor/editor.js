@@ -3,8 +3,8 @@
 // printed, where shapes can be picked and dragged too), and the map compiled by our
 // compiler in a worker (compile.js). Shapes come from the library (click a card then draw
 // or click in a view, or drag the card onto a view); a right click or a long press opens
-// the menu; tapping a measure types it. Play alone and Host for friends hand the compiled
-// map over (client/handoff.js) and open the game in a new tab (`?fromeditor`). The project
+// the menu; tapping a measure types it. Try it hands the compiled map over
+// (client/handoff.js) and opens the game in a new tab (`?fromeditor`) in demo mode. The project
 // autosaves in localStorage (a convenience: Save writes a file) and saves / opens as JSON.
 
 import {
@@ -22,9 +22,6 @@ const CLIP_KEY = 'comicstrike.editor.clipboard';
 const LAYOUT_KEY = 'comicstrike.editor.layout';
 const UNDO = 200;
 const GRIDS = [1, 2, 4, 8, 16, 32, 64, 128, 256];
-const MODES = [['competitive', 'Competitive'], ['casual', 'Casual'], ['wingman', 'Wingman'], ['deathmatch', 'Deathmatch'],
-  ['armsrace', 'Arms Race'], ['demolition', 'Demolition'], ['demo', 'Demo']];
-const BOTS = [[0, 'None'], [2, '2'], [4, '4'], [6, '6'], [10, '10']];
 const SLOTS = [['all', 'All'], ['top', 'Top'], ['side', 'Sides'], ['bottom', 'Bottom']];
 const PREVIEW_DELAY = 400; // ms after the last change before the 3D view is rebuilt
 const T3 = (t) => ({ top: t, bottom: t, side: t });
@@ -69,7 +66,7 @@ const CARD = new Map(CARDS.map((c) => [c.id, c]));
 // the library's first ten cards take 1-9, 0. Ctrl+N is the browser's own, so New is Alt+N.
 const KEYS = {
   new: 'Alt+N', open: 'Ctrl+O', save: 'Ctrl+S', undo: 'Ctrl+Z', redo: 'Ctrl+Y|Ctrl+Shift+Z', export: 'Ctrl+E',
-  play: 'Ctrl+Enter', host: 'Ctrl+Shift+Enter', layout: 'L', help: '?',
+  try: 'Ctrl+Enter', layout: 'L', help: '?',
 };
 const MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 const keyLabel = (k) => MAC ? k.replace(/Ctrl\+/g, '⌘').replace(/Alt\+/g, '⌥') : k;
@@ -659,9 +656,6 @@ class Editor {
     const grid = $('grid');
     for (const g of GRIDS) grid.append(new Option(String(g), String(g)));
     grid.addEventListener('change', () => this.setGrid(+grid.value));
-    for (const [v, l] of MODES) $('mode').append(new Option(l, v));
-    for (const [v, l] of BOTS) $('bots').append(new Option(l, String(v)));
-    $('bots').value = '10';
     for (const [id, k] of Object.entries(KEYS)) $(id).dataset.keys = keyLabel(k);
     $('new').addEventListener('click', () => this.newMap());
     $('open').addEventListener('click', () => $('file').click());
@@ -685,8 +679,7 @@ class Editor {
     $('undo').addEventListener('click', () => this.undo());
     $('redo').addEventListener('click', () => this.undo(true));
     $('export').addEventListener('click', () => this.exportBsp());
-    $('play').addEventListener('click', () => this.play('practice'));
-    $('host').addEventListener('click', () => this.play('host'));
+    $('try').addEventListener('click', () => this.play());
     $('layout').addEventListener('click', () => this.setLayout(this.layout === 'simple' ? 'four' : 'simple'));
     $('help').addEventListener('click', () => this.tour.start());
     for (const v of this.views) {
@@ -797,7 +790,7 @@ class Editor {
     else if (ctrl && lk === 's') $('save').click();
     else if (ctrl && lk === 'o') $('open').click();
     else if (ctrl && lk === 'e') this.exportBsp();
-    else if (ctrl && k === 'Enter') this.play(e.shiftKey ? 'host' : 'practice');
+    else if (ctrl && k === 'Enter') this.play();
     else if (ctrl) used = false;
     else if (e.altKey && lk === 'n') this.newMap();
     else if (card && !e.altKey) this.setTool(this.tool === card.id ? 'select' : card.id);
@@ -1137,20 +1130,19 @@ class Editor {
   }
 
   // Hands the map over and opens the game in a new tab, which takes it (client/handoff.js).
-  async play(action) {
+  async play() {
     this.status('Compiling...');
     const r = await this.compile('full');
     if (r.error) return this.status(r.error, true);
     try {
       await putHandoff({
-        action, name: this.project.name, bytes: r.bytes, mode: $('mode').value, players: +$('bots').value, difficulty: 1,
-        team: +$('team').value,
+        name: this.project.name, bytes: r.bytes, mode: 'demo', players: 0, difficulty: 1, team: +$('team').value,
       });
     } catch (err) {
       return this.status(`Could not hand the map over: ${err.message}`, true);
     }
     if (!open('/?fromeditor', '_blank')) return this.status('The browser blocked the new tab: allow pop-ups for this site', true);
-    this.status(action === 'host' ? 'Hosting in a new tab' : 'Playing in a new tab');
+    this.status('Trying it in a new tab');
   }
 
   message(e) {
