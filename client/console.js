@@ -117,7 +117,8 @@ export class ConsoleWindow {
       this.out.appendChild(div);
     }
     while (this.out.childElementCount > MAX_LINES) this.out.firstChild.remove();
-    this.out.scrollTop = this.out.scrollHeight;
+    // Reading scrollHeight lays out the page: only while open (opening scrolls to the end).
+    if (this.isOpen) this.out.scrollTop = this.out.scrollHeight;
   }
 
   clear() {

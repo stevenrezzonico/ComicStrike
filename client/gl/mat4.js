@@ -3,6 +3,11 @@
 
 const DEG = Math.PI / 180;
 
+// A view-projection that clips everything (every vertex at w = 0): warm-up draws at map load
+// run each program and vertex layout once, drawing nothing (the driver sets them up at their
+// first draw, else mid-game: the first bullet hole, smoke or enemy in view dropped a frame).
+export const CLIP_ALL = new Float32Array(16);
+
 export function perspective(out, fovyRad, aspect, near, far) {
   const f = 1 / Math.tan(fovyRad / 2);
   const nf = 1 / (near - far);

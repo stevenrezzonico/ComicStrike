@@ -52,7 +52,9 @@ export class SkinnedMesh {
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, MESH_STRIDE, 0);
     gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 3, gl.BYTE, true, MESH_STRIDE, 12);
+    // The normal read as 4 bytes (the 4th is the bone byte, unused here): Direct3D 11 has no
+    // 3-byte vertex format, so ANGLE converted every mesh's buffer on the CPU at its first draw.
+    gl.vertexAttribPointer(1, 4, gl.BYTE, true, MESH_STRIDE, 12);
     gl.enableVertexAttribArray(2);
     gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_BYTE, MESH_STRIDE, 15);
     gl.enableVertexAttribArray(3);
@@ -69,6 +71,19 @@ export class SkinnedMesh {
 // outlines each model and each part. Shared by all renderers: ids differ across them too.
 let nextId = 0;
 
+// One program for every renderer (viewmodel, player models, grenade effects, blasts): each
+// copy paid the driver's first-draw setup again, mid-game. begin() sets all its uniforms.
+const programs = new WeakMap();
+function skinnedProgram(gl) {
+  let p = programs.get(gl);
+  if (!p) {
+    p = program(gl, SKINNED_VS, SKINNED_FS, ['u_viewProj', 'u_bones', 'u_light', 'u_lightDir',
+      'u_emissive', 'u_white', 'u_id', 'u_lightFull', 'u_eye', 'u_flags']);
+    programs.set(gl, p);
+  }
+  return p;
+}
+
 export class SkinnedRenderer {
   constructor(gl) {
     this.gl = gl;
@@ -76,8 +91,7 @@ export class SkinnedRenderer {
     this.white = 0;
     this.eye = new Float32Array(3);
     this.flags = 0; // G_FLAGS on every pixel drawn (G_FLAGS.VIEW: the first-person view)
-    this.prog = program(gl, SKINNED_VS, SKINNED_FS, ['u_viewProj', 'u_bones', 'u_light', 'u_lightDir',
-      'u_emissive', 'u_white', 'u_id', 'u_lightFull', 'u_eye', 'u_flags']);
+    this.prog = skinnedProgram(gl);
     this.bones = new Float32Array(MAX_BONES * 16); // model x skin, per draw
   }
 

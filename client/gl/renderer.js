@@ -184,12 +184,17 @@ export class Renderer {
     const c = this.canvas;
     const w = Math.max(1, Math.round(this.cssWidth * pixels));
     const h = Math.max(1, Math.round(this.cssHeight * pixels));
+    let changed = false;
     if (c.width !== w || c.height !== h) {
       c.width = w;
       c.height = h;
+      changed = true;
     }
     const s = Math.min(2, scale);
-    this.gbuf.resize(Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)));
+    const gw = Math.max(1, Math.round(w * s)), gh = Math.max(1, Math.round(h * s));
+    if (gw !== this.gbuf.width || gh !== this.gbuf.height) changed = true;
+    this.gbuf.resize(gw, gh);
+    if (changed) this.timer.reset(); // the GPU's work per frame changed: its readings start over
     return w / h;
   }
 
@@ -322,7 +327,7 @@ export class Renderer {
     const h = this.canvas.height;
     const gscale = this.gbuf.width / this.canvas.width;
     const line = st.comic && st.ink > 0 ? Math.max(1, Math.round(h / 540 * st.ink)) : 0;
-    this.timer.mark(PASS.PRINT);
+    this.timer.mark(PASS.INK);
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
     gl.bindVertexArray(this.emptyVao);
@@ -339,6 +344,7 @@ export class Renderer {
       gl.uniform1f(k.u_zoom, this.zoom);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
+    this.timer.mark(PASS.PRINT);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.canvas.width, h);
     const c = this.comp.loc;

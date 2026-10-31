@@ -5,6 +5,7 @@
 
 import { program } from './program.js';
 import { SHADOW_VS, SHADOW_FS } from './shaders.js';
+import { CLIP_ALL } from './mat4.js';
 
 const F = 5; // floats per disc: x, y, floor height, radius, darkness
 
@@ -39,6 +40,12 @@ export class FloorShadows {
     d[o + 2] = z;
     d[o + 3] = r;
     d[o + 4] = dark;
+  }
+
+  // One draw clipped away (map load): see CLIP_ALL.
+  warm(gbuf) {
+    this.add(0, 0, 0, 1, 0);
+    this.draw(CLIP_ALL, gbuf);
   }
 
   // Multiplies the light under the discs added since the last draw, then forgets them.

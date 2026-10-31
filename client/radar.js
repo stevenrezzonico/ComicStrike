@@ -18,6 +18,8 @@ const RANGE = 4096; // world units across the radar at cl_radar_scale 1 (approx.
 const SIZE = 0.27; // of the screen height at cl_hud_radar_scale 1 (approx.)
 const LEVEL = 128; // higher or lower than this: an up / down mark
 const DEG = Math.PI / 180;
+const REDRAW_MS = 33; // the radar is redrawn at most this often...
+const REDRAW_TURN = 1.5; // ... unless the view turned this many degrees since
 const COLOR = {
   [TEAM_T]: '#ffb84a', [TEAM_CT]: '#7db8ff', enemy: '#e2402a', bomb: '#ff9a3c', site: 'rgba(226,64,42,0.9)',
 };
@@ -34,6 +36,9 @@ export class Radar {
     this.sites = []; // [x, y, letter]
     this.hidden = false; // hideradar / drawradar
     this.cssSize = 0;
+    this.shown = null;
+    this.drawnAt = -Infinity; // when, and at which view yaw, it was last drawn
+    this.drawnYaw = 0;
   }
 
   // A new map: its overview and bomb sites (A, B in entity order, approx.).
@@ -57,7 +62,11 @@ export class Radar {
   draw(show, cx, cy, cz, yaw, rows, selfId, watched, team, ffa, bomb, hostages, now) {
     const c = this.canvas;
     show = show && !this.hidden && this.overview !== null;
-    c.style.display = show ? 'block' : 'none';
+    if (show !== this.shown) {
+      this.shown = show;
+      c.style.display = show ? 'block' : 'none';
+      this.drawnAt = -Infinity;
+    }
     const css = show ? Math.max(120, Math.round(innerHeight * SIZE * this.cv.cl_hud_radar_scale.number)) : 0;
     if (css !== this.cssSize) {
       this.cssSize = css;
@@ -68,7 +77,15 @@ export class Radar {
     if (c.width !== D) {
       c.width = c.height = D;
       c.style.width = c.style.height = `${css}px`;
+      this.drawnAt = -Infinity;
     }
+    // Drawn about 30 times a second (it cost ~0.3 ms a frame), every frame while the view
+    // turns, so the rotating map stays smooth.
+    let turn = Math.abs(yaw - this.drawnYaw) % 360;
+    if (turn > 180) turn = 360 - turn;
+    if (now - this.drawnAt < REDRAW_MS && turn < REDRAW_TURN) return;
+    this.drawnAt = now;
+    this.drawnYaw = yaw;
     const ctx = this.ctx, o = this.overview, R = D / 2, selfX = cx, selfY = cy;
     const k = D / (RANGE * this.cv.cl_radar_scale.number); // screen pixels per world unit
     const rotate = this.cv.cl_radar_rotate.bool;

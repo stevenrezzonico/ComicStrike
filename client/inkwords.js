@@ -51,6 +51,11 @@ const BANNER = (() => {
   return `polygon(${pts.join(',')})`;
 })();
 
+// A spray line's kick per shot: a few jolts to pick from.
+const JOLTS = [-3, -1.8, -0.6, 0.6, 1.8, 3].map((j) => [
+  { transform: `scale(1.28) translate(${j}px, ${-Math.abs(j)}px) rotate(${j}deg)` }, { transform: 'scale(1)' }]);
+const JOLT_TIMING = { duration: 120 };
+
 export class InkWords {
   constructor(root) {
     this.root = root;
@@ -65,8 +70,11 @@ export class InkWords {
       el.innerHTML = '<div class="in"><i class="bk"></i><i class="fg"></i><b></b></div>';
       el.hidden = true;
       root.append(el);
-      this.items.push({ el, inner: el.firstChild, bk: el.querySelector('.bk'), fg: el.querySelector('.fg'),
-        b: el.querySelector('b'), end: 0 });
+      // Each slot keeps one burst outline (set once: a new clip path every spawn restyled it).
+      const it = { el, inner: el.firstChild, bk: el.querySelector('.bk'), fg: el.querySelector('.fg'),
+        b: el.querySelector('b'), end: 0, flip: false };
+      it.bk.style.clipPath = it.fg.style.clipPath = STARS[i % STARS.length];
+      this.items.push(it);
     }
     // Automatic fire: a line that grows with each shot of a spray; a long spray stacks new
     // lines above it, tilted the other way, the older ones fading.
@@ -100,13 +108,13 @@ export class InkWords {
     el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
     const burst = cls !== 'wall' && !cls.startsWith('shot');
     it.bk.hidden = it.fg.hidden = !burst;
-    if (burst) it.bk.style.clipPath = it.fg.style.clipPath = pick(STARS);
     it.b.textContent = text;
     el.hidden = false;
-    // Restart the CSS animation on a reused element.
-    it.inner.style.animation = 'none';
-    void it.inner.offsetWidth;
-    it.inner.style.animation = '';
+    // Restart the CSS animation on a reused element by switching between two identical
+    // keyframes (reading offsetWidth between two writes, the usual trick, forced a layout
+    // of the whole page for every word: a few per shot in a fight).
+    it.flip = !it.flip;
+    it.inner.style.animationName = it.flip ? 'pop2' : 'pop';
     it.end = performance.now() + life;
   }
 
@@ -221,10 +229,8 @@ export class InkWords {
     this.lastBeat = now;
     l.b.textContent = `${s.text(this.beats)}!`;
     l.el.hidden = false;
-    // Each shot kicks the line: a jolt and a little shake.
-    const j = rnd(-3, 3).toFixed(1);
-    l.b.animate?.([{ transform: `scale(1.28) translate(${j}px, ${-Math.abs(j)}px) rotate(${j}deg)` },
-      { transform: 'scale(1)' }], { duration: 120 });
+    // Each shot kicks the line: a jolt and a little shake (keyframes made once).
+    l.b.animate?.(pick(JOLTS), JOLT_TIMING);
   }
 
   // Every frame: hides expired words and fades a spray's lines after it.

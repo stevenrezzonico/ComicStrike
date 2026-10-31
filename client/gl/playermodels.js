@@ -10,7 +10,7 @@ import { MAX_HOSTAGES, HS_IDLE, HS_CARRIED, HS_DEAD } from '../../shared/hostage
 import { PlayerAnimator, holdOf, gunInHand } from '../anim/playeranim.js';
 import { PLAYER_SKELETON as S, MAX_BONES } from '../anim/skeleton.js';
 import { GUN_MAG, GUN_BOLT } from '../models/guns.js';
-import { multiply, sphereInView } from './mat4.js';
+import { multiply, sphereInView, CLIP_ALL } from './mat4.js';
 import { FloorShadows } from './shadows.js';
 import { TEAM_CT } from '../../shared/player.js';
 import { WEAPON_ID } from '../../shared/weapons.js';
@@ -102,6 +102,13 @@ export class PlayerModels {
     this.tmpLight = new Float32Array(3);
     this.immune = new Uint8Array(MAX_PLAYERS); // spawn protection: drawn pulsing toward white
     this.time = 0;
+    // Players out of the last frame's view are posed every other frame (the time saved up and
+    // handed over): one frame stale at worst when they come into view, where posing all 9
+    // every frame was ~0.5 ms of CPU.
+    this.lastViewProj = new Float32Array(16);
+    this.haveView = false;
+    this.frameNo = 0;
+    this.owedDt = new Float32Array(MAX_PLAYERS);
     // Hostages.
     this.bodyH = new SkinnedMesh(gl, buildPlayer('H'));
     this.farOf.set(this.bodyH, new SkinnedMesh(gl, buildPlayer('H', false, true)));
@@ -155,6 +162,7 @@ export class PlayerModels {
   // hides them all (cl_showhitboxes draws boxes instead).
   update(ents, row0, self, dt, surfaces, show = true) {
     this.time += dt;
+    this.frameNo++;
     for (let id = 0; id < MAX_PLAYERS; id++) {
       const r = row0 + id * E_FIELDS;
       const a = this.anim[id];
@@ -168,8 +176,14 @@ export class PlayerModels {
       const x = ents[r + E_X], y = ents[r + E_Y], z = ents[r + E_Z] - feetOffset(flags);
       const yaw = dequantizeYaw(ents[r + E_YAW]);
       const weapon = ents[r + E_WEAPON];
-      a.update(dt, x, y, z, yaw, dequantizePitch(ents[r + E_PITCH]), ents[r + E_DUCK] / 255, (flags & FL_ONGROUND) !== 0,
-        holdOf(weapon), ents[r + E_ANIM], ents[r + E_SHOTS], alive, this.guns.points[weapon] || null, weapon);
+      const seen = !this.haveView || sphereInView(this.lastViewProj, x, y, z + BODY_MID, BODY_R);
+      if (!seen && ((this.frameNo + id) & 1)) this.owedDt[id] += dt;
+      else {
+        a.update(dt + this.owedDt[id], x, y, z, yaw, dequantizePitch(ents[r + E_PITCH]), ents[r + E_DUCK] / 255,
+          (flags & FL_ONGROUND) !== 0, holdOf(weapon), ents[r + E_ANIM], ents[r + E_SHOTS], alive,
+          this.guns.points[weapon] || null, weapon);
+        this.owedDt[id] = 0;
+      }
       this.weapon[id] = alive && this.guns.mesh[weapon] ? weapon : 0;
       this.silenced[id] = (ents[r + E_ANIM] & ANIM_SILENCED) !== 0;
       this.immune[id] = alive && (ents[r + E_ANIM] & ANIM_IMMUNE) !== 0;
@@ -330,7 +344,19 @@ export class PlayerModels {
     return this.far[slot] ? this.farOf.get(mesh) : mesh;
   }
 
+  // The contact shadows' and the skinned program's draws once, clipped away (map load: see
+  // CLIP_ALL); the program is shared with the view, the grenade effects and the blasts.
+  warm(gbuf) {
+    this.shadows.warm(gbuf);
+    const r = this.renderer;
+    r.begin(CLIP_ALL);
+    r.draw(this.guns.c4Off, IDENTITY_SKIN, IDENTITY_SKIN, this.hostageLight[0]);
+    r.end();
+  }
+
   draw(viewProj, gbuf) {
+    this.lastViewProj.set(viewProj);
+    this.haveView = true;
     this.drawShadows(viewProj, gbuf);
     const r = this.renderer;
     let begun = false;

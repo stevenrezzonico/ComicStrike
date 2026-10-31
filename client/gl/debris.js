@@ -4,6 +4,7 @@
 
 import { program } from './program.js';
 import { DEBRIS_VS, DEBRIS_FS } from './shaders.js';
+import { CLIP_ALL } from './mat4.js';
 import { Trace, traceHull, HULL_POINT } from '../../shared/trace.js';
 import {
   MAT_GLASS, MAT_WOOD, MAT_METAL, MAT_FLESH, MAT_CINDER, MAT_CEILING_TILE, MAT_COMPUTER, MAT_UNBREAKABLE_GLASS,
@@ -175,6 +176,14 @@ export class Debris {
       s[o + 7] += s[o + 10] * dt;
       s[o + 8] += s[o + 11] * dt;
     }
+  }
+
+  // One draw clipped away (map load): see CLIP_ALL.
+  warm() {
+    const n = this.count;
+    this.count = 1;
+    this.draw(CLIP_ALL);
+    this.count = n;
   }
 
   draw(viewProj) {

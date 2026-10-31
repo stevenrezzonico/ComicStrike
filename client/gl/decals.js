@@ -3,6 +3,7 @@
 
 import { program } from './program.js';
 import { DECAL_VS, DECAL_FS } from './shaders.js';
+import { CLIP_ALL } from './mat4.js';
 
 const FLOATS_PER_VERT = 6; // pos xyz, uv, seed
 const FLOATS_PER_DECAL = FLOATS_PER_VERT * 4;
@@ -101,6 +102,14 @@ export class Decals {
 
   // Ink stars painted into the G-buffer's albedo only: the wall keeps its normal, id and
   // depth, so a hole draws no outline of its own.
+  // One draw clipped away (map load): see CLIP_ALL.
+  warm(gbuf) {
+    const n = this.count;
+    this.count = 1;
+    this.draw(CLIP_ALL, gbuf);
+    this.count = n;
+  }
+
   draw(viewProj, gbuf) {
     if (this.count === 0) return;
     const gl = this.gl;

@@ -219,6 +219,7 @@ const lastFlashPop = new Float64Array(4); // x, y, z, time (ms) of the newest fl
 let flashShown = -1, lastFlashLeft = 0;
 function showFlash(left, total) {
   if (left > lastFlashLeft + 0.05) { // a new flash: keep this frame; ears ring; the burst goes where it popped
+    tag('flashed');
     sounds.earRing(left);
     renderer.afterimage.capture(canvas.width, canvas.height);
     let sx = 0, sy = 0;
@@ -247,6 +248,7 @@ function showFlash(left, total) {
 }
 
 fx.onEffect = (kind, _weapon, x, y, z) => {
+  tag(kind === FX_HE ? 'HE' : kind === FX_SMOKE ? 'smoke' : kind === FX_FIRE ? 'fire' : kind === FX_FLASH ? 'flashbang' : 'fizzle');
   if (kind === FX_HE) explosion(x, y, z, 0.45);
   else if (kind === FX_FIZZLE) {
     debris.puff(x, y, z, 0.3, 0.3, 0.3, 20);
@@ -351,6 +353,11 @@ async function loadMap(name) {
   renderer.loadMap(mesh, bsp);
   decals.clear();
   debris.clear();
+  // Every effect's program draws once now, clipped away, not on its first use in a fight.
+  renderer.gbuf.begin();
+  decals.warm(renderer.gbuf);
+  debris.warm();
+  models.warm(renderer.gbuf);
   world = CollisionWorld.fromBSP(bsp);
   world.surfaces = new SurfaceMap(bsp);
   world.bombSites = new BombSites(bsp);
@@ -388,6 +395,7 @@ function resetView(yaw) {
 // A new round wipes what the last one left on the map: bullet holes, scorches, shards
 // and chunks, explosions (breakables, doors, the ground and grenades come from the server).
 function clearRoundMarks() {
+  tag('round start');
   decals.clear();
   debris.clear();
   blasts.clear();
@@ -436,7 +444,10 @@ function showImpacts() {
     const p = impacts.pos, n = impacts.normal;
     decals.add(p[i * 3], p[i * 3 + 1], p[i * 3 + 2], n[i * 3], n[i * 3 + 1], n[i * 3 + 2], melee ? 1.2 : 1.6,
       (hash32(tickCount * 7 + i) & 0xffff) / 65536, impacts.owner[i]);
-    if (!melee) words.wall(viewProj, p[i * 3], p[i * 3 + 1], p[i * 3 + 2]);
+    if (!melee) {
+      words.wall(viewProj, p[i * 3], p[i * 3 + 1], p[i * 3 + 2]);
+      tag('impact');
+    }
   }
 }
 
@@ -728,6 +739,7 @@ function applyEvents() {
       if (ev.shooter[k] === selfId) { // we hit someone
         sounds.hit(false);
         words.hit(viewProj, x, y, z);
+        tag('hit');
       }
     } else if (!breakables.broken[ev.breakable[k]] || !ev.breakable[k]) {
       sounds.impact(x, y, z);
@@ -750,6 +762,7 @@ function applyEvents() {
 // A comic explosion: the fireball and smoke (client/gl/blast.js), dark chunks and embers,
 // for the bomb a scorch on the ground under it.
 function explosion(x, y, z, size = 1) {
+  tag('explosion');
   blasts.add(x, y, z, size, world && world.surfaces);
   renderer.flashes.add(x, y, z + 40 * size, 700 * size, 1, 0.25 + 0.35 * size, performance.now() / 1000);
   debris.puff(x, y, z + 24 * size, 0.2, 0.16, 0.12, Math.round(40 * size));
@@ -811,6 +824,7 @@ function killBody(killer, victim, headshot, seed) {
 }
 
 function addKill(killer, victim, weapon, headshot) {
+  tag('kill');
   const row = document.createElement('div');
   const name = (id) => net.names[id] || `player${id}`;
   const wname = WEAPONS[weapon] ? WEAPONS[weapon].label : 'world';
@@ -976,6 +990,7 @@ function tick() {
     const w = activeWeapon(ws);
     if ((ws.f[WS_EVENTS] & WEV_FIRE) && w && w.gun) {
       words.shot(gunProfile(w, silenced(ws, ws.f[WS_ACTIVE])), performance.now());
+      tag('shot');
       // Our own flash, a little ahead of the eye along the view.
       const p = angles[0] * DEG, yw = angles[1] * DEG, c = Math.cos(p) * 24;
       muzzleLight(eye[0] + Math.cos(yw) * c, eye[1] + Math.sin(yw) * c, eye[2] - Math.sin(p) * 24,
@@ -996,8 +1011,49 @@ let fps = 0;
 let cpuSim = 0, cpuDraw = 0; // ms summed over the readout's window (cl_showfps 3)
 let gpuText = '';
 const dynres = new DynamicResolution(); // r_dynres
-// benchmark: the gaps between frames over a few seconds, then a report in the console.
-const bench = { until: 0, seconds: 0, gaps: new Float32Array(8192), n: 0, cpu: 0, ctx: null };
+// What it reads from the GPU timer each frame (per drawn frame: r_drawrepeat draws it several times).
+const gpuRead = { readings: 0, frameMs: 0, behind: 0 };
+// Where r_dynres settled, per window size, so the next map starts there: starting at full
+// scale and stepping down was a stutter at every map start on a GPU that cannot keep up.
+const DYNRES_KEY = 'comicstrike.dynres';
+let dynresSaved = false;
+const screenKey = () => `${innerWidth}x${innerHeight}@${cv.r_hidpi.bool ? Math.min(2, devicePixelRatio || 1) : 1}`;
+function dynresMemory() {
+  try {
+    const m = JSON.parse(localStorage.getItem(DYNRES_KEY));
+    return m && typeof m === 'object' ? m : {};
+  } catch {
+    return {};
+  }
+}
+function saveDynres() {
+  dynresSaved = true;
+  const m = dynresMemory();
+  m[screenKey()] = [dynres.factor, dynres.print];
+  try {
+    localStorage.setItem(DYNRES_KEY, JSON.stringify(m));
+  } catch { /* storage blocked: start from full scale next time */ }
+}
+// benchmark: the gaps between frames over a few seconds, then a report in the console: frame
+// times, how far the GPU runs behind, the CPU by part, and every hitch with what happened in
+// the frame before it (`tag`).
+const bench = {
+  until: 0, start: 0, seconds: 0, gaps: new Float32Array(8192), n: 0, cpu: 0, ctx: null,
+  parts: new Float64Array(7), hitches: [], heap: 0, gpu: 0, gpuN: 0, passes: false,
+};
+const CPU_PARTS = ['ticks', 'models', 'render', 'radar', 'hud', 'view', 'print'];
+const HITCH_MS = 25; // a frame gap over this is listed (60 Hz misses read 33)
+const MAX_HITCHES = 30;
+const frameTags = []; // what happened during this frame (only while a benchmark runs)
+let lapAt = 0; // lap(): the CPU time since the last lap goes to that part
+function tag(what) {
+  if (bench.until && frameTags.length < 8 && !frameTags.includes(what)) frameTags.push(what);
+}
+function lap(part) {
+  const t = performance.now();
+  if (bench.until) bench.parts[part] += t - lapAt;
+  lapAt = t;
+}
 
 // The scene's render resolution relative to the canvas, as a percentage (r_dynres, mat_viewportscale).
 const renderScale = () =>
@@ -1009,27 +1065,43 @@ function benchmarkReport() {
   const at = (q) => (n ? sorted[Math.min(n - 1, Math.floor(n * q))] : 0).toFixed(1);
   let slow = 0;
   for (let i = 0; i < n; i++) if (gaps[i] > SLOW_MS) slow++;
-  const gpu = renderer.timer.report();
-  con.out(bench.ctx, [
+  const t = renderer.timer;
+  const gpu = bench.passes ? t.report() : t.ext && bench.gpuN ? `gpu: ${(bench.gpu / bench.gpuN).toFixed(2)} ms a frame` : '';
+  const per = (ms) => (ms / Math.max(1, n)).toFixed(2);
+  const lines = [
     `benchmark ${bench.seconds} s: ${(n / bench.seconds).toFixed(1)} fps, ${(100 * slow / Math.max(1, n)).toFixed(0)}% slow ` +
       `(over ${SLOW_MS} ms), res ${renderScale()}${cv.r_dynres.bool ? ' (r_dynres)' : ''}`,
     `frame ms: median ${at(0.5)} · 95% ${at(0.95)} · 99% ${at(0.99)} · worst ${at(1)}`,
-    `cpu: ${(bench.cpu / Math.max(1, n)).toFixed(2)} ms a frame (ticks + building the frame)`,
-    gpu || 'gpu: no timings',
-  ].join('\n'));
+    `cpu: ${per(bench.cpu)} ms a frame: ${CPU_PARTS.map((p, i) => `${p} ${per(bench.parts[i])}`).join(' · ')}`,
+    (gpu || 'gpu: no timings') +
+      (bench.passes ? '\n(timing every pass slows a GPU near its limit: compare frame rates without "passes")' : ''),
+    t.behindReport() || 'gpu behind: no timings',
+  ];
+  const h = bench.hitches;
+  lines.push(h.length ? `hitches over ${HITCH_MS} ms (${h.length}${h.length === MAX_HITCHES ? '+' : ''}):` : `no hitches over ${HITCH_MS} ms`);
+  for (const [t, g, what] of h) lines.push(`  ${(t / 1000).toFixed(2)} s: ${g.toFixed(0)} ms${what ? ` after ${what}` : ''}`);
+  con.out(bench.ctx, lines.join('\n'));
   bench.until = 0;
 }
 
 con.command('benchmark', (a, ctx) => {
   if (!playing) return con.out(ctx, 'benchmark: start a game first');
   bench.seconds = Math.min(60, Math.max(2, +a[1] || 10));
+  bench.passes = a.includes('passes');
+  bench.gpu = bench.gpuN = 0;
   bench.until = performance.now() + bench.seconds * 1000;
+  bench.start = performance.now();
   bench.n = 0;
   bench.cpu = 0;
+  bench.parts.fill(0);
+  bench.hitches.length = 0;
+  bench.heap = 0;
+  frameTags.length = 0;
   bench.ctx = ctx;
   renderer.timer.report(); // a fresh window for the GPU times
+  renderer.timer.behindReport();
   con.out(ctx, `benchmark: measuring ${bench.seconds} s...`);
-}, 'benchmark [seconds]: frame rate, slow frames, CPU and GPU time per pass over 10 s (or the given time)');
+}, 'benchmark [seconds] [passes]: frame rate, slow frames, hitches, CPU by part, GPU time and lag over 10 s (or the given time); passes: GPU time per pass (which itself slows a GPU near its limit)');
 
 function frame(now) {
   // The next frame first: a frame that throws (a bug) then costs one frame, not the game
@@ -1053,8 +1125,27 @@ function frame(now) {
   const gap = now - last;
   const elapsed = paused ? 0 : gap / 1000;
   frameMsMax = Math.max(frameMsMax, gap);
-  if (cv.r_dynres.bool) dynres.frame(gap, now);
-  if (bench.until && bench.n < bench.gaps.length) bench.gaps[bench.n++] = gap;
+  if (bench.until) {
+    if (bench.n < bench.gaps.length) bench.gaps[bench.n++] = gap;
+    // A heap that shrank: a garbage collection ran (Chrome's performance.memory).
+    const heap = performance.memory ? performance.memory.usedJSHeapSize : 0;
+    if (heap && heap < bench.heap) tag('gc');
+    bench.heap = heap;
+    if (gap > HITCH_MS && bench.hitches.length < MAX_HITCHES) {
+      bench.hitches.push([now - bench.start, gap, frameTags.join(', ')]);
+    }
+    frameTags.length = 0;
+  }
+  if (cv.r_dynres.bool) {
+    const t = renderer.timer, repeat = cv.r_drawrepeat.number;
+    gpuRead.readings = t.readings;
+    gpuRead.frameMs = t.frameMs * repeat;
+    gpuRead.behind = t.behind / repeat;
+    if (dynres.frame(gap, now, t.ext ? gpuRead : null)) {
+      tag('resolution step');
+      dynresSaved = false;
+    } else if (!dynresSaved && dynres.settled(now)) saveDynres();
+  }
   last = now;
 
   // Scopes: CS:GO fovs per zoom level; sensitivity scales with zoom_sensitivity_ratio_mouse.
@@ -1085,9 +1176,16 @@ function frame(now) {
     ticks++;
   }
   if (ticks === MAX_TICKS_PER_FRAME) accumulator = 0; // fell far behind (tab was hidden)
+  if (ticks > 2) tag(`${ticks} ticks`);
 
   const t1 = performance.now();
-  renderer.timer.on = cv.cl_showfps.number >= 3 || bench.until > 0;
+  if (bench.until) bench.parts[0] += t1 - t0;
+  lapAt = t1;
+  renderer.timer.on = cv.cl_showfps.number >= 3 || (bench.until > 0 && bench.passes);
+  if (bench.until && renderer.timer.readings) {
+    bench.gpu += renderer.timer.frameMs;
+    bench.gpuN++;
+  }
   draw(now, accumulator / TICK_DT, Math.min(elapsed, 0.1));
   renderer.timer.endFrame();
   if (previewEdit) previewEdit.draw();
@@ -1111,7 +1209,8 @@ function frame(now) {
     const fl = ps.i[PS_FLAGS];
     const lines = [];
     if (cv.cl_showfps.number) {
-      lines.push(`fps: ${fps.toFixed(0)}${cv.cl_showfps.number > 1 ? `  worst frame: ${frameMsMax.toFixed(1)} ms  res ${renderScale()}` : ''}`);
+      const t = renderer.timer, gpu = t.readings ? `  gpu ${t.frameMs.toFixed(1)} ms, ${t.behind.toFixed(1)} frames behind` : '';
+      lines.push(`fps: ${fps.toFixed(0)}${cv.cl_showfps.number > 1 ? `  worst frame: ${frameMsMax.toFixed(1)} ms  res ${renderScale()}${gpu}` : ''}`);
     }
     if (cv.cl_showfps.number >= 3) {
       // CPU: the simulation ticks, then building and sending the frame (the draw calls).
@@ -1214,6 +1313,7 @@ function draw(now, alpha, dt) {
       b.state === BOMB_PLANTED && now - lastBeep < 120, world && world.surfaces);
   }
   if (net && synced) bombBeeps(now);
+  lap(1);
 
   // r_hidpi: the screen's own pixels (up to 2 per page pixel) for crisp ink on high-DPI
   // screens; lines and dots keep their size (they scale with the canvas height).
@@ -1237,12 +1337,14 @@ function draw(now, alpha, dt) {
     scape.others(interp, selfId, dt, rowFeet);
   }
   renderer.render(viewProj, invViewProj, eye, now / 1000, overlays);
+  lap(2);
 
   // The radar centers on whoever we see the game through.
   const watched = spectating && !roaming ? spectator.target : -1, w = watched * E_FIELDS;
   radar.draw(playing, watched >= 0 ? interp[w + E_X] : eye[0], watched >= 0 ? interp[w + E_Y] : eye[1],
     watched >= 0 ? interp[w + E_Z] : eye[2], yaw, interpolated ? interp : null, selfId, watched, player.team,
     (gameMode() & GAME_FFA) !== 0, net ? net.own.bomb : null, net ? net.hostages : null, now);
+  lap(3);
   hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now, leader(), progress());
   document.body.classList.toggle('dm', freeBuys() || gunGame()); // no money in deathmatch, the demo, the gun games
   const action = ws.f[WS_ACTION];
@@ -1289,6 +1391,7 @@ function draw(now, alpha, dt) {
     deathNotice.style.whiteSpace = 'pre';
     if (spec) deathNotice.textContent = spec;
   }
+  lap(4);
   renderer.timer.mark(PASS.VIEW);
   if (inEyes) {
     spectator.syncWeapon(interp, now / 1000, dt, weaponView);
@@ -1298,6 +1401,7 @@ function draw(now, alpha, dt) {
     weaponView.draw(canvas.height, aspect, ws, ps, lastButtons, simTime, dt, Math.max(player.health, 0),
       player.armor);
   }
+  lap(5);
   // Print the frame, then what goes over it; the flashbang's afterimage is taken from it.
   renderer.composite();
   words.enabled = cv.cl_comicwords.bool && cv.cl_drawhud.bool;
@@ -1306,6 +1410,7 @@ function draw(now, alpha, dt) {
   else showFlash(flash.left, flash.total);
   renderer.timer.mark(PASS.OVER);
   if (!preview) weaponView.drawCrosshair(canvas.width, canvas.height);
+  lap(6);
 }
 
 // The video cvars into the renderer, sizing the canvas and the G-buffer; returns the aspect.
@@ -1797,7 +1902,10 @@ async function startSandbox(map, team) {
 function enterGame() {
   playing = true;
   backdrop = false;
-  dynres.reset(performance.now()); // full resolution again, judged after the first seconds
+  // Where it settled last time on this window size (else full), judged after the first seconds.
+  const settled = dynresMemory()[screenKey()];
+  dynres.reset(performance.now(), 2000, Array.isArray(settled) ? +settled[0] || 1 : 1, Array.isArray(settled) ? +settled[1] || 1 : 1);
+  dynresSaved = true;
   menu.online = net !== null && !localWorker; // Disconnect, or Quit practice
   menu.server = net !== null; // spectating needs server rules
   menu.busy('');

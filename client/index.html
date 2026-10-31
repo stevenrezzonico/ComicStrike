@@ -261,6 +261,14 @@
     72% { opacity: 1; }
     100% { transform: translate(-50%, -78%) rotate(var(--r)) scale(0.92); opacity: 0; }
   }
+  /* The same, under a second name: switching names restarts a reused word's animation. */
+  @keyframes pop2 {
+    0% { transform: translate(-50%, -50%) rotate(var(--r)) scale(0.2); opacity: 1; }
+    14% { transform: translate(-50%, -50%) rotate(var(--r)) scale(1.18); }
+    26% { transform: translate(-50%, -50%) rotate(var(--r)) scale(1); }
+    72% { opacity: 1; }
+    100% { transform: translate(-50%, -78%) rotate(var(--r)) scale(0.92); opacity: 0; }
+  }
   @media (prefers-reduced-motion: reduce) { .pop .in { animation-timing-function: linear; } }
   /* Start / pause menu (client/menu.js): actions on the left, the open panel beside them, over
      a dot-screened sky (start) or the dotted, dimmed game (pause). */

@@ -32,7 +32,9 @@ export class Viewmodel {
     this.arms = { T: new SkinnedMesh(gl, buildArms('T')), CT: new SkinnedMesh(gl, buildArms('CT')) };
     this.handMeshes = new Map(); // 'T L 1.9 1.5' -> SkinnedMesh
     this.handsOf = { T: [], CT: [] }; // per weapon id: [left, right] SkinnedMesh
-    this.openLeft = {}; // team -> the open left hand (shielding the eyes from a flashbang)
+    // team -> the open left hand (shielding the eyes from a flashbang), built now: building it
+    // on the first flashbang added to that frame's hitch.
+    this.openLeft = { T: new SkinnedMesh(gl, buildHand('T', FLAT_CURL, true)), CT: new SkinnedMesh(gl, buildHand('CT', FLAT_CURL, true)) };
   }
 
   // The two hand meshes for weapon `id`, fitted to what they hold (built once).
@@ -66,7 +68,6 @@ export class Viewmodel {
     const look = team === TEAM_CT ? 'CT' : 'T', hands = this.hands(look, weaponId);
     r.draw(this.arms[look], this.rig, va.pose.skin, light);
     if (va.blind > 0.45) { // shielding the eyes: an open hand
-      this.openLeft[look] ??= new SkinnedMesh(this.gl, buildHand(look, FLAT_CURL, true));
       r.draw(this.openLeft[look], this.rig, va.pose.skin, light);
     } else r.draw(hands[0], this.rig, va.pose.skin, light);
     r.draw(hands[1], this.rig, va.pose.skin, light);

@@ -28,6 +28,8 @@ export class Hud {
     this.elProgressBar = this.elProgress.firstElementChild;
     this.elProgressLabel = this.elProgress.lastElementChild;
     this.shown = { money: '', round: '', banner: '', bomb: '', progress: '' };
+    this.scoreShown = false; // the scoreboard (Tab), and when its rows were last built
+    this.scoreAt = -Infinity;
     // What the round bar and banner were built from: rebuilt only when one changes.
     this.key = { money: -1, secs: -1, phase: -1, planted: false, ct: -1, t: -1, mode: -1, info: -1, notice: '',
       lName: '', lScore: -1, lSelf: false, lTied: false, progress: '' };
@@ -143,8 +145,16 @@ export class Hud {
   // net: NetClient (names/teams/kills/deaths/scores), alive(id) -> bool. Deathmatch
   // adds the points (and sorts by them); free for all is one list.
   scoreboard(show, net, selfId, alive) {
-    this.elScore.style.display = show ? 'block' : 'none';
+    if (show !== this.scoreShown) {
+      this.scoreShown = show;
+      this.elScore.style.display = show ? 'block' : 'none';
+      this.scoreAt = -Infinity; // fresh rows as it opens
+    }
     if (!show || !net) return;
+    // The rows change a few times a second at most: rebuilt (and compared) 4 times a second.
+    const now = performance.now();
+    if (now - this.scoreAt < 250) return;
+    this.scoreAt = now;
     const mode = net.own.round.mode, armsRace = (mode & GAME_ARMSRACE) !== 0;
     const dm = (mode & GAME_DM) !== 0 || armsRace; // ranked by score (arms race: the level)
     const ranked = (id) => armsRace ? Math.min(net.scores[id] + 1, ARMS_RACE.length) : net.scores[id];
