@@ -22,6 +22,7 @@ const SNIPER = new Set(['awp', 'ssg08', 'g3sg1', 'scar20']);
 const HEAVY = new Set(['deagle', 'revolver']);
 const MG = new Set(['m249', 'negev']);
 const RELOAD_CLICKS = [['magout', 0.25], ['magin', 0.6], ['bolt', 0.76]]; // as the first-person animation
+const DEPLOY_GAP_MS = 150; // one draw click for a burst of switches (wheel cycling, round-start equips)
 
 // The gunshot voice of weapon w.
 export function gunProfile(w, silencedOn) {
@@ -44,6 +45,7 @@ export class SoundScape {
     this.s = sounds;
     this.surfaceKind = surfaceKind;
     this.ownStep = 0;
+    this.lastDeploy = -Infinity; // when the last draw click played (ms)
     this.shots = new Int16Array(MAX_PLAYERS).fill(-1); // last E_SHOTS seen per player
     this.anim = new Uint8Array(MAX_PLAYERS);
     this.stepDist = new Float32Array(MAX_PLAYERS);
@@ -64,7 +66,13 @@ export class SoundScape {
       for (const [name, at] of RELOAD_CLICKS) s.click(name, null, 0, 0, 1, at * w.reloadTime);
     }
     if (ev & WEV_SHELL) s.click('shell');
-    if (ev & WEV_DEPLOY) s.click('deploy');
+    if (ev & WEV_DEPLOY) {
+      const now = performance.now();
+      if (now - this.lastDeploy >= DEPLOY_GAP_MS) {
+        this.lastDeploy = now;
+        s.click('deploy', null, 0, 0, 0.6);
+      }
+    }
     if (ev & WEV_ZOOM) s.click('zoom');
     if (ev & (WEV_MODE | WEV_COCK)) s.click('mode');
     if (ev & WEV_PIN) s.click('pin');

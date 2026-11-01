@@ -26,10 +26,11 @@ export const GUN_SOUNDS = {
   silenced: { pow: [700, 350, 0.05, 0.22], puff: [1000, 0.3, 0.07], boom: null, rise: 0.012, tail: 0 }, // "pfft"
 };
 
-// Mechanical clicks: band center (Hz), length (s), repeats.
+// Mechanical clicks: band center (Hz), length (s), repeats. The draw (deploy) is one low soft
+// click: it was three bright ones on every switch, wheel notch and buy, and tired the ear.
 const CLICKS = {
   dry: [3000, 0.025, 1], magout: [1300, 0.05, 1], magin: [1700, 0.04, 2], bolt: [2100, 0.035, 2],
-  deploy: [1900, 0.03, 3], zoom: [3400, 0.015, 1], shell: [1500, 0.04, 1], mode: [2500, 0.02, 2],
+  deploy: [1100, 0.03, 1], zoom: [3400, 0.015, 1], shell: [1500, 0.04, 1], mode: [2500, 0.02, 2],
   pin: [3600, 0.06, 1], defuse: [2300, 0.02, 1],
 };
 
