@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { parseUntrustedBSP } from '../shared/bsp.js';
-import { CollisionWorld, pointContents } from '../shared/trace.js';
+import { parseUntrustedBSP, faceNumEdges, faceVertex, facePlane, faceSide } from '../shared/bsp.js';
+import { CollisionWorld, pointContents, traceHull, Trace, HULL_POINT } from '../shared/trace.js';
 import { Nav, NAV_CELL } from '../shared/nav.js';
 import { decompileBSP } from '../client/editor/decompile.js';
 import {
@@ -30,6 +30,69 @@ function agreement(bsp, p, out, samples = 3000) {
     if ((pointContents(a, ...q) === -1) === (pointContents(b, ...q) === -1)) same++;
   }
   return same / samples;
+}
+
+// Rays from random points open in both maps: of the hits on a face drawn in the original,
+// the share where the map compiled back draws none (a hole: a cell side that came back
+// with no texture compiles to no face, and the wall was see-through).
+function holes(bsp, out, rays = 2000) {
+  const back = parseUntrustedBSP(out.slice().buffer);
+  const maps = [bsp, back].map((m) => ({ world: CollisionWorld.fromBSP(m), faces: facesOf(m) }));
+  const box = [0, 1, 2, 3, 4, 5].map((k) => bsp.modelsF[k]), tr = new Trace();
+  let seed = 11, walls = 0, missing = 0;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < rays;) {
+    const q = [0, 1, 2].map((k) => box[k] + (box[k + 3] - box[k]) * rnd());
+    if (maps.some((m) => pointContents(m.world, ...q) !== -1)) continue;
+    i++;
+    const z = rnd() * 2 - 1, t = rnd() * Math.PI * 2, r = Math.sqrt(1 - z * z), dir = [r * Math.cos(t), r * Math.sin(t), z];
+    const hit = maps.map((m) => {
+      traceHull(m.world, HULL_POINT, ...q, q[0] + dir[0] * 4000, q[1] + dir[1] * 4000, q[2] + dir[2] * 4000, tr);
+      return tr.fraction < 1 && !tr.startsolid ? [tr.endx, tr.endy, tr.endz] : null;
+    });
+    if (!hit[0] || !hit[1] || Math.hypot(hit[0][0] - hit[1][0], hit[0][1] - hit[1][1], hit[0][2] - hit[1][2]) > 2) continue;
+    if (!drawnAt(maps[0].faces, hit[0], dir)) continue;
+    walls++;
+    if (!drawnAt(maps[1].faces, hit[1], dir)) missing++;
+  }
+  return missing / Math.max(walls, 1);
+}
+
+// A map's faces as outward planes and corner loops, with their bounds.
+function facesOf(b) {
+  const faces = [];
+  for (let f = 0; f < b.numFaces; f++) {
+    const pl = facePlane(b, f), s = faceSide(b, f) ? -1 : 1;
+    const pts = [];
+    for (let i = 0; i < faceNumEdges(b, f); i++) {
+      const v = faceVertex(b, f, i);
+      pts.push([b.vertices[v * 3], b.vertices[v * 3 + 1], b.vertices[v * 3 + 2]]);
+    }
+    faces.push({
+      n: [0, 1, 2].map((k) => b.planesF[pl * 5 + k] * s), d: b.planesF[pl * 5 + 3] * s, pts,
+      lo: [0, 1, 2].map((k) => Math.min(...pts.map((q) => q[k])) - 1), hi: [0, 1, 2].map((k) => Math.max(...pts.map((q) => q[k])) + 1),
+    });
+  }
+  return faces;
+}
+
+// Is a face drawn at point h, facing a ray along dir?
+function drawnAt(faces, h, dir) {
+  const within = (f) => {
+    let sign = 0;
+    for (let i = 0; i < f.pts.length; i++) {
+      const p = f.pts[i], q = f.pts[(i + 1) % f.pts.length], e = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+      const r = [h[0] - p[0], h[1] - p[1], h[2] - p[2]];
+      const x = (e[1] * r[2] - e[2] * r[1]) * f.n[0] + (e[2] * r[0] - e[0] * r[2]) * f.n[1] + (e[0] * r[1] - e[1] * r[0]) * f.n[2];
+      if (Math.abs(x) < 0.5) continue;
+      if (sign && Math.sign(x) !== sign) return false;
+      sign = Math.sign(x);
+    }
+    return true;
+  };
+  return faces.some((f) => h.every((v, k) => v >= f.lo[k] && v <= f.hi[k]) &&
+    Math.abs(f.n[0] * h[0] + f.n[1] * h[1] + f.n[2] * h[2] - f.d) < 1 && f.n[0] * dir[0] + f.n[1] * dir[1] + f.n[2] * dir[2] < 0 &&
+    within(f));
 }
 
 function open(name) {
@@ -63,6 +126,8 @@ for (const name of ['de_playground', 'de_inkwell']) {
     assert.deepEqual(report.dropped, {}, 'our own maps hold nothing the editor cannot make');
     const out = compileProject(p, 'draft').bytes;
     assert.ok(agreement(bsp, p, out) > 0.995, 'solid where it was solid');
+    const h = holes(bsp, out);
+    assert.ok(h < 0.002, `walls drawn where they were (${(h * 100).toFixed(2)} % of hits on no face)`);
   });
 }
 
@@ -127,6 +192,8 @@ for (const name of ['de_dust2', 'cs_office', 'de_nuke']) {
       assert.deepEqual(checkProject(p).errors, []);
       const out = compileProject(p, 'draft').bytes;
       assert.ok(agreement(bsp, p, out, 2000) > 0.99, 'solid where it was solid');
+      const h = holes(bsp, out);
+      assert.ok(h < 0.002, `walls drawn where they were (${(h * 100).toFixed(2)} % of hits on no face)`);
       const back = parseUntrustedBSP(out.buffer), world = CollisionWorld.fromBSP(back);
       const nav = new Nav(back, world, NAV_CELL, true);
       const node = (cls) => {

@@ -10,7 +10,9 @@
 // solid; spawns and hostages become points, point bomb targets and rescue spots zones.
 // Everything else is left out and counted. Pure (no DOM): the compile worker runs it.
 
-import { mapNameOf, faceFirstEdge, faceNumEdges, faceTexinfo, faceSide } from '../../shared/bsp.js';
+import {
+  mapNameOf, faceFirstEdge, faceNumEdges, faceTexinfo, faceSide, facePlane, modelFirstFace, modelNumFaces,
+} from '../../shared/bsp.js';
 import { planeSquare, clip } from '../../shared/bspwriter.js';
 import { FORMAT, VERSION, TEXTURES, KINDS, makeBrush } from './project.js';
 
@@ -90,7 +92,7 @@ export function decompileBSP(bsp, fileName) {
         contents,
         faces: faces.map((f) => ({
           n: f.n, d: f.d + dot(f.n, origin), poly: f.poly.map((v) => [v[0] + origin[0], v[1] + origin[1], v[2] + origin[2]]),
-          tex: sky ? 'sky' : textureOf(f),
+          tex: sky ? 'sky' : textureOf(f, m),
         })),
       };
     }
@@ -168,25 +170,50 @@ export function decompileBSP(bsp, fileName) {
     return poly;
   }
 
-  // The texture of the node face under a cell side's middle (else near one of its corners).
-  function textureOf(f) {
+  // The texture of the face under a cell side's middle (else near one of its corners): first
+  // the faces hung on the side's node, then those of model m on the same plane facing the
+  // same way (a compiler hangs a face on one of the nodes sharing its plane, so the node a
+  // cell was cut by may hold none), then the nearest of those. A side with no texture
+  // compiles to no face: a hole to see through, where the original had a wall.
+  function textureOf(f, m) {
     if (f.node < 0) return null;
     const first = bsp.nodesI16[f.node * 12 + 10] & 0xffff, count = bsp.nodesI16[f.node * 12 + 11] & 0xffff;
-    if (!count) return null;
     const c = [0, 1, 2].map((k) => f.poly.reduce((s, v) => s + v[k], 0) / f.poly.length);
     const probes = [c, ...f.poly.map((v) => [0, 1, 2].map((k) => v[k] + (c[k] - v[k]) * 0.1))];
+    const nameOf = (i) => useTexture(bsp.textureNames[bsp.texinfoI[faceTexinfo(bsp, i) * 10 + 8]]);
     for (const q of probes) {
       for (let i = first; i < first + count; i++) {
-        if (faceSide(bsp, i) !== f.side || !inside(i, q, f.n)) continue;
-        const name = bsp.textureNames[bsp.texinfoI[faceTexinfo(bsp, i) * 10 + 8]];
-        return useTexture(name);
+        if (faceSide(bsp, i) === f.side && inside(i, q, f.n)) return nameOf(i);
       }
     }
-    return null;
+    const same = onPlane(m, bsp.nodesI32[f.node * 6]).filter((i) => faceSide(bsp, i) === f.side);
+    for (const q of probes) for (const i of same) if (inside(i, q, f.n)) return nameOf(i);
+    let best = -1, bestD = Infinity;
+    for (const i of same) {
+      const pts = loopOf(i), mid = [0, 1, 2].map((k) => pts.reduce((s, v) => s + v[k], 0) / pts.length);
+      const d = (mid[0] - c[0]) ** 2 + (mid[1] - c[1]) ** 2 + (mid[2] - c[2]) ** 2;
+      if (d < bestD) [best, bestD] = [i, d];
+    }
+    return best >= 0 ? nameOf(best) : null;
   }
 
-  // Is point q (on the face's plane) within face i's outline?
-  function inside(i, q, n) {
+  // Model m's faces on plane pl.
+  const planeFaces = new Map();
+  function onPlane(m, pl) {
+    let byPlane = planeFaces.get(m);
+    if (!byPlane) {
+      planeFaces.set(m, (byPlane = new Map()));
+      for (let i = modelFirstFace(bsp, m), n = i + modelNumFaces(bsp, m); i < n; i++) {
+        const k = facePlane(bsp, i);
+        if (!byPlane.has(k)) byPlane.set(k, []);
+        byPlane.get(k).push(i);
+      }
+    }
+    return byPlane.get(pl) || [];
+  }
+
+  // Face i's corners.
+  function loopOf(i) {
     let pts = faceLoops.get(i);
     if (!pts) {
       pts = [];
@@ -198,6 +225,12 @@ export function decompileBSP(bsp, fileName) {
       }
       faceLoops.set(i, pts);
     }
+    return pts;
+  }
+
+  // Is point q (on the face's plane) within face i's outline?
+  function inside(i, q, n) {
+    const pts = loopOf(i);
     let pos = false, neg = false;
     for (let k = 0; k < pts.length; k++) {
       const a = pts[k], b = pts[(k + 1) % pts.length], e = sub(b, a);
