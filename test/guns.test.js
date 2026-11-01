@@ -4,7 +4,7 @@ import { WEAPONS } from '../shared/weapons.js';
 import { MESH_STRIDE } from '../client/gl/meshkit.js';
 import { buildFlash } from '../client/gl/gunmeshes.js';
 import { buildBurst, buildPuff } from '../client/gl/blast.js';
-import { buildFlame, buildSmokeCloud } from '../client/gl/grenadefx.js';
+import { buildFlame, buildPool, buildSmokeCloud } from '../client/gl/grenadefx.js';
 
 // Closed (every directed edge matched by its reverse) and outward (positive volume).
 function closed(m, what) {
@@ -91,9 +91,37 @@ Deno.test('explosions: the fireball layers and smoke puffs are closed, low-poly 
     closed(burst, `burst ${seed}`);
     closed(puff, `puff ${seed}`);
     assert.ok(burst.tris <= 120 && puff.tris <= 200, `seed ${seed}: ${burst.tris} / ${puff.tris} triangles`);
-    const flame = buildFlame([1, 0.5, 0.1], seed);
+  }
+});
+
+Deno.test('fire: a tongue is one closed mesh of three nested outlines, a pool a flat lumpy disc', () => {
+  for (const seed of [211, 222, 233]) {
+    const flame = buildFlame(seed);
     closed(flame, `flame ${seed}`);
-    assert.ok(flame.tris <= 120, `flame ${seed}: ${flame.tris} triangles`);
+    assert.ok(flame.tris <= 700, `flame ${seed}: ${flame.tris} triangles`);
+    // The layers lie at their own depths (y), the inner ones nearer the camera (-y).
+    const ys = new Set();
+    let top = 0;
+    for (let i = 0; i < flame.positions.length; i += 3) {
+      ys.add(Math.round(flame.positions[i + 1] * 1000) / 1000);
+      top = Math.max(top, flame.positions[i + 2]);
+    }
+    assert.equal(ys.size, 4, `flame ${seed}: three layers back to back (${[...ys]})`);
+    assert.ok(Math.min(...ys) < -0.025 && Math.max(...ys) <= 0.011, `flame ${seed}: the inner layers step nearer`);
+    assert.ok(top > 0.9 && top < 1.15, `flame ${seed}: about 1 high (${top})`);
+  }
+  for (const seed of [1, 2]) {
+    const pool = buildPool(seed);
+    closed(pool, `pool ${seed}`);
+    assert.ok(pool.tris <= 400, `pool ${seed}: ${pool.tris} triangles`);
+    let r = 0, lo = 0, zs = 0;
+    for (let i = 0; i < pool.positions.length; i += 3) {
+      r = Math.max(r, Math.hypot(pool.positions[i], pool.positions[i + 1]));
+      lo = Math.min(lo, pool.positions[i + 2]);
+      zs = Math.max(zs, pool.positions[i + 2]);
+    }
+    assert.ok(r > 1.05 && r < 1.25, `pool ${seed}: lumpy round the rim (${r})`);
+    assert.ok(lo >= -0.004 && zs <= 0.012, `pool ${seed}: flat (${lo}..${zs})`);
   }
 });
 

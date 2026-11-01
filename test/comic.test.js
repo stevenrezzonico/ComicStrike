@@ -81,6 +81,29 @@ Deno.test('comic: flash lights fade out, the live ones packed first, the newest 
   assert.equal(f.count, 0);
 });
 
+Deno.test('comic: held lights (fires) stay while refreshed, come first, and leave the flashes the rest', () => {
+  const f = new FlashLights();
+  f.hold(7, 1, 1, 1, 300, 0.5);
+  f.update(1);
+  assert.equal(f.count, 1);
+  assert.deepEqual([...f.pos.slice(0, 4)], [1, 1, 1, 300]);
+  f.hold(7, 1, 1, 2, 300, 0.4); // refreshed: kept, moved
+  f.hold(8, 5, 5, 5, 200, 0.3);
+  f.hold(9, 9, 9, 9, 200, 0.3); // a third: no room (MAX_HELD)
+  for (let i = 0; i < MAX_FLASHES; i++) f.add(i, 0, 0, 10, 1, 1, 1);
+  f.update(1.1);
+  assert.equal(f.count, MAX_FLASHES);
+  assert.deepEqual([...f.pos.slice(0, 8)], [1, 1, 2, 300, 5, 5, 5, 200], 'the two held first');
+  assert.ok(Math.abs(f.k[0] - 0.4) < 1e-6 && Math.abs(f.k[2] - 0.9) < 1e-6, 'held strength as given, flashes fading');
+  f.hold(8, 5, 5, 5, 200, 0.3); // 7 not refreshed: dropped
+  f.update(1.2);
+  assert.deepEqual([...f.pos.slice(0, 4)], [5, 5, 5, 200]);
+  assert.equal(f.count, MAX_FLASHES, 'one held, the flashes in the rest');
+  f.clear();
+  f.update(1.3);
+  assert.equal(f.count, 0);
+});
+
 Deno.test('comic: the G-buffer flags agree between JS and GLSL', () => {
   for (const src of [WORLD_FS, COMPOSITE_FS]) {
     for (const [name, value] of Object.entries(G_FLAGS)) {

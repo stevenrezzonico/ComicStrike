@@ -562,6 +562,7 @@ layout(location=4) in uvec2 a_blend; // second bone, its weight (0..255)
 uniform mat4 u_viewProj;
 uniform mat4 u_bones[24]; // bone -> world (the model matrix folded in, client/gl/skinned.js)
 uniform uint u_id;
+uniform float u_emissive; // 1: a glow (a flame's nested colors are one object: no line between them)
 out vec3 v_nrm;
 out vec3 v_col;
 out vec3 v_pos; // world
@@ -577,7 +578,9 @@ void main() {
   v_col = a_col.rgb;
   v_fin = uint(a_col.a * 255.0 + 0.5);
   v_obj = a_pos;
-  uvec3 c = uvec3(a_col.rgb * 255.0 + 0.5);
+  // The ink id: the draw's, mixed with the vertex color so every part of a model gets
+  // its outline; an emissive draw is one object whatever its colors.
+  uvec3 c = u_emissive > 0.5 ? uvec3(0u) : uvec3(a_col.rgb * 255.0 + 0.5);
   v_id = (u_id * 37u + c.r * 7u + c.g * 13u + c.b * 29u) % 127u + 128u;
   vec4 w = m * vec4(a_pos, 1.0);
   v_pos = w.xyz;

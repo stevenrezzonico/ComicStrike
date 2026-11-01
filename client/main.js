@@ -277,6 +277,7 @@ fx.onEffect = (kind, _weapon, x, y, z) => {
 };
 fx.onBounce = (x, y, z) => sounds.bounce(x, y, z);
 fx.onCrackle = (x, y, z) => words.crackle(viewProj, x, y, z);
+fx.onBurn = (id, x, y, z, r, k) => renderer.flashes.hold(id, x, y, z, r, k); // a fire lights the world round it
 let breakables = null;
 let breakableColors = null; // rgb per breakable slot, for debris
 let doors = null; // doors and buttons: placed for the tick each command runs at, as on the server
