@@ -69,6 +69,10 @@ Deno.test('a room runs the uploaded map, players join it, bots fill in', () => {
   assert.equal(room.host.password.value, room.rcon);
   assert.throws(() => room.host.opts.loadMap('de_dust2'), /only has my_map/, 'a room has its map only');
   assert.equal(room.host.opts.readCfg('server.cfg'), null, 'no server cfgs through a room');
+  assert.equal(room.host.game.rules.armouryEntities, true, 'the map weapons lie out unless the upload says not');
+  const bare = quietly(() => rooms.create(PLAYGROUND, { fileName: 'bare.bsp', armoury: false, address: '9.9.9.9' }));
+  assert.equal(bare.host.game.rules.armouryEntities, false);
+  rooms.close(bare, 'done');
 
   const s = session();
   const game = room.host.game;

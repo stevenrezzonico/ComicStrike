@@ -142,6 +142,7 @@ export class Menu {
     this.practicePlayers = 10; // bot_quota fill: bots make up the rest
     this.demoPlayers = 0; // the demo: no bots unless asked for (targets)
     this.practiceDifficulty = 1;
+    this.practiceArmoury = true; // the map's own weapons laid out (armoury_entity, the fy_ maps)
     this.panel = ''; // open panel: '', 'play', 'practice', 'demo', 'own', 'team', 'settings'
     this.room = ''; // a room's code (a hosted map, server/rooms.js): Play joins it
     this.roomGone = false; // the room's code did not answer (it closed)
@@ -541,9 +542,11 @@ export class Menu {
       teams.append(b);
     }
     body.append(teams);
-    const choice = (label, options, value, set) => { // a row of buttons, one picked
+    const choice = (label, options, value, set, tip = '') => { // a row of buttons, one picked
       const row = el('div', 'menu-row menu-choice');
-      row.append(el('span', '', label));
+      const name = el('span', '', label);
+      if (tip) name.title = tip;
+      row.append(name);
       const opts = el('div', 'menu-opts'); // wraps onto more lines in a narrow panel
       for (const [v, text] of options) {
         const b = button(text, () => {
@@ -578,7 +581,13 @@ export class Menu {
         this.practiceDifficulty = v;
       });
     }
-    const opts = { mode: demo ? 'demo' : this.practiceMode, players, difficulty: this.practiceDifficulty };
+    const mode = demo ? 'demo' : this.practiceMode;
+    if (mode !== 'armsrace' && mode !== 'demolition') { // the gun games arm by level: never laid out
+      choice('Map weapons', [[true, 'Laid out'], [false, 'None']], this.practiceArmoury, (v) => {
+        this.practiceArmoury = v;
+      }, 'Weapons some maps leave lying at the spawns (the fy_ maps), back every round');
+    }
+    const opts = { mode, players, difficulty: this.practiceDifficulty, armoury: this.practiceArmoury };
     if (!own) {
       body.append(button('Start', () => this.onPractice(this.practiceMap, this.practiceTeam, opts), 'menu-go'));
       return;

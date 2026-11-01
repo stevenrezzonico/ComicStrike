@@ -5,7 +5,8 @@
 // reads them synchronously), and handles `map` / `changelevel` by fetching first.
 //
 // Messages in:  start { map, mode: a GAME_MODES name ('competitive', 'casual', 'wingman', 'armsrace',
-//                        'demolition', 'deathmatch', 'demo'), players, difficulty,
+//                        'demolition', 'deathmatch', 'demo'), players, difficulty, armoury
+//                        (the map's own weapons laid out: mp_armoury_entities),
 //                        bytes: the map file itself (a player's own map, checked as untrusted:
 //                        parseUntrustedBSP), else fetched from maps/ },
 //               open { id }, dgram { id, bytes }, close { id },
@@ -39,7 +40,7 @@ async function fetchMap(name) {
   return maps.get(name);
 }
 
-async function start({ map, mode, players: n, difficulty, bytes }) {
+async function start({ map, mode, players: n, difficulty, armoury = true, bytes }) {
   if (bytes) own = { name: map, bsp: parseUntrustedBSP(bytes) };
   const [list] = await Promise.all([
     fetch('/maps.json').then((r) => r.json()).catch(() => []),
@@ -62,7 +63,8 @@ async function start({ map, mode, players: n, difficulty, bytes }) {
   const rcon = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16)).join('');
   host.password.set(rcon);
   const [type, gameMode] = Object.keys(GAME_MODES).find((k) => GAME_MODES[k] === mode)?.split('/') || ['0', '1'];
-  host.con.exec(`game_type ${type}; game_mode ${gameMode}; hostname Practice; bot_difficulty ${difficulty}`);
+  host.con.exec(`game_type ${type}; game_mode ${gameMode}; hostname Practice; bot_difficulty ${difficulty}; ` +
+    `mp_armoury_entities ${armoury ? 1 : 0}`);
   host.start(map);
   for (const name of ['map', 'changelevel']) { // fetch the map first (the Host loads synchronously)
     host.con.command(name, (a, ctx) => {

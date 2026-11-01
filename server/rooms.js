@@ -49,9 +49,10 @@ export class Rooms {
   }
 
   // A new room for `bytes` (the map file). opts: fileName, mode (a GAME_MODES name),
-  // players (bot_quota fill: bots make up the rest), difficulty, address (the uploader's).
+  // players (bot_quota fill: bots make up the rest), difficulty, armoury (mp_armoury_entities),
+  // address (the uploader's).
   // Returns the room; throws a RoomError when refused.
-  create(bytes, { fileName = '', mode = 'competitive', players = 0, difficulty = 1, address = '' } = {}) {
+  create(bytes, { fileName = '', mode = 'competitive', players = 0, difficulty = 1, armoury = true, address = '' } = {}) {
     const L = this.limits, now = this.now(), key = addressKey(address);
     if (bytes.byteLength > L.bytes) throw new RoomError(`the map is too large (${L.bytes >> 20} MB at most)`, 413);
     if (this.rooms.size >= L.rooms) throw new RoomError('every room on this server is taken: try again later', 503);
@@ -89,7 +90,8 @@ export class Rooms {
       now: this.opts.now,
     });
     const [type, gameMode] = modeKey.split('/');
-    host.con.exec(`game_type ${type}; game_mode ${gameMode}; bot_difficulty ${Math.max(0, Math.min(3, difficulty | 0))}`);
+    host.con.exec(`game_type ${type}; game_mode ${gameMode}; bot_difficulty ${Math.max(0, Math.min(3, difficulty | 0))}; ` +
+      `mp_armoury_entities ${armoury ? 1 : 0}`);
     host.hostname.set(`Room ${code}`);
     host.password.set(rcon);
     try {

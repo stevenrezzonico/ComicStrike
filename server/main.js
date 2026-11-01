@@ -199,7 +199,7 @@ async function readBody(req, max) {
   return out;
 }
 
-// POST /rooms?file=<name>&mode=<mode>&players=<n>&difficulty=<0-3>, the map file as the
+// POST /rooms?file=<name>&mode=<mode>&players=<n>&difficulty=<0-3>&armoury=<0|1>, the map file as the
 // body: a new room; answers its code, the map name, the room's rcon password (the uploader's
 // console uses it) and the room console's catalog (the console's suggestions).
 async function createRoom(req, url, address) {
@@ -208,7 +208,7 @@ async function createRoom(req, url, address) {
     const q = url.searchParams;
     const room = rooms.create(bytes, {
       fileName: q.get('file') || '', mode: q.get('mode') || 'competitive', players: +q.get('players') || 0,
-      difficulty: +(q.get('difficulty') ?? 1), address,
+      difficulty: +(q.get('difficulty') ?? 1), armoury: q.get('armoury') !== '0', address,
     });
     return Response.json({ code: room.code, map: room.name, rcon: room.rcon, names: room.host.con.catalog() });
   } catch (err) {

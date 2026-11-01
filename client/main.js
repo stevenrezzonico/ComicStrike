@@ -1926,12 +1926,13 @@ const OWN_MAP_MAX = 24 << 20; // the server's room limit (server/rooms.js ROOM_L
 // Host for friends: uploads our own map to the server, which runs a room on it (held in
 // its memory only, server/rooms.js), then joins it. The page's address becomes the
 // invite link.
-async function hostRoom(map, team, { mode = 'competitive', players = 0, difficulty = 1 } = {}) {
+async function hostRoom(map, team, { mode = 'competitive', players = 0, difficulty = 1, armoury = true } = {}) {
   const bytes = ownMaps.get(map);
   if (!bytes) throw new Error('pick a map file first');
   if (playing) leaveGame();
   menu.busy(`Uploading ${map}...`);
-  const q = new URLSearchParams({ file: `${map}.bsp`, mode, players: String(players), difficulty: String(difficulty) });
+  const q = new URLSearchParams({ file: `${map}.bsp`, mode, players: String(players), difficulty: String(difficulty),
+    armoury: armoury ? '1' : '0' });
   const res = await fetch(`/rooms?${q}`, { method: 'POST', body: bytes, headers: { 'content-type': 'application/octet-stream' } });
   const out = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(out.error || `the upload failed (HTTP ${res.status})`);
@@ -1956,7 +1957,7 @@ function setRoom(code, rcon = '', names = null) {
 // bots filling the teams to `players` at `difficulty` (bot_quota fill, bot_difficulty);
 // then join it like a server, on `team` (2 T, 3 CT, 1 spectators, 0 auto).
 let localWorker = null, localRcon = '', localPaused = false;
-async function startPractice(map, team, { mode = 'competitive', players = 10, difficulty = 1 } = {}) {
+async function startPractice(map, team, { mode = 'competitive', players = 10, difficulty = 1, armoury = true } = {}) {
   if (playing) leaveGame();
   resetSession();
   localPaused = false; // the new worker starts running
@@ -1973,7 +1974,7 @@ async function startPractice(map, team, { mode = 'competitive', players = 10, di
         else if (e.data.type === 'failed') reject(new Error(e.data.error));
       };
       worker.onerror = (e) => reject(new Error(e.message || 'the practice server did not start'));
-      worker.postMessage({ type: 'start', map, mode, players, difficulty, bytes: ownMaps.get(map) }); // bytes: copied
+      worker.postMessage({ type: 'start', map, mode, players, difficulty, armoury, bytes: ownMaps.get(map) }); // bytes: copied
     });
   } catch (err) {
     worker.terminate();
@@ -2123,7 +2124,7 @@ async function start() {
   const map = params.get('map') || 'de_dust2';
   if (params.has('practice')) {
     return await startPractice(map, team, { mode: params.get('mode') || 'competitive',
-      players: +(params.get('players') ?? 10), difficulty: +(params.get('difficulty') ?? 1) });
+      players: +(params.get('players') ?? 10), difficulty: +(params.get('difficulty') ?? 1), armoury: params.get('armoury') !== '0' });
   }
   if (!params.has('offline')) {
     try {
