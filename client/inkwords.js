@@ -12,7 +12,7 @@ const POOL = 24;
 const TICKER_GAP_MS = 260; // no shot for this long ends a burst's word
 const LINE_BEATS = 6; // shots in one line of a spray ("RATA-TA-TA-TA-TA!"), then a new line above it
 const LINES = 3; // lines of one spray on screen at once, the oldest fading
-const CLEAR = 0.15; // radius round the crosshair, of the window height, kept free of words and sparks
+const CLEAR = 0.15; // radius round the crosshair, of the window height, kept free of words
 const pick = (a) => a[(Math.random() * a.length) | 0];
 const rnd = (a, b) => a + Math.random() * (b - a);
 
@@ -94,7 +94,7 @@ export class InkWords {
     this.burst = null; // the SHOTS entry of the spray
   }
 
-  // Shows `text` at screen (x, y) (CSS px): cls is the look (hit, big, wall, spark, shot),
+  // Shows `text` at screen (x, y) (CSS px): cls is the look (hit, big, wall, shot),
   // size the letter height at 720 px of window, life in ms.
   spawn(text, cls, x, y, size, life = 700) {
     if (!this.enabled) return;
@@ -162,11 +162,11 @@ export class InkWords {
       innerHeight * 0.29, headshot ? 46 : 42, 900);
   }
 
-  // Our bullet hit a wall at (x, y, z): a spark (none round the crosshair: the bullet hole
-  // marks it there), now and then a word, beside the crosshair.
+  // Our bullet hit a wall at (x, y, z): now and then a word, beside the crosshair. No spark:
+  // the bullet hole marks the hit, and a burst over the view only hid what we shot at.
   wall(viewProj, x, y, z) {
     if (!this.project(viewProj, x, y, z)) return;
-    if (this.aside()) this.spawn('', 'spark', this.sx, this.sy, rnd(18, 26), 240);
+    this.aside();
     if (Math.random() < 0.25) this.spawn(pick(WALL), 'wall', this.sx, this.sy, rnd(18, 26), 620);
   }
 
