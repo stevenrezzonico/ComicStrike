@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { parseUntrustedBSP, faceNumEdges, faceVertex, facePlane, faceSide } from '../shared/bsp.js';
+import { parseUntrustedBSP, faceNumEdges, faceVertex, facePlane, faceSide, faceTexinfo } from '../shared/bsp.js';
 import { CollisionWorld, pointContents, traceHull, Trace, HULL_POINT } from '../shared/trace.js';
 import { Nav, NAV_CELL } from '../shared/nav.js';
 import { decompileBSP } from '../client/editor/decompile.js';
@@ -34,7 +34,8 @@ function agreement(bsp, p, out, samples = 3000) {
 
 // Rays from random points open in both maps: of the hits on a face drawn in the original,
 // the share where the map compiled back draws none (a hole: a cell side that came back
-// with no texture compiles to no face, and the wall was see-through).
+// with no texture compiles to no face, and the wall was see-through) or only sky where the
+// original drew a wall (a side over a wall face and a sky face that took the sky).
 function holes(bsp, out, rays = 2000) {
   const back = parseUntrustedBSP(out.slice().buffer);
   const maps = [bsp, back].map((m) => ({ world: CollisionWorld.fromBSP(m), faces: facesOf(m) }));
@@ -51,9 +52,9 @@ function holes(bsp, out, rays = 2000) {
       return tr.fraction < 1 && !tr.startsolid ? [tr.endx, tr.endy, tr.endz] : null;
     });
     if (!hit[0] || !hit[1] || Math.hypot(hit[0][0] - hit[1][0], hit[0][1] - hit[1][1], hit[0][2] - hit[1][2]) > 2) continue;
-    if (!drawnAt(maps[0].faces, hit[0], dir)) continue;
+    if (drawnAt(maps[0].faces, hit[0], dir) !== 'wall') continue;
     walls++;
-    if (!drawnAt(maps[1].faces, hit[1], dir)) missing++;
+    if (drawnAt(maps[1].faces, hit[1], dir) !== 'wall') missing++;
   }
   return missing / Math.max(walls, 1);
 }
@@ -69,6 +70,7 @@ function facesOf(b) {
       pts.push([b.vertices[v * 3], b.vertices[v * 3 + 1], b.vertices[v * 3 + 2]]);
     }
     faces.push({
+      sky: /^sky/i.test(b.textureNames[b.texinfoI[faceTexinfo(b, f) * 10 + 8]] || ''),
       n: [0, 1, 2].map((k) => b.planesF[pl * 5 + k] * s), d: b.planesF[pl * 5 + 3] * s, pts,
       lo: [0, 1, 2].map((k) => Math.min(...pts.map((q) => q[k])) - 1), hi: [0, 1, 2].map((k) => Math.max(...pts.map((q) => q[k])) + 1),
     });
@@ -76,7 +78,7 @@ function facesOf(b) {
   return faces;
 }
 
-// Is a face drawn at point h, facing a ray along dir?
+// What is drawn at point h facing a ray along dir: 'wall', 'sky' or null.
 function drawnAt(faces, h, dir) {
   const within = (f) => {
     let sign = 0;
@@ -90,9 +92,10 @@ function drawnAt(faces, h, dir) {
     }
     return true;
   };
-  return faces.some((f) => h.every((v, k) => v >= f.lo[k] && v <= f.hi[k]) &&
+  const at = faces.filter((f) => h.every((v, k) => v >= f.lo[k] && v <= f.hi[k]) &&
     Math.abs(f.n[0] * h[0] + f.n[1] * h[1] + f.n[2] * h[2] - f.d) < 1 && f.n[0] * dir[0] + f.n[1] * dir[1] + f.n[2] * dir[2] < 0 &&
     within(f));
+  return at.some((f) => !f.sky) ? 'wall' : at.length ? 'sky' : null;
 }
 
 function open(name) {
@@ -127,7 +130,7 @@ for (const name of ['de_playground', 'de_inkwell']) {
     const out = compileProject(p, 'draft').bytes;
     assert.ok(agreement(bsp, p, out) > 0.995, 'solid where it was solid');
     const h = holes(bsp, out);
-    assert.ok(h < 0.002, `walls drawn where they were (${(h * 100).toFixed(2)} % of hits on no face)`);
+    assert.ok(h < 0.002, `walls drawn where they were (${(h * 100).toFixed(2)} % of hits on no face or sky)`);
   });
 }
 
@@ -193,7 +196,7 @@ for (const name of ['de_dust2', 'cs_office', 'de_nuke']) {
       const out = compileProject(p, 'draft').bytes;
       assert.ok(agreement(bsp, p, out, 2000) > 0.99, 'solid where it was solid');
       const h = holes(bsp, out);
-      assert.ok(h < 0.002, `walls drawn where they were (${(h * 100).toFixed(2)} % of hits on no face)`);
+      assert.ok(h < 0.002, `walls drawn where they were (${(h * 100).toFixed(2)} % of hits on no face or sky)`);
       const back = parseUntrustedBSP(out.buffer), world = CollisionWorld.fromBSP(back);
       const nav = new Nav(back, world, NAV_CELL, true);
       const node = (cls) => {

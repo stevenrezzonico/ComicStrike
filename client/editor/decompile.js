@@ -55,7 +55,7 @@ export function decompileBSP(bsp, fileName) {
     function walk(node, faces) {
       if (node < 0) {
         const contents = bsp.leavesI32[(-node - 1) * 7];
-        if (keep(contents)) out.push(cellOf(faces, contents));
+        if (keep(contents)) for (const part of byTexture(faces, 0)) out.push(cellOf(part, contents));
         return;
       }
       const pl = bsp.nodesI32[node * 6];
@@ -86,13 +86,28 @@ export function decompileBSP(bsp, fileName) {
       }
     }
 
+    // A leaf whose side lies over both sky and wall faces (brushes the tree merged into one
+    // solid leaf: a wall's top half sky, half stone) is cut along the edge between them;
+    // one texture for the whole side drew the wall as sky, which shows the sky through it.
+    function byTexture(faces, depth) {
+      if (depth < 8) {
+        for (const f of faces) {
+          const cut = divide(f, m);
+          if (!cut) continue;
+          const a = halve(faces, cut.n, cut.d), b = halve(faces, [-cut.n[0], -cut.n[1], -cut.n[2]], -cut.d);
+          if (a && b) return [...byTexture(a, depth + 1), ...byTexture(b, depth + 1)];
+        }
+      }
+      return [faces];
+    }
+
     function cellOf(faces, contents) {
       const sky = contents === CONTENTS_SKY;
       return {
         contents,
         faces: faces.map((f) => ({
           n: f.n, d: f.d + dot(f.n, origin), poly: f.poly.map((v) => [v[0] + origin[0], v[1] + origin[1], v[2] + origin[2]]),
-          tex: sky ? 'sky' : textureOf(f, m),
+          tex: sky ? textureOf(f, m, false) || 'sky' : textureOf(f, m, true),
         })),
       };
     }
@@ -163,6 +178,97 @@ export function decompileBSP(bsp, fileName) {
     return list;
   }
 
+  // The cell's faces behind plane (n, d), closed by a side on it (null: too little left).
+  function halve(faces, n, d) {
+    const cap = { n, d, node: -1, side: 0 };
+    const next = [];
+    for (const f of faces) {
+      const poly = clip(f.poly, n, d);
+      if (poly.length) next.push({ ...f, poly });
+    }
+    cap.poly = loop(cap, next);
+    if (cap.poly.length) next.push(cap);
+    return next.length >= 4 ? next : null;
+  }
+
+  // A plane splitting cell side f where it lies over both sky and wall faces of model m
+  // (through an edge of a sky face, square to the side), else null. Only sky against wall
+  // is cut: other textures sharing a side cost a texture, not a wall, and cutting for every
+  // one made maps too big to compile back (de_inferno's clipnodes).
+  function divide(f, m) {
+    if (f.node < 0) return null;
+    const pl = bsp.nodesI32[f.node * 6];
+    const first = bsp.nodesI16[f.node * 12 + 10] & 0xffff, count = bsp.nodesI16[f.node * 12 + 11] & 0xffff;
+    const under = new Set(onPlane(m, pl));
+    for (let i = first; i < first + count; i++) under.add(i);
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (const v of f.poly) for (let k = 0; k < 3; k++) [lo[k], hi[k]] = [Math.min(lo[k], v[k]), Math.max(hi[k], v[k])];
+    const c = [0, 1, 2].map((k) => f.poly.reduce((s, v) => s + v[k], 0) / f.poly.length);
+    const edges = []; // the side's outline as planes facing out, along its plane
+    for (let k = 0; k < f.poly.length; k++) {
+      const a = f.poly[k], e = sub(f.poly[(k + 1) % f.poly.length], a);
+      let n = cross(e, f.n);
+      const l = Math.hypot(n[0], n[1], n[2]);
+      if (l < 1e-6) continue;
+      n = n.map((x) => x / l);
+      if (dot(n, c) > dot(n, a)) n = n.map((x) => -x);
+      edges.push([n, dot(n, a)]);
+    }
+    const parts = [];
+    let sky = false, wall = false;
+    for (const i of under) {
+      if (faceSide(bsp, i) !== f.side) continue;
+      const [flo, fhi] = boundsOfLoop(i);
+      if (flo[0] > hi[0] + 1 || flo[1] > hi[1] + 1 || flo[2] > hi[2] + 1 || fhi[0] < lo[0] - 1 || fhi[1] < lo[1] - 1 || fhi[2] < lo[2] - 1) continue;
+      let poly = loopOf(i);
+      for (const [n, d] of edges) if (poly.length) poly = clip(poly, n, d);
+      if (area(poly, f.n) < 4) continue;
+      const isSky = /^sky/i.test(bsp.textureNames[bsp.texinfoI[faceTexinfo(bsp, i) * 10 + 8]] || '');
+      if (isSky) sky = true;
+      else wall = true;
+      parts.push({ sky: isSky, poly });
+    }
+    if (!sky || !wall) return null;
+    for (const q of parts) {
+      if (!q.sky) continue;
+      for (let k = 0; k < q.poly.length; k++) {
+        const a = q.poly[k], e = sub(q.poly[(k + 1) % q.poly.length], a);
+        let n = cross(e, f.n);
+        const l = Math.hypot(n[0], n[1], n[2]);
+        if (l < 0.5) continue;
+        n = n.map((x) => x / l);
+        const d = dot(n, a);
+        let pos = false, neg = false;
+        for (const v of f.poly) {
+          const x = dot(n, v) - d;
+          if (x > 0.5) pos = true;
+          else if (x < -0.5) neg = true;
+        }
+        if (pos && neg) return { n, d };
+      }
+    }
+    return null;
+  }
+
+  // Face i's bounds: [lo, hi].
+  const faceBounds = new Map();
+  function boundsOfLoop(i) {
+    let b = faceBounds.get(i);
+    if (!b) {
+      b = [[Infinity, Infinity, Infinity], [-Infinity, -Infinity, -Infinity]];
+      for (const v of loopOf(i)) for (let k = 0; k < 3; k++) [b[0][k], b[1][k]] = [Math.min(b[0][k], v[k]), Math.max(b[1][k], v[k])];
+      faceBounds.set(i, b);
+    }
+    return b;
+  }
+
+  // The area of polygon poly on a plane facing n.
+  function area(poly, n) {
+    let s = 0;
+    for (let k = 1; k + 1 < poly.length; k++) s += dot(cross(sub(poly[k], poly[0]), sub(poly[k + 1], poly[0])), n);
+    return Math.abs(s) / 2;
+  }
+
   // Face f's polygon: its plane's square clipped by the other faces.
   function loop(f, faces) {
     let poly = planeSquare(f.n, f.d);
@@ -174,8 +280,10 @@ export function decompileBSP(bsp, fileName) {
   // the faces hung on the side's node, then those of model m on the same plane facing the
   // same way (a compiler hangs a face on one of the nodes sharing its plane, so the node a
   // cell was cut by may hold none), then the nearest of those. A side with no texture
-  // compiles to no face: a hole to see through, where the original had a wall.
-  function textureOf(f, m) {
+  // compiles to no face: a hole to see through, where the original had a wall. A sky leaf's
+  // sides take a face's texture only from under them (`guess` false), else sky: mappers
+  // run walls up into sky brushes, and the wall's tops and sides there are drawn as wall.
+  function textureOf(f, m, guess) {
     if (f.node < 0) return null;
     const first = bsp.nodesI16[f.node * 12 + 10] & 0xffff, count = bsp.nodesI16[f.node * 12 + 11] & 0xffff;
     const c = [0, 1, 2].map((k) => f.poly.reduce((s, v) => s + v[k], 0) / f.poly.length);
@@ -188,10 +296,14 @@ export function decompileBSP(bsp, fileName) {
     }
     const same = onPlane(m, bsp.nodesI32[f.node * 6]).filter((i) => faceSide(bsp, i) === f.side);
     for (const q of probes) for (const i of same) if (inside(i, q, f.n)) return nameOf(i);
+    if (!guess) return null;
     let best = -1, bestD = Infinity;
     for (const i of same) {
       const pts = loopOf(i), mid = [0, 1, 2].map((k) => pts.reduce((s, v) => s + v[k], 0) / pts.length);
-      const d = (mid[0] - c[0]) ** 2 + (mid[1] - c[1]) ** 2 + (mid[2] - c[2]) ** 2;
+      // A wall before any sky: the guess is for a side the original hid, and sky there
+      // shows through once the map compiles back.
+      const sky = /^sky/i.test(bsp.textureNames[bsp.texinfoI[faceTexinfo(bsp, i) * 10 + 8]] || '');
+      const d = (mid[0] - c[0]) ** 2 + (mid[1] - c[1]) ** 2 + (mid[2] - c[2]) ** 2 + (sky ? 1e12 : 0);
       if (d < bestD) [best, bestD] = [i, d];
     }
     return best >= 0 ? nameOf(best) : null;
