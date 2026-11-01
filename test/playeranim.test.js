@@ -319,3 +319,46 @@ Deno.test('player animation: moving leans into the direction and the hips swing 
   }
   assert.ok(hi - lo > 1, `the hips swing (${(hi - lo).toFixed(2)})`);
 });
+
+Deno.test('player animation: a planted foot does not slide; the swing lifts high at a run, low at a walk', () => {
+  // Running along x at 250 u/s: the world x of an ankle on the ground stays put from frame to frame.
+  const a = run(new PlayerAnimator(), 64, (t) => [t * 250, 0, 0], { hold: HOLD_RIFLE });
+  let maxSlide = 0, hi = 0, planted = 0;
+  const last = [NaN, NaN];
+  for (let k = 0; k < 64; k++) {
+    const x = (64 + k) / 64 * 250;
+    run(a, 1, () => [x, 0, 0], { hold: HOLD_RIFLE });
+    for (const [s, side] of [[0, 'L'], [1, 'R']]) {
+      const [ax, , az] = bone(a, `ankle_${side}`);
+      hi = Math.max(hi, az);
+      if (az < 3.6) {
+        if (!Number.isNaN(last[s])) maxSlide = Math.max(maxSlide, Math.abs(ax + x - last[s]));
+        last[s] = ax + x;
+        planted++;
+      } else last[s] = NaN;
+    }
+  }
+  assert.ok(planted > 20, `feet on the ground part of the time (${planted} frames)`);
+  assert.ok(maxSlide < 0.6, `a planted foot slides ${maxSlide.toFixed(2)} units a frame`);
+  assert.ok(hi > 14, `the swing lifts the foot (${hi.toFixed(1)})`);
+  const w = run(new PlayerAnimator(), 64, (t) => [t * 60, 0, 0], { hold: HOLD_RIFLE });
+  let wh = 0;
+  for (let k = 0; k < 96; k++) {
+    run(w, 1, () => [(64 + k) / 64 * 60, 0, 0], { hold: HOLD_RIFLE });
+    wh = Math.max(wh, bone(w, 'ankle_L')[2]);
+  }
+  assert.ok(wh > 5 && wh < 11, `walking lifts less (${wh.toFixed(1)})`);
+});
+
+Deno.test('player animation: feet and hips turn part way toward a strafe; backpedalling keeps them forward', () => {
+  const footYaw = (a, side) => {
+    const q = a.pose.wrot, i = S.bone(`ankle_${side}`) * 4;
+    return Math.atan2(2 * (q[i + 3] * q[i + 2] + q[i] * q[i + 1]), 1 - 2 * (q[i + 1] * q[i + 1] + q[i + 2] * q[i + 2])) * 180 / Math.PI;
+  };
+  const left = run(new PlayerAnimator(), 64, (t) => [0, t * 250, 0], { hold: HOLD_PISTOL });
+  const fwd = run(new PlayerAnimator(), 64, (t) => [t * 250, 0, 0], { hold: HOLD_PISTOL });
+  assert.ok(footYaw(left, 'L') - footYaw(fwd, 'L') > 30, `the left foot turns into a left strafe (${(footYaw(left, 'L') - footYaw(fwd, 'L')).toFixed(0)} degrees)`);
+  assert.ok(bone(left, 'leg_upper_L')[0] < bone(left, 'leg_upper_R')[0] - 1, 'the hips turn toward the strafe');
+  const back = run(new PlayerAnimator(), 64, (t) => [-t * 250, 0, 0], { hold: HOLD_PISTOL });
+  assert.ok(Math.abs(footYaw(back, 'L') - footYaw(fwd, 'L')) < 5, 'backpedalling feet point forward');
+});

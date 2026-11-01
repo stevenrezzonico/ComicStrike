@@ -1,8 +1,9 @@
 // Third-person player animation, generated in code from what snapshots say about a
 // player: position, view angles, duck amount, ground contact, weapon, ANIM_* bits and
 // the shot counter. Feet follow a stride cycle whose phase advances with the distance
-// travelled (a step every 2 x STEP_SCALE half-strides: a little foot slide buys a calmer
-// cadence than the short legs allow); hips drop and the torso leans to fit the crouch hit boxes;
+// travelled: each foot is planted for a share of the cycle (DUTY_*), moving back under
+// the body at the ground's speed, then swings heel first and lands ahead; running, both
+// are off the ground part of the cycle; hips drop and the torso leans to fit the crouch hit boxes;
 // the aim pitch bends spine and neck; hands reach per-hold grip points in the aim frame
 // (two-bone solves) and the gun hand takes the aim rotation. Standing with a gun is CS:GO's
 // ready stance: feet apart with the toes out, knees soft, a lean forward, the body bladed
@@ -33,7 +34,12 @@ const PELVIS_Z = S.bind[PELVIS * 3 + 2];
 const CROUCH_DROP = 22; // full duck: hips 16 units above the feet, head near the squashed head box
 const CROUCH_LEAN = 55; // degrees forward at full duck
 const LEG = 32.4; // hip to ankle when reaching, a little short of the 33 of the bones
-const STEP_SCALE = 1.5; // distance per step over the swing: 60 units a step when running (~4/s)
+const DUTY_WALK = 0.62; // the share of its cycle a foot stays planted, walking
+const DUTY_RUN = 0.38; // running: both feet are in the air for the rest (~4.7 steps/s at 250 u/s)
+const LIFT_WALK = 5; // how high the swinging foot rises, walking
+const LIFT_RUN = 15; // running: the heel comes up behind, the knee folds
+const FOOT_TURN = 0.6; // the feet turn this share of the way toward the movement direction
+const HIP_TURN = 0.4; // the hips too (the spine takes two thirds of it back)
 const TOSS_RATE = 2.5; // a throw's arm swing lasts 1 / this seconds
 const RIFLE_TWIST = 6; // per spine bone: left shoulder forward for a rifle stance
 const RIFLE_BLADE = 18; // the hips turned right with a rifle (the shoulders -36 in all)
@@ -97,6 +103,8 @@ export class PlayerAnimator {
     this.pose = new Pose(S);
     this.reload = { take: 0, roll: 0, drop: 0, x: 0, y: 0, z: 0 }; // reloadPose's result
     this.deathDir = new Float32Array(2); // die(): the shot's direction in the world
+    this.footAlong = new Float32Array(2); // the stride cycle this frame: each foot's offset along
+    this.footLift = new Float32Array(2); // the movement and its height
     this.reset();
   }
 
@@ -160,9 +168,15 @@ export class PlayerAnimator {
     const fwd = this.vx * cy + this.vy * sy, left = -this.vx * sy + this.vy * cy;
     const speed = Math.sqrt(fwd * fwd + left * left);
     this.stride = Math.min(20, 5 + speed * 0.06) * (1 - 0.35 * duck);
-    if (onGround) this.phase = (this.phase + speed * dt / (4 * this.stride * STEP_SCALE)) % 1;
+    const run = smoothstep(70, 230, speed), duty = DUTY_WALK - (DUTY_WALK - DUTY_RUN) * run;
+    // A planted foot covers 2 strides in `duty` of the cycle at the ground's speed.
+    if (onGround) this.phase = (this.phase + speed * dt * duty / (2 * this.stride)) % 1;
     const walk = smoothstep(10, 70, speed) * (1 - this.air);
     const dirF = speed > 1 ? fwd / speed : 1, dirL = speed > 1 ? left / speed : 0;
+    // The movement's direction in the body frame, degrees, kept within a quarter turn
+    // (backpedalling runs the same cycle backwards with the feet still forward).
+    const back = dirF < 0 ? -1 : 1;
+    const moveYaw = Math.atan2(dirL * back, dirF * back) * 180 / Math.PI * walk;
 
     const kneel = anim & (ANIM_PLANT | ANIM_DEFUSE) ? 1 : 0;
     const c = Math.max(duck, kneel);
@@ -172,26 +186,54 @@ export class PlayerAnimator {
     const p = this.pose.reset();
     if (this.dead > 0) return this.headshot ? this.headshotPose(c, yaw) : this.collapsePose(c);
 
-    // Hips: crouch drop, soft knees; standing, they sink when the feet are apart so both
-    // reach the ground (lowest with both feet down, highest passing over the planted foot);
-    // the weight sways from foot to foot at rest. A rifle blades the hips to the right;
-    // moving, they swing with the stride and the body leans into its direction.
-    const sw = this.stride * walk, spread = Math.cos(this.phase * 2 * Math.PI);
-    const bob = (33 - Math.sqrt(LEG * LEG - sw * sw)) * spread * spread * (1 - c);
+    // The stride cycle, per foot (phase 0: the left foot lands ahead; the right is half a
+    // cycle on): planted for the first `duty` of its cycle, it moves from a stride ahead to
+    // a stride behind at the ground's speed (no slide); swinging, it rises heel first (the
+    // knee folds, high at a run) and comes forward late to land straight. Running, both
+    // are in the air between a lift-off and the other's landing.
+    const S = this.stride, liftH = (LIFT_WALK + (LIFT_RUN - LIFT_WALK) * run) * (1 - 0.5 * c);
+    const along = this.footAlong, lift = this.footLift;
+    let planted = 0;
+    for (let s = 0; s < 2; s++) {
+      const ph = (this.phase + s * 0.5) % 1;
+      if (ph < duty) {
+        along[s] = (S - 2 * S * ph / duty) * walk;
+        lift[s] = 0;
+        planted++;
+      } else {
+        const u = (ph - duty) / (1 - duty);
+        along[s] = (-S + 2 * S * Math.pow(u, 1.6)) * walk;
+        lift[s] = liftH * Math.sin(Math.PI * Math.pow(u, 0.75)) * walk;
+      }
+    }
+
+    // Hips: crouch drop, soft knees; walking, they drop as far as a planted foot reaches
+    // (the leg straight at touchdown and lift-off, highest passing over it) and lift a
+    // little in flight; the weight sways from foot to foot at rest. A rifle blades the
+    // hips to the right; moving, they turn part way toward the movement, swing with the
+    // stride and the body leans into its direction.
+    const reach = 33 - Math.sqrt(LEG * LEG - S * S * walk * walk);
+    let drop = 0;
+    if (planted) {
+      for (let s = 0; s < 2; s++) if (lift[s] === 0) drop = Math.max(drop, 33 - Math.sqrt(LEG * LEG - along[s] * along[s]));
+    } else {
+      drop = reach * (1 - 0.5 * Math.sin(Math.PI * ((this.phase % 0.5) - duty) / (0.5 - duty)));
+    }
     const rest = (1 - walk) * (1 - c), blade = (hold === HOLD_RIFLE ? 1 : 0) * (1 - kneel);
-    const stride = spread * walk; // 1: the left foot ahead
+    const stride = Math.cos(this.phase * 2 * Math.PI) * walk; // 1: the left foot ahead
     p.pos[PELVIS * 3] = -5 * c;
     p.pos[PELVIS * 3 + 1] = SWAY * Math.sin(this.time * 0.94) * rest;
-    p.pos[PELVIS * 3 + 2] = PELVIS_Z - CROUCH_DROP * c - bob - KNEE_SOFT * (1 - c);
-    p.turn(PELVIS, MOVE_LEAN * dirF * walk, -RIFLE_BLADE * blade - HIP_SWING * stride, -MOVE_LEAN * dirL * walk);
+    p.pos[PELVIS * 3 + 2] = PELVIS_Z - CROUCH_DROP * c - (drop + KNEE_SOFT) * (1 - c);
+    const hipYaw = -RIFLE_BLADE * blade - HIP_SWING * stride + HIP_TURN * moveYaw;
+    p.turn(PELVIS, MOVE_LEAN * dirF * walk, hipYaw, -MOVE_LEAN * dirL * walk);
 
     // Spine: crouch lean, the ready lean, aim pitch (down-positive), rifle twist, the
-    // shoulders countering the hips, breathing, fire kick; the head keeps looking along
-    // the aim (half the blade is left in it).
+    // shoulders taking back two thirds of the hips' swing and turn, breathing, fire kick;
+    // the head keeps looking along the aim (a little of the blade is left in it).
     const lean = CROUCH_LEAN * c + READY_LEAN * (grip.aimed ? 1 : 0.4) * (1 - c);
     const aimP = Math.max(-80, Math.min(80, pitch));
-    const twist = -RIFLE_TWIST * blade + HIP_SWING * stride / 3;
-    const unturn = (RIFLE_BLADE * blade - HIP_SWING * stride) * 0.5 - twist;
+    const twist = -RIFLE_TWIST * blade + (HIP_SWING * stride - HIP_TURN * moveYaw) * (2 / 9);
+    const unturn = -(hipYaw + 3 * twist) * 0.5 - 3 * blade;
     const breath = BREATH * Math.sin(this.time * 1.57);
     p.turn(SPINE1, lean * 0.5 + aimP * 0.15, twist, 0);
     p.turn(SPINE2, lean * 0.3 + aimP * 0.15 + breath, twist, 0);
@@ -201,23 +243,19 @@ export class PlayerAnimator {
     p.turn(HEAD, -lean * 0.6 + aimP * 0.35 + this.kick * 5 - breath * 0.5, unturn, 0);
     p.solve();
 
-    // Legs: feet on the ground under the hips, apart at rest (the right one back when
-    // bladed), cycling along the movement direction. A foot is lifted while sin(ph) > 0
-    // and swings from behind to ahead meanwhile (-cos), then stays planted while the body
-    // passes over it (the other way round was a moonwalk). Soles flat, toes out.
+    // Legs: feet under the hips, apart at rest (the right one back when bladed), the
+    // cycle laid along the movement direction, the knees bending toward it. Soles flat,
+    // toes out, the feet turned part way toward the movement.
     for (let s = 0; s < 2; s++) {
-      const ph = (this.phase + s * 0.5) * 2 * Math.PI;
-      const swing = -Math.cos(ph) * this.stride * walk;
-      const lift = Math.max(0, Math.sin(ph)) * (2 + this.stride * 0.35) * walk;
       const goal = p.goal;
-      goal[0] = 2 * c + dirF * swing + (s ? -3 : 4) * this.air + SIDE[s] * BLADE_STEP * blade * rest;
-      goal[1] = SIDE[s] * (4.5 + c + (STANCE - 4.5) * rest) + dirL * swing;
-      goal[2] = 3.5 + lift + 9 * this.air;
-      goal[3] = 1;
-      goal[4] = SIDE[s] * 0.25;
+      goal[0] = 2 * c + dirF * along[s] + (s ? -3 : 4) * this.air + SIDE[s] * BLADE_STEP * blade * rest;
+      goal[1] = SIDE[s] * (4.5 + c + (STANCE - 4.5) * rest) + dirL * along[s];
+      goal[2] = 3.5 + lift[s] + 9 * this.air;
+      goal[3] = dirF * back * walk + (1 - walk);
+      goal[4] = dirL * back * walk + SIDE[s] * 0.25;
       goal[5] = 0;
       p.reachGoal(HIP[s], KNEE[s], ANKLE[s]);
-      Q.fromEuler(tq, 0, 0, SIDE[s] * TOES_OUT * (1 - this.air), 0);
+      Q.fromEuler(tq, 0, 0, SIDE[s] * TOES_OUT * (1 - this.air) + FOOT_TURN * moveYaw, 0);
       p.setWorldRotation(ANKLE[s], tq, 0);
     }
 
