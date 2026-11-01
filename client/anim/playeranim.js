@@ -101,6 +101,7 @@ export function holdOf(weaponId) {
 
 const tq = new Float32Array(4);
 const tv = new Float32Array(6);
+const t3 = new Float32Array(3); // a rotated offset
 
 export class PlayerAnimator {
   constructor() {
@@ -473,12 +474,12 @@ export class PlayerAnimator {
     return p;
   }
 
-  // A headshot: blown off his feet. The head snaps back and the whole body flies along the
-  // shot (deathDir, in the world; dist units over FLY seconds, fast at first, in an arc),
-  // turning onto its back as it goes: the feet kick up toward the shooter and the arms
-  // fling out past the head, so it lies flat in the air; it lands on its back (drop lower
-  // where the floor is), bounces once, slides a little further and the limbs flop down.
-  // yaw: the player's, to take the shot into his frame.
+  // A headshot: blown off his feet, stiff as a board. The head snaps back and the whole
+  // body flies along the shot (deathDir, in the world; dist units over FLY seconds, fast at
+  // first, in an arc), turning over backwards about the hips in one piece, the legs nearly
+  // straight and the arms flung out wide, until it lies flat on its back in the air; it
+  // lands (drop lower where the floor is), bounces once, slides a little further and the
+  // hands and feet come down on the ground. yaw: the player's, to take the shot into his frame.
   headshotPose(c, yaw) {
     const p = this.pose, t = this.dead;
     const yr = yaw * Math.PI / 180, cy = Math.cos(yr), sy = Math.sin(yr);
@@ -488,9 +489,9 @@ export class PlayerAnimator {
       dy = 0;
     }
     const u = Math.min(1, t / FLY), travel = 1 - Math.pow(1 - u, 1.6);
-    const lift = ramp(t, 0, 0.16); // the feet leave the ground, the arms fling
-    const flat = smoothstep(0, 0.75, u); // upright .. lying flat on the back
-    const land = ramp(t, FLY, FLY + 0.22); // the limbs come down on the ground
+    const spread = ramp(t, 0, 0.14); // the arms fling out wide
+    const flat = smoothstep(0, 0.8, u); // upright .. lying flat on the back
+    const land = ramp(t, FLY, FLY + 0.22); // the hands and feet come down on the ground
     const slide = ramp(t, FLY, FLY + 0.3);
     const bounce = bump(t, FLY, FLY + 0.07, FLY + 0.07, FLY + 0.28);
     const R = this.deathDist * travel + FLY_SLIDE * (1 - (1 - slide) * (1 - slide));
@@ -501,52 +502,56 @@ export class PlayerAnimator {
     p.pos[PELVIS * 3] = px;
     p.pos[PELVIS * 3 + 1] = py;
     p.pos[PELVIS * 3 + 2] = pz;
-    Q.fromAxisAngle(tv, 0, -dy, dx, 0, (94 * flat - 4 * land) * Math.PI / 180); // over about the axis across the shot
+    Q.fromAxisAngle(tv, 0, -dy, dx, 0, (92 * flat) * Math.PI / 180); // over about the axis across the shot
     for (let k = 0; k < 4; k++) p.rot[PELVIS * 4 + k] = tv[k];
-    const arch = -12 * lift * (1 - land); // the chest thrown back; flat once down
+    const arch = -8 * spread * (1 - land); // the chest thrown back; flat once down
     p.turn(SPINE1, arch, 0, 0);
     p.turn(SPINE2, arch, 0, 0);
     p.turn(SPINE3, arch, 0, 0);
-    p.turn(HEAD, -50 * bump(t, 0, 0.06, 0.1, 0.35) - 18 * lift * (1 - land), 0, 0);
+    p.turn(HEAD, -50 * bump(t, 0, 0.06, 0.1, 0.35) - 18 * spread * (1 - land), 0, 0);
     p.solve();
     const ex = -dy, ey = dx; // ex, ey: across the shot
+    const goal = p.goal;
     for (let s = 0; s < 2; s++) {
-      const goal = p.goal;
-      // Planted, then kicked up toward the shooter (the legs out level with the hips, a
-      // little apart, knees a touch bent), then down flat on the ground, the feet nearer.
-      const fx = px - dx * 29 + ex * SIDE[s] * 6, fy = py - dy * 29 + ey * SIDE[s] * 6, fz = pz + 5;
-      const gx = px - dx * 30.5 + ex * SIDE[s] * 6, gy = py - dy * 30.5 + ey * SIDE[s] * 6;
-      let x = fx * lift, y = SIDE[s] * 4.5 + (fy - SIDE[s] * 4.5) * lift, z = 3.5 + (fz - 3.5) * lift;
-      x += (gx - x) * land;
-      y += (gy - y) * land;
-      z += (4 - z) * land;
-      goal[0] = x;
-      goal[1] = y;
-      goal[2] = z;
-      goal[3] = (1 - lift) - dx * 0.3 * lift; // knees forward, then up (toward the sky, lying)
-      goal[4] = SIDE[s] * 0.25 - dy * 0.3 * lift;
-      goal[5] = lift;
+      // Legs: straight down the body (a touch bent, the knees toward its front), turning
+      // over with it: the feet leave the ground as it goes over and come down flat once
+      // it has landed.
+      goal[0] = 1;
+      goal[1] = SIDE[s] * 5;
+      goal[2] = -31.5;
+      Q.rotate(t3, 0, tv, 0, goal, 0);
+      goal[0] = px + t3[0];
+      goal[1] = py + t3[1];
+      goal[2] = pz + t3[2] + (4 - pz - t3[2]) * land;
+      goal[3] = 1;
+      goal[4] = 0;
+      goal[5] = 0;
+      Q.rotate(goal, 3, tv, 0, goal, 3);
       this.reachLeg(s);
       p.setWorldRotation(ANKLE[s], tv, 0);
     }
     const w = p.wpos, cx = w[SPINE3 * 3], cyy = w[SPINE3 * 3 + 1], cz = w[SPINE3 * 3 + 2];
     for (let s = 0; s < 2; s++) {
-      const goal = p.goal;
-      // Holding the gun, then flung out straight past the head along the shot, then down
-      // on the ground out to the sides, nearly straight.
+      // Arms: from the gun out wide, straight out to the sides level with the shoulders
+      // (a little toward the body's front and its head), turning over with it; down on
+      // the ground beside the body once landed.
+      const sx = w[ARM[s] * 3], sy = w[ARM[s] * 3 + 1], sz = w[ARM[s] * 3 + 2];
       const hx = cx + 14, hy = cyy + SIDE[s] * 4, hz = cz - 6;
-      const fx = cx + dx * 22 + ex * SIDE[s] * 12, fy = cyy + dy * 22 + ey * SIDE[s] * 12, fz = cz + 8 * (1 - flat) + 4;
-      const gx = px + dx * 2 + ex * SIDE[s] * 25, gy = py + dy * 2 + ey * SIDE[s] * 25;
-      let x = hx + (fx - hx) * lift, y = hy + (fy - hy) * lift, z = hz + (fz - hz) * lift;
-      x += (gx - x) * land;
-      y += (gy - y) * land;
+      goal[0] = 3;
+      goal[1] = SIDE[s] * 21;
+      goal[2] = 3;
+      Q.rotate(t3, 0, tv, 0, goal, 0);
+      let x = hx + (sx + t3[0] - hx) * spread, y = hy + (sy + t3[1] - hy) * spread, z = hz + (sz + t3[2] - hz) * spread;
+      x += (px + dx * 18 + ex * SIDE[s] * 25 - x) * land;
+      y += (py + dy * 18 + ey * SIDE[s] * 25 - y) * land;
       z += (3 - z) * land;
       goal[0] = x;
       goal[1] = y;
       goal[2] = z;
-      goal[3] = ex * SIDE[s] * 0.5 * (1 - land);
-      goal[4] = ey * SIDE[s] * 0.5 * (1 - land);
-      goal[5] = 1;
+      goal[3] = 1; // elbows toward the body's front (up, once on the back), a little bent
+      goal[4] = SIDE[s] * 0.3;
+      goal[5] = 0.4;
+      Q.rotate(goal, 3, tv, 0, goal, 3);
       p.reachGoal(ARM[s], ELBOW[s], HAND[s]);
     }
     p.skinMatrices();
