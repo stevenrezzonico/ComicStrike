@@ -41,6 +41,10 @@ const LIFT_RUN = 15; // running: the heel comes up behind, the knee folds
 const FOOT_TURN = 0.6; // the feet turn this share of the way toward the movement direction
 const HIP_TURN = 0.4; // the hips too (the spine takes two thirds of it back)
 const TOSS_RATE = 2.5; // a throw's arm swing lasts 1 / this seconds
+const FLY = 0.55; // a headshot's body flies for this long (seconds)
+const FLY_ARC = 14; // and rises this much at mid-flight (with room to fly)
+const FLY_SLIDE = 7; // then slides this far after landing
+const LYING = 8; // the hips this high lying on the back (broad shoulders)
 const RIFLE_TWIST = 6; // per spine bone: left shoulder forward for a rifle stance
 const RIFLE_BLADE = 18; // the hips turned right with a rifle (the shoulders -36 in all)
 const STANCE = 6; // feet this far out from the center line at rest (4.5 walking)
@@ -469,10 +473,12 @@ export class PlayerAnimator {
     return p;
   }
 
-  // A headshot: the head snaps back and the body is thrown along the shot (deathDir, in
-  // the world; dist units at most, decelerating over 0.5 s), tipping over onto its back,
-  // legs kicked up and arms flung, then lands (drop lower where the floor is) and slides
-  // to rest with the limbs flopping down. yaw: the player's, to take the shot into his frame.
+  // A headshot: blown off his feet. The head snaps back and the whole body flies along the
+  // shot (deathDir, in the world; dist units over FLY seconds, fast at first, in an arc),
+  // turning onto its back as it goes: the feet kick up toward the shooter and the arms
+  // fling out past the head, so it lies flat in the air; it lands on its back (drop lower
+  // where the floor is), bounces once, slides a little further and the limbs flop down.
+  // yaw: the player's, to take the shot into his frame.
   headshotPose(c, yaw) {
     const p = this.pose, t = this.dead;
     const yr = yaw * Math.PI / 180, cy = Math.cos(yr), sy = Math.sin(yr);
@@ -481,51 +487,56 @@ export class PlayerAnimator {
       dx = -1;
       dy = 0;
     }
-    const u = Math.min(1, t / 0.5), travel = 1 - (1 - u) * (1 - u);
-    const tip = ramp(t, 0.02, 0.6);
-    const land = ramp(t, 0.5, 0.8);
-    const settle = bump(t, 0.6, 0.7, 0.7, 0.9);
-    const R = this.deathDist * travel + 6 * tip;
+    const u = Math.min(1, t / FLY), travel = 1 - Math.pow(1 - u, 1.6);
+    const lift = ramp(t, 0, 0.16); // the feet leave the ground, the arms fling
+    const flat = smoothstep(0, 0.75, u); // upright .. lying flat on the back
+    const land = ramp(t, FLY, FLY + 0.22); // the limbs come down on the ground
+    const slide = ramp(t, FLY, FLY + 0.3);
+    const bounce = bump(t, FLY, FLY + 0.07, FLY + 0.07, FLY + 0.28);
+    const R = this.deathDist * travel + FLY_SLIDE * (1 - (1 - slide) * (1 - slide));
     const h = PELVIS_Z - CROUCH_DROP * c;
     const px = dx * R, py = dy * R;
-    const pz = h + (6 - h) * tip + 12 * Math.sin(Math.PI * u) * (1 - land) - this.deathDrop * land + 2 * settle;
+    const pz = h * (1 - u) + LYING * u + FLY_ARC * Math.sin(Math.PI * u) * Math.min(1, this.deathDist / 30) -
+      this.deathDrop * smoothstep(0.4, 1, u) + 3 * bounce;
     p.pos[PELVIS * 3] = px;
     p.pos[PELVIS * 3 + 1] = py;
     p.pos[PELVIS * 3 + 2] = pz;
-    Q.fromAxisAngle(tv, 0, -dy, dx, 0, (85 * tip) * Math.PI / 180); // over about the axis across the shot
+    Q.fromAxisAngle(tv, 0, -dy, dx, 0, (94 * flat - 4 * land) * Math.PI / 180); // over about the axis across the shot
     for (let k = 0; k < 4; k++) p.rot[PELVIS * 4 + k] = tv[k];
-    const arch = -6 * ramp(t, 0, 0.2) * (1 - land);
+    const arch = -12 * lift * (1 - land); // the chest thrown back; flat once down
     p.turn(SPINE1, arch, 0, 0);
     p.turn(SPINE2, arch, 0, 0);
     p.turn(SPINE3, arch, 0, 0);
-    p.turn(HEAD, -45 * bump(t, 0, 0.08, 0.1, 0.4) - 15 * ramp(t, 0, 0.2), 0, 0);
+    p.turn(HEAD, -50 * bump(t, 0, 0.06, 0.1, 0.35) - 18 * lift * (1 - land), 0, 0);
     p.solve();
-    const lift = ramp(t, 0, 0.2), ex = -dy, ey = dx; // ex, ey: across the shot
+    const ex = -dy, ey = dx; // ex, ey: across the shot
     for (let s = 0; s < 2; s++) {
       const goal = p.goal;
-      // Planted, then trailing behind and kicked up, then stretched out along the ground.
-      const fx = px - dx * 8 + ex * SIDE[s] * 6, fy = py - dy * 8 + ey * SIDE[s] * 6;
-      const gx = px - dx * 22 + ex * SIDE[s] * 5, gy = py - dy * 22 + ey * SIDE[s] * 5;
-      let x = (fx) * lift, y = SIDE[s] * 4.5 + (fy - SIDE[s] * 4.5) * lift, z = 3.5 + (pz + 8 - 3.5) * lift;
+      // Planted, then kicked up toward the shooter (the legs out level with the hips, a
+      // little apart, knees a touch bent), then down flat on the ground, the feet nearer.
+      const fx = px - dx * 29 + ex * SIDE[s] * 6, fy = py - dy * 29 + ey * SIDE[s] * 6, fz = pz + 5;
+      const gx = px - dx * 30.5 + ex * SIDE[s] * 6, gy = py - dy * 30.5 + ey * SIDE[s] * 6;
+      let x = fx * lift, y = SIDE[s] * 4.5 + (fy - SIDE[s] * 4.5) * lift, z = 3.5 + (fz - 3.5) * lift;
       x += (gx - x) * land;
       y += (gy - y) * land;
       z += (4 - z) * land;
       goal[0] = x;
       goal[1] = y;
       goal[2] = z;
-      goal[3] = 1 - land;
-      goal[4] = SIDE[s] * 0.25 * (1 - land);
-      goal[5] = land;
+      goal[3] = (1 - lift) - dx * 0.3 * lift; // knees forward, then up (toward the sky, lying)
+      goal[4] = SIDE[s] * 0.25 - dy * 0.3 * lift;
+      goal[5] = lift;
       this.reachLeg(s);
       p.setWorldRotation(ANKLE[s], tv, 0);
     }
     const w = p.wpos, cx = w[SPINE3 * 3], cyy = w[SPINE3 * 3 + 1], cz = w[SPINE3 * 3 + 2];
     for (let s = 0; s < 2; s++) {
       const goal = p.goal;
-      // Holding the gun, then whipped out and up as the body goes, then flat on the ground.
+      // Holding the gun, then flung out straight past the head along the shot, then down
+      // on the ground out to the sides, nearly straight.
       const hx = cx + 14, hy = cyy + SIDE[s] * 4, hz = cz - 6;
-      const fx = cx - dx * 12 + ex * SIDE[s] * 14, fy = cyy - dy * 12 + ey * SIDE[s] * 14, fz = cz + 8;
-      const gx = px + dx * 4 + ex * SIDE[s] * 20, gy = py + dy * 4 + ey * SIDE[s] * 20;
+      const fx = cx + dx * 22 + ex * SIDE[s] * 12, fy = cyy + dy * 22 + ey * SIDE[s] * 12, fz = cz + 8 * (1 - flat) + 4;
+      const gx = px + dx * 2 + ex * SIDE[s] * 25, gy = py + dy * 2 + ey * SIDE[s] * 25;
       let x = hx + (fx - hx) * lift, y = hy + (fy - hy) * lift, z = hz + (fz - hz) * lift;
       x += (gx - x) * land;
       y += (gy - y) * land;
@@ -533,9 +544,9 @@ export class PlayerAnimator {
       goal[0] = x;
       goal[1] = y;
       goal[2] = z;
-      goal[3] = -0.2 * (1 - land);
-      goal[4] = SIDE[s] * 0.6 * (1 - land);
-      goal[5] = -1 + 2 * land;
+      goal[3] = ex * SIDE[s] * 0.5 * (1 - land);
+      goal[4] = ey * SIDE[s] * 0.5 * (1 - land);
+      goal[5] = 1;
       p.reachGoal(ARM[s], ELBOW[s], HAND[s]);
     }
     p.skinMatrices();

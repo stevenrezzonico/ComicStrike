@@ -872,7 +872,7 @@ function killBody(killer, victim, headshot, seed) {
   dy /= len;
   let dist = 0, drop = 0;
   if (headshot) {
-    const reach = 48;
+    const reach = 120; // blown off his feet: a long way back where there is room
     traceHull(world, HULL_POINT, vx, vy, vz + 36, vx + dx * reach, vy + dy * reach, vz + 36, bodyTrace);
     dist = Math.max(0, bodyTrace.fraction * reach - 6);
     const lx = vx + dx * dist, ly = vy + dy * dist;
