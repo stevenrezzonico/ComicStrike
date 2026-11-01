@@ -65,7 +65,8 @@ export function flashDuration(dist, facing) {
   return t < 0.25 ? 0 : t;
 }
 
-// HE damage at `dist` (CS:GO RadiusDamage: a gaussian, sigma = radius / 3, nothing beyond).
+// HE damage at `dist` from the feet (CS:GO RadiusDamage: a gaussian, sigma = radius / 3,
+// nothing beyond).
 export function heDamage(dist) {
   if (dist > HE_RADIUS) return 0;
   const sigma = HE_RADIUS / 3;
@@ -261,9 +262,13 @@ export class Grenades {
       this.addEffect(FX_HE, weapon, owner, team, x, y, z);
       for (let i = 0; i < targets.count; i++) {
         if (!targets.alive(i)) continue;
-        targets.center(i, v3);
+        // Measured to the feet (CS:GO's player origin): one at a target's feet does 98 (a
+        // hull's half width away), as CS:GO's does; to the hull center it was ~95.
+        targets.feet(i, v3);
         const d = heDamage(Math.hypot(v3[0] - x, v3[1] - y, v3[2] - z));
-        if (d <= 0 || !this.visible(world, x, y, z + 1, v3)) continue;
+        if (d <= 0) continue;
+        targets.center(i, v3);
+        if (!this.visible(world, x, y, z + 1, v3)) continue;
         targets.hurt(i, d, weapon, owner, team);
       }
     } else if (kind === 'flash') {

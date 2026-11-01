@@ -3,8 +3,9 @@ import { parseBSP } from '../shared/bsp.js';
 import { TICK_DT, IN_ATTACK } from '../shared/constants.js';
 import { CollisionWorld } from '../shared/trace.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
-import { TEAM_T, TEAM_CT } from '../shared/player.js';
-import { WEAPON_ID, SLOT_GRENADE, THROW_LONG, THROW_SHORT, giveWeapon } from '../shared/weapons.js';
+import { TEAM_T, TEAM_CT, applyDamage } from '../shared/player.js';
+import { HITGROUP_CHEST } from '../shared/hitgroups.js';
+import { WEAPONS, WEAPON_ID, SLOT_GRENADE, THROW_LONG, THROW_SHORT, giveWeapon } from '../shared/weapons.js';
 import {
   Grenades, heDamage, flashDuration, fireRadius, smokeRadius, FUSE, HE_DAMAGE, HE_RADIUS, FX_HE, FX_SMOKE, FX_FIRE,
   FIRE_DPS, SMOKE_TIME,
@@ -48,6 +49,14 @@ Deno.test('grenade formulas: CS:GO throw speeds, HE gaussian, flash by angle and
   // HE: 99 at the center, gaussian falloff, nothing beyond 350.
   assert.equal(Math.round(heDamage(0)), HE_DAMAGE);
   assert.ok(heDamage(100) < heDamage(50) && heDamage(HE_RADIUS + 1) === 0);
+  // At someone's feet (a hull's half width away): CS:GO's 98 unarmored, 57 armored, so two
+  // kill a fully armored player.
+  const atFeet = heDamage(16);
+  assert.equal(Math.trunc(atFeet), 98);
+  const armored = { health: 100, armor: 100, helmet: true, ps: { f: new Float32Array(64) } };
+  assert.equal(applyDamage(armored, atFeet, WEAPONS[WEAPON_ID.hegrenade], HITGROUP_CHEST), 56);
+  applyDamage(armored, atFeet, WEAPONS[WEAPON_ID.hegrenade], HITGROUP_CHEST);
+  assert.ok(armored.health <= 0, `two HEs leave ${armored.health}`);
   // Flashbangs: looking at it is worst, looking away still blinds a little, far is less.
   assert.ok(flashDuration(200, 1) > flashDuration(200, 0) && flashDuration(200, 0) > flashDuration(200, -1));
   assert.ok(flashDuration(200, -1) > 0, 'even behind you');
@@ -83,6 +92,7 @@ Deno.test({ name: 'grenades fly, bounce and settle; HE and flashbangs go off aft
   assert.equal(h.fxKind[0], FX_HE);
   assert.ok(t.damage[0] > 40 && t.damage[0] < HE_DAMAGE, `close: ${t.damage[0]}`);
   assert.equal(t.damage[1], 0);
+
 
   // A flashbang in front of one target and behind another.
   const f = new Grenades();

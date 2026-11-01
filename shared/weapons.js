@@ -124,7 +124,9 @@ export const WEAPONS = [
     ['decoy', 'Decoy Grenade', 'decoy', 50, 3, 1],
   ].map(([name, label, grenade, price, teams, limit]) => ({
     name, label, slot: SLOT_GRENADE, grenade, price, teams, limit, maxSpeed: 245, clip: 0, reserve: 0,
-    deployTime: 0.6, killAward: 300, armorRatio: 1, flinchLarge: 0, flinchSmall: 0,
+    // HE: 57.5 % of the blast gets through armor (CS:GO's 98 unarmored, 57 armored at the
+    // feet: two kill a fully armored player); with 1 it was 47 and took three.
+    deployTime: 0.6, killAward: 300, armorRatio: name === 'hegrenade' ? 1.15 : 1, flinchLarge: 0, flinchSmall: 0,
   })),
 ];
 
