@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import { parseBSP } from '../shared/bsp.js';
 import { IN_FORWARD, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_ATTACK } from '../shared/constants.js';
-import { CollisionWorld, Trace, traceHull, hullFits, HULL_POINT, HULL_STAND } from '../shared/trace.js';
+import { CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, HULL_POINT, HULL_STAND } from '../shared/trace.js';
 import { Breakables } from '../shared/breakables.js';
-import { PS_ORIGIN, eyeOffset } from '../shared/pmove.js';
+import { PS_ORIGIN, FL_DUCKING, eyeOffset } from '../shared/pmove.js';
 import { ShotList } from '../shared/weapons.js';
 import { Player, runCommand, TEAM_T, TEAM_CT } from '../shared/player.js';
 import {
   MAX_DATAGRAM, S2C_WELCOME, S2C_SNAPSHOT, SHOT_BLOOD, KILL_HEADSHOT, Writer, Reader, CmdRing,
-  SnapshotRing, OwnState, EventList, writeHello, writeCmds, readWelcome, readSnapshot, E_ACTIVE, E_TEAM,
+  SnapshotRing, OwnState, EventList, writeHello, writeCmds, readWelcome, readSnapshot, E_ACTIVE, E_TEAM, E_X, E_Y, E_Z, E_FLAGS,
+  E_HEALTH, MAX_PLAYERS,
 } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
 
@@ -24,6 +25,22 @@ async function loadBSP(t, name) {
 // A client as the browser runs it, minus rendering: it predicts with the shared
 // simulation and talks to the Game through a fake session.
 class FakeClient {
+  // The other players as bodies to collide with, as client/main.js packs them (the newest
+  // snapshot's positions, standing or ducked).
+  packBodies() {
+    const w = this.world;
+    clearBodies(w);
+    if (this.latest < 0) return;
+    const E = this.ring.ents, self = this.welcome.playerId;
+    w.bodySelf = self;
+    w.bodyTeam = this.player.team;
+    for (let id = 0; id < MAX_PLAYERS; id++) {
+      const a = this.ring.row(this.latest, id);
+      if (id === self || !E[a + E_ACTIVE] || E[a + E_HEALTH] <= 0) continue;
+      setBody(w, id, E[a + E_X], E[a + E_Y], E[a + E_Z], (E[a + E_FLAGS] & FL_DUCKING) ? 18 : 36, 0, 0, 0, E[a + E_TEAM]);
+    }
+  }
+
   constructor(game, bsp, name, team) {
     this.inbox = [];
     this.session = { send: (b) => this.inbox.push(b.slice()), close: () => {} };
@@ -83,6 +100,7 @@ class FakeClient {
     if (!this.synced) return;
     const t = this.tick++;
     this.cmds.put(t, buttons, -1, pitch, yaw, view);
+    this.packBodies();
     runCommand(this.world, this.player, buttons, -1, Math.fround(pitch), Math.fround(yaw), t, this.shots);
     const bytes = writeCmds(this.w, this.latestSeq, this.cmds, t).slice();
     if (!drop) this.game.receive(this.client, bytes);
@@ -128,6 +146,37 @@ Deno.test('server: two players join, move, and the client prediction matches the
   assert.equal(a.ring.ents[rowB + E_TEAM], TEAM_CT);
   assert.equal(a.ring.ents[a.ring.row(a.latest, a.welcome.playerId) + E_ACTIVE], 0);
   assert.ok(Math.max(...a.sizes) <= MAX_DATAGRAM);
+});
+
+Deno.test('server: players block each other, predicted bit for bit against a standing one', async (t) => {
+  const bsp = await loadBSP(t, 'de_dust2');
+  if (!bsp) return;
+  const game = new Game('de_dust2', bsp, { rounds: false });
+  const a = new FakeClient(game, bsp, 'alice', TEAM_T);
+  const b = new FakeClient(game, bsp, 'bob', TEAM_CT);
+  game.step();
+  a.poll();
+  b.poll();
+  const deg = faceOff(game, a, b); // a 250 units from b, looking at him along the lane
+  for (let i = 0; i < 3; i++) { // b's new place reaches a in a snapshot before a moves
+    a.play(0, 0);
+    b.play(0, 0);
+    game.step();
+  }
+  const bx = b.client.player.ps.f[PS_ORIGIN], by = b.client.player.ps.f[PS_ORIGIN + 1];
+  let nearest = Infinity; // a slides along his box when it meets him at an angle, so: never inside it
+  for (let i = 0; i < 160; i++) { // 2.5 s of running at him: far more than 250 units
+    a.play(IN_FORWARD, deg + 180, i % 3 === 1);
+    b.play(0, 0);
+    game.step();
+    const f = a.client.player.ps.f;
+    nearest = Math.min(nearest, Math.max(Math.abs(f[PS_ORIGIN] - bx), Math.abs(f[PS_ORIGIN + 1] - by)));
+  }
+  for (let i = 0; i < 4; i++) game.step();
+  a.poll();
+  assert.ok(nearest > 31.9 && nearest < 33, `held off by b's hull (nearest ${nearest.toFixed(2)} along an axis)`);
+  assert.deepEqual(a.client.player.psBytes, a.player.psBytes, 'prediction diverged against a standing player');
+  assert.equal(b.client.player.ps.f[PS_ORIGIN], bx, 'b was not pushed');
 });
 
 Deno.test('server: a client cannot run commands faster than real time', async (t) => {

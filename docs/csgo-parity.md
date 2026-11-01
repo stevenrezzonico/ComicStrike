@@ -28,6 +28,7 @@ Grenades and bomb: prices, limits (1, flashbang 2, 4 in all), throw speed formul
 |---|---|---|---|
 | Crouched hit boxes and hull | 36 units tall (GoldSrc duck hull), head box top 34.5 | 54-unit duck hull, head near 46-54 | the BSP clip hulls fix the ducked hull; a taller one would clip the maps' low passages |
 | Crouched eye height | 30 | 46 | same reason |
+| Crouch boost (a player on a crouching one) | 36 up, 72 on a standing one | 54 / 72 | same reason; run boosts and standing boosts match |
 | Stamina slow-down | velocity × ((100 − s) / 100) ^ (dt × 70) per tick | wish speed × (100 − s) / 100 | close by feel; *unsure* which quantity CS:GO scales |
 | Duck spam penalty | −2 per press, min 1.5, +3/s | `sv_timebetweenducks` 0.4 and CS:GO's own penalty | close |
 | Tagging recovery | +0.4 of the modifier per second | *unsure* | approximation |

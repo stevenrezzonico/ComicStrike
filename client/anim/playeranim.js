@@ -510,7 +510,6 @@ export class PlayerAnimator {
     p.turn(SPINE3, arch, 0, 0);
     p.turn(HEAD, -50 * bump(t, 0, 0.06, 0.1, 0.35) - 18 * spread * (1 - land), 0, 0);
     p.solve();
-    const ex = -dy, ey = dx; // ex, ey: across the shot
     const goal = p.goal;
     for (let s = 0; s < 2; s++) {
       // Legs: nearly straight, swung a little ahead of the body and apart (the knees
@@ -544,7 +543,8 @@ export class PlayerAnimator {
       goal[1] = SIDE[s] * (13 + 7 * land);
       goal[2] = 13 - 4 * land;
       Q.rotate(t3, 0, tv, 0, goal, 0);
-      let x = hx + (sx + t3[0] - hx) * spread, y = hy + (sy + t3[1] - hy) * spread, z = hz + (sz + t3[2] - hz) * spread;
+      const x = hx + (sx + t3[0] - hx) * spread, y = hy + (sy + t3[1] - hy) * spread;
+      let z = hz + (sz + t3[2] - hz) * spread;
       z += (3 - z) * land;
       goal[0] = x;
       goal[1] = y;

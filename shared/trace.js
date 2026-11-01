@@ -18,7 +18,17 @@ export const ENT_LADDER = 1;
 export const ENT_WATER = 2;
 export const ENT_NONE = 3; // disabled: collides with nothing (broken func_breakable)
 
-const DIST_EPSILON = 0.03125;
+export const DIST_EPSILON = 0.03125;
+
+// Player bodies: the living players as solid boxes to each other's movement (CS:GO:
+// players collide, stand on each other and ride a moving teammate, the run boost). They
+// are packed every tick by player id (`setBody`), so a client's prediction and the server
+// agree on the ground entity's index; only the player hull traces see them
+// (`tracePlayer`), bullets never (the hit groups do players). A body the trace starts
+// inside is passed through: two players left overlapping walk out of each other.
+export const MAX_BODIES = 64; // slots (player ids)
+export const BODY_FIELDS = 8; // x, y, z (hull center), half height (0: no body), vx, vy, vz, team
+export const ENT_BODY_BASE = 1 << 16; // trace.ent of body k is ENT_BODY_BASE + k
 
 // Brush entities that never block movement. Every other func_* brush entity is solid.
 const NONSOLID = new Set([
@@ -71,6 +81,11 @@ export class CollisionWorld {
     this.cnChild = cnChild;
     this.ents = [];
     this.surfaces = null; // SurfaceMap, attached by whoever loads the map (bullet penetration)
+    this.bodies = new Float32Array(MAX_BODIES * BODY_FIELDS); // see BODY_FIELDS
+    this.bodyCount = 0; // slots in use (by player id, so holes are bodies of half height 0)
+    this.bodySelf = -1; // the moving player's own slot: never collides with itself
+    this.bodyTeam = 0; // the moving player's team
+    this.solidTeam = true; // mp_solid_teammates: false lets teammates pass through each other
   }
 
   // heads: hull 0..3 root nodes (or contents when negative); bounds in model space.
@@ -443,6 +458,93 @@ export function traceHull(world, hull, sx, sy, sz, ex, ey, ez, out) {
     out.endx = sx; out.endy = sy; out.endz = sz;
   }
   return out;
+}
+
+// Body slot k (a player id): his hull center, half height (36 standing, 18 ducked), velocity
+// (what a player standing on him rides along with) and team. Packed again every tick.
+export function setBody(world, k, x, y, z, halfHeight, vx, vy, vz, team) {
+  const B = world.bodies, b = k * BODY_FIELDS;
+  B[b] = x; B[b + 1] = y; B[b + 2] = z;
+  B[b + 3] = halfHeight;
+  B[b + 4] = vx; B[b + 5] = vy; B[b + 6] = vz;
+  B[b + 7] = team;
+  if (k >= world.bodyCount) world.bodyCount = k + 1;
+}
+
+export function clearBodies(world) {
+  world.bodies.fill(0, 0, world.bodyCount * BODY_FIELDS);
+  world.bodyCount = 0;
+}
+
+// Clips a hull trace (already run against the world and brush entities into `out`)
+// against the player bodies: each body's box grown by the hull's extents, the ray
+// through the slabs, the end backed off DIST_EPSILON like the BSP trace. A box the
+// start lies inside is skipped, a box touched exactly is not entered by a move along it.
+export function traceBodies(world, hull, sx, sy, sz, ex, ey, ez, out) {
+  const n = world.bodyCount;
+  if (n === 0 || out.startsolid) return out;
+  const B = world.bodies, self = world.bodySelf, pass = world.solidTeam ? -1 : world.bodyTeam;
+  const hx = HULL_MAXS[hull * 3], hz = HULL_MAXS[hull * 3 + 2]; // the hulls are symmetric
+  const dx = ex - sx, dy = ey - sy, dz = ez - sz;
+  for (let k = 0; k < n; k++) {
+    const b = k * BODY_FIELDS, bh = B[b + 3];
+    if (bh === 0 || k === self || B[b + 7] === pass) continue;
+    const minx = B[b] - 16 - hx, maxx = B[b] + 16 + hx;
+    const miny = B[b + 1] - 16 - hx, maxy = B[b + 1] + 16 + hx;
+    const minz = B[b + 2] - bh - hz, maxz = B[b + 2] + bh + hz;
+    if (sx > minx && sx < maxx && sy > miny && sy < maxy && sz > minz && sz < maxz) continue;
+    let tin = -Infinity, tout = Infinity, axis = -1, sign = 0;
+    // x
+    if (dx === 0) {
+      if (sx <= minx || sx >= maxx) continue;
+    } else {
+      let t1 = (minx - sx) / dx, t2 = (maxx - sx) / dx, sg = -1;
+      if (t1 > t2) { const t = t1; t1 = t2; t2 = t; sg = 1; }
+      if (t1 > tin) { tin = t1; axis = 0; sign = sg; }
+      if (t2 < tout) tout = t2;
+    }
+    // y
+    if (dy === 0) {
+      if (sy <= miny || sy >= maxy) continue;
+    } else {
+      let t1 = (miny - sy) / dy, t2 = (maxy - sy) / dy, sg = -1;
+      if (t1 > t2) { const t = t1; t1 = t2; t2 = t; sg = 1; }
+      if (t1 > tin) { tin = t1; axis = 1; sign = sg; }
+      if (t2 < tout) tout = t2;
+    }
+    // z
+    if (dz === 0) {
+      if (sz <= minz || sz >= maxz) continue;
+    } else {
+      let t1 = (minz - sz) / dz, t2 = (maxz - sz) / dz, sg = -1;
+      if (t1 > t2) { const t = t1; t1 = t2; t2 = t; sg = 1; }
+      if (t1 > tin) { tin = t1; axis = 2; sign = sg; }
+      if (t2 < tout) tout = t2;
+    }
+    if (axis < 0 || tin >= tout || tout <= 0 || tin >= out.fraction) continue;
+    const d = axis === 0 ? dx : axis === 1 ? dy : dz;
+    let frac = tin - DIST_EPSILON / Math.abs(d);
+    if (frac < 0) frac = 0;
+    if (frac >= out.fraction) continue;
+    out.fraction = frac;
+    out.allsolid = false;
+    out.startsolid = false;
+    out.endx = sx + dx * frac;
+    out.endy = sy + dy * frac;
+    out.endz = sz + dz * frac;
+    out.nx = axis === 0 ? sign : 0;
+    out.ny = axis === 1 ? sign : 0;
+    out.nz = axis === 2 ? sign : 0;
+    out.dist = out.nx * out.endx + out.ny * out.endy + out.nz * out.endz;
+    out.ent = ENT_BODY_BASE + k;
+  }
+  return out;
+}
+
+// A player's movement trace: the world, the brush entities, then the other players.
+export function tracePlayer(world, hull, sx, sy, sz, ex, ey, ez, out) {
+  traceHull(world, hull, sx, sy, sz, ex, ey, ez, out);
+  return traceBodies(world, hull, sx, sy, sz, ex, ey, ez, out);
 }
 
 // Contents of a point in one entity's hull (CONTENTS_*).

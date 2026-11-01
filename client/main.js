@@ -17,7 +17,7 @@ import {
   TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED, IN_SCORE,
   IN_ATTACK, IN_ATTACK2, IN_USE, IN_RELOAD, IN_DROP,
 } from '../shared/constants.js';
-import { CollisionWorld, Trace, traceHull, pointContents, HULL_POINT } from '../shared/trace.js';
+import { CollisionWorld, Trace, traceHull, pointContents, setBody, clearBodies, HULL_POINT } from '../shared/trace.js';
 import {
   eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_SIZE, FL_ONGROUND, FL_DUCKING, touched, touchedCount,
 } from '../shared/pmove.js';
@@ -82,7 +82,7 @@ import { NetGraph } from './netgraph.js';
 import { createConsole, watch } from './settings.js';
 import { releaseOf, quote } from '../shared/cvars.js';
 import {
-  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_DM, GAME_DEMO, GAME_WINGMAN, GAME_ARMSRACE, GAME_DEMOLITION, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
+  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_DM, GAME_DEMO, GAME_WINGMAN, GAME_ARMSRACE, GAME_DEMOLITION, GAME_GHOST_TEAM, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
 } from '../shared/economy.js';
 
 const DEG = Math.PI / 180;
@@ -522,8 +522,40 @@ function canTakeOver(id) {
 // The bomb as of the newest snapshot (defusing is predicted against it).
 const simBomb = () => (net ? net.own.bomb : null);
 
+// The other players as bodies our predicted commands collide with (shared/trace.js): the
+// living ones where the newest snapshot has them (the server runs the command against
+// where they are by then: a touched one that moved brings a correction), ducked or
+// standing, moving at the speed between the two newest snapshots (riding a running
+// teammate is predicted from it). The sandbox has nobody.
+function packBodies() {
+  clearBodies(world);
+  if (!net || net.latest < 0) return;
+  const ring = net.ring, E = ring.ents, k1 = net.latest, k0 = ring.find(net.latestSeq - 1);
+  world.bodySelf = selfId;
+  world.bodyTeam = player.team;
+  world.solidTeam = (net.own.round.mode & GAME_GHOST_TEAM) === 0;
+  for (let id = 0; id < MAX_PLAYERS; id++) {
+    if (id === selfId) continue;
+    const a = ring.row(k1, id);
+    if (!E[a + E_ACTIVE] || E[a + E_HEALTH] <= 0) continue;
+    let vx = 0, vy = 0, vz = 0;
+    if (k0 >= 0) {
+      const b = ring.row(k0, id);
+      if (E[b + E_ACTIVE] && E[b + E_HEALTH] > 0) {
+        vx = (E[a + E_X] - E[b + E_X]) * TICK_RATE;
+        vy = (E[a + E_Y] - E[b + E_Y]) * TICK_RATE;
+        vz = (E[a + E_Z] - E[b + E_Z]) * TICK_RATE;
+        if (vx * vx + vy * vy + vz * vz > 4000 * 4000) vx = vy = vz = 0; // a respawn, not a move
+      }
+    }
+    setBody(world, id, E[a + E_X], E[a + E_Y], E[a + E_Z], (E[a + E_FLAGS] & FL_DUCKING) ? 18 : 36, vx, vy, vz,
+      E[a + E_TEAM]);
+  }
+}
+
 // Runs our commands after `from` again on top of the state we were just given.
 function replayFrom(from) {
+  packBodies();
   for (let t = from + 1; t < tickCount; t++) {
     if (!cmds.has(t)) continue;
     const k = t & cmds.mask;
@@ -1003,6 +1035,7 @@ function tick() {
 
   shots.count = 0;
   impacts.count = 0;
+  packBodies();
   if (net) doors.apply(world, t + cmdOffset);
   else sandboxDoors(t, alive);
   if (noclip && !net) {

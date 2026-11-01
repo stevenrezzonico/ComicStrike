@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { parseBSP, parseVec3 } from '../shared/bsp.js';
 import { TICK_DT, IN_FORWARD, IN_JUMP, IN_DUCK, IN_SPEED, IN_MOVERIGHT } from '../shared/constants.js';
-import { CollisionWorld, Trace, traceHull, hullFits, HULL_POINT, HULL_STAND, ENT_LADDER, ENT_SOLID } from '../shared/trace.js';
 import {
-  createPlayerState, playerMove, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_EVENTS, PS_WATERLEVEL,
+  CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, HULL_POINT, HULL_STAND, ENT_LADDER, ENT_SOLID, ENT_BODY_BASE,
+} from '../shared/trace.js';
+import {
+  createPlayerState, playerMove, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_EVENTS, PS_WATERLEVEL, PS_GROUNDENT, PS_BASEVEL,
   FL_ONGROUND, FL_DUCKING, EV_JUMP, EV_LAND, EV_APEX, MOVE, eyeOffset, VIEW_STAND, VIEW_DUCK,
 } from '../shared/pmove.js';
 import { feetOffset } from '../shared/hitgroups.js';
@@ -305,4 +307,119 @@ Deno.test('a jump never carries more than 1.1 x the max speed (sv_enablebunnyhop
   run(w, ps, 1, IN_JUMP);
   assert.ok(ps.f[PS_VEL + 2] > 0, 'jumped');
   near(hspeed(ps), KNIFE * 1.1, 1, 'clamped to 275');
+});
+
+// A second player as a body: standing (half height 36) at x, y, z (hull center), moving at v.
+function body(w, k, x, y, z, half = 36, vx = 0, vy = 0, vz = 0, team = 1) {
+  setBody(w, k, x, y, z, half, vx, vy, vz, team);
+}
+
+Deno.test('players: a walk into another player stops at the hulls touching', () => {
+  const w = floorWorld();
+  w.bodySelf = 0;
+  w.bodyTeam = 1;
+  body(w, 1, 100, 0, 36);
+  const ps = settle(w, spawn(0, 0, 36));
+  run(w, ps, 64, IN_FORWARD);
+  near(ps.f[PS_ORIGIN], 100 - 32, 0.1, 'stopped a hull width away, center to center');
+  near(ps.f[PS_VEL], 0, 1, 'held against him');
+  // He is on the other team and teammates are not solid: still solid.
+  w.solidTeam = false;
+  body(w, 1, 100, 0, 36, 36, 0, 0, 0, 2);
+  run(w, ps, 16, IN_FORWARD);
+  near(ps.f[PS_ORIGIN], 100 - 32, 0.1, 'an enemy blocks whatever mp_solid_teammates says');
+  // A teammate with mp_solid_teammates 0: walked through.
+  body(w, 1, 100, 0, 36, 36, 0, 0, 0, 1);
+  run(w, ps, 64, IN_FORWARD);
+  assert.ok(ps.f[PS_ORIGIN] > 100 + 32, `walked through a ghost teammate (x=${ps.f[PS_ORIGIN]})`);
+  clearBodies(w);
+});
+
+Deno.test('players: dropped onto another player, we land on his head (72 standing, 36 ducked)', () => {
+  const w = floorWorld();
+  w.bodySelf = 0;
+  body(w, 1, 0, 0, 36);
+  let ps = run(w, spawn(0, 0, 200), 64);
+  near(ps.f[PS_ORIGIN + 2], 72 + 36, 0.1, 'standing on a standing player');
+  assert.equal(ps.i[PS_GROUNDENT], ENT_BODY_BASE + 1);
+  assert.ok(ps.i[PS_FLAGS] & FL_ONGROUND);
+  body(w, 1, 0, 0, 18, 18);
+  ps = run(w, spawn(0, 0, 200), 64);
+  near(ps.f[PS_ORIGIN + 2], 36 + 36, 0.1, 'standing on a crouching player');
+  // Walking off his head: a fall to the floor, no step down.
+  run(w, ps, 64, IN_FORWARD);
+  near(ps.f[PS_ORIGIN + 2], 36, 0.1, 'back on the floor');
+  clearBodies(w);
+});
+
+Deno.test('players: we ride a running teammate and keep his speed jumping off (run boost)', () => {
+  const w = floorWorld();
+  w.bodySelf = 0;
+  const run_x = (ps, n, buttons = 0) => {
+    for (let t = 0; t < n; t++) {
+      // He runs +x at 250: his body moves ahead of our move each tick, as on the server.
+      const B = w.bodies;
+      B[8] += 250 * TICK_DT;
+      playerMove(w, ps, buttons, 0, 0, TICK_DT, KNIFE);
+    }
+  };
+  body(w, 1, 0, 0, 36, 36, 250, 0, 0);
+  const ps = run(w, spawn(0, 0, 72 + 36), 4);
+  assert.equal(ps.i[PS_GROUNDENT], ENT_BODY_BASE + 1, 'on his head');
+  const ahead = ps.f[PS_ORIGIN] - w.bodies[8];
+  run_x(ps, 32);
+  near(ps.f[PS_ORIGIN] - w.bodies[8], ahead, 0.5, 'carried along: still over him after half a second');
+  near(ps.f[PS_VEL], 0, 0.01, 'own velocity zero while riding');
+  near(ps.f[PS_BASEVEL], 250, 0.01, 'his speed is our base velocity');
+  // Jump off: his 250 becomes ours, on top of our own jump, past the 1.1 x cap.
+  run_x(ps, 1, IN_JUMP | IN_FORWARD);
+  assert.ok(ps.f[PS_VEL + 2] > 0, 'jumped');
+  run_x(ps, 1, IN_FORWARD);
+  // His 250 (plus half a frame) and one tick of air acceleration (30): past the 275 cap.
+  near(hspeed(ps), 250 * (1 + TICK_DT / 2) + 30, 1, 'his speed on top of our own, past the 1.1 x cap');
+  assert.ok(hspeed(ps) > KNIFE * 1.1);
+  clearBodies(w);
+});
+
+Deno.test('players: the carrier stopping throws us off; overlapping players walk apart', () => {
+  const w = floorWorld();
+  w.bodySelf = 0;
+  body(w, 1, 0, 0, 36, 36, 250, 0, 0);
+  const ps = run(w, spawn(0, 0, 72 + 36), 4);
+  near(ps.f[PS_BASEVEL], 250, 0.01);
+  body(w, 1, 0, 0, 36); // he stops dead under us
+  run(w, ps, 1);
+  near(ps.f[PS_VEL], 250 * (1 + TICK_DT / 2) * (1 - MOVE.friction * TICK_DT), 0.5, 'his momentum is ours now, one tick of friction off');
+  run(w, ps, 64);
+  near(ps.f[PS_ORIGIN + 2], 36, 0.1, 'slid off his head to the floor');
+  // Spawned inside him (his lower half): walk out, never stuck.
+  body(w, 1, 0, 0, 36);
+  const q = settle(w, spawn(8, 0, 36));
+  near(q.f[PS_ORIGIN + 2], 36, 0.1, 'stays on the floor, not lifted');
+  run(w, q, 64, IN_FORWARD);
+  assert.ok(q.f[PS_ORIGIN] > 32, `walked out of him (x=${q.f[PS_ORIGIN]})`);
+  clearBodies(w);
+});
+
+Deno.test('players: a crouching player standing up lifts whoever stands on him (a boost)', () => {
+  const w = floorWorld();
+  w.bodySelf = 0;
+  body(w, 1, 0, 0, 18, 18);
+  const ps = run(w, spawn(0, 0, 200), 64);
+  near(ps.f[PS_ORIGIN + 2], 36 + 36, 0.1, 'on a crouching player');
+  body(w, 1, 0, 0, 36, 36); // he stands up under us
+  run(w, ps, 2);
+  near(ps.f[PS_ORIGIN + 2], 72 + 36, 0.1, 'lifted onto his head');
+  assert.ok(ps.i[PS_FLAGS] & FL_ONGROUND, 'standing, never fell');
+  clearBodies(w);
+});
+
+Deno.test('players: a player on our head blocks our jump', () => {
+  const w = floorWorld();
+  w.bodySelf = 0;
+  body(w, 1, 0, 0, 72 + 36);
+  const ps = settle(w, spawn(0, 0, 36));
+  run(w, ps, 4, IN_JUMP);
+  near(ps.f[PS_ORIGIN + 2], 36, 0.5, 'could not rise into him');
+  clearBodies(w);
 });

@@ -8,11 +8,11 @@
 import { parseVec3 } from '../shared/bsp.js';
 import { TICK_RATE, TICK_DT } from '../shared/constants.js';
 import { ARMS_RACE, DEMOLITION, armLevel } from '../shared/progression.js';
-import { CollisionWorld, Trace, traceHull, hullFits, HULL_STAND, HULL_POINT } from '../shared/trace.js';
+import { CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, HULL_STAND, HULL_POINT } from '../shared/trace.js';
 import { Breakables } from '../shared/breakables.js';
 import { Doors, MapLogic } from '../shared/doors.js';
 import { touched, touchedCount } from '../shared/pmove.js';
-import { PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, FL_ONGROUND, eyeOffset } from '../shared/pmove.js';
+import { PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, FL_ONGROUND, FL_DUCKING, eyeOffset } from '../shared/pmove.js';
 import {
   ShotList, WEAPONS, WEAPON_ID, giveWeapon, silenced, canCarryGrenade, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4,
   WEV_PLANTED, WEV_DEFUSED, WEV_DROP, WEV_FIRE, WEV_MELEE, WEV_THROW, WS_RELOAD_END, WS_ACTION, WS_THROWN, ACTION_PLANT,
@@ -40,7 +40,7 @@ import {
   MAX_ROUNDS, OVERTIME_ROUNDS, OVERTIME_MONEY, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD,
   PLANT_LOSS_BONUS, LOSS_STREAK_MAX, TEAMKILL_PENALTY, END_ELIMINATION, END_TIME, END_DRAW, END_BOMB, END_DEFUSE,
   END_RESCUE, RESCUE_WIN_REWARD, RESCUE_REWARD, HOSTAGE_TOUCH_REWARD, HOSTAGE_HIT_PENALTY, HOSTAGE_KILL_PENALTY,
-  END_MATCH, GAME_FFA, GAME_DM, GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION, GAME_WINGMAN, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
+  END_MATCH, GAME_FFA, GAME_DM, GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION, GAME_WINGMAN, GAME_GHOST_TEAM, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
@@ -184,6 +184,7 @@ export const DEFAULT_RULES = {
   demo: false, // the demo: free buying anywhere and anytime, infinite ammo, humans cannot die, anyone
   // plants and defuses, the bomb comes back after each explosion or defuse (cfg/gamemode_demo.cfg)
   teammatesAreEnemies: false, // mp_teammates_are_enemies: free for all
+  solidTeammates: true, // mp_solid_teammates: teammates block each other (enemies always do)
   respawnT: false, // mp_respawn_on_death_t
   respawnCT: false, // mp_respawn_on_death_ct
   randomSpawn: false, // mp_randomspawn: any spawn point, away from enemies
@@ -589,6 +590,7 @@ export class Game {
     if (this.tick % 16 === 0) this.bots.maintain(); // bot_quota
     this.bots.think(); // bots queue this tick's commands like clients do
     this.updateDoors();
+    this.packBodies();
 
     for (const c of this.clients) {
       if (!c) continue;
@@ -651,6 +653,8 @@ export class Game {
     c.cmdTime = t * TICK_DT;
     const wf = p.ws.f, held = WS_SLOTS + wf[WS_ACTIVE] * 3;
     const heldId = wf[held], heldClip = wf[held + 1], heldReserve = wf[held + 2]; // what G may drop
+    this.world.bodySelf = c.id;
+    this.world.bodyTeam = c.team;
     const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots, frozen, this.bomb,
       this.rules.demo);
     const events = p.ws.f[WS_EVENTS];
@@ -793,7 +797,8 @@ export class Game {
     }
     const ready = this.ready(t, ct), r = this.rules;
     rs.mode = (r.teammatesAreEnemies ? GAME_FFA : 0) | (r.deathmatch ? GAME_DM : 0) | (r.demo ? GAME_DEMO : 0) |
-      (r.armsRace ? GAME_ARMSRACE : 0) | (r.demolition ? GAME_DEMOLITION : 0) | (r.wingman ? GAME_WINGMAN : 0);
+      (r.armsRace ? GAME_ARMSRACE : 0) | (r.demolition ? GAME_DEMOLITION : 0) | (r.wingman ? GAME_WINGMAN : 0) |
+      (!r.solidTeammates && !r.teammatesAreEnemies ? GAME_GHOST_TEAM : 0);
     if (rs.phase === PHASE_WARMUP) {
       if (!ready) this.warmupReady = -1;
       else if (this.warmupReady < 0) this.warmupReady = this.tick;
@@ -1233,6 +1238,21 @@ export class Game {
     }
     this.logic.update(this.tick, acts);
     this.doors.update(this.world, this.tick, bodies, this.fireTarget);
+  }
+
+  // The living players as bodies the tick's commands collide with (shared/trace.js): each
+  // command meets the others where they are now, as in CS:GO (no lag compensation for
+  // movement); a client predicts against the newest snapshot's positions.
+  packBodies() {
+    const w = this.world;
+    clearBodies(w);
+    w.solidTeam = this.rules.solidTeammates || this.rules.teammatesAreEnemies;
+    for (const c of this.clients) {
+      if (!c || !c.joined || !c.alive || c.controlled) continue;
+      const f = c.player.ps.f, ducked = (c.player.ps.i[PS_FLAGS] & FL_DUCKING) !== 0;
+      setBody(w, c.id, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2], ducked ? 18 : 36,
+        f[PS_VEL], f[PS_VEL + 1], f[PS_VEL + 2], c.team);
+    }
   }
 
   // Where client c stands and looks (door swing side, trigger activator).

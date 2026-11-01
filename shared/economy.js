@@ -56,6 +56,7 @@ export const GAME_DEMO = 4; // demo: free buying anywhere, infinite ammo, no dyi
 export const GAME_ARMSRACE = 8; // arms race: a new weapon for every kill, no buying (shared/progression.js)
 export const GAME_DEMOLITION = 16; // demolition: a better weapon each round after a kill, no buying
 export const GAME_WINGMAN = 32; // wingman: 2 against 2 on one bomb site
+export const GAME_GHOST_TEAM = 64; // mp_solid_teammates 0: teammates walk through each other (casual)
 export const DM_KILL_POINTS = 10; // per enemy killed (approx.: CS:GO adds weapon bonuses)
 export const DM_RESPAWN = 2; // seconds dead before respawning (approx.)
 

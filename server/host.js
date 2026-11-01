@@ -74,6 +74,7 @@ export class Host {
       min: 0, max: 3,
     });
     num('mp_teammates_are_enemies', 0, 'Everyone is an enemy (free for all)', 0, 1);
+    num('mp_solid_teammates', 1, 'Teammates block each other (enemies always do)', 0, 1);
     num('mp_respawn_on_death_t', 0, 'Terrorists respawn after dying', 0, 1);
     num('mp_respawn_on_death_ct', 0, 'Counter-Terrorists respawn after dying', 0, 1);
     num('mp_randomspawn', 0, 'Spawn at any spawn point, away from enemies', 0, 1);
@@ -234,6 +235,7 @@ export class Host {
       overtimeMoney: v('mp_overtime_startmoney'),
       teamSizeMax: v('mp_teamsize_max'),
       teammatesAreEnemies: v('mp_teammates_are_enemies') !== 0,
+      solidTeammates: v('mp_solid_teammates') !== 0,
       respawnT: v('mp_respawn_on_death_t') !== 0,
       respawnCT: v('mp_respawn_on_death_ct') !== 0,
       randomSpawn: v('mp_randomspawn') !== 0,

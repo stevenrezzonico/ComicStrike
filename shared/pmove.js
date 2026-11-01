@@ -9,8 +9,8 @@ import {
 } from './constants.js';
 import { CONTENTS_EMPTY } from './bsp.js';
 import {
-  Trace, traceHull, traceEntity, entityContents, pointContents, hullFits,
-  HULL_STAND, HULL_DUCK, HULL_POINT, HULL_MINS, ENT_LADDER,
+  Trace, tracePlayer, traceEntity, entityContents, pointContents, hullFits,
+  HULL_STAND, HULL_DUCK, HULL_POINT, HULL_MINS, HULL_MAXS, ENT_LADDER, ENT_BODY_BASE, BODY_FIELDS,
 } from './trace.js';
 
 // Tunables (CS:GO convar defaults where they exist).
@@ -134,8 +134,9 @@ export const touched = new Int32Array(4);
 export let touchedCount = 0;
 const planes = new Float64Array(MAX_CLIP_PLANES * 3);
 
+// The world, the brush entities and the other players (`world.bodies`).
 function trace(sx, sy, sz, ex, ey, ez) {
-  return traceHull(W, hull, sx, sy, sz, ex, ey, ez, tr);
+  return tracePlayer(W, hull, sx, sy, sz, ex, ey, ez, tr);
 }
 
 function checkVelocity() {
@@ -595,10 +596,39 @@ function unstick() {
   }
 }
 
+// Inside another player (he stood up under us, or we spawned on him): when our feet are
+// in his upper half we are put on top of him (a crouching teammate standing up lifts
+// whoever stands on him: CS:GO's boost), else we walk out of him (his box is passed
+// through while we start inside it).
+function liftOffBodies() {
+  const n = W.bodyCount;
+  if (n === 0) return;
+  const B = W.bodies, self = W.bodySelf, pass = W.solidTeam ? -1 : W.bodyTeam;
+  const hx = HULL_MAXS[hull * 3], hz = HULL_MAXS[hull * 3 + 2];
+  for (let k = 0; k < n; k++) {
+    const b = k * BODY_FIELDS, bh = B[b + 3];
+    if (bh === 0 || k === self || B[b + 7] === pass) continue;
+    if (Math.abs(ox - B[b]) >= 16 + hx || Math.abs(oy - B[b + 1]) >= 16 + hx) continue;
+    const top = B[b + 2] + bh, feet = oz - hz;
+    if (feet >= top || feet < B[b + 2]) continue;
+    oz = top + hz + DIST_EPSILON;
+  }
+}
+
 // GoldSrc SV_CheckMovingGround: standing on a conveyor sets the base velocity; once
-// off it, the base velocity becomes real momentum (plus half a frame of it).
+// off it, the base velocity becomes real momentum (plus half a frame of it). Standing
+// on another player, his velocity is the base velocity (Source's SetGroundEntity adds
+// the ground's velocity on leaving it): we ride along with him, and a jump off a running
+// teammate keeps his speed on top of its own, past the jump's speed cap (the run boost).
 function checkMovingGround() {
-  const e = onGround && groundEnt >= 0 ? W.ents[groundEnt] : null;
+  if (onGround && groundEnt >= ENT_BODY_BASE) {
+    const b = (groundEnt - ENT_BODY_BASE) * BODY_FIELDS, B = W.bodies;
+    if (B[b + 3] !== 0 && (B[b + 4] !== 0 || B[b + 5] !== 0 || B[b + 6] !== 0)) {
+      bvx = B[b + 4]; bvy = B[b + 5]; bvz = B[b + 6];
+      return;
+    }
+  }
+  const e = onGround && groundEnt >= 0 && groundEnt < ENT_BODY_BASE ? W.ents[groundEnt] : null;
   if (e && (e.pushX !== 0 || e.pushY !== 0 || e.pushZ !== 0)) {
     bvx = e.pushX; bvy = e.pushY; bvz = e.pushZ;
     return;
@@ -642,6 +672,7 @@ export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) 
   smove = ((buttons & IN_MOVERIGHT) ? MOVE.forwardSpeed : 0) - ((buttons & IN_MOVELEFT) ? MOVE.forwardSpeed : 0);
 
   unstick();
+  liftOffBodies();
   checkMovingGround();
   if (!onGround) fallVel = -vz;
 
