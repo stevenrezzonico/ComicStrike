@@ -73,6 +73,7 @@ const TABS = [
     ['slider', 'mat_viewportscale', 'Render resolution (most; over 1: supersampling)', 0.5, 2, 0.05],
     ['select', 'r_hidpi', 'High-DPI screens', ['Page pixels', 'Sharp (screen pixels)']],
     ['toggle', 'r_lowlatency', 'Low-latency display (may tear; takes effect on reload)'],
+    ['slider', 'fps_max', 'Frame rate cap (0: none; only with vsync off)', 0, 1000, 10],
     ['section', null, 'Weapon'],
     ['slider', 'viewmodel_fov', 'Weapon field of view', 54, 68, 1],
     ['slider', 'viewmodel_offset_x', 'Weapon offset right', -2.5, 2.5, 0.1],

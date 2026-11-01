@@ -83,6 +83,8 @@ export function createConsole(print) {
   add('r_dynres', 1, 'Automatic render resolution: lowers the scene resolution while frames come late (under 60 fps), raises it again when they keep up', 0, 1);
   add('r_hidpi', 0, 'Sharp: render at the screen pixel density on high-DPI screens (up to 2x; costs up to 4x the pixels)', 0, 1);
   add('r_lowlatency', 1, 'Low-latency display: frames go to the screen without the browser compositor (a frame less of mouse lag where the browser allows it; 0 if it tears during fast turns; takes effect on reload)', 0, 1);
+  add('fps_max', 400, 'Frame rate cap (0: none); matters only where the browser runs with vsync off, else frames come at the display rate', 0, 1000);
+  add('r_frames_ahead', 3, 'Frames the browser may hold in its GPU pipeline before the next is drawn (0: no limit); a browser with vsync off otherwise queues frames (mouse lag) and stalls once the queue is full', 0, 8);
   // View.
   add('viewmodel_fov', 60, 'Weapon model field of view', 54, 68);
   add('viewmodel_offset_x', 1, 'Weapon model offset: right', -2.5, 2.5);

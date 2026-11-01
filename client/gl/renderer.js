@@ -13,6 +13,7 @@ import { program } from './program.js';
 import { GBuffer } from './gbuffer.js';
 import { mapLight } from './skinned.js';
 import { GpuTimer, PASS } from './gputimer.js';
+import { FrameGate } from './framegate.js';
 import { FlashLights } from './flashes.js';
 import { Afterimage } from './afterimage.js';
 import { WorldVis } from './worldvis.js';
@@ -72,6 +73,7 @@ export class Renderer {
     this.inkFast = null; // r_inkfast's, built when first asked for
     this.afterimage = new Afterimage(gl); // the flashbang's frozen frame
     this.timer = new GpuTimer(gl); // GPU time per pass (cl_showfps 3)
+    this.gate = new FrameGate(gl); // frames in flight (r_frames_ahead)
     this.emptyVao = gl.createVertexArray();
     this.vao = null;
     this.opaqueCount = 0;

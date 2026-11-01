@@ -46,7 +46,7 @@ export class GpuTimer {
     this.behind = 0;
     this.readings = 0; // frames read back since the last reset()
     // Frames behind of each result, counted for the benchmark (index: frames, capped).
-    this.behindCount = new Int32Array(8);
+    this.behindCount = new Int32Array(32);
   }
 
   mark(pass) {

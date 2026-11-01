@@ -1097,6 +1097,7 @@ function tick() {
 }
 
 let last = performance.now();
+let lastDraw = last; // when the last frame was drawn (fps_max, r_frames_ahead skip frames)
 let accumulator = 0;
 let frames = 0;
 let fpsTime = last;
@@ -1132,8 +1133,8 @@ function saveDynres() {
 // times, how far the GPU runs behind, the CPU by part, and every hitch with what happened in
 // the frame before it (`tag`).
 const bench = {
-  until: 0, start: 0, seconds: 0, gaps: new Float32Array(8192), n: 0, cpu: 0, ctx: null,
-  parts: new Float64Array(7), hitches: [], heap: 0, gpu: 0, gpuN: 0, passes: false,
+  until: 0, start: 0, seconds: 0, gaps: new Float32Array(32768), n: 0, frames: 0, cpu: 0, ctx: null,
+  parts: new Float64Array(7), hitches: [], heap: 0, gpu: 0, gpuN: 0, passes: false, skipped: 0, capped: 0,
 };
 const CPU_PARTS = ['ticks', 'models', 'render', 'radar', 'hud', 'view', 'print'];
 const HITCH_MS = 25; // a frame gap over this is listed (60 Hz misses read 33)
@@ -1154,18 +1155,20 @@ const renderScale = () =>
   `${Math.round(100 * renderer.renderScale)}%${cv.r_dynres.bool && dynres.print < 1 ? `, print ${Math.round(100 * dynres.print)}%` : ''}${renderer.style.fast ? ', fast ink' : ''}`;
 
 function benchmarkReport() {
-  const { gaps, n } = bench;
+  const { gaps, n, frames: n0 } = bench; // n: the gaps kept (the first of a long run), n0: every drawn frame
   const sorted = Array.from(gaps.subarray(0, n)).sort((a, b) => a - b);
   const at = (q) => (n ? sorted[Math.min(n - 1, Math.floor(n * q))] : 0).toFixed(1);
   let slow = 0;
   for (let i = 0; i < n; i++) if (gaps[i] > SLOW_MS) slow++;
   const t = renderer.timer;
   const gpu = bench.passes ? t.report() : t.ext && bench.gpuN ? `gpu: ${(bench.gpu / bench.gpuN).toFixed(2)} ms a frame` : '';
-  const per = (ms) => (ms / Math.max(1, n)).toFixed(2);
+  const per = (ms) => (ms / Math.max(1, n0)).toFixed(2);
+  const held = bench.skipped + bench.capped;
   const lines = [
-    `benchmark ${bench.seconds} s: ${(n / bench.seconds).toFixed(1)} fps, ${(100 * slow / Math.max(1, n)).toFixed(0)}% slow ` +
-      `(over ${SLOW_MS} ms), res ${renderScale()}${cv.r_dynres.bool ? ' (r_dynres)' : ''}`,
-    `frame ms: median ${at(0.5)} · 95% ${at(0.95)} · 99% ${at(0.99)} · worst ${at(1)}`,
+    `benchmark ${bench.seconds} s: ${(n0 / bench.seconds).toFixed(1)} fps, ${(100 * slow / Math.max(1, n)).toFixed(0)}% slow ` +
+      `(over ${SLOW_MS} ms), res ${renderScale()}${cv.r_dynres.bool ? ' (r_dynres)' : ''}` +
+      (held ? `, ${held} frames held back (${bench.skipped} by r_frames_ahead, ${bench.capped} by fps_max)` : ''),
+    `frame ms: median ${at(0.5)} · 95% ${at(0.95)} · 99% ${at(0.99)} · worst ${at(1)}${n < n0 ? ` (the first ${n} frames)` : ''}`,
     `cpu: ${per(bench.cpu)} ms a frame: ${CPU_PARTS.map((p, i) => `${p} ${per(bench.parts[i])}`).join(' · ')}`,
     (gpu || 'gpu: no timings') +
       (bench.passes ? '\n(timing every pass slows a GPU near its limit: compare frame rates without "passes")' : ''),
@@ -1185,7 +1188,7 @@ con.command('benchmark', (a, ctx) => {
   bench.gpu = bench.gpuN = 0;
   bench.until = performance.now() + bench.seconds * 1000;
   bench.start = performance.now();
-  bench.n = 0;
+  bench.n = bench.frames = bench.skipped = bench.capped = 0;
   bench.cpu = 0;
   bench.parts.fill(0);
   bench.hitches.length = 0;
@@ -1216,31 +1219,14 @@ function frame(now) {
     localPaused = paused;
     if (localWorker) localWorker.postMessage({ type: 'pause', on: paused });
   }
-  const gap = now - last;
-  const elapsed = paused ? 0 : gap / 1000;
-  frameMsMax = Math.max(frameMsMax, gap);
+  const elapsed = paused ? 0 : (now - last) / 1000;
+  last = now;
   if (bench.until) {
-    if (bench.n < bench.gaps.length) bench.gaps[bench.n++] = gap;
     // A heap that shrank: a garbage collection ran (Chrome's performance.memory).
     const heap = performance.memory ? performance.memory.usedJSHeapSize : 0;
     if (heap && heap < bench.heap) tag('gc');
     bench.heap = heap;
-    if (gap > HITCH_MS && bench.hitches.length < MAX_HITCHES) {
-      bench.hitches.push([now - bench.start, gap, frameTags.join(', ')]);
-    }
-    frameTags.length = 0;
   }
-  if (cv.r_dynres.bool) {
-    const t = renderer.timer, repeat = cv.r_drawrepeat.number;
-    gpuRead.readings = t.readings;
-    gpuRead.frameMs = t.frameMs * repeat;
-    gpuRead.behind = t.behind / repeat;
-    if (dynres.frame(gap, now, t.ext ? gpuRead : null)) {
-      tag('resolution step');
-      dynresSaved = false;
-    } else if (!dynresSaved && dynres.settled(now)) saveDynres();
-  }
-  last = now;
 
   // Scopes: CS:GO fovs per zoom level; sensitivity scales with zoom_sensitivity_ratio_mouse.
   const held = activeWeapon(ws);
@@ -1271,9 +1257,41 @@ function frame(now) {
   }
   if (ticks === MAX_TICKS_PER_FRAME) accumulator = 0; // fell far behind (tab was hidden)
   if (ticks > 2) tag(`${ticks} ticks`);
-
   const t1 = performance.now();
   if (bench.until) bench.parts[0] += t1 - t0;
+  cpuSim += t1 - t0;
+  // Draw this frame? A browser with vsync off calls us as fast as we return: fps_max caps
+  // the rate and r_frames_ahead holds a frame back while the GPU pipeline is full (see
+  // client/gl/framegate.js). The ticks and the mouse ran whatever happens here.
+  const gap = now - lastDraw, fpsMax = cv.fps_max.number;
+  if (!renderer.gate.ready(cv.r_frames_ahead.number, now)) {
+    if (bench.until) bench.skipped++;
+    return;
+  }
+  if (fpsMax > 0 && gap < 1000 / fpsMax - 0.5) {
+    if (bench.until) bench.capped++;
+    return;
+  }
+  lastDraw = now;
+  frameMsMax = Math.max(frameMsMax, gap);
+  if (bench.until) {
+    bench.frames++;
+    if (bench.n < bench.gaps.length) bench.gaps[bench.n++] = gap;
+    if (gap > HITCH_MS && bench.hitches.length < MAX_HITCHES) {
+      bench.hitches.push([now - bench.start, gap, frameTags.join(', ')]);
+    }
+    frameTags.length = 0;
+  }
+  if (cv.r_dynres.bool) {
+    const t = renderer.timer, repeat = cv.r_drawrepeat.number;
+    gpuRead.readings = t.readings;
+    gpuRead.frameMs = t.frameMs * repeat;
+    gpuRead.behind = t.behind / repeat;
+    if (dynres.frame(gap, now, t.ext ? gpuRead : null)) {
+      tag('resolution step');
+      dynresSaved = false;
+    } else if (!dynresSaved && dynres.settled(now)) saveDynres();
+  }
   lapAt = t1;
   renderer.timer.on = cv.cl_showfps.number >= 3 || (bench.until > 0 && bench.passes);
   if (bench.until && renderer.timer.readings) {
@@ -1288,7 +1306,7 @@ function frame(now) {
     draw(now, accumulator / TICK_DT, 0);
     renderer.timer.endFrame();
   }
-  cpuSim += t1 - t0;
+  renderer.gate.drawn(now);
   cpuDraw += performance.now() - t1;
   if (bench.until) {
     bench.cpu += performance.now() - t0;
