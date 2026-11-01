@@ -1,14 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <!-- ComicStrike's mark: a comic burst in the print's own inks (yellow, red, paper, ink) with a
-       crosshair over it. The favicon and the badge beside the menu title; no font, so it looks
-       the same everywhere. -->
-  <path d="M32 2l5 9 9-5-1 10 10 1-5 9 9 5-9 5 5 9-10 1 1 10-9-5-5 9-5-9-9 5 1-10-10-1 5-9-9-5 9-5-5-9 10-1-1-10 9 5z"
-    fill="#17130f" transform="translate(2.5 2.5)"/>
-  <path d="M32 2l5 9 9-5-1 10 10 1-5 9 9 5-9 5 5 9-10 1 1 10-9-5-5 9-5-9-9 5 1-10-10-1 5-9-9-5 9-5-5-9 10-1-1-10 9 5z"
-    fill="#ffd23a" stroke="#17130f" stroke-width="2.5" stroke-linejoin="round"/>
-  <circle cx="32" cy="32" r="13" fill="#e2402a" stroke="#17130f" stroke-width="2.5"/>
-  <circle cx="32" cy="32" r="3" fill="#17130f"/>
-  <g stroke="#17130f" stroke-width="3" stroke-linecap="round">
-    <path d="M32 13v8M32 43v8M13 32h8M43 32h8"/>
+  <!-- ComicStrike's mark: the letters CS inked in yellow on a blue tile, with the print's hard
+       ink shadow. The favicon and the badge beside the menu title; drawn as strokes, no font,
+       so it looks the same everywhere. -->
+  <rect x="4" y="4" width="54" height="54" rx="12" fill="#17130f" transform="translate(2.5 2.5)"/>
+  <rect x="4" y="4" width="54" height="54" rx="12" fill="#2f6fc4" stroke="#17130f" stroke-width="3"/>
+  <defs>
+    <path id="c" d="M27.5 23.5A10.5 10.5 0 1 0 27.5 38.5"/>
+    <path id="s" d="M50 23.5c-2-1.8-4.4-2.6-7-2.6-4.6 0-7.4 2.4-7.4 5.6 0 7.2 14.8 3.3 14.8 10.6 0 3.3-3 5.8-7.6 5.8-3 0-5.6-1-7.6-2.8"/>
+  </defs>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#17130f" stroke-width="12" transform="translate(1.5 1.5)"><use href="#c"/><use href="#s"/></g>
+    <g stroke="#17130f" stroke-width="11"><use href="#c"/><use href="#s"/></g>
+    <g stroke="#ffd23a" stroke-width="5.5"><use href="#c"/><use href="#s"/></g>
   </g>
 </svg>
