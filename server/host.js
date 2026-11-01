@@ -87,6 +87,7 @@ export class Host {
     num('mp_respawn_immunitytime', 0, 'Seconds a respawned player cannot be hurt (until he shoots)', 0, 60);
     num('mp_match_restart_delay', 15, 'Seconds between the end of a match and the next', 1, 300);
     num('mp_death_drop_gun', 1, 'The dead drop their best gun', 0, 1);
+    num('mp_armoury_entities', 1, "The map's own weapons lie out at every round start (armoury_entity, the fy_ maps)", 0, 1);
     num('mp_halftime', 1, 'Teams swap sides after half the rounds', 0, 1);
     num('mp_overtime_enable', 1, 'A tied match goes to overtime', 0, 1);
     num('mp_overtime_maxrounds', DEFAULT_RULES.overtimeRounds, 'Rounds per overtime period (swap after half, first past half wins)', 2, 30);
@@ -248,6 +249,7 @@ export class Host {
       immunityTime: v('mp_respawn_immunitytime'),
       matchRestartDelay: v('mp_match_restart_delay'),
       deathDropGun: v('mp_death_drop_gun') !== 0,
+      armouryEntities: v('mp_armoury_entities') !== 0,
       botQuota: v('bot_quota'),
       botQuotaMode: this.con.get('bot_quota_mode').value === 'fill' ? 'fill' : 'normal',
       botDifficulty: v('bot_difficulty'),

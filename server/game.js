@@ -61,6 +61,13 @@ const SEND_BUFFERS = 8; // rotating send buffers: a datagram may still be queued
 const WARMUP_MONEY = 16000; // CS:GO warmup: buy anything
 const THROW_DISTANCE = 64; // a dropped (G) bomb lands this far ahead (weapons fly: shared/items.js)
 const PICKUP_DELAY = TICK_RATE; // ticks before a thrown bomb or weapon can be picked up
+// CS 1.6's armoury_entity `item` numbers, as our weapons (the MP5 as the MP5-SD, the TMP
+// as the MP9, the M3 as the Nova, the SG 550 as the SCAR-20, the Scout as the SSG 08; 15
+// and 16, kevlar and kevlar + helmet, have no item on the ground: left out).
+const ARMOURY_ITEMS = [
+  'mp5sd', 'mp9', 'p90', 'mac10', 'ak47', 'nova', 'm4a1', 'scar20', 'awp', 'g3sg1', 'ssg08', 'deagle', 'famas', 'galilar',
+  'm249', null, null, 'hegrenade', 'flashbang', 'smokegrenade',
+];
 const DEMO_RESTOCK = 2; // the demo: seconds from a bomb going off or being defused to the next one
 const DEMO_HEAL = 2; // the demo: seconds from the last hurt to full health
 
@@ -197,6 +204,7 @@ export const DEFAULT_RULES = {
   immunityTime: 0, // mp_respawn_immunitytime (s)
   matchRestartDelay: 15, // mp_match_restart_delay (s)
   deathDropGun: true, // mp_death_drop_gun
+  armouryEntities: true, // mp_armoury_entities: the map's weapons lying out at each round start
   // Bots (server/bots.js).
   botQuota: 0, // bot_quota
   botQuotaMode: 'normal', // bot_quota_mode: normal (that many bots) or fill (bots + humans)
@@ -228,6 +236,16 @@ export class Game {
       parseVec3(e.origin, o);
       const yaw = e.angles ? +e.angles.trim().split(/\s+/)[1] || 0 : +(e.angle || 0);
       this.spawns[team].push([o[0], o[1], o[2], yaw]);
+    }
+    // The map's weapons lying out (CS 1.6's armoury_entity: fy_ maps): placed at each round start.
+    this.armoury = [];
+    for (const e of bsp.entities) {
+      if (e.classname !== 'armoury_entity') continue;
+      const weapon = WEAPON_ID[ARMOURY_ITEMS[+(e.item || 0)] || ''];
+      if (!weapon) continue; // kevlar, or a weapon we do not have
+      parseVec3(e.origin, o);
+      const yaw = e.angles ? +e.angles.trim().split(/\s+/)[1] || 0 : (this.armoury.length * 73) % 360;
+      this.armoury.push({ weapon, count: Math.max(1, Math.min(32, +(e.count || 1))), x: o[0], y: o[1], z: o[2], yaw });
     }
     // Who wins when the round clock runs out: CTs defend bomb sites, Ts hold hostages.
     this.bombSites = new BombSites(bsp);
@@ -277,6 +295,7 @@ export class Game {
 
     // Weapons on the ground.
     this.items = new Items();
+    this.placeArmoury(); // laid out for the warmup too; each round start lays them out again
     this.itemsDirty = false;
     this.itemsWriter = new Writer();
 
@@ -915,6 +934,7 @@ export class Game {
     this.placing = false;
     this.resetBomb();
     this.items.clear(); // CS:GO cleans up the ground between rounds
+    this.placeArmoury();
     this.itemsDirty = true;
     this.grenades.clear();
     for (const c of this.clients) if (c) c.flashLeft = 0;
@@ -1188,6 +1208,20 @@ export class Game {
     f[o + 2] = it.reserve[i];
     it.remove(i);
     this.itemsDirty = true;
+  }
+
+  // The map's armoury_entity weapons laid out on the floor, each with a full magazine
+  // and reserve, `count` of them in a short row (CS 1.6 restocks them every round); not in
+  // the gun game modes, which arm everyone by level.
+  placeArmoury() {
+    if (!this.rules.armouryEntities || this.rules.armsRace || this.rules.demolition) return;
+    for (const a of this.armoury) {
+      const w = WEAPONS[a.weapon], r = a.yaw * Math.PI / 180;
+      for (let k = 0; k < a.count; k++) {
+        const x = a.x - Math.sin(r) * 12 * k, y = a.y + Math.cos(r) * 12 * k;
+        this.items.add(a.weapon, w.clip, w.reserve, x, y, this.floorBelow(x, y, a.z + 16), a.yaw);
+      }
+    }
   }
 
   // Each tick: the living take weapons they walk over when that slot is free.

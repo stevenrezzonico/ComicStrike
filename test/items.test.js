@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { parseBSP } from '../shared/bsp.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { IN_DROP, IN_USE } from '../shared/constants.js';
-import { WEAPON_ID, WS_SLOTS, WS_ACTIVE, SLOT_PRIMARY, SLOT_SECONDARY } from '../shared/weapons.js';
+import { WEAPONS, WEAPON_ID, WS_SLOTS, WS_ACTIVE, SLOT_PRIMARY, SLOT_SECONDARY } from '../shared/weapons.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
 import { Writer, Reader, CmdRing, writeHello, writeCmds, writeBuy, readItems, S2C_ITEMS } from '../shared/protocol.js';
 import { Items } from '../shared/items.js';
@@ -170,4 +170,41 @@ Deno.test({ name: 'weapons on the ground: G throws the gun in an arc; it lands a
   assert.ok(d > 80 && d < 400, `well ahead (${d.toFixed(0)} units)`);
   run(2, [a, b]);
   assert.equal(a.items().flying[0], 0, 'clients are told it lies still');
+} });
+
+let buzzkill = null;
+try {
+  buzzkill = parseBSP(Deno.readFileSync(new URL('../maps/fy_buzzkill.bsp', import.meta.url)).buffer);
+} catch { /* map-dependent */ }
+
+Deno.test({ name: "weapons on the ground: fy_buzzkill's armoury_entity weapons lie out at every round start", ignore: !buzzkill, fn: () => {
+  const game = new Game('fy_buzzkill', buzzkill, { rounds: false });
+  const w = new Writer();
+  const c = game.connect({ send: () => {}, close: () => {}, closed: false });
+  game.receive(c, writeHello(w, TEAM_T, 0, 0, 'alpha').slice());
+  game.step();
+  const it = game.items, counts = {};
+  for (let i = 0; i < it.count; i++) counts[it.weapon[i]] = (counts[it.weapon[i]] || 0) + 1;
+  assert.equal(it.count, 22, '28 points, the 6 kevlar left out');
+  assert.equal(counts[WEAPON_ID.mp5sd], 6);
+  assert.equal(counts[WEAPON_ID.ak47], 4);
+  assert.equal(counts[WEAPON_ID.m4a1], 4);
+  assert.equal(counts[WEAPON_ID.awp], 2);
+  assert.equal(counts[WEAPON_ID.deagle], 2);
+  assert.equal(counts[WEAPON_ID.famas], 2);
+  assert.equal(counts[WEAPON_ID.galilar], 2);
+  for (let i = 0; i < it.count; i++) {
+    assert.equal(it.clip[i], WEAPONS[it.weapon[i]].clip, 'a full magazine');
+    assert.ok(it.reserve[i] > 0, 'and reserve');
+    assert.equal(it.flying[i], 0, 'lying still');
+    assert.ok(it.z[i] < 20 && it.z[i] > -320, `on a floor (z ${it.z[i]})`);
+  }
+  // Picked up and the round restarted: laid out again. mp_armoury_entities 0: none.
+  it.remove(0);
+  assert.equal(it.count, 21);
+  game.startRound(true);
+  assert.equal(game.items.count, 22, 'restocked');
+  game.rules.armouryEntities = false;
+  game.startRound(true);
+  assert.equal(game.items.count, 0, 'turned off');
 } });
