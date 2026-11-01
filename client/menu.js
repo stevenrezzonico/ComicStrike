@@ -117,6 +117,13 @@ const ACTIONS = [
 ];
 const KEY_COLUMNS = 2;
 
+// Online play goes over WebTransport (client/net.js): Chrome, Edge and Firefox have it,
+// Safari from 26.4 (macOS and iOS 26.4). Without it the page can still practice (the
+// server runs in a worker) and edit maps.
+const hasWebTransport = () => typeof WebTransport !== 'undefined';
+const NO_WEBTRANSPORT = 'This browser cannot play online: it has no WebTransport (Chrome, Edge and Firefox have it, ' +
+  'Safari from 26.4). Practice and the map editor work here.';
+
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -425,6 +432,7 @@ export class Menu {
       ? `${s.hostname} · ${s.map} · ${MODE_LABELS[s.mode] || s.mode || 'Competitive'} · ${s.players}/${s.maxPlayers} players`
       : 'No server answered.'));
     if (!s) return;
+    if (!hasWebTransport()) return body.append(el('p', 'menu-hint', NO_WEBTRANSPORT));
     this.renderTeam(body, (team) => this.onPlay(team), true);
   }
 
@@ -597,8 +605,9 @@ export class Menu {
     const go = el('div', 'menu-teams');
     go.append(button('Play alone', () => this.onPractice(this.ownMap, this.practiceTeam, opts), 'menu-go'));
     const host = button('Host for friends', () => this.onHost(this.ownMap, this.practiceTeam, opts), 'menu-go');
-    host.disabled = !this.server;
+    host.disabled = !this.server || !hasWebTransport();
     if (!this.server) host.title = 'Hosting needs the server, which did not answer';
+    else if (!hasWebTransport()) host.title = NO_WEBTRANSPORT;
     go.append(host);
     body.append(go);
   }

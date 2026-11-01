@@ -27,7 +27,8 @@ export class GBuffer {
     this.height = 0;
     this.all = [gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2];
     this.albedoOnly = [gl.COLOR_ATTACHMENT0, gl.NONE, gl.NONE];
-    this.packed = !gl.getExtension('EXT_color_buffer_half_float');
+    // Either extension makes RG16F renderable (Safari exposes only the float one).
+    this.packed = !(gl.getExtension('EXT_color_buffer_half_float') || gl.getExtension('EXT_color_buffer_float'));
     if (this.packed) shaderDefines.prefix += '#define DEPTH_PACKED\n';
   }
 
