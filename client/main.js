@@ -1683,7 +1683,7 @@ con.command('buymenu', () => {
 }, 'Opens the buy menu');
 con.command('teammenu', () => {
   if (!playing) return;
-  if (document.pointerLockElement) document.exitPointerLock();
+  input.unlock();
   menu.showPause('team');
 }, 'Opens the team menu');
 const BUY_NAMES = { vest: ITEM_KEVLAR, vesthelm: ITEM_ASSAULTSUIT, defuser: ITEM_DEFUSER };
@@ -1801,11 +1801,14 @@ applyDrawHud();
 // In a game, releasing the mouse (Escape) opens the pause menu, unless the console or
 // the buy menu took it; closing those takes the mouse back (the key press allows it).
 function updateOverlay() {
+  document.body.classList.toggle('softplay', input.locked && input.soft); // the pause button (no Escape key on a tablet)
   if (preview) return menu.hide(); // the editor's 3D view: Escape only lets the mouse go
   if (!playing) return;
-  if (document.pointerLockElement) menu.hide();
+  if (input.locked) menu.hide();
   else if (!conWin.isOpen && !hud.menuOpen) menu.showPause();
 }
+input.onLockChange = updateOverlay;
+document.getElementById('pausebtn').addEventListener('click', () => input.unlock());
 // The overlay is decided once the lock request settles: asked at once, the mouse was not
 // back yet and the pause menu flashed up for a frame.
 function closeBuyMenu() {
@@ -2046,7 +2049,7 @@ function leaveGame(message = '') {
   playing = false;
   backdrop = false;
   resetSession();
-  if (document.pointerLockElement) document.exitPointerLock();
+  input.unlock();
   input.leaveFullscreen();
   menu.showStart(message);
 }
@@ -2127,7 +2130,7 @@ function startPreview() {
   menu.hide();
   input.canLock = () => false; // a click picks; the right button held looks round and flies
   previewEdit = new PreviewEditor(canvas, () => ({ viewProj, invViewProj }),
-    (msg) => parent.postMessage(msg, location.origin), () => input.lock().catch(() => {}), () => document.exitPointerLock());
+    (msg) => parent.postMessage(msg, location.origin), () => input.lock().catch(() => {}), () => input.unlock());
   addEventListener('message', (e) => {
     if (e.origin !== location.origin || e.source !== parent || !e.data) return;
     if (e.data.type === 'preview-map') previewMap(e.data.name, e.data.bytes).catch((err) => console.warn(`preview: ${err.message}`));

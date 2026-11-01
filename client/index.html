@@ -16,7 +16,12 @@
     color-scheme: light;
   }
   html, body { margin: 0; height: 100%; background: var(--ink); overflow: hidden; }
-  #view { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+  #view { display: block; width: 100%; height: 100%; image-rendering: pixelated; touch-action: none; }
+  /* The pause button, on devices without a Pointer Lock API (a tablet: no Escape key). */
+  #pausebtn { position: fixed; right: 14px; top: 14px; display: none; padding: 4px 16px; border: 3px solid var(--ink);
+    border-radius: 4px; background: var(--paper); color: var(--ink); box-shadow: 4px 4px 0 var(--ink);
+    font: 26px/1.2 var(--display); letter-spacing: 0.1em; touch-action: manipulation; }
+  body.softplay #pausebtn { display: block; }
   #status {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
     color: var(--yellow); font: 32px/1.4 var(--display); letter-spacing: 0.04em;
@@ -394,6 +399,7 @@
 <div id="hud-bomb"></div>
 <div id="progress"><div></div><div></div></div>
 <div id="usehint"></div>
+<button id="pausebtn" title="Pause">II</button>
 <div id="scoreboard"></div>
 <div id="buymenu"></div>
 <div id="death"></div>

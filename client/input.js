@@ -5,6 +5,7 @@
 import { keyName, MOUSE_NAMES } from './binds.js';
 
 export const SELECT_LAST = -2; // switch to the previous weapon (lastinv)
+const TOUCH_COUNTS = 4; // mouse counts per pixel of a touch drag (a screen's width turns about half round)
 
 export class Input {
   constructor(canvas) {
@@ -16,6 +17,12 @@ export class Input {
     this.mouseDX = 0;
     this.mouseDY = 0;
     this.locked = false;
+    this.soft = false; // locked without the Pointer Lock API (iOS, iPadOS: the cursor stays free)
+    this.onLockChange = () => {}; // after a soft lock or unlock (the game's overlay)
+    this.touchId = -1; // the finger that looks round, and where it was
+    this.touchX = 0;
+    this.touchY = 0;
+    this.fireId = -1; // a second finger: fire while it is down
     this.sensitivity = 2.5; // the sensitivity / m_yaw / m_pitch / m_rawinput cvars
     this.mYaw = 0.022; // degrees per count
     this.mPitch = 0.022;
@@ -34,15 +41,55 @@ export class Input {
     });
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas;
+      this.soft = false;
       if (!this.locked && !this.keepKeys()) this.clear();
     });
+    // Touch (a tablet, a phone): one finger drags the view round, a second one fires. Only
+    // while locked (a soft lock there: see lock()), so the menus' touches are their own.
+    canvas.addEventListener('touchstart', (e) => {
+      if (!this.locked) return;
+      e.preventDefault();
+      for (const t of e.changedTouches) {
+        if (this.touchId < 0) {
+          this.touchId = t.identifier;
+          this.touchX = t.clientX;
+          this.touchY = t.clientY;
+        } else if (this.fireId < 0) {
+          this.fireId = t.identifier;
+          this.onKey('mouse1', true);
+        }
+      }
+    }, { passive: false });
+    canvas.addEventListener('touchmove', (e) => {
+      if (!this.locked) return;
+      e.preventDefault();
+      for (const t of e.changedTouches) {
+        if (t.identifier !== this.touchId) continue;
+        this.mouseDX += (t.clientX - this.touchX) * TOUCH_COUNTS;
+        this.mouseDY += (t.clientY - this.touchY) * TOUCH_COUNTS;
+        this.touchX = t.clientX;
+        this.touchY = t.clientY;
+      }
+    }, { passive: false });
+    const touchEnd = (e) => {
+      for (const t of e.changedTouches) {
+        if (t.identifier === this.touchId) this.touchId = -1;
+        if (t.identifier === this.fireId) {
+          this.fireId = -1;
+          this.onKey('mouse1', false);
+        }
+      }
+    };
+    canvas.addEventListener('touchend', touchEnd);
+    canvas.addEventListener('touchcancel', touchEnd);
     document.addEventListener('mousemove', (e) => {
       if (!this.locked) return;
       this.mouseDX += e.movementX;
       this.mouseDY += e.movementY;
     });
     document.addEventListener('mousedown', (e) => {
-      if (this.locked && MOUSE_NAMES[e.button]) this.onKey(MOUSE_NAMES[e.button], true);
+      // Under a soft lock the cursor is free: a click on the pause button is not a shot.
+      if (this.locked && MOUSE_NAMES[e.button] && (!this.soft || e.target === canvas)) this.onKey(MOUSE_NAMES[e.button], true);
     });
     document.addEventListener('mouseup', (e) => {
       if (MOUSE_NAMES[e.button]) this.onKey(MOUSE_NAMES[e.button], false);
@@ -61,7 +108,7 @@ export class Input {
       }
       const name = keyName(e.code, e.key);
       if (name === 'escape' && this.locked) { // under a keyboard lock the browser leaves Escape to the page
-        document.exitPointerLock();
+        this.unlock();
         return;
       }
       if (this.onKey(name, true)) e.preventDefault();
@@ -118,6 +165,14 @@ export class Input {
 
   async lock() {
     if (this.locked) return;
+    if (!this.canvas.requestPointerLock) {
+      // No Pointer Lock API (iOS and iPadOS Safari): the game plays with the cursor free, the
+      // view turned by the trackpad's movement and by touch, Escape or the pause button let go.
+      this.locked = this.soft = true;
+      this.onLockChange();
+      if (this.fullscreen) await this.enterFullscreen();
+      return;
+    }
     // Raw input: bypass OS mouse acceleration where supported (m_rawinput 1). Asked before
     // the fullscreen request, in the same task: entering fullscreen uses up the click's
     // activation, and a pointer lock asked after it was refused (a second click took it).
@@ -130,6 +185,16 @@ export class Input {
       await this.canvas.requestPointerLock();
     }
     if (fullscreen) await fullscreen;
+  }
+
+  // Lets the mouse go (Escape, the menus): the pause menu opens from the change.
+  unlock() {
+    if (this.soft) {
+      this.locked = this.soft = false;
+      this.touchId = this.fireId = -1;
+      if (!this.keepKeys()) this.clear();
+      this.onLockChange();
+    } else if (document.pointerLockElement) document.exitPointerLock();
   }
 
   // Fullscreen (the `fullscreen` cvar), from a click: the page fills the screen and, where
