@@ -260,7 +260,10 @@ function hullBrush(planes, h, origin, contents, index) {
   }
   const all = h === 0 ? local : grown;
   const vs = h === 0 ? verts : brushPolygons(all).flat();
-  return { planes: all, verts: vs, b: boundsOf(vs), contents, index };
+  // A brush whose every textured side is alpha-tested ('{': a ladder board, a grate) is
+  // seen through: the faces of other brushes inside it are kept (hull 0).
+  const clear = h === 0 && planes.some((p) => p.tex) && planes.every((p) => !p.tex || p.tex[0] === '{');
+  return { planes: all, verts: vs, b: boundsOf(vs), contents, index, clear };
 }
 
 // BSP tree over brushes inside `cell`: a node { n, d (canonical), type, front, back, cell
@@ -274,8 +277,11 @@ function buildTree(brushes, rootBounds) {
     };
     const inside = list.filter((i) => !apart(brushes[i].b) && !brushes[i].planes.some((p) => sideOf(verts, p.n, p.d) === 1));
     if (!inside.length) return { contents: CONTENTS_EMPTY, bounds };
+    // A solid leaf is `clear` (faces of other brushes inside it are kept: a wall behind a
+    // ladder board, seen through its holes) when every brush reaching into it is.
+    const clear = inside.every((i) => brushes[i].clear);
     const full = inside.find((i) => brushes[i].planes.every((p) => sideOf(verts, p.n, p.d) === -1));
-    if (full !== undefined) return { contents: brushes[full].contents, bounds };
+    if (full !== undefined) return { contents: brushes[full].contents, bounds, clear };
     let best = null, bestScore = Infinity;
     const tried = new Set();
     // Candidates are scored against every brush here, or an even sample of SCORE_SAMPLE of
@@ -304,12 +310,14 @@ function buildTree(brushes, rootBounds) {
         }
       }
     }
-    if (!best) return { contents: brushes[inside[0]].contents, bounds }; // (within the tolerance: call it inside)
+    if (!best) return { contents: brushes[inside[0]].contents, bounds, clear }; // (within the tolerance: call it inside)
     const [b, f] = splitCell(cell, best.n, best.d);
     const front = split(f, inside), back = split(b, inside);
     // Two leaves alike need no node between them (a cell inside two overlapping brushes, cut
     // where one ends: a fifth of the clipnodes of a map opened from a .bsp).
-    if (front.n === undefined && back.n === undefined && front.contents === back.contents) return { contents: front.contents, bounds };
+    if (front.n === undefined && back.n === undefined && front.contents === back.contents && front.clear === back.clear) {
+      return { contents: front.contents, bounds, clear: front.clear };
+    }
     return { n: best.n, d: best.d, type: best.type, bounds, front, back };
   };
   return split(boxCell(rootBounds), brushes.map((_, i) => i));
@@ -317,12 +325,14 @@ function buildTree(brushes, rootBounds) {
 
 // --- Faces -----------------------------------------------------------------------------
 
-// A brush side pushed down the hull 0 tree: its parts in open space, with the node whose
-// plane each lies on and whether it faces that plane's back (side 1).
+// A brush side pushed down the hull 0 tree: its parts in open space (or inside a brush
+// seen through, a `clear` leaf: the wall behind a ladder board shows through its holes;
+// before, it was dropped and the holes looked into the void beyond the wall), with the
+// node whose plane each lies on and whether it faces that plane's back (side 1).
 function faceFragments(tree, poly, normal, out) {
   const push = (node, p, on) => {
     if (node.n === undefined) {
-      if (node.contents !== CONTENTS_SOLID && on) out.push({ poly: p, node: on.node, side: on.side });
+      if ((node.contents !== CONTENTS_SOLID || node.clear) && on) out.push({ poly: p, node: on.node, side: on.side });
       return;
     }
     const ds = p.map((v) => dot3(node.n, v) - node.d);
