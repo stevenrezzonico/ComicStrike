@@ -22,7 +22,9 @@ export const MAT = {
   DECAL: 16,
   TECH: 17,
   ROOF: 18,
-  SNOW: 19,
+  LADDER: 19,
+  RUNGS: 20,
+  SNOW: 21,
 };
 
 // Surface flags (packed into the vertex alongside the material id).
@@ -43,7 +45,9 @@ const RULES = [
   [['snow', 'ice0'], MAT.SNOW, [215, 220, 228]],
   [['light', 'lght', 'lgt', 'lamp', 'lite', 'lantern'], MAT.LIGHT, [250, 240, 205]],
   [['glass', 'window', 'wndw', 'wndwn', 'cuwnd', 'wdw', 'winl', 'stuccowin', 'concyelwin'], MAT.WINDOW, [70, 85, 100]],
-  [['grate', 'grat', 'fence', 'rail', 'ladder', 'rung', 'trellis', 'mesh', 'net', 'bars', 'razor', 'tension', 'scaffold', 'winerack'], MAT.GRATE, [70, 70, 68]],
+  [['ladder'], MAT.LADDER, [70, 70, 68]],
+  [['rung'], MAT.RUNGS, [95, 70, 50]],
+  [['grate', 'grat', 'fence', 'rail', 'trellis', 'mesh', 'net', 'bars', 'razor', 'tension', 'scaffold', 'winerack'], MAT.GRATE, [70, 70, 68]],
   [['grass', 'grss', 'moss', 'ivy', 'vine', 'leaf', 'tree', 'plant', 'bush', 'hedge', 'jung', 'flower'], MAT.FOLIAGE, [70, 95, 45]],
   [['crate', 'crte', 'crt', 'cardb', 'cardbox', 'box', '_bx', 'bcrate'], MAT.CRATE, [140, 105, 60]],
   [['door', 'dr1', 'dr2', 'dr3', 'dr4', 'dr5', 'dr8', 'dr9', 'cstldr', 'drd'], MAT.DOOR, [110, 80, 50]],
@@ -132,7 +136,7 @@ export function classify(name) {
   }
   if (mat === MAT.LIGHT) flags |= FLAG_FULLBRIGHT;
   if (mat === MAT.WATER) flags |= FLAG_SCROLL;
-  if (flags & FLAG_ALPHATEST && mat !== MAT.FOLIAGE) mat = MAT.GRATE;
+  if (flags & FLAG_ALPHATEST && mat !== MAT.FOLIAGE && mat !== MAT.LADDER && mat !== MAT.RUNGS) mat = MAT.GRATE;
 
   // Per-texture variation so neighbouring textures of one class differ slightly.
   const v = 0.85 + ((seed >>> 8) & 0xff) / 255 * 0.3;

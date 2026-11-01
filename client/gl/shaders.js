@@ -180,6 +180,31 @@ float screenAt(vec2 frag, float cover, float size) {
   return step(length(fract(q) - 0.5), sqrt(cover / 3.14159));
 }
 
+// A ladder: GoldSrc ladder textures put a rail at each side of the tile (our compiler fits
+// one tile to a ladder's width), rungs every 16 units up the wall (world z, so every ladder
+// texture climbs alike), holes between; the board's top and bottom are solid. Without
+// rails, rungs stop short of the tile's sides (staples in a wall, bars of a gate).
+vec3 ladder(bool rails, vec2 uv, vec2 fw, vec3 base, uint flags, inout float ink, inout float dark) {
+  if (abs(normalize(v_nrm).z) > 0.7) return base;
+  float u = fract(uv.x), fu = fw.x;
+  float r = fract(v_pos.z / 16.0), fr = fwidth(v_pos.z) / 16.0;
+  float side = min(u, 1.0 - u); // to the tile's edge
+  float railW = rails ? 0.12 : 0.0, rungW = 0.13, rung = abs(r - 0.5);
+  bool onRail = side < railW;
+  bool onRung = rung < rungW && (rails || side > 0.12);
+  if (!onRail && !onRung) {
+    if ((flags & FLAG_ALPHATEST) != 0u) CUT;
+    dark = 0.6;
+    return base * 0.4;
+  }
+  // Inked edges (each bar outlined; the rails pass over the rungs), shade under each rung.
+  float railInk = rails ? line(side, railW, 0.03, fu) : 0.0;
+  float rungInk = onRail ? 0.0 : line(rung, rungW, 0.03, fr);
+  ink = max(railInk, rungInk) * (1.0 - smoothstep(0.15, 0.3, max(fu, fr)));
+  if (!onRail && r < 0.5 - rungW * 0.3) dark = 0.35;
+  return onRail ? base : base * 0.9;
+}
+
 // Comic background art: a flat color with a few ink marks per class (some bricks outlined,
 // plank seams, tile grout) and, on floors (up = 1), weathering blotches printed as dots
 // ('dark' takes light away).
@@ -282,6 +307,10 @@ vec3 surface(uint mat, vec2 uv, vec2 fw, vec3 base, float seed, uint flags, floa
     float on = step(0.72, h21(c + seed + floor(u_time * 1.5 * h21(c)))) * step(0.15, edge(fract(uv * 6.0)));
     vec3 led = mix(vec3(0.25, 0.86, 0.35), vec3(0.95, 0.63, 0.16), h21(c + 9.0));
     return mix(base, led, on);
+  } else if (mat == 19u) { // LADDER: two side rails and rungs
+    return ladder(true, uv, fw, base, flags, ink, dark);
+  } else if (mat == 20u) { // RUNGS: rungs alone
+    return ladder(false, uv, fw, base, flags, ink, dark);
   } else if (mat == 18u) { // ROOF: shingle rows, shadowed under each row
     float p = uv.y * 6.0;
     ink = grid(vec2(0.5, p), vec2(0.0, 0.05), vec2(0.0, fw.y * 6.0));

@@ -59,6 +59,8 @@ const SURF_BY_MAT = {
   [MAT.TECH]: [0.4, GM_COMPUTER],
   [MAT.ROOF]: [0.7, GM_TILE],
   [MAT.SNOW]: [0.85, GM_SNOW],
+  [MAT.LADDER]: [0.95, GM_GRATE],
+  [MAT.RUNGS]: [0.95, GM_GRATE],
 };
 // func_breakable "material" -> surface.
 const SURF_BY_BREAKABLE = {

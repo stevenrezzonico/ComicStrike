@@ -581,15 +581,35 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
 
   const texNames = Object.keys(TEX), texIndex = new Map(texNames.map((n, i) => [n, i]));
   const texinfos = [], texinfoOf = new Map();
-  function texinfo(tex, axis) {
-    const key = `${tex}:${axis}`;
+  // fit: [scale, shift] along s (a ladder's side, see fitOf), else none.
+  function texinfo(tex, axis, fit) {
+    const key = fit ? `${tex}:${axis}:${fit[0]}:${fit[1]}` : `${tex}:${axis}`;
     if (!texinfoOf.has(key)) {
       if (!texIndex.has(tex)) throw new Error(`texture ${tex} is not in the texture list`); // (it would print as sky)
       texinfoOf.set(key, texinfos.length);
       const special = tex === 'sky' || tex[0] === '!' ? 1 : 0;
-      texinfos.push({ s: TEX_AXES[axis][0], t: TEX_AXES[axis][1], miptex: texIndex.get(tex), flags: special });
+      const k = fit ? fit[0] : 1;
+      texinfos.push({
+        s: TEX_AXES[axis][0].map((x) => x * k), t: TEX_AXES[axis][1], sShift: fit ? fit[1] : 0, miptex: texIndex.get(tex),
+        flags: special,
+      });
     }
     return texinfoOf.get(key);
+  }
+
+  // A ladder texture across a brush side (polygon poly, facing n): the scale and shift that
+  // make one tile span the side's width, so its two rails run up the side's edges (a world-
+  // aligned tile put a rail wherever a multiple of the texture width fell). Null for any
+  // other texture and for floors and ceilings.
+  function fitOf(tex, poly, n) {
+    const axis = texAxis(n);
+    if (!/ladder/i.test(tex) || axis === 2) return null;
+    const sv = TEX_AXES[axis][0];
+    let lo = Infinity, hi = -Infinity;
+    for (const p of poly) [lo, hi] = [Math.min(lo, dot3(p, sv)), Math.max(hi, dot3(p, sv))];
+    if (hi - lo < 1) return null;
+    const k = Math.round(TEX[tex][0] / (hi - lo) * 1024) / 1024;
+    return [k, Math.round(-lo * k * 64) / 64];
   }
 
   const vertices = [], vertexOf = new Map();
@@ -618,7 +638,7 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
       surfedges.push(edges.length);
       edges.push([loop[i], loop[(i + 1) % loop.length]]);
     }
-    const ti = texinfo(f.tex, texAxis(f.normal)), info = texinfos[ti];
+    const ti = texinfo(f.tex, texAxis(f.normal), f.fit), info = texinfos[ti];
     let lightofs = -1;
     if (!info.flags) lightofs = bakeLightmap(f, info, o);
     faces.push({ plane: f.planeIndex, side: f.side, firstedge, numedges: loop.length, texinfo: ti, lightofs });
@@ -627,7 +647,7 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
   // The face's lightmap: one texel per 16 texture units over its extents (as the engine
   // reads them), each lit at the nearest point of the face.
   function bakeLightmap(f, info, o) {
-    const st = f.poly.map((p) => [dot3(p, info.s), dot3(p, info.t)]);
+    const st = f.poly.map((p) => [dot3(p, info.s) + info.sShift, dot3(p, info.t)]);
     let smin = Infinity, smax = -Infinity, tmin = Infinity, tmax = -Infinity;
     for (const [s, t] of st) {
       smin = Math.min(smin, s);
@@ -647,8 +667,8 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
         // Into the face: half a unit inside its outline (never sample in the wall beside it).
         const [s, t] = insidePoint(st, cs, (minS + i) * 16, (minT + j) * 16);
         const pt = [0, 0, 0];
-        pt[sAxis] = s * info.s[sAxis];
-        pt[tAxis] = t * info.t[tAxis];
+        pt[sAxis] = (s - info.sShift) / info.s[sAxis];
+        pt[tAxis] = t / info.t[tAxis];
         pt[k] = (f.d - n[sAxis] * pt[sAxis] - n[tAxis] * pt[tAxis]) / n[k];
         lighting.push(...lightAt([pt[0] + o[0], pt[1] + o[1], pt[2] + o[2]], n));
       }
@@ -714,11 +734,11 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
           const ps = brushPlanes(br).map((p) => ({ n: p.n, d: p.d - dot3(p.n, model.origin), tex: p.tex }));
           brushPolygons(ps).forEach((poly, i) => {
             if (!poly.length || !ps[i].tex) return;
-            const frags = [];
+            const frags = [], fit = fitOf(ps[i].tex, poly, ps[i].n);
             faceFragments(tree, poly, ps[i].n, frags);
             for (const fr of frags) {
               if (!byNode.has(fr.node)) byNode.set(fr.node, []);
-              byNode.get(fr.node).push({ poly: fr.poly, normal: ps[i].n, d: ps[i].d, tex: ps[i].tex, side: fr.side });
+              byNode.get(fr.node).push({ poly: fr.poly, normal: ps[i].n, d: ps[i].d, tex: ps[i].tex, side: fr.side, fit });
             }
           });
         }
@@ -729,7 +749,7 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
             for (let i = 0; i < list.length && !merged; i++) {
               for (let j = i + 1; j < list.length && !merged; j++) {
                 const p = list[i], q = list[j];
-                if (p.side !== q.side || p.tex !== q.tex) continue;
+                if (p.side !== q.side || p.tex !== q.tex || String(p.fit) !== String(q.fit)) continue;
                 const joined = joinPolys(p.poly, q.poly, p.normal);
                 if (!joined) continue;
                 p.poly = joined;
@@ -803,6 +823,7 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
   texinfos.forEach((t, i) => {
     const o = i * 40;
     t.s.forEach((x, k) => d.setFloat32(o + k * 4, x, true));
+    d.setFloat32(o + 12, t.sShift, true);
     t.t.forEach((x, k) => d.setFloat32(o + 16 + k * 4, x, true));
     d.setInt32(o + 32, t.miptex, true);
     d.setInt32(o + 36, t.flags, true);
