@@ -513,12 +513,12 @@ export class PlayerAnimator {
     const ex = -dy, ey = dx; // ex, ey: across the shot
     const goal = p.goal;
     for (let s = 0; s < 2; s++) {
-      // Legs: straight down the body (a touch bent, the knees toward its front), turning
-      // over with it: the feet leave the ground as it goes over and come down flat once
-      // it has landed.
-      goal[0] = 1;
-      goal[1] = SIDE[s] * 5;
-      goal[2] = -31.5;
+      // Legs: nearly straight, swung a little ahead of the body and apart (the knees
+      // toward its front), turning over with it: the feet leave the ground as it goes
+      // over and come down once it has landed, the legs laid out straight and flat.
+      goal[0] = 7 * (1 - land);
+      goal[1] = SIDE[s] * 6;
+      goal[2] = -30 - 2 * land;
       Q.rotate(t3, 0, tv, 0, goal, 0);
       goal[0] = px + t3[0];
       goal[1] = py + t3[1];
@@ -532,25 +532,26 @@ export class PlayerAnimator {
     }
     const w = p.wpos, cx = w[SPINE3 * 3], cyy = w[SPINE3 * 3 + 1], cz = w[SPINE3 * 3 + 2];
     for (let s = 0; s < 2; s++) {
-      // Arms: from the gun out wide, straight out to the sides level with the shoulders
-      // (a little toward the body's front and its head), turning over with it; down on
-      // the ground beside the body once landed.
+      // Arms: from the gun they fly up in front, the hands thrown up and out past the
+      // shoulders with the elbows bent and out (a man falling backwards, grasping at the
+      // air), turning over with the body so they point at the sky once it lies flat;
+      // down on the ground beside the head once landed.
       const sx = w[ARM[s] * 3], sy = w[ARM[s] * 3 + 1], sz = w[ARM[s] * 3 + 2];
       const hx = cx + 14, hy = cyy + SIDE[s] * 4, hz = cz - 6;
-      goal[0] = 3;
-      goal[1] = SIDE[s] * 21;
-      goal[2] = 3;
+      goal[0] = 9;
+      goal[1] = SIDE[s] * 13;
+      goal[2] = 13;
       Q.rotate(t3, 0, tv, 0, goal, 0);
       let x = hx + (sx + t3[0] - hx) * spread, y = hy + (sy + t3[1] - hy) * spread, z = hz + (sz + t3[2] - hz) * spread;
-      x += (px + dx * 18 + ex * SIDE[s] * 25 - x) * land;
-      y += (py + dy * 18 + ey * SIDE[s] * 25 - y) * land;
+      x += (px + dx * 24 + ex * SIDE[s] * 22 - x) * land;
+      y += (py + dy * 24 + ey * SIDE[s] * 22 - y) * land;
       z += (3 - z) * land;
       goal[0] = x;
       goal[1] = y;
       goal[2] = z;
-      goal[3] = 1; // elbows toward the body's front (up, once on the back), a little bent
-      goal[4] = SIDE[s] * 0.3;
-      goal[5] = 0.4;
+      goal[3] = 0.3 - 0.3 * land; // elbows out to the sides and a little down the body
+      goal[4] = SIDE[s] * 0.8;
+      goal[5] = -0.4 + 1.2 * land; // (up, once landed: never into the ground)
       Q.rotate(goal, 3, tv, 0, goal, 3);
       p.reachGoal(ARM[s], ELBOW[s], HAND[s]);
     }
