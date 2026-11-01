@@ -4,7 +4,7 @@ import { WEAPONS } from '../shared/weapons.js';
 import { MESH_STRIDE } from '../client/gl/meshkit.js';
 import { buildFlash } from '../client/gl/gunmeshes.js';
 import { buildBurst, buildPuff } from '../client/gl/blast.js';
-import { buildFlame } from '../client/gl/grenadefx.js';
+import { buildFlame, buildSmokeCloud } from '../client/gl/grenadefx.js';
 
 // Closed (every directed edge matched by its reverse) and outward (positive volume).
 function closed(m, what) {
@@ -95,6 +95,27 @@ Deno.test('explosions: the fireball layers and smoke puffs are closed, low-poly 
     closed(flame, `flame ${seed}`);
     assert.ok(flame.tris <= 120, `flame ${seed}: ${flame.tris} triangles`);
   }
+});
+
+Deno.test('smoke: a cloud is one closed lumpy mesh, flat underneath, different per seed', () => {
+  const tops = [];
+  for (let seed = 1; seed <= 3; seed++) {
+    const cloud = buildSmokeCloud([0.8, 0.8, 0.78], seed);
+    closed(cloud, `cloud ${seed}`);
+    assert.ok(cloud.tris <= 2000, `cloud ${seed}: ${cloud.tris} triangles`);
+    let lo = Infinity, hi = -Infinity, wide = 0, flat = 0;
+    for (let i = 0; i < cloud.positions.length; i += 3) {
+      const z = cloud.positions[i + 2];
+      lo = Math.min(lo, z);
+      hi = Math.max(hi, z);
+      wide = Math.max(wide, Math.abs(cloud.positions[i]), Math.abs(cloud.positions[i + 1]));
+      if (z < -0.579) flat++;
+    }
+    assert.ok(lo > -0.59 && flat > 50, `cloud ${seed}: a flat underside (${flat} corners at ${lo.toFixed(2)})`);
+    assert.ok(hi > 0.75 && hi < 1 && wide > 1.05 && wide < 1.35, `cloud ${seed}: squat and lumpy (${hi.toFixed(2)} high, ${wide.toFixed(2)} wide)`);
+    tops.push(hi);
+  }
+  assert.ok(new Set(tops.map((t) => t.toFixed(3))).size === 3, 'the seeds differ');
 });
 
 Deno.test('guns: magazines and bolts are separate bones; sizes follow the real guns', () => {

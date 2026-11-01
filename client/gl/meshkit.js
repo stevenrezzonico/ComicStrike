@@ -1,8 +1,9 @@
 // Procedural mesh builder for player and weapon models (zero assets): boxes, rounded
 // boxes, rounded slabs, spheres, lathes, extrusions (optionally bevelled), lofts and
 // capsules, and swept tubes under a transform stack, one color and finish per vertex,
-// skinned to one bone or blended between two (skin(): limbs that bend smoothly).
-// Normals are smooth within each primitive across edges flatter than its crease angle
+// skinned to one bone or blended between two (skin(): limbs that bend smoothly), their
+// positions optionally warped (warp(): a lumpy cloud out of a sphere) before the normals
+// are taken. Normals are smooth within each primitive across edges flatter than its crease angle
 // (smooth(): round shapes shade round and get no crease ink, box corners stay sharp).
 // Every primitive is closed, wound counter-clockwise seen from outside. Runs once at
 // load; the result is one interleaved buffer for client/gl/skinned.js.
@@ -47,6 +48,7 @@ export class MeshBuilder {
     this.bones2 = []; // per vertex: the second bone and its weight (0..0.5)
     this.weights = [];
     this.skinFn = null;
+    this.warpFn = null;
     this.groups = []; // per triangle: the primitive it belongs to
     this.creases = []; // per triangle: cos of its crease angle
     this.hards = []; // per triangle: 1 = a flat face that keeps its normal (bevels bend to it)
@@ -108,6 +110,14 @@ export class MeshBuilder {
   // null: the bone() bone alone.
   skin(fn = null) {
     this.skinFn = fn;
+    return this;
+  }
+
+  // Warping by position for the next vertices: fn([x, y, z]) (builder space, after the
+  // transform) -> the moved point, applied before a triangle's normal is taken, so the
+  // smoothed normals follow the warped surface; null: none.
+  warp(fn = null) {
+    this.warpFn = fn;
     return this;
   }
 
@@ -177,12 +187,12 @@ export class MeshBuilder {
   // transforms keep the winding outward. A loose triangle (outside a primitive) stands
   // alone: flat.
   tri(a, b, c) {
-    const m = this.m;
+    const m = this.m, w = this.warpFn;
     const p = [a, b, c].map(([x, y, z]) => [
       m[0] * x + m[1] * y + m[2] * z + m[3],
       m[4] * x + m[5] * y + m[6] * z + m[7],
       m[8] * x + m[9] * y + m[10] * z + m[11],
-    ]);
+    ]).map((q) => (w ? w(q) : q));
     const det = m[0] * (m[5] * m[10] - m[6] * m[9]) - m[1] * (m[4] * m[10] - m[6] * m[8]) +
       m[2] * (m[4] * m[9] - m[5] * m[8]);
     if (det < 0) [p[1], p[2]] = [p[2], p[1]];

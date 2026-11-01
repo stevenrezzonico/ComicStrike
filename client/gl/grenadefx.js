@@ -1,38 +1,65 @@
 // Grenades in the world (shared/grenades.js lists, from the server or the offline
 // simulation): flying grenades as their models, spinning, interpolated between the two
-// newest lists; smoke clouds as a billowing cluster of smooth puffs around a core (they
-// bulge out as it pops, churn and swell slowly, drop away one by one at the end), fires
+// newest lists; smoke clouds as one lumpy comic cloud (it bulges out as it pops, turns
+// and breathes slowly, shrinks away at the end), fires
 // as a patch of flickering comic flame tongues facing the camera with rising embers,
 // flashbang pops as white-yellow starbursts (HE blasts are client/gl/blast.js). Opaque and
 // depth-tested, so a smoke cloud hides what is behind it. One draw call per grenade,
-// effect, puff or flame layer; nothing allocates per frame.
+// effect, cloud, puff or flame layer; nothing allocates per frame.
 
 import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN, modelLight, eyeOf } from './skinned.js';
 import { MeshBuilder } from './meshkit.js';
 import { buildBurst } from './blast.js';
 import {
-  Grenades, smokeRadius, fireRadius, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE, MAX_GRENADES, MAX_EFFECTS, SMOKE_TIME,
+  Grenades, smokeRadius, fireRadius, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE, MAX_GRENADES, MAX_EFFECTS,
   FIRE_TIME,
 } from '../../shared/grenades.js';
 
 const SPHERE = [[0, -1], [0.7, -0.7], [1, 0], [0.7, 0.7], [0, 1]];
 
-// Smoke: a core and SMOKE_PUFFS puffs per cloud, each its own draw (they churn). Puffs
-// are smooth balls of one blue-grey (a darker ring along the ground), half sunk into the
-// core so the outline scallops, lit at least SMOKE_LIGHT so their dots stay on the shadow
-// side.
-const SMOKE_PUFFS = 24;
-const SMOKE_LIGHT = 1.35;
-const SMOKE_COLORS = [[0.7, 0.75, 0.82], [0.56, 0.62, 0.72]]; // the cloud, its ground ring
+// Smoke: one draw per cloud, a sphere warped into SMOKE_LOBES lobes (buildSmokeCloud),
+// squashed and flat underneath where it sits on the floor; one primitive with smooth
+// normals, so the ink draws one scalloped outline round it and only short lines in the
+// valleys between lobes up close (before: a core and 24 puffs, each its own draw with its
+// own ink id, which printed as a pile of outlined balls). A light warm grey like CS:GO's,
+// lit at least SMOKE_LIGHT so the dots stay on its underside. SMOKE_SHAPES clouds are
+// built at load; an effect's id picks one.
+const SMOKE_LOBES = 22;
+const SMOKE_SHAPES = 3;
+const SMOKE_SQUASH = 0.72; // height over width
+const SMOKE_FLOOR = -0.58; // the flat underside, in cloud radii below the center
+const SMOKE_LIGHT = 1.6;
+const SMOKE_COLOR = [0.86, 0.86, 0.84];
 
-function buildSmokePuff(color) {
-  return new MeshBuilder().color(color).sphere(1, 14, 7).build();
-}
-
-// Deterministic 0..1 noise for a puff layout (no allocation).
+// Deterministic 0..1 noise for a cloud's lobes and a column's puffs (no allocation).
 function hash(n) {
   const s = Math.sin(n * 12.9898 + 78.233) * 43758.5453;
   return s - Math.floor(s);
+}
+
+export function buildSmokeCloud(color, seed) {
+  // Lobe centers on a golden spiral from a little under the equator to the top, each
+  // with its own height and width.
+  const lobes = [];
+  for (let i = 0; i < SMOKE_LOBES; i++) {
+    const e = Math.asin(-0.2 + 1.2 * (i + 0.5) / SMOKE_LOBES), a = i * 2.39996 + seed * 1.7;
+    lobes.push([Math.cos(e) * Math.cos(a), Math.cos(e) * Math.sin(a), Math.sin(e),
+      0.18 + 0.17 * hash(seed * 7.3 + i * 2.1), (18 + 10 * hash(seed * 3.1 + i * 5.7)) * Math.PI / 180]);
+  }
+  const warp = (q) => {
+    const l = Math.hypot(q[0], q[1], q[2]) || 1, dx = q[0] / l, dy = q[1] / l, dz = q[2] / l;
+    let r = 1;
+    for (const [cx, cy, cz, h, w] of lobes) {
+      const t = Math.acos(Math.max(-1, Math.min(1, dx * cx + dy * cy + dz * cz)));
+      if (t < w) r += h * Math.cos(Math.PI * t / (2 * w)) ** 2;
+    }
+    return [dx * r, dy * r, Math.max(SMOKE_FLOOR, dz * r * SMOKE_SQUASH)];
+  };
+  return new MeshBuilder().color(color).warp(warp).sphere(1, 40, 20).warp().build();
+}
+
+function buildSmokePuff(color) {
+  return new MeshBuilder().color(color).sphere(1, 14, 7).build();
 }
 
 // Fire: one blazing mass per patch: BASE_FLAMES wide low flames round its edge and
@@ -54,7 +81,7 @@ const FLAME_LAYERS = [
   { color: [0.82, 0.45, 0.06], w: 0.84, h: 0.8, lift: 0.05 },
   { color: [0.85, 0.78, 0.36], w: 0.64, h: 0.56, lift: 0.1 },
 ];
-const PER_EFFECT = Math.max(SMOKE_PUFFS + 1, (BASE_FLAMES + TALL_FLAMES) * FLAME_LAYERS.length + EMBERS + SMOKE_COLUMN);
+const PER_EFFECT = (BASE_FLAMES + TALL_FLAMES) * FLAME_LAYERS.length + EMBERS + SMOKE_COLUMN;
 const DRAWS = MAX_GRENADES + MAX_EFFECTS * PER_EFFECT;
 
 // Park-Miller, so the shapes are the same every load.
@@ -91,7 +118,7 @@ export class GrenadeFx {
     this.gl = gl;
     this.guns = guns;
     this.renderer = new SkinnedRenderer(gl);
-    this.puffs = SMOKE_COLORS.map((c) => new SkinnedMesh(gl, buildSmokePuff(c)));
+    this.clouds = Array.from({ length: SMOKE_SHAPES }, (_, i) => new SkinnedMesh(gl, buildSmokeCloud(SMOKE_COLOR, i + 1)));
     this.flames = FLAME_LAYERS.map((l, i) =>
       Array.from({ length: FLAME_FRAMES }, (_, f) => new SkinnedMesh(gl, buildFlame(l.color, 211 + i * 37 + f * 11))));
     this.spark = new SkinnedMesh(gl, buildBurst([0.8, 0.7, 0.25], 57));
@@ -239,39 +266,19 @@ export class GrenadeFx {
     return light;
   }
 
-  // The draws of smoke cloud `id`, `age` seconds old, resting at (x, y, z), from draw n;
-  // returns the next free draw. A core (a squat dome) keeps it opaque; the puffs sit half
-  // sunk in its surface, spread evenly over it (a golden spiral up from the ground), bulge
-  // out as it pops, drift round and swell, and drop away one by one in the last seconds
-  // while the core shrinks with the cloud (smokeRadius).
+  // The draw of smoke cloud `id`, `age` seconds old, resting at (x, y, z), as draw n;
+  // returns the next free draw. The cloud's flat underside sits on the floor; it bulges
+  // out as it pops, turns and breathes slowly, and shrinks away with smokeRadius.
   smoke(n, id, age, x, y, z, mapLight) {
     const R = smokeRadius(age);
     if (R < 1) return n;
     const pop = 1 + Math.sin(Math.min(1, age / 1.2) * Math.PI) * 0.18; // bulge while popping
-    const rx = R * 0.66, rz = R * 0.52, cz = R * 0.3, turn = hash(id) * 6.283;
-    for (let i = 0; i <= SMOKE_PUFFS; i++) {
-      let px = 0, py = 0, pz = cz, sx = rx, sz = rz, ground = false;
-      if (i < SMOKE_PUFFS) {
-        const u = (i + 0.5) / SMOKE_PUFFS, e = Math.asin(u * 0.96) + 0.03 * Math.sin(age * 0.7 + i);
-        const a = i * 2.39996 + turn + age * 0.05 * (i & 1 ? 1 : -1);
-        // Gone one by one near the end.
-        const drop = SMOKE_TIME - 3 + 2.4 * hash(id * 9.1 + i * 3.7);
-        const s = R * (0.2 + 0.1 * hash(id * 5.7 + i * 2.3)) * (1 + 0.08 * Math.sin(age * 1.1 + i * 1.9)) *
-          Math.max(0, Math.min(1, (drop + 0.6 - age) / 0.6));
-        if (s < 1) continue;
-        px = Math.cos(e) * Math.cos(a) * rx * 0.92 * pop;
-        py = Math.cos(e) * Math.sin(a) * rx * 0.92 * pop;
-        pz = cz + Math.sin(e) * rz * 0.92 * pop;
-        sx = sz = s;
-        ground = e < 0.35;
-      }
-      place(this.model[n], x + px, y + py, z + pz, i * 0.7, sx, sx, sz);
-      this.mesh[n] = this.puffs[ground ? 1 : 0];
-      this.emissive[n] = 0;
-      for (let c = 0; c < 3; c++) this.light[n][c] = Math.max(mapLight[c], SMOKE_LIGHT);
-      n++;
-    }
-    return n;
+    const s = R * 0.95 * pop * (1 + 0.03 * Math.sin(age * 1.9 + id));
+    place(this.model[n], x, y, z - SMOKE_FLOOR * s, hash(id) * 6.283 + age * 0.04, s, s, s);
+    this.mesh[n] = this.clouds[id % SMOKE_SHAPES];
+    this.emissive[n] = 0;
+    for (let c = 0; c < 3; c++) this.light[n][c] = Math.max(mapLight[c], SMOKE_LIGHT);
+    return n + 1;
   }
 
   // The draws of fire `id`, `age` seconds old, centered at (x, y, z), from draw n: a ring
