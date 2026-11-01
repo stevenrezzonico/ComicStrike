@@ -81,6 +81,7 @@ const TABS = [
     ['section', null, 'HUD'],
     ['toggle', 'cl_drawhud', 'Show HUD'],
     ['toggle', 'cl_comicwords', 'Comic sound words'],
+    ['toggle', 'cl_autowepswitch', 'Switch weapon on pick up'],
     ['slider', 'cl_hud_radar_scale', 'Radar size', 0.8, 1.3, 0.05],
     ['slider', 'cl_radar_scale', 'Radar zoom', 0.25, 1, 0.05],
     ['toggle', 'cl_radar_rotate', 'Rotate the radar'],

@@ -24,6 +24,7 @@ import {
 import {
   WEAPONS, WEAPON_ID, ShotList, giveWeapon, weaponTick, viewPunchPitch, viewPunchYaw, hash32, WS_LAST_SLOT,
   WS_EVENTS, WS_SIZE, WS_SLOTS, WS_ACTIVE, WS_ACTION, WS_ACTION_END, SLOT_C4, NUM_SLOTS, ACTION_PLANT, ACTION_DEFUSE,
+  SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, SLOT_GRENADE,
   WS_ZOOM, WS_THROWN, WEV_THROW, WEV_FIRE, activeWeapon, silenced,
 } from '../shared/weapons.js';
 import { ARMS_RACE, DEMOLITION, levelWeapon } from '../shared/progression.js';
@@ -294,6 +295,30 @@ let noclip = false;
 let net = null;
 let selfId = -1;
 let synced = false; // false until the first snapshot gives us our spawn
+
+// cl_autowepswitch (CS:GO's): a gun newly in its slot (bought, picked up) that outranks the
+// one in hand is drawn, by CS:GO's weapon weights: primary over pistol over C4 over grenade
+// over knife. Never a grenade or the C4, never on a respawn (a new baseline), never while
+// planting or defusing. The switch is an ordinary slot select, so it is predicted.
+const SLOT_RANK = [];
+SLOT_RANK[SLOT_PRIMARY] = 25;
+SLOT_RANK[SLOT_SECONDARY] = 5;
+SLOT_RANK[SLOT_C4] = 3;
+SLOT_RANK[SLOT_GRENADE] = 1;
+SLOT_RANK[SLOT_KNIFE] = 0;
+const AUTO_SLOTS = [SLOT_PRIMARY, SLOT_SECONDARY];
+const lastSlots = new Float64Array(NUM_SLOTS);
+let lastSpawn = -1;
+function autoSwitch() {
+  const respawn = player.spawnCount !== lastSpawn;
+  lastSpawn = player.spawnCount;
+  for (const s of AUTO_SLOTS) {
+    const id = ws.f[WS_SLOTS + s * 3];
+    if (id !== lastSlots[s] && id && !respawn && cv.cl_autowepswitch.number && input.select === -1 &&
+      !ws.f[WS_ACTION] && SLOT_RANK[s] > SLOT_RANK[ws.f[WS_ACTIVE]]) input.select = s;
+    lastSlots[s] = id;
+  }
+}
 const cmds = new CmdRing(HISTORY);
 const predictedPs = new Uint8Array(HISTORY * PS_SIZE * 4); // our state after each command
 const predictedWs = new Uint8Array(HISTORY * WS_SIZE * 8);
@@ -967,6 +992,7 @@ function tick() {
     if (interpolatePlayers(viewTick, interp)) buildTargets();
   }
 
+  autoSwitch();
   const buttons = input.sampleButtons();
   let select = input.sampleSelect();
   if (select === SELECT_LAST) select = ws.f[WS_LAST_SLOT];
