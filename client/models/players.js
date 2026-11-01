@@ -68,8 +68,11 @@ function chain(axis, stops, abs = false) {
 }
 const TORSO = chain(2, [[36, 'pelvis'], [40, 'spine_0'], [44.5, 'spine_1'], [49, 'spine_2'], [53.5, 'spine_3'],
   [59.5, 'neck_0']]);
-const ARM = chain(1, [[3.5, 'spine_3'], [6.5, 'clavicle_L'], [9.5, 'arm_upper_L'], [17.5, 'arm_upper_L'],
-  [21.5, 'arm_lower_L'], [29.5, 'arm_lower_L'], [31.5, 'hand_L']], true);
+const ARM = chain(1, [[3.5, 'spine_3'], [7, 'clavicle_L'], [10.5, 'arm_upper_L'], [19.75, 'arm_upper_L'],
+  [23.75, 'arm_lower_L'], [31.75, 'arm_lower_L'], [33.75, 'hand_L']], true);
+// The deltoid: a ball on the shoulder joint, mostly the clavicle's, so the arm's root stays
+// covered however the arm swings.
+const DELTOID = () => [B('clavicle_L'), B('arm_upper_L'), 0.3];
 const LEG = chain(2, [[2.5, 'ankle_L'], [5.5, 'leg_lower_L'], [18, 'leg_lower_L'], [22, 'leg_upper_L'],
   [33, 'leg_upper_L'], [38, 'pelvis']]);
 
@@ -78,9 +81,10 @@ function fold(b, at, pitch, yaw, roll, len) {
   b.push().translate(...at).rotate(pitch, yaw, roll).scale(len, 0.13, 0.13).sphere(1, 6, 3).pop();
 }
 
-// Torso sections up the spine (width a across, depth b forward), as rounded boxes.
-const TORSO_SECTIONS = [[33.5, 6.4, 4.3], [37, 7.4, 4.8], [41, 6.9, 4.5], [46, 7.6, 4.8], [51, 8.8, 5.4],
-  [55, 9.2, 5.2], [58, 8, 4.4], [59.8, 3.4, 2.9]];
+// Torso sections up the spine (width a across, depth b forward), as rounded boxes: a V,
+// narrow at the waist, broad across the chest to a shoulder shelf that slopes into the neck.
+const TORSO_SECTIONS = [[33.5, 6.6, 4.3], [37, 7.4, 4.8], [41, 6.7, 4.4], [46, 7.0, 4.7], [51, 8.6, 5.4],
+  [55, 10.0, 5.3], [58, 9.6, 4.6], [59.8, 3.6, 2.9]];
 const torsoAt = (grow = 0, from = 0, to = TORSO_SECTIONS.length) => TORSO_SECTIONS.slice(from, to)
   .map(([z, a, bb]) => ({ at: [0, 0, z], a: a + grow, b: bb + grow, n: 3 }));
 
@@ -112,7 +116,7 @@ export function buildPlayer(team, helmet = false, coarse = false) {
       b.color(shade(L.vest, 1.25));
       for (const y of [-3.2, 0, 3.2]) b.rbox(1.5, 2.6, 3.4, 0.5, 5.9, y, 46.5, 1);
       if (team === 'CT') b.rbox(1.2, 3, 2.2, 0.4, 5.9, -4.3, 52, 1); // radio pouch
-      b.color(L.vest).rbox(2.2, 3, 1.2, 0.5, 0, 6, 58.2, 1).rbox(2.2, 3, 1.2, 0.5, 0, -6, 58.2, 1); // shoulder straps
+      b.color(L.vest).rbox(2.2, 3, 1.2, 0.5, 0, 7, 58.4, 1).rbox(2.2, 3, 1.2, 0.5, 0, -7, 58.4, 1); // shoulder straps
     }
   } else if (fine) {
     b.color(shade(L.jacket, 1.12)).sweep([{ at: [0, 0, 57.8], a: 4.2, b: 3.4 }, { at: [0, 0, 59.4], a: 3.9, b: 3.1 }],
@@ -121,7 +125,7 @@ export function buildPlayer(team, helmet = false, coarse = false) {
   b.skin();
 
   // Neck and head.
-  b.bone(B('neck_0')).color(team === 'H' ? SKIN : L.head).push().translate(0.3, 0, 58).lathe([[2.2, 0], [2.0, 3.6]], sg(12)).pop();
+  b.bone(B('neck_0')).color(team === 'H' ? SKIN : L.head).push().translate(0.3, 0, 58).lathe([[2.4, 0], [2.1, 3.6]], sg(12)).pop();
   b.bone(B('head_0')).color(L.head).push().translate(1, 0, 0)
     .lathe([[0, 59.4], [2.6, 59.9], [3.7, 61.2], [4.2, 63.2], [4.2, 65.8], [3.6, 67.9], [2.3, 69.1], [0, 69.5]], sg(16)).pop();
   const eyes = (z) => {
@@ -158,41 +162,43 @@ export function buildPlayer(team, helmet = false, coarse = false) {
   }
 
   b.mirror((m) => {
-    // Arms (T-pose along +y), one tube from the shoulder to the wrist.
+    // Arms (T-pose along +y): the deltoid on the joint, then one tube from inside it to the
+    // wrist, a full upper arm, the forearm swelling below the elbow and tapering to the wrist.
     const [, sy, sz] = bind('arm_upper_L'), [, ey] = bind('arm_lower_L'), [, hy] = bind('hand_L');
-    m.skin(ARM).color(L.jacket).sweep([{ at: [0, sy - 2, sz - 0.3], a: 3.1, b: 3.3 }, { at: [0, sy + 1.5, sz], a: 2.8, b: 2.9 },
-      { at: [0, sy + 6.5, sz], a: 2.65, b: 2.75 }, { at: [0, ey, sz], a: 2.25, b: 2.35 }, { at: [0, ey + 3.5, sz], a: 2.4, b: 2.35 },
-      { at: [0, hy - 2.2, sz], a: 1.85, b: 1.95 }], sg(12));
+    m.skin(DELTOID).color(L.jacket).push().translate(0.3, sy, sz + 0.3).sphere(3.6, sg(12), coarse ? 2 : 6).pop();
+    m.skin(ARM).sweep([{ at: [0, sy - 0.8, sz], a: 3.5, b: 3.6 }, { at: [0, sy + 2.5, sz], a: 3.3, b: 3.4 },
+      { at: [0, sy + 7, sz], a: 3.0, b: 3.1 }, { at: [0, ey, sz], a: 2.6, b: 2.7 }, { at: [0, ey + 3.2, sz], a: 2.95, b: 2.8 },
+      { at: [0, ey + 7, sz], a: 2.5, b: 2.4 }, { at: [0, hy - 2.2, sz], a: 2.0, b: 2.05 }], sg(12));
     if (fine) {
       m.color(shade(L.jacket, team === 'H' ? 1.08 : 1.18)).push().translate(0, hy - 3.2, sz).rotate(0, 0, -90)
-        .lathe([[2.05, 0], [2.2, 0.3], [2.2, 1.0], [2.0, 1.3]], 12).pop(); // sleeve end
-      if (L.patch) m.color(L.patch).push().translate(0, sy + 3.5, sz + 2.8).scale(1.4, 1.4, 0.35).sphere(1, 8, 4).pop();
+        .lathe([[2.2, 0], [2.35, 0.3], [2.35, 1.0], [2.15, 1.3]], 12).pop(); // sleeve end
+      if (L.patch) m.color(L.patch).push().translate(0, sy + 4, sz + 3.3).scale(1.4, 1.4, 0.35).sphere(1, 8, 4).pop();
       m.color(shade(L.jacket, 0.75));
       fold(m, [1.9, ey - 0.6, sz + 0.9], 0, 70, 30, 1.5); // the elbow's crease
       fold(m, [1.6, ey + 1.6, sz + 1.4], 0, 60, 20, 1.2);
     }
-    m.color(L.gloves).push().translate(0, hy - 1.6, sz).rotate(0, 0, -90).lathe([[1.9, 0], [1.95, 0.4], [1.8, 1.8]], sg(12)).pop();
+    if (fine) m.color(L.gloves).push().translate(0, hy - 1.6, sz).rotate(0, 0, -90).lathe([[2.05, 0], [2.1, 0.4], [1.9, 1.8]], 12).pop();
     m.skin();
     // A gloved fist and the thumb along it.
     m.bone(B('hand_L')).rbox(3.1, 3.5, 3.1, 1.05, 0, hy + 1.6, sz, 1);
     if (fine) m.push().translate(1.4, hy + 0.6, sz + 0.9).rotate(90, 70).capsule(0.6, 2.4, 8, 2).pop();
 
-    // Legs, one tube from the hip to the ankle.
+    // Legs, one tube from the hip to the ankle: a full thigh, the calf swelling under the knee.
     const [, ly] = bind('leg_upper_L');
-    m.skin(LEG).color(L.pants).sweep([{ at: [0, ly, 37.5], a: 4, b: 4.3 }, { at: [0.2, ly + 0.2, 31], a: 3.8, b: 4 },
-      { at: [0.2, ly, 24], a: 3.3, b: 3.5 }, { at: [0.3, ly, 20], a: 2.95, b: 3.15 }, { at: [-0.1, ly, 15], a: 2.9, b: 3.2 },
-      { at: [0, ly, 8], a: 2.4, b: 2.6 }, { at: [0, ly, 4.5], a: 2.25, b: 2.35 }], sg(12), [1, 0, 0]);
+    m.skin(LEG).color(L.pants).sweep([{ at: [0, ly, 37.5], a: 4.7, b: 4.9 }, { at: [0.2, ly + 0.2, 31], a: 4.4, b: 4.6 },
+      { at: [0.2, ly, 24], a: 3.7, b: 3.9 }, { at: [0.3, ly, 20], a: 3.2, b: 3.4 }, { at: [-0.2, ly, 16], a: 3.4, b: 3.7 },
+      { at: [0, ly, 11], a: 2.9, b: 3.1 }, { at: [0, ly, 4.5], a: 2.4, b: 2.5 }], sg(12), [1, 0, 0]);
     if (fine) {
       m.color(shade(L.pants, 0.75));
-      fold(m, [3.3, ly + 0.8, 33.5], 20, 0, 90, 1.6); // hip crease
-      fold(m, [-2.9, ly, 21], 0, 90, 0, 1.4); // behind the knee
-      fold(m, [3.0, ly - 0.6, 25], -25, 0, 90, 1.2);
-      if (team === 'T') m.color(shade(L.pants, 0.88)).rbox(4, 1.6, 4.6, 0.6, 0, ly + 3.8, 27, 1); // cargo pocket
-      if (L.pads) m.color(L.pads).rbox(1.6, 4.2, 4.2, 0.7, 3.1, ly, 20, 1); // knee pad
+      fold(m, [3.9, ly + 0.8, 33.5], 20, 0, 90, 1.6); // hip crease
+      fold(m, [-3.3, ly, 21], 0, 90, 0, 1.4); // behind the knee
+      fold(m, [3.4, ly - 0.6, 25], -25, 0, 90, 1.2);
+      if (team === 'T') m.color(shade(L.pants, 0.88)).rbox(4, 1.6, 4.6, 0.6, 0, ly + 4.3, 27, 1); // cargo pocket
+      if (L.pads) m.color(L.pads).rbox(1.6, 4.2, 4.2, 0.7, 3.3, ly, 20, 1); // knee pad
     }
     m.skin();
     // Boot: a shaft round the ankle, the foot, a thick sole.
-    m.bone(B('ankle_L')).color(L.boots).push().translate(0, ly, 2).lathe([[2.5, 0], [2.4, 4.8]], sg(12)).pop();
+    m.bone(B('ankle_L')).color(L.boots).push().translate(0, ly, 2).lathe([[2.6, 0], [2.5, 4.8]], sg(12)).pop();
     m.rbox(8.6, 4.4, 3.4, 1.3, 1.8, ly, 2.1, coarse ? 1 : 2);
     m.color(shade(L.boots, 0.55)).rbox(9.2, 4.7, 0.9, 0.35, 1.9, ly, 0.45, 1);
   }, 1, S.mirror);

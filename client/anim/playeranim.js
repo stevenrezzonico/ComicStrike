@@ -4,7 +4,11 @@
 // travelled (a step every 2 x STEP_SCALE half-strides: a little foot slide buys a calmer
 // cadence than the short legs allow); hips drop and the torso leans to fit the crouch hit boxes;
 // the aim pitch bends spine and neck; hands reach per-hold grip points in the aim frame
-// (two-bone solves) and the gun hand takes the aim rotation. Reloads follow the first-
+// (two-bone solves) and the gun hand takes the aim rotation. Standing with a gun is CS:GO's
+// ready stance: feet apart with the toes out, knees soft, a lean forward, the body bladed
+// for a rifle (hips and shoulders turned right, the stock in the shoulder, the aim-side
+// foot back); the chest breathes and the weight sways at rest, and moving the body leans
+// into its direction while the hips swing with the stride and the shoulders counter it. Reloads follow the first-
 // person timeline (client/anim/viewanim.js) from when the reload bit came on: the gun
 // tilts, the off hand pulls the magazine out along its bone and seats a new one, racks
 // the bolt or slide; shotguns load shell by shell at the port; the revolver's cylinder.
@@ -31,13 +35,23 @@ const CROUCH_LEAN = 55; // degrees forward at full duck
 const LEG = 32.4; // hip to ankle when reaching, a little short of the 33 of the bones
 const STEP_SCALE = 1.5; // distance per step over the swing: 60 units a step when running (~4/s)
 const TOSS_RATE = 2.5; // a throw's arm swing lasts 1 / this seconds
-const RIFLE_TWIST = 12; // per spine bone: left shoulder forward for a rifle stance
+const RIFLE_TWIST = 6; // per spine bone: left shoulder forward for a rifle stance
+const RIFLE_BLADE = 18; // the hips turned right with a rifle (the shoulders -36 in all)
+const STANCE = 6; // feet this far out from the center line at rest (4.5 walking)
+const TOES_OUT = 8; // degrees
+const KNEE_SOFT = 1.5; // the hips sit this much lower than straight legs would hold them
+const BLADE_STEP = 1.5; // bladed: the left foot this far ahead, the right behind
+const READY_LEAN = 5; // degrees forward with a gun up
+const MOVE_LEAN = 4; // degrees into the movement, forward or to a side
+const HIP_SWING = 7; // the hips turn this far with the stride, the shoulders a third against
+const BREATH = 0.8; // chest pitch, degrees, at 0.25 Hz
+const SWAY = 0.5; // the weight shifting from foot to foot, units, at 0.15 Hz
 
 // Hand targets per hold, relative to the shoulder-line center (spine_3), in the aim frame
 // (x along the aim, z up) when `aimed`, else in the body frame: [left xyz, right xyz].
 const GRIPS = {
-  [HOLD_RIFLE]: { aimed: true, hands: [[20, -1.5, -4.5], [8.5, -4.5, -6]] },
-  [HOLD_PISTOL]: { aimed: true, hands: [[16, -0.6, -6], [17, -1.4, -4.6]] },
+  [HOLD_RIFLE]: { aimed: true, hands: [[20, -2.5, -4], [8, -6.5, -5]] }, // the stock in the right shoulder
+  [HOLD_PISTOL]: { aimed: true, hands: [[16.5, -0.4, -4.5], [17.5, -1.6, -4]] },
   [HOLD_KNIFE]: { aimed: false, hands: [[1, 9.5, -21], [12, -6.5, -10]] },
   [HOLD_C4]: { aimed: false, hands: [[11, 3, -13], [11, -2.5, -12.5]] },
   [HOLD_TIED]: { aimed: false, hands: [[-7, 2.5, -24], [-7, -2.5, -24]] },
@@ -152,51 +166,62 @@ export class PlayerAnimator {
 
     const kneel = anim & (ANIM_PLANT | ANIM_DEFUSE) ? 1 : 0;
     const c = Math.max(duck, kneel);
+    const grip = GRIPS[hold] || GRIPS[HOLD_KNIFE];
     const support = pts ? pts.support : null;
     const reload = this.reloadPose(anim, hold, pts, weapon);
     const p = this.pose.reset();
     if (this.dead > 0) return this.headshot ? this.headshotPose(c, yaw) : this.collapsePose(c);
 
-    // Hips: crouch drop; standing, they sink when the feet are apart so both reach the
-    // ground (lowest with both feet down, highest passing over the planted foot).
+    // Hips: crouch drop, soft knees; standing, they sink when the feet are apart so both
+    // reach the ground (lowest with both feet down, highest passing over the planted foot);
+    // the weight sways from foot to foot at rest. A rifle blades the hips to the right;
+    // moving, they swing with the stride and the body leans into its direction.
     const sw = this.stride * walk, spread = Math.cos(this.phase * 2 * Math.PI);
     const bob = (33 - Math.sqrt(LEG * LEG - sw * sw)) * spread * spread * (1 - c);
+    const rest = (1 - walk) * (1 - c), blade = (hold === HOLD_RIFLE ? 1 : 0) * (1 - kneel);
+    const stride = spread * walk; // 1: the left foot ahead
     p.pos[PELVIS * 3] = -5 * c;
-    p.pos[PELVIS * 3 + 2] = PELVIS_Z - CROUCH_DROP * c - bob;
+    p.pos[PELVIS * 3 + 1] = SWAY * Math.sin(this.time * 0.94) * rest;
+    p.pos[PELVIS * 3 + 2] = PELVIS_Z - CROUCH_DROP * c - bob - KNEE_SOFT * (1 - c);
+    p.turn(PELVIS, MOVE_LEAN * dirF * walk, -RIFLE_BLADE * blade - HIP_SWING * stride, -MOVE_LEAN * dirL * walk);
 
-    // Spine: crouch lean, aim pitch (down-positive), rifle twist, fire kick; the head
-    // keeps looking along the aim.
-    const lean = CROUCH_LEAN * c;
+    // Spine: crouch lean, the ready lean, aim pitch (down-positive), rifle twist, the
+    // shoulders countering the hips, breathing, fire kick; the head keeps looking along
+    // the aim (half the blade is left in it).
+    const lean = CROUCH_LEAN * c + READY_LEAN * (grip.aimed ? 1 : 0.4) * (1 - c);
     const aimP = Math.max(-80, Math.min(80, pitch));
-    const twist = hold === HOLD_RIFLE ? -RIFLE_TWIST : 0;
+    const twist = -RIFLE_TWIST * blade + HIP_SWING * stride / 3;
+    const unturn = (RIFLE_BLADE * blade - HIP_SWING * stride) * 0.5 - twist;
+    const breath = BREATH * Math.sin(this.time * 1.57);
     p.turn(SPINE1, lean * 0.5 + aimP * 0.15, twist, 0);
-    p.turn(SPINE2, lean * 0.3 + aimP * 0.15, twist, 0);
+    p.turn(SPINE2, lean * 0.3 + aimP * 0.15 + breath, twist, 0);
     const swing = this.toss > 0 ? Math.sin(Math.PI * this.toss) : 0; // the throw's arm swing, out and back
-    p.turn(SPINE3, lean * 0.2 + aimP * 0.15 - this.kick * 5 + swing * 6, swing * 10, 0);
-    p.turn(NECK, -lean * 0.4 + aimP * 0.2, -twist, 0);
-    p.turn(HEAD, -lean * 0.6 + aimP * 0.35 + this.kick * 5, -twist, 0);
+    p.turn(SPINE3, lean * 0.2 + aimP * 0.15 - this.kick * 5 + swing * 6, twist + swing * 10, 0);
+    p.turn(NECK, -lean * 0.4 + aimP * 0.2 - breath * 0.5, unturn, 0);
+    p.turn(HEAD, -lean * 0.6 + aimP * 0.35 + this.kick * 5 - breath * 0.5, unturn, 0);
     p.solve();
 
-    // Legs: feet on the ground under the hips, cycling along the movement direction. A foot
-    // is lifted while sin(ph) > 0 and swings from behind to ahead meanwhile (-cos), then
-    // stays planted while the body passes over it (the other way round was a moonwalk).
+    // Legs: feet on the ground under the hips, apart at rest (the right one back when
+    // bladed), cycling along the movement direction. A foot is lifted while sin(ph) > 0
+    // and swings from behind to ahead meanwhile (-cos), then stays planted while the body
+    // passes over it (the other way round was a moonwalk). Soles flat, toes out.
     for (let s = 0; s < 2; s++) {
       const ph = (this.phase + s * 0.5) * 2 * Math.PI;
       const swing = -Math.cos(ph) * this.stride * walk;
       const lift = Math.max(0, Math.sin(ph)) * (2 + this.stride * 0.35) * walk;
       const goal = p.goal;
-      goal[0] = 2 * c + dirF * swing + (s ? -3 : 4) * this.air;
-      goal[1] = SIDE[s] * (4.5 + c) + dirL * swing;
+      goal[0] = 2 * c + dirF * swing + (s ? -3 : 4) * this.air + SIDE[s] * BLADE_STEP * blade * rest;
+      goal[1] = SIDE[s] * (4.5 + c + (STANCE - 4.5) * rest) + dirL * swing;
       goal[2] = 3.5 + lift + 9 * this.air;
       goal[3] = 1;
       goal[4] = SIDE[s] * 0.25;
       goal[5] = 0;
       p.reachGoal(HIP[s], KNEE[s], ANKLE[s]);
-      p.setWorldRotation(ANKLE[s], Q.identity(tq), 0); // soles flat
+      Q.fromEuler(tq, 0, 0, SIDE[s] * TOES_OUT * (1 - this.air), 0);
+      p.setWorldRotation(ANKLE[s], tq, 0);
     }
 
     // Arms: grip points around the shoulder line, in the aim frame for guns.
-    const grip = GRIPS[hold] || GRIPS[HOLD_KNIFE];
     const w = p.wpos, cx = w[SPINE3 * 3], cyy = w[SPINE3 * 3 + 1], cz = w[SPINE3 * 3 + 2];
     const handP = grip.aimed ? aimP : 25;
     const hr = handP * Math.PI / 180, ch = Math.cos(hr), sh = Math.sin(hr);
@@ -222,6 +247,8 @@ export class PlayerAnimator {
         oz += Math.sin(this.time * 7) * 1.2;
       }
       ox -= this.kick * 2;
+      oz += breath * 0.6 * rest; // the gun rises with the chest
+      if (s === 0 && hold === HOLD_KNIFE) ox -= 8 * stride; // the free arm swings against the left leg
       if (s === 1) { // throwing: the gun hand swings forward and up
         ox += swing * 9;
         oz += swing * 7;
@@ -372,7 +399,7 @@ export class PlayerAnimator {
     const settle = bump(t, 0.85, 0.98, 0.98, 1.15);
     const c0 = c * (1 - buckle);
     const hUp = PELVIS_Z - CROUCH_DROP * c0 - 24 * buckle;
-    const px = -5 * c0 + 10 * fwd * f, py = side * 13 * f, pz = hUp + (7 - hUp) * f + 2.5 * settle;
+    const px = -5 * c0 + 10 * fwd * f, py = side * 13 * f, pz = hUp + (9 - hUp) * f + 2.5 * settle; // (9: broad shoulders lie high)
     p.pos[PELVIS * 3] = px;
     p.pos[PELVIS * 3 + 1] = py;
     p.pos[PELVIS * 3 + 2] = pz;

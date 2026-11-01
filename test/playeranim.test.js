@@ -208,7 +208,7 @@ Deno.test('player animation: a weapon throw swings the gun hand forward and back
   }
   assert.ok(reach > rest + 5, `the hand swings forward (${(reach - rest).toFixed(1)} units)`);
   assert.equal(a.toss, 0);
-  assert.ok(Math.abs(bone(a, 'hand_R')[0] - rest) < 0.01, 'and comes back');
+  assert.ok(Math.abs(bone(a, 'hand_R')[0] - rest) < 1, 'and comes back (within a breath)');
 });
 
 Deno.test('player animation: the off hand holds the gun at its support point', async () => {
@@ -258,4 +258,64 @@ Deno.test('player animation: reloads move the magazine with the off hand, rack t
   const nova = buildGun('nova'), a = run(new PlayerAnimator(), 8, () => [0, 0, 0]);
   for (let k = 0; k < 64; k++) a.update(1 / 64, 0, 0, 0, 0, 0, 0, true, HOLD_RIFLE, ANIM_RELOAD, 0, true, nova, WEAPON_ID.nova);
   assert.ok(a.reload.roll < -20 && a.reload.take > 0.9);
+});
+
+Deno.test('player models: a deltoid covers each shoulder joint; broad shoulders', () => {
+  const m = buildPlayer('T'), u8 = new Uint8Array(m.data);
+  for (const side of ['L', 'R']) {
+    const j = S.bone(`arm_upper_${side}`), [jx, jy, jz] = [S.bind[j * 3], S.bind[j * 3 + 1], S.bind[j * 3 + 2]];
+    assert.ok(Math.abs(jy) > 9, `the ${side} shoulder joint is out at the chest's edge (${jy})`);
+    // Vertices of the clavicle (the deltoid's main bone) all round the joint, within 5 units.
+    let n = 0;
+    for (let v = 0; v < m.count; v++) {
+      if (S.names[u8[v * MESH_STRIDE + 15]] !== `clavicle_${side}`) continue;
+      const dx = m.positions[v * 3] - jx, dy = m.positions[v * 3 + 1] - jy, dz = m.positions[v * 3 + 2] - jz;
+      assert.ok(dx * dx + dy * dy + dz * dz < 25, `a ${side} deltoid vertex ${Math.sqrt(dx * dx + dy * dy + dz * dz).toFixed(1)} from the joint`);
+      n++;
+    }
+    assert.ok(n > 30, `${side} deltoid vertices: ${n}`);
+  }
+});
+
+Deno.test('player animation: the ready stance stands apart, bladed and leaning; breathing stays small', () => {
+  const a = run(new PlayerAnimator(), 64, () => [0, 0, 0], { hold: HOLD_RIFLE });
+  const l = bone(a, 'ankle_L'), r = bone(a, 'ankle_R');
+  assert.ok(l[1] - r[1] > 11, `feet apart at rest (${(l[1] - r[1]).toFixed(1)})`);
+  assert.ok(l[0] - r[0] > 2, 'the right foot back for a rifle');
+  assert.ok(bone(a, 'pelvis')[2] < 37.5, 'knees soft');
+  const sh = bone(a, 'arm_upper_L'), sr = bone(a, 'arm_upper_R');
+  assert.ok(sh[0] > sr[0] + 6, 'bladed: the left shoulder ahead of the right');
+  assert.ok(bone(a, 'head_0')[0] > bone(a, 'pelvis')[0] + 1, 'leaning forward');
+  const pistol = run(new PlayerAnimator(), 64, () => [0, 0, 0], { hold: HOLD_PISTOL });
+  assert.ok(Math.abs(bone(pistol, 'ankle_L')[0] - bone(pistol, 'ankle_R')[0]) < 0.5, 'a pistol stance is square');
+  // Breathing and sway over 4 s move the hands and hips by less than a unit and a half.
+  let lo = Infinity, hi = -Infinity, ylo = Infinity, yhi = -Infinity;
+  for (let k = 0; k < 256; k++) {
+    run(a, 1, () => [0, 0, 0], { hold: HOLD_RIFLE });
+    const h = bone(a, 'hand_R'), p = bone(a, 'pelvis');
+    lo = Math.min(lo, h[2]);
+    hi = Math.max(hi, h[2]);
+    ylo = Math.min(ylo, p[1]);
+    yhi = Math.max(yhi, p[1]);
+  }
+  assert.ok(hi - lo > 0.05 && hi - lo < 1.5, `the gun hand breathes (${(hi - lo).toFixed(2)})`);
+  assert.ok(yhi - ylo > 0.2 && yhi - ylo < 1.5, `the weight sways (${(yhi - ylo).toFixed(2)})`);
+});
+
+Deno.test('player animation: moving leans into the direction and the hips swing with the stride', () => {
+  const fwd = run(new PlayerAnimator(), 64, (t) => [t * 250, 0, 0], { hold: HOLD_RIFLE });
+  const still = run(new PlayerAnimator(), 64, () => [0, 0, 0], { hold: HOLD_RIFLE });
+  const leanOf = (a) => bone(a, 'head_0')[0] - bone(a, 'pelvis')[0];
+  assert.ok(leanOf(fwd) > leanOf(still) + 1, 'leans forward running');
+  const back = run(new PlayerAnimator(), 64, (t) => [-t * 250, 0, 0], { hold: HOLD_RIFLE });
+  assert.ok(leanOf(back) < leanOf(still) - 1, 'leans back backpedalling');
+  // The hips turn one way then the other over a stride.
+  let lo = Infinity, hi = -Infinity;
+  for (let k = 0; k < 64; k++) {
+    run(fwd, 1, () => [(64 + k) / 64 * 250, 0, 0], { hold: HOLD_RIFLE });
+    const d = bone(fwd, 'leg_upper_L')[0] - bone(fwd, 'leg_upper_R')[0];
+    lo = Math.min(lo, d);
+    hi = Math.max(hi, d);
+  }
+  assert.ok(hi - lo > 1, `the hips swing (${(hi - lo).toFixed(2)})`);
 });
