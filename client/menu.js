@@ -74,6 +74,7 @@ const TABS = [
     ['select', 'r_hidpi', 'High-DPI screens', ['Page pixels', 'Sharp (screen pixels)']],
     ['toggle', 'r_lowlatency', 'Low-latency display (may tear; takes effect on reload)'],
     ['slider', 'fps_max', 'Frame rate cap (0: none; only with vsync off)', 0, 1000, 10],
+    ['toggle', 'fullscreen', 'Fullscreen while playing (Chrome, Edge: Ctrl+W and the other shortcuts stay in the game)'],
     ['section', null, 'Weapon'],
     ['slider', 'viewmodel_fov', 'Weapon field of view', 54, 68, 1],
     ['slider', 'viewmodel_offset_x', 'Weapon offset right', -2.5, 2.5, 0.1],
@@ -766,6 +767,8 @@ export class Menu {
     }
     list.append(el('p', 'menu-hint', 'Click a key, then press the new key or mouse button. Backspace clears it, ' +
       'Escape cancels. Everything else is in the console (bind, unbind).'));
+    list.append(el('p', 'menu-hint', 'Crouch on Ctrl: Ctrl+W closes the tab in Firefox, and in Chrome and Edge ' +
+      'unless Fullscreen is on (Video). Bind crouch to C there, or play fullscreen.'));
   }
 
   startCapture(cell, command, key) {

@@ -20,6 +20,8 @@ export class Input {
     this.mYaw = 0.022; // degrees per count
     this.mPitch = 0.022;
     this.rawInput = true;
+    this.fullscreen = false; // the `fullscreen` cvar: the page fills the screen when it takes the mouse
+    this.keyLocked = false; // the keyboard lock asked for (Chrome, Edge; it holds while fullscreen)
     // onKey(name, down) -> true if the key is used (its default action is then prevented).
     this.onKey = () => false;
     // True while held keys should outlive losing the mouse (the buy menu: buy on the move).
@@ -57,7 +59,12 @@ export class Input {
         if (this.locked) e.preventDefault();
         return;
       }
-      if (this.onKey(keyName(e.code, e.key), true)) e.preventDefault();
+      const name = keyName(e.code, e.key);
+      if (name === 'escape' && this.locked) { // under a keyboard lock the browser leaves Escape to the page
+        document.exitPointerLock();
+        return;
+      }
+      if (this.onKey(name, true)) e.preventDefault();
     });
     document.addEventListener('keyup', (e) => {
       this.onKey(keyName(e.code, e.key), false);
@@ -111,13 +118,47 @@ export class Input {
 
   async lock() {
     if (this.locked) return;
+    // Raw input: bypass OS mouse acceleration where supported (m_rawinput 1). Asked before
+    // the fullscreen request, in the same task: entering fullscreen uses up the click's
+    // activation, and a pointer lock asked after it was refused (a second click took it).
+    const first = this.rawInput ? this.canvas.requestPointerLock({ unadjustedMovement: true })
+      : this.canvas.requestPointerLock();
+    const fullscreen = this.fullscreen ? this.enterFullscreen() : null;
     try {
-      // Raw input: bypass OS mouse acceleration where supported (m_rawinput 1).
-      if (this.rawInput) await this.canvas.requestPointerLock({ unadjustedMovement: true });
-      else await this.canvas.requestPointerLock();
+      await first;
     } catch {
       await this.canvas.requestPointerLock();
     }
+    if (fullscreen) await fullscreen;
+  }
+
+  // Fullscreen (the `fullscreen` cvar), from a click: the page fills the screen and, where
+  // the browser has the Keyboard Lock API (Chrome, Edge), its own shortcuts (Ctrl+W, Ctrl+T,
+  // Alt+Tab, the Windows key) go to the game instead: a Ctrl+W (crouch and forward) no
+  // longer closes the tab. Escape then reaches the page too (handled above; held for 2 s it
+  // leaves fullscreen, the browser's rule). The lock is asked for once and holds while the
+  // page is fullscreen; without a user gesture the fullscreen request is refused and the
+  // next click tries again.
+  async enterFullscreen() {
+    const doc = this.canvas.ownerDocument;
+    if (navigator.keyboard && navigator.keyboard.lock && !this.keyLocked) {
+      this.keyLocked = true;
+      navigator.keyboard.lock().catch(() => {
+        this.keyLocked = false;
+      });
+    }
+    if (doc.fullscreenElement || !doc.documentElement.requestFullscreen) return;
+    try {
+      await doc.documentElement.requestFullscreen({ navigationUI: 'hide' });
+    } catch { /* no gesture, or the browser refused */ }
+  }
+
+  // Back to the window: leaving the game, or the cvar turned off.
+  leaveFullscreen() {
+    if (this.keyLocked && navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock();
+    this.keyLocked = false;
+    const doc = this.canvas.ownerDocument;
+    if (doc.fullscreenElement && doc.exitFullscreen) doc.exitFullscreen().catch(() => {});
   }
 
   // Applies accumulated mouse motion to angles [pitch, yaw] (degrees).

@@ -2047,6 +2047,7 @@ function leaveGame(message = '') {
   backdrop = false;
   resetSession();
   if (document.pointerLockElement) document.exitPointerLock();
+  input.leaveFullscreen();
   menu.showStart(message);
 }
 
@@ -2088,6 +2089,23 @@ async function reconnect() {
 //  * ?fromeditor: a tab the editor's Try it opened; it takes the map the editor handed
 //    over (client/handoff.js) and starts a practice game on it (the demo mode).
 const preview = params.has('preview');
+// The `fullscreen` cvar (Video tab): the page fills the screen when it takes the mouse,
+// and in Chrome and Edge the keyboard is locked (Input.enterFullscreen). Not in the
+// editor's 3D view.
+const applyFullscreen = () => {
+  input.fullscreen = cv.fullscreen.bool && !preview;
+  if (!input.fullscreen) input.leaveFullscreen();
+};
+watch(cv.fullscreen, applyFullscreen);
+applyFullscreen();
+// Where the keyboard is not locked (Firefox; Chrome out of fullscreen) a Ctrl+W (crouch
+// and forward) closes the tab: while a game runs with the mouse captured the browser asks
+// first. Not at the menus, so a tab left from the pause menu closes without a question.
+addEventListener('beforeunload', (e) => {
+  if (!playing || !input.locked || preview) return;
+  e.preventDefault();
+  e.returnValue = ''; // Safari and older Chrome want this one
+});
 async function previewMap(name, bytes) {
   ownMaps.clear();
   ownMaps.set(name, bytes);
