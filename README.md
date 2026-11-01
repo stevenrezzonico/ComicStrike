@@ -2,18 +2,22 @@
 
 **A multiplayer FPS in the browser that looks like a printed comic.**
 
-Flat colors, ink outlines, halftone dots and sound words (BLAM!, KAPOW!) on top of CS:GO's mechanics: the movement, recoil and spray patterns, armor, economy, the bomb and hostages. The maps are classic Counter-Strike 1.6 maps, read straight from their `.bsp` files.
+Flat colors, ink outlines, halftone dots and sound words (BLAM!, KAPOW!) on top of CS:GO's mechanics: the movement, recoil and spray patterns, armor, economy, the bomb and hostages. It plays classic Counter-Strike 1.6 maps, read straight from their `.bsp` files, comes with its own (`de_inkwell`, below) and has a map editor to make more.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 [![Deno 2.9+](https://img.shields.io/badge/deno-2.9%2B-black.svg)](https://deno.com/)
 ![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen.svg)
 
 <p>
-  <img src="docs/screenshot-terrorists.jpg" alt="Three Terrorists with rifles beside a big wooden gate, seen over an AK-47, all in flat comic colors with ink outlines and halftone shading" width="49%">
-  <img src="docs/screenshot-counter-terrorists.jpg" alt="Two Counter-Terrorists pushing through a passage past a wall of wooden panels, in the same comic print style" width="49%">
+  <img src="docs/screenshot-inkwell-short.jpg" alt="Terrorists in red shemaghs climbing stone stairs toward a bomb site, seen over an AK-47, in flat comic colors with ink outlines and halftone shading" width="49%">
+  <img src="docs/screenshot-inkwell-ct.jpg" alt="Counter-Terrorists in navy moving through a sandy yard past crates and a barred gate, seen over a rifle, in the same comic print" width="49%">
+</p>
+<p>
+  <img src="docs/screenshot-inkwell-a.jpg" alt="A raised stone plaza with a wooden portico on pillars and a crate, a Terrorist running in from the left" width="49%">
+  <img src="docs/screenshot-inkwell-editor.jpg" alt="The map editor: de_inkwell seen from the top, with both bomb sites, buy zones and spawns, beside its live 3D view of the A plaza" width="49%">
 </p>
 
-<sub>Bots playing a 5 against 5 on `de_playground`, the map that comes with the repository.</sub>
+<sub>Bots playing a 5 against 5 on `de_inkwell`, our own map, and the same map open in the map editor.</sub>
 
 Everything is written from scratch in plain JavaScript:
 - WebGL2 for the graphics;
@@ -32,14 +36,14 @@ cd ComicStrike
 deno task start
 ```
 
-Then open <http://127.0.0.1:27015/>, choose **Practice** and play against bots. Practice needs no Counter-Strike maps: pick `de_playground`.
+Then open <http://127.0.0.1:27015/>, choose **Practice** and play against bots. Practice needs no Counter-Strike maps: pick `de_inkwell`, our own defusal map, or `de_playground`.
 
 Use `127.0.0.1` rather than `localhost`, because Chrome tries IPv6 first and the game server listens on IPv4.
 
 ## Features
 
 - **The comic print:**
-  - one full-screen pass draws ink lines on every silhouette, crease and part;
+  - an ink pass draws lines on every silhouette, crease and part, and one full-screen pass prints the frame;
   - shade is printed as halftone dots, with a slightly misregistered color plate;
   - surfaces get flat colors and a few ink marks by material (bricks, planks, tiles), colored like the original textures.
 - **CS:GO gameplay:**
@@ -48,9 +52,11 @@ Use `127.0.0.1` rather than `localhost`, because Chrome tries IPv6 first and the
   - armor, rounds and the economy, with the radial buy menu;
   - planting and defusing the bomb, carrying hostages, all five grenades.
 - **Netcode:** a 64-tick server, client-side prediction that matches the server bit for bit, interpolation and lag compensation.
-- **Light on hardware:** only the part of the map that can be seen is drawn, nearest first, and on a slower GPU (a laptop on battery) the game first switches to a cheaper ink pass, then lowers the render resolution step by step to hold 60 fps.
+- **Light on hardware:** only the part of the map that can be seen is drawn, nearest first. The game times its own GPU work and lowers the scene's resolution before frames come late or queue up (a laptop on battery holds 60 fps), while the ink lines and dots stay sharp at the screen's own resolution.
 - **Bots** that navigate any map, fight, plant, defuse and rescue hostages, at four difficulties.
 - **Practice anywhere:** the real server runs inside the browser in a Web Worker, so you can play against bots without running a server.
+- **A map editor** in the browser: drag boxes, ramps, stairs, doors, ladders, water, buy zones and bomb sites onto the views, see the map printed live in 3D, try it in one click and export it as a `.bsp`. It also opens any `.bsp`, Valve's maps included, and turns it back into shapes you can edit.
+- **Your own maps:** drop a `.bsp` in the menu to play it against bots, or host it as a room on the server and share the invite link.
 - **A CS:GO-style console** (`` ` ``) with the familiar commands, cvars and binds.
 - **Also:**
   - spectating, and taking over a bot of your team;
@@ -74,20 +80,23 @@ Pick a mode in the Practice menu. On a server, set `game_type` and `game_mode` i
 
 ## Maps
 
-The repository includes one map of its own, `de_playground`. It is a small yard with something of everything:
-- stairs and a ladder tower;
-- crates and glass to break;
-- a conveyor belt and a pool;
-- three kinds of doors;
-- both bomb sites.
+The repository includes two maps of its own:
+- **`de_inkwell`**, a full defusal map: a harbour town round a print works, with T spawn on the docks over a canal, a raised A plaza reached by Long, Short and a CT ramp, a B yard behind a paper warehouse, and a fountain in Mid. Its timings are measured against de_dust2's with the bots' paths ([the map's notes and plan](docs/maps/de_inkwell.md)). It is written as a map editor project: open it with the editor's **Example** button.
+- **`de_playground`**, a small yard with something of everything: stairs and a ladder tower, crates and glass to break, a conveyor belt and a pool, three kinds of doors, both bomb sites.
 
-Counter-Strike 1.6 maps belong to Valve and are not included. If you own the game, copy the `.bsp` files from its `cstrike/maps` folder into `maps/`. The server starts on `de_dust2` by default; without it, start on the included map:
+A few community maps are included too (`fy_buzzkill`, `fy_snow_pool`, `awp_cs16`, `de_cache_cs2_beta` and some ports of CS:S maps).
+
+Counter-Strike 1.6 maps belong to Valve and are not included. If you own the game, copy the `.bsp` files from its `cstrike/maps` folder into `maps/`. The server starts on `de_dust2` by default; without it, start on an included map:
 
 ```bash
-MAP=de_playground deno task start
+MAP=de_inkwell deno task start
 ```
 
-In PowerShell: `$env:MAP = "de_playground"; deno task start`.
+In PowerShell: `$env:MAP = "de_inkwell"; deno task start`.
+
+### The map editor
+
+Choose **Map editor** in the start menu (or open `/client/editor.html`). Pick a shape from the library and drag it onto a view, or click it and draw a rectangle; move, resize and turn shapes with the mouse, paint them with Counter-Strike 1.6 textures, and watch the 3D view rebuild the map as you go. **Try it** plays the map at once; **Export .bsp** downloads it. The problems list warns about missing spawns, spawns stuck in walls, ramps too steep to walk and steps too high to climb. Press `?` for the introduction.
 
 ## Controls
 
@@ -118,7 +127,7 @@ In practice, server commands work without a password, typed with or without `rco
 | `sv_cheats 1`, then `setpos x y z` / `setang pitch yaw` | Move yourself (`setang` works without cheats) |
 | `cl_showfps 1`, `net_graph 1` | Frame rate, network graph |
 | `benchmark` | Measures 10 s: frame rate, slow frames, CPU and GPU time per pass |
-| `r_dynres 0`, `r_inkfast 1` | Fixed resolution; the cheaper ink always on |
+| `r_dynres 0`, `mat_viewportscale 0.75` | A fixed render resolution (the print stays at the screen's) |
 | `r_comic 0` | The plain render, without the print |
 
 ## Running a server
@@ -167,14 +176,15 @@ flowchart LR
 
 - `shared/` is the code the client and the server both run: map loading, movement, collision, weapons, rules, the wire protocol. The client predicts with exactly the server's code.
 - `client/` is the browser game:
-  - a deferred renderer: the scene is drawn into a G-buffer, then a single composite pass prints ink, dots and color;
+  - a deferred renderer: the scene is drawn into a G-buffer, then an ink pass and a composite pass print ink, dots and color;
+  - the map editor, with its own BSP compiler (shared with the tools) and decompiler;
   - models and animation built in code;
   - the HUD, the menus and the synthesized sound.
 - `server/` is the Deno server: the WebTransport endpoint, the game rules, the bots, the console.
 - `tools/` holds generators:
   - weapon data from CS:GO's game files;
   - texture colors measured from the original WADs;
-  - the playground map, written as a real BSP file.
+  - de_playground and de_inkwell, written as real BSP files by our own compiler.
 
 [CLAUDE.md](CLAUDE.md) is the detailed design document: every system, its rules and its approximations.
 
@@ -189,7 +199,7 @@ Some ground rules:
 - **No dependencies:** no npm or jsr packages, no bundler, no WebAssembly.
 - **No asset files at runtime:** textures, models and sounds stay procedural.
 - **No allocations in hot paths:** the main loop and the server tick avoid garbage-collection spikes.
-- **Never commit Valve's files:** maps in `maps/` and WADs in `wads/` are git-ignored; only `de_playground.bsp` is tracked.
+- **Never commit Valve's files:** maps in `maps/` and WADs in `wads/` are git-ignored; only our own maps and the community maps are tracked.
 
 ## License
 
