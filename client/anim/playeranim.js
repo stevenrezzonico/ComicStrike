@@ -538,21 +538,22 @@ export class PlayerAnimator {
       // down on the ground beside the head once landed.
       const sx = w[ARM[s] * 3], sy = w[ARM[s] * 3 + 1], sz = w[ARM[s] * 3 + 2];
       const hx = cx + 14, hy = cyy + SIDE[s] * 4, hz = cz - 6;
-      goal[0] = 9;
-      goal[1] = SIDE[s] * 13;
-      goal[2] = 13;
+      // (offsets from the shoulder in the body's frame, turned with it: in the air, then at
+      // rest out to its sides past the head; the hands then come down to the ground)
+      goal[0] = 9 - 11 * land;
+      goal[1] = SIDE[s] * (13 + 7 * land);
+      goal[2] = 13 - 4 * land;
       Q.rotate(t3, 0, tv, 0, goal, 0);
       let x = hx + (sx + t3[0] - hx) * spread, y = hy + (sy + t3[1] - hy) * spread, z = hz + (sz + t3[2] - hz) * spread;
-      x += (px + dx * 24 + ex * SIDE[s] * 22 - x) * land;
-      y += (py + dy * 24 + ey * SIDE[s] * 22 - y) * land;
       z += (3 - z) * land;
       goal[0] = x;
       goal[1] = y;
       goal[2] = z;
-      goal[3] = 0.3 - 0.3 * land; // elbows out to the sides and a little down the body
+      goal[3] = 0.3; // elbows out to the sides and a little down the body (turned with it)
       goal[4] = SIDE[s] * 0.8;
-      goal[5] = -0.4 + 1.2 * land; // (up, once landed: never into the ground)
+      goal[5] = -0.4;
       Q.rotate(goal, 3, tv, 0, goal, 3);
+      goal[5] += 1.5 * land; // landed: the elbows up off the ground (the turned pole lies flat)
       p.reachGoal(ARM[s], ELBOW[s], HAND[s]);
     }
     p.skinMatrices();
