@@ -18,7 +18,8 @@ import {
 const SPHERE = [[0, -1], [0.7, -0.7], [1, 0], [0.7, 0.7], [0, 1]];
 
 // Smoke: one draw per cloud, a sphere warped into SMOKE_LOBES lobes (buildSmokeCloud),
-// squashed and flat underneath where it sits on the floor; one primitive with smooth
+// squashed and flat underneath where it spreads over the floor (the lowest lobes bulge
+// out as a skirt, so it pools like CS:GO's); one primitive with smooth
 // normals, so the ink draws one scalloped outline round it and only short lines in the
 // valleys between lobes up close (before: a core and 24 puffs, each its own draw with its
 // own ink id, which printed as a pile of outlined balls). A light warm grey like CS:GO's,
@@ -26,8 +27,9 @@ const SPHERE = [[0, -1], [0.7, -0.7], [1, 0], [0.7, 0.7], [0, 1]];
 // built at load; an effect's id picks one.
 const SMOKE_LOBES = 22;
 const SMOKE_SHAPES = 3;
-const SMOKE_SQUASH = 0.72; // height over width
-const SMOKE_FLOOR = -0.58; // the flat underside, in cloud radii below the center
+const SMOKE_SQUASH = 0.6; // height over width
+const SMOKE_FLOOR = -0.36; // the flat underside, in cloud radii below the center (a 1.6-radii base)
+const SMOKE_SKIRT = 1.4; // the lowest lobes this much higher and wider
 const SMOKE_LIGHT = 1.6;
 const SMOKE_COLOR = [0.86, 0.86, 0.84];
 
@@ -43,8 +45,9 @@ export function buildSmokeCloud(color, seed) {
   const lobes = [];
   for (let i = 0; i < SMOKE_LOBES; i++) {
     const e = Math.asin(-0.2 + 1.2 * (i + 0.5) / SMOKE_LOBES), a = i * 2.39996 + seed * 1.7;
+    const skirt = e < 15 * Math.PI / 180 ? SMOKE_SKIRT : 1;
     lobes.push([Math.cos(e) * Math.cos(a), Math.cos(e) * Math.sin(a), Math.sin(e),
-      0.18 + 0.17 * hash(seed * 7.3 + i * 2.1), (18 + 10 * hash(seed * 3.1 + i * 5.7)) * Math.PI / 180]);
+      (0.18 + 0.17 * hash(seed * 7.3 + i * 2.1)) * skirt, (18 + 10 * hash(seed * 3.1 + i * 5.7)) * skirt * Math.PI / 180]);
   }
   const warp = (q) => {
     const l = Math.hypot(q[0], q[1], q[2]) || 1, dx = q[0] / l, dy = q[1] / l, dz = q[2] / l;
@@ -273,7 +276,7 @@ export class GrenadeFx {
     const R = smokeRadius(age);
     if (R < 1) return n;
     const pop = 1 + Math.sin(Math.min(1, age / 1.2) * Math.PI) * 0.18; // bulge while popping
-    const s = R * 0.95 * pop * (1 + 0.03 * Math.sin(age * 1.9 + id));
+    const s = R * 0.9 * pop * (1 + 0.03 * Math.sin(age * 1.9 + id));
     place(this.model[n], x, y, z - SMOKE_FLOOR * s, hash(id) * 6.283 + age * 0.04, s, s, s);
     this.mesh[n] = this.clouds[id % SMOKE_SHAPES];
     this.emissive[n] = 0;
@@ -376,8 +379,14 @@ export class GrenadeFx {
       m[12] = bx + cx * lift; m[13] = by + cy * lift; m[14] = this.faceBase[i * 3 + 2]; m[15] = 1;
     }
     r.begin(viewProj);
+    const gl = r.gl;
     for (let i = 0; i < this.n; i++) {
+      // A cloud's inside is drawn too: with the camera in it the near plane cuts the shell,
+      // and the culled back faces left a see-through band (the composite fogs the rest).
+      const cloud = this.clouds.includes(this.mesh[i]);
+      if (cloud) gl.disable(gl.CULL_FACE);
       r.draw(this.mesh[i], this.model[i], IDENTITY_SKIN, this.light[i], this.emissive[i]);
+      if (cloud) gl.enable(gl.CULL_FACE);
     }
     r.end();
   }

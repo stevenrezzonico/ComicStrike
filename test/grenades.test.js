@@ -128,6 +128,12 @@ Deno.test({ name: 'smoke pops once it stops; a molotov burns on the floor and a 
   assert.deepEqual(Array.from(g.fxKind.subarray(0, g.fxCount)), [FX_SMOKE], 'and put the fire out');
   for (let i = 0; i < 64; i++) g.update(world, t);
   assert.ok(g.inSmoke(x, y, floor + 40), 'a second later the cloud covers it');
+  // How deep a point is in the cloud: nothing outside, all smoke a little way in.
+  const cx = g.fxPos[0], cy = g.fxPos[1], cz = g.fxPos[2], r = smokeRadius(g.fxAge[0]);
+  assert.equal(g.smokeDepth(cx + r + 5, cy, cz), 0, 'outside');
+  assert.equal(g.smokeDepth(cx, cy, cz), 1, 'at the center');
+  const near = g.smokeDepth(cx + r - 6, cy, cz);
+  assert.ok(near > 0.3 && near < 0.7, `half way at 6 units in (${near})`);
 } });
 
 Deno.test({ name: 'server: a thrown HE flies from the thrower, hurts an enemy, and the kill is credited', ignore: !bsp, fn: () => {

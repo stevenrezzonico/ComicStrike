@@ -1437,6 +1437,11 @@ function draw(now, alpha, dt) {
   deathPanel.show(dying);
   renderer.style.dead += ((dying ? 1 : 0) - renderer.style.dead) * Math.min(1, dt * (dying ? 6 : 10));
   if (renderer.style.dead < 0.005) renderer.style.dead = 0;
+  // The camera inside a smoke cloud: the print fogs over (eased, so crossing the cloud's
+  // shell is a short fade, not a pop).
+  const smoked = fx.cur.smokeDepth(eye[0], eye[1], eye[2]);
+  renderer.style.smoke += (smoked - renderer.style.smoke) * Math.min(1, dt * 12);
+  if (renderer.style.smoke < 0.005) renderer.style.smoke = 0;
   const deathDisplay = dead && net ? 'block' : 'none';
   if (deathDisplay !== deathShown) deathNotice.style.display = deathShown = deathDisplay;
   // The spectator notice, rebuilt only when what it says changes.
@@ -1824,6 +1829,7 @@ function resetSession() {
   blasts.clear();
   deathPanel.show(false);
   renderer.style.dead = 0;
+  renderer.style.smoke = 0;
   serverClock = -1;
   predictedTick.fill(-1);
   serverBroken.fill(0);

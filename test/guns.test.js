@@ -109,10 +109,10 @@ Deno.test('smoke: a cloud is one closed lumpy mesh, flat underneath, different p
       lo = Math.min(lo, z);
       hi = Math.max(hi, z);
       wide = Math.max(wide, Math.abs(cloud.positions[i]), Math.abs(cloud.positions[i + 1]));
-      if (z < -0.579) flat++;
+      if (z < -0.359) flat++;
     }
-    assert.ok(lo > -0.59 && flat > 50, `cloud ${seed}: a flat underside (${flat} corners at ${lo.toFixed(2)})`);
-    assert.ok(hi > 0.75 && hi < 1 && wide > 1.05 && wide < 1.35, `cloud ${seed}: squat and lumpy (${hi.toFixed(2)} high, ${wide.toFixed(2)} wide)`);
+    assert.ok(lo > -0.37 && flat > 150, `cloud ${seed}: a flat underside (${flat} corners at ${lo.toFixed(2)})`);
+    assert.ok(hi > 0.6 && hi < 0.85 && wide > 1.1 && wide < 1.5, `cloud ${seed}: squat and lumpy (${hi.toFixed(2)} high, ${wide.toFixed(2)} wide)`);
     tops.push(hi);
   }
   assert.ok(new Set(tops.map((t) => t.toFixed(3))).size === 3, 'the seeds differ');

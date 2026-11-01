@@ -842,7 +842,10 @@ uniform int u_style;   // 0: plain lit colors (r_comic 0)
 uniform vec3 u_calm;   // calm zone round the crosshair: center, radius (px; 0: none): dots there go flat
 uniform float u_soft;  // shade dots: 0 bold, 1 soft (a finer screen, a paler print, less ink)
 uniform float u_dead;  // 0..1: our death (client/deathpanel.js): a red-brown duotone, a darker vignette
+uniform float u_smoke; // 0..1: the camera inside a smoke cloud: everything but the view fogs over with distance
 out vec4 o_color;
+const vec3 SMOKE_TONE = vec3(0.86, 0.86, 0.84); // the cloud's own grey (client/gl/grenadefx.js)
+const float SMOKE_SIGHT = 28.0; // units: the fog's e-fold; about arm's length still shows
 ${GBUFFER_CONSTS}
 ${NOISE}
 
@@ -925,6 +928,15 @@ void main() {
     // (soft: paler still, and less ink).
     vec3 shade = mix(alb * vec3(0.52, 0.53, 0.62), base, 0.3 * u_soft);
     col = mix(base, mix(shade, INK, (0.12 + 0.28 * smoothstep(0.5, 0.9, dark)) * (1.0 - 0.6 * u_soft)), m);
+  }
+  // Inside a smoke cloud: the print fogs toward the cloud's grey with the pixel's
+  // distance, printed with a faint dot screen so it still looks printed; the first-person
+  // view (its depth is cleared before it draws) and its ink stay, the sky goes.
+  if (u_smoke > 0.0 && (fl & G_VIEW) == 0u) {
+    float fog = u_smoke * ((fl & G_SKY) != 0u ? 1.0 : 1.0 - exp(-dP / SMOKE_SIGHT));
+    vec3 smoke = mix(SMOKE_TONE, SMOKE_TONE * vec3(0.52, 0.53, 0.62), tone(frag, 0.15, size, TURN_SHADE, 0.0));
+    col = mix(col, smoke, fog);
+    edge *= 1.0 - fog;
   }
   if (u_dead > 0.0) {
     float g = dot(col, vec3(0.3, 0.59, 0.11));

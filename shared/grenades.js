@@ -27,6 +27,7 @@ export const SMOKE_TIME = 18;
 export const SMOKE_RADIUS = 144; // a cloud's radius once grown
 export const SMOKE_GROW = 1; // seconds to grow (approx.)
 export const SMOKE_FADE = 3; // shrinking away at the end (approx.)
+const SMOKE_DEEP = 12; // this far inside a cloud the view is all smoke (smokeDepth)
 export const FIRE_TIME = 7; // inferno_flame_lifetime
 export const FIRE_RADIUS = 130; // the spread fire's reach (approx.: CS:GO's spreads irregularly)
 export const FIRE_GROW = 1.5; // seconds to spread (approx.)
@@ -181,6 +182,19 @@ export class Grenades {
       }
     }
     return false;
+  }
+
+  // How deep inside a smoke cloud (x, y, z) is: 0 outside, 1 from SMOKE_DEEP units in,
+  // between near the cloud's surface (the print fogs the view by it).
+  smokeDepth(x, y, z) {
+    let deep = 0;
+    for (let k = 0; k < this.fxCount; k++) {
+      if (this.fxKind[k] !== FX_SMOKE) continue;
+      const o = k * 3, r = smokeRadius(this.fxAge[k]);
+      const d = r - Math.hypot(x - this.fxPos[o], y - this.fxPos[o + 1], (z - this.fxPos[o + 2]) * 1.5);
+      if (d > deep) deep = d;
+    }
+    return Math.min(1, deep / SMOKE_DEEP);
   }
 
   // Does a smoke cloud cut the line between two points?
