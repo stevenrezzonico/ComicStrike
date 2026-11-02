@@ -811,7 +811,10 @@ void main() {
     if (isChar(tDR)) dChar = min(dChar, depthOf(tDR));
     float farC = dChar < 1e8 ? smoothstep(80.0 * u_zoom, 250.0 * u_zoom, dChar) : 0.0;
     float sil = eD;
-    if (farC > 0.0) {
+    if (dChar < 1e8) {
+      // The ring at every distance: near, it lies outside the silhouette line on the
+      // figure's own edge pixels, a bold outline like the first-person view's (the depth
+      // line alone was thin on a rounded limb, whose depth bulges gently toward its edge).
       float ring = 0.0;
       if ((fl & G_CHAR) == 0u) {
         // The four directions out to the ring's width, the diagonals one short of it (so
@@ -829,7 +832,7 @@ void main() {
           }
         }
       }
-      sil = mix(eD, ring, farC);
+      sil = max(ring, eD * (1.0 - farC));
     }
     // Crease and object lines: inside a far character they fade out (by 300 units, where a
     // figure is ~50 px tall and the lines between its parts were a dark speckle); beside
