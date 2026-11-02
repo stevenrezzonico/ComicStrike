@@ -622,11 +622,14 @@ void main() {
   float lit = clamp(max(lum / u_lightFull, MODEL_FLOOR), 0.0, 1.0);
   float ndl = dot(n, u_lightDir);
   // Small on screen (a far figure, a few units a pixel): the detail (two tones, rim, shine)
-  // is only speckle there, so it fades to one flat tone and the silhouette carries it.
+  // is only speckle there, so it fades to one flat tone, the lit one (the shade tone's
+  // dots, taken flat by the print, turned a dark uniform black), and the silhouette
+  // carries it.
   float small = smoothstep(1.2, 3.0, length(fwidth(v_pos)));
-  float light = mix(ndl > 0.0 ? lit : 0.6 * lit, 0.85 * lit, small);
-  // Rim: a pale band along the outline on the shadow side.
-  float rim = smoothstep(0.68, 0.76, 1.0 - max(dot(n, V), 0.0)) * step(ndl, 0.0) * (1.0 - small);
+  float light = mix(ndl > 0.0 ? lit : 0.6 * lit, lit, small);
+  // Rim: a pale band along the outline, all round (on the lit side too: inside the ink
+  // line it keeps a dark uniform's outline readable).
+  float rim = smoothstep(0.68, 0.76, 1.0 - max(dot(n, V), 0.0)) * (1.0 - small);
   light = mix(light, lit, rim);
   albedo = mix(albedo, min(albedo * 1.35 + 0.08, vec3(1.0)), rim);
   if (v_fin == FIN_METAL || v_fin == FIN_POLYMER) {
@@ -790,10 +793,11 @@ void main() {
     // Characters past arm's length: a crisp outline and their colors, not their ink (the
     // two-sided silhouette and the part lines are a black blob on a small figure; a thinned
     // one goes ragged, as the samples are s pixels apart). Their silhouette becomes a ring
-    // exactly one pixel wide just outside them (a pixel touching a character in front of
-    // it: only next to characters are these four extra fetches made), and the lines inside
-    // fade out. By the nearest character depth round the sample, so a near one keeps its
-    // bold comic outline.
+    // just outside them, as wide as the world's ink lines (a pixel within that many texels
+    // of a character in front of it; a ring one texel wide was thinner than every wall's
+    // line, and all but gone on a high-DPI screen; only next to characters are these extra
+    // fetches made), and the lines inside fade out. By the nearest character depth round
+    // the sample, so a near one keeps its bold comic outline.
     float dChar = cc ? dC : 1e9;
     if (isChar(tL)) dChar = min(dChar, depthOf(tL));
     if (isChar(tR)) dChar = min(dChar, depthOf(tR));
@@ -810,16 +814,28 @@ void main() {
     if (farC > 0.0) {
       float ring = 0.0;
       if ((fl & G_CHAR) == 0u) {
-        DTEX r0 = dtex(p + ivec2(1, 0)), r1 = dtex(p + ivec2(-1, 0)), r2 = dtex(p + ivec2(0, 1)), r3 = dtex(p + ivec2(0, -1));
+        // The four directions out to the ring's width, the diagonals one short of it (so
+        // the ring rounds its corners instead of notching them).
+        int w = max(1, int(u_line * u_gscale + 0.5));
         float lim = dP - 8.0;
-        if ((isChar(r0) && depthOf(r0) < lim) || (isChar(r1) && depthOf(r1) < lim) ||
-          (isChar(r2) && depthOf(r2) < lim) || (isChar(r3) && depthOf(r3) < lim)) ring = 1.0;
+        for (int k = 1; k <= w && ring == 0.0; k++) {
+          DTEX r0 = dtex(p + ivec2(k, 0)), r1 = dtex(p + ivec2(-k, 0)), r2 = dtex(p + ivec2(0, k)), r3 = dtex(p + ivec2(0, -k));
+          if ((isChar(r0) && depthOf(r0) < lim) || (isChar(r1) && depthOf(r1) < lim) ||
+            (isChar(r2) && depthOf(r2) < lim) || (isChar(r3) && depthOf(r3) < lim)) ring = 1.0;
+          if (ring == 0.0 && k < w) {
+            DTEX r4 = dtex(p + ivec2(k, k)), r5 = dtex(p + ivec2(-k, k)), r6 = dtex(p + ivec2(k, -k)), r7 = dtex(p + ivec2(-k, -k));
+            if ((isChar(r4) && depthOf(r4) < lim) || (isChar(r5) && depthOf(r5) < lim) ||
+              (isChar(r6) && depthOf(r6) < lim) || (isChar(r7) && depthOf(r7) < lim)) ring = 1.0;
+          }
+        }
       }
       sil = mix(eD, ring, farC);
     }
-    // Crease and object lines: inside a far character they fade out; beside one (the
-    // background next to it) they go at once, else their jittered samples speckle the ring.
-    float inner = (fc & G_CHAR) != 0u ? 1.0 - smoothstep(200.0 * u_zoom, 600.0 * u_zoom, dC) : 1.0 - farC;
+    // Crease and object lines: inside a far character they fade out (by 300 units, where a
+    // figure is ~50 px tall and the lines between its parts were a dark speckle); beside
+    // one (the background next to it) they go at once, else their jittered samples speckle
+    // the ring.
+    float inner = (fc & G_CHAR) != 0u ? 1.0 - smoothstep(120.0 * u_zoom, 300.0 * u_zoom, dC) : 1.0 - farC;
     edge = max(sil, max(eN, eI) * fade * inner);
   }
   o_ink = vec4(edge, 0.0, 0.0, 1.0);
@@ -917,20 +933,25 @@ void main() {
   // pattern for it to get lost in).
   float calm = u_calm.z > 0.0 ? 1.0 - smoothstep(u_calm.z * 0.55, u_calm.z, distance(frag, u_calm.xy)) : 0.0;
   float far = u_dot < 1.0 ? 1.0 : max(smoothstep(500.0 * u_zoom, 1300.0 * u_zoom, dP), calm);
-  if ((fl & G_CHAR) != 0u) far = max(far, smoothstep(300.0 * u_zoom, 800.0 * u_zoom, dP)); // flat colors sooner
+  // A character past 300-800 units: flat colors sooner, and its shade printed in its own
+  // color with the darkness capped (the shade tone's ink and its full coverage turned a
+  // navy uniform into a black blob at that size).
+  float farChar = (fl & G_CHAR) != 0u ? smoothstep(300.0 * u_zoom, 800.0 * u_zoom, dP) : 0.0;
+  far = max(far, farChar);
   if ((fl & G_SKY) != 0u) {
     col = mix(alb, alb * vec3(0.43, 0.71, 0.89), tone(frag, 1.0 - light, size * 1.15, TURN_SKY, u_dot < 1.0 ? 1.0 : calm));
   } else if ((fl & G_FLAT) != 0u) {
     col = alb * (0.62 + 0.38 * light);
   } else {
-    float dark = 1.0 - light;
+    float dark = mix(1.0 - light, min(1.0 - light, 0.35), farChar);
     // (A flat tone reads darker than the same tone in dots: the calm zone prints lighter.)
     float m = tone(frag, dark, size, TURN_SHADE, far) * (1.0 - 0.15 * calm);
     vec3 base = alb * (0.84 + 0.16 * light);
     // Shade dots: a cool, darker print of the color, only a little ink even at full dark
-    // (soft: paler still, and less ink).
+    // (soft: paler still, and less ink); a far character's shade is its color, a bit darker.
     vec3 shade = mix(alb * vec3(0.52, 0.53, 0.62), base, 0.3 * u_soft);
-    col = mix(base, mix(shade, INK, (0.12 + 0.28 * smoothstep(0.5, 0.9, dark)) * (1.0 - 0.6 * u_soft)), m);
+    vec3 print = mix(shade, INK, (0.12 + 0.28 * smoothstep(0.5, 0.9, dark)) * (1.0 - 0.6 * u_soft));
+    col = mix(base, mix(print, alb * 0.72, farChar), m);
   }
   // Inside a smoke cloud: the print fogs toward the cloud's grey with the pixel's
   // distance, printed with a faint dot screen so it still looks printed; the first-person

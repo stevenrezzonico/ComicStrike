@@ -50,6 +50,8 @@ Deno.test('comic: every G-buffer shader writes all three targets through gbuffer
   assert.match(ink, /ivec2 p = ivec2\(gl_FragCoord\.xy\);/);
   assert.match(ink, /ntex\(/);
   assert.match(ink, /o_ink = vec4\(edge/);
+  // A far character's ring is as wide as the ink lines (in G-buffer texels).
+  assert.match(ink, /int w = max\(1, int\(u_line \* u_gscale \+ 0\.5\)\);/);
   const comp = COMPOSITE_FS.slice(COMPOSITE_FS.indexOf('void main()'));
   assert.doesNotMatch(comp, /u_normal|ntex\(/, 'the composite needs no normals');
   assert.match(comp, /ivec2\(frag \* u_gscale\)/);
