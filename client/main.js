@@ -1551,6 +1551,7 @@ function applyVideoSettings() {
   renderer.novis = cv.r_novis.bool;
   models.farLod = cv.r_lod_dist.number;
   style.fast = cv.r_inkfast.bool;
+  style.inkaa = cv.r_inkaa.bool;
   return aspect;
 }
 

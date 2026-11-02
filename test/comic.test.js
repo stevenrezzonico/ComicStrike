@@ -58,6 +58,11 @@ Deno.test('comic: every G-buffer shader writes all three targets through gbuffer
   assert.match(comp, /bool exact = u_gscale\.x == 1\.0;/);
   assert.match(comp, /exact \? texelFetch\(u_albedo[^\n]*: texture\(u_albedo/);
   assert.match(comp, /exact \? texelFetch\(u_ink[^\n]*: texture\(u_ink/);
+  // Smooth ink (r_inkaa): only at the canvas's own scale, where the ink is not filtered.
+  assert.match(comp, /if \(exact && u_inkaa > 0\.0 && u_line > 0\.0\) edge = smoothInk\(p, edge\);/);
+  const smooth = COMPOSITE_FS.slice(COMPOSITE_FS.indexOf('float smoothInk('), COMPOSITE_FS.indexOf('void main()'));
+  assert.match(smooth, /if \(m >= 1\.0\) return m;/, 'a pixel on a line keeps its ink, with no fetches');
+  assert.equal((smooth.match(/inkOf\(/g) || []).length, 4, 'the four direct neighbors');
 });
 
 Deno.test('comic: decals paint the albedo target only', () => {

@@ -70,6 +70,7 @@ const TABS = [
     ['section', null, 'Resolution'],
     ['toggle', 'r_dynres', 'Automatic resolution (keeps 60 fps)'],
     ['select', 'r_inkfast', 'Ink lines', ['Full', 'Fast']],
+    ['toggle', 'r_inkaa', 'Smooth ink lines'],
     ['slider', 'mat_viewportscale', 'Render resolution (most; over 1: supersampling)', 0.5, 2, 0.05],
     ['select', 'r_hidpi', 'High-DPI screens', ['Page pixels', 'Sharp (screen pixels)']],
     ['toggle', 'r_lowlatency', 'Low-latency display (may tear; takes effect on reload)'],
@@ -103,7 +104,7 @@ const TABS = [
 // The print settings the Video tab's window compares against their defaults while the
 // compare button is held.
 const PRINT_CVARS = ['r_comic', 'r_inkwidth', 'r_halftone', 'r_halftone_style', 'r_crosshair_clearzone',
-  'r_shadebands', 'r_shadowlift', 'mat_viewportscale', 'r_inkfast'];
+  'r_shadebands', 'r_shadowlift', 'mat_viewportscale', 'r_inkfast', 'r_inkaa'];
 
 // The controls tab: [label, command] per action, in groups.
 const ACTIONS = [

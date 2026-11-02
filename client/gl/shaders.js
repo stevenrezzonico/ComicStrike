@@ -865,9 +865,11 @@ uniform vec3 u_calm;   // calm zone round the crosshair: center, radius (px; 0: 
 uniform float u_soft;  // shade dots: 0 bold, 1 soft (a finer screen, a paler print, less ink)
 uniform float u_dead;  // 0..1: our death (client/deathpanel.js): a red-brown duotone, a darker vignette
 uniform float u_smoke; // 0..1: the camera inside a smoke cloud: everything but the view fogs over with distance
+uniform float u_inkaa; // 1: smooth the lines at the canvas's own render scale (r_inkaa)
 out vec4 o_color;
 const vec3 SMOKE_TONE = vec3(0.86, 0.86, 0.84); // the cloud's own grey (client/gl/grenadefx.js)
 const float SMOKE_SIGHT = 28.0; // units: the fog's e-fold; about arm's length still shows
+const float INK_CORNER = 0.35; // smoothInk: the ink a step's inside corner takes
 ${GBUFFER_CONSTS}
 ${NOISE}
 
@@ -884,6 +886,21 @@ DTEX dtex(ivec2 p) { return texelFetch(u_depth, cl(p), 0).rg; }
 uint flagsOf(DTEX t) { return uint(t.g); }
 float depthOf(DTEX t) { return DEPTH_NEAR / t.r; }
 #endif
+
+// Smooth ink (r_inkaa) at the canvas's own render scale, where a line is a staircase of
+// whole texels (at any other scale the ink is filtered between texels): a pixel off the
+// line in the inside corner of a step (ink on two sides at right angles) takes INK_CORNER
+// of the lesser of the two, a grey tread between the risers. A pixel on a line keeps its
+// ink (a blur faded a 1 px line to a quarter), and a pixel beside a straight line, with
+// ink on one side only, stays paper: straight lines are untouched. Four R8 fetches, only
+// off the lines' own pixels.
+float inkOf(ivec2 p) { return texelFetch(u_ink, cl(p), 0).r; }
+float smoothInk(ivec2 p, float m) {
+  if (m >= 1.0) return m;
+  float n = inkOf(p + ivec2(0, 1)), s = inkOf(p - ivec2(0, 1)), e = inkOf(p + ivec2(1, 0)), w = inkOf(p - ivec2(1, 0));
+  float corner = max(max(min(n, e), min(n, w)), max(min(s, e), min(s, w)));
+  return max(m, INK_CORNER * corner);
+}
 
 // Halftone: round dots on a screen at angle 'ang', area growing with 'dark' (they touch
 // at full dark: the paper always shows between them).
@@ -930,6 +947,7 @@ void main() {
     return;
   }
   float edge = u_line > 0.0 ? (exact ? texelFetch(u_ink, p, 0).r : texture(u_ink, frag / u_res).r) : 0.0;
+  if (exact && u_inkaa > 0.0 && u_line > 0.0) edge = smoothInk(p, edge);
   vec3 col;
   float size = max(u_dot, 1.0) * (1.0 - 0.25 * u_soft);
   // Round the crosshair the dots melt into their own average tone (same brightness, no
