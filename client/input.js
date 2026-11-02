@@ -3,6 +3,7 @@
 // bitfield plus accumulated raw mouse deltas, consumed by the frame loop.
 
 import { keyName, MOUSE_NAMES } from './binds.js';
+import { stickButtons, STICK_ZONE, STICK_BITS } from './touch.js';
 
 export const SELECT_LAST = -2; // switch to the previous weapon (lastinv)
 const TOUCH_COUNTS = 4; // mouse counts per pixel of a touch drag (a screen's width turns about half round)
@@ -26,6 +27,11 @@ export class Input {
     this.touchX = 0;
     this.touchY = 0;
     this.fireId = -1; // a second finger: fire while it is down
+    this.stickId = -1; // the finger on the movement stick (landed on the left STICK_ZONE of the canvas), and where it landed
+    this.stickX = 0;
+    this.stickY = 0;
+    this.stickBits = 0; // the movement bits the stick holds now
+    this.onStick = () => {}; // (active, x, y, dx, dy): the stick's drawing (client/touch.js)
     this.sensitivity = 2.5; // the sensitivity / m_yaw / m_pitch / m_rawinput cvars
     this.mYaw = 0.022; // degrees per count
     this.mPitch = 0.022;
@@ -47,13 +53,21 @@ export class Input {
       this.soft = false;
       if (!this.locked && !this.keepKeys()) this.clear();
     });
-    // Touch (a tablet, a phone): one finger drags the view round, a second one fires. Only
-    // while locked (a soft lock there: see lock()), so the menus' touches are their own.
+    // Touch (a tablet, a phone): a finger landing on the left STICK_ZONE of the canvas is
+    // the movement stick (client/touch.js), elsewhere one finger drags the view round and a
+    // second one fires. Only while locked (a soft lock there: see lock()), so the menus'
+    // touches are their own.
     canvas.addEventListener('touchstart', (e) => {
       if (!this.locked) return;
       e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
       for (const t of e.changedTouches) {
-        if (this.touchId < 0) {
+        if (this.stickId < 0 && t.clientX < rect.left + rect.width * STICK_ZONE) {
+          this.stickId = t.identifier;
+          this.stickX = t.clientX;
+          this.stickY = t.clientY;
+          this.onStick(true, t.clientX, t.clientY, 0, 0);
+        } else if (this.touchId < 0) {
           this.touchId = t.identifier;
           this.touchX = t.clientX;
           this.touchY = t.clientY;
@@ -67,15 +81,21 @@ export class Input {
       if (!this.locked) return;
       e.preventDefault();
       for (const t of e.changedTouches) {
-        if (t.identifier !== this.touchId) continue;
-        this.mouseDX += (t.clientX - this.touchX) * TOUCH_COUNTS;
-        this.mouseDY += (t.clientY - this.touchY) * TOUCH_COUNTS;
-        this.touchX = t.clientX;
-        this.touchY = t.clientY;
+        if (t.identifier === this.stickId) {
+          const dx = t.clientX - this.stickX, dy = t.clientY - this.stickY;
+          this.setStick(stickButtons(dx, dy));
+          this.onStick(true, this.stickX, this.stickY, dx, dy);
+        } else if (t.identifier === this.touchId) {
+          this.mouseDX += (t.clientX - this.touchX) * TOUCH_COUNTS;
+          this.mouseDY += (t.clientY - this.touchY) * TOUCH_COUNTS;
+          this.touchX = t.clientX;
+          this.touchY = t.clientY;
+        }
       }
     }, { passive: false });
     const touchEnd = (e) => {
       for (const t of e.changedTouches) {
+        if (t.identifier === this.stickId) this.dropStick();
         if (t.identifier === this.touchId) this.touchId = -1;
         if (t.identifier === this.fireId) {
           this.fireId = -1;
@@ -142,6 +162,25 @@ export class Input {
     this.buttons &= ~bit;
   }
 
+  // The stick's movement bits (client/touch.js stickButtons): held as the key 'stick', so
+  // a keyboard holding the same button keeps it.
+  setStick(bits) {
+    const was = this.stickBits;
+    if (bits === was) return;
+    this.stickBits = bits;
+    for (let b = 1; b <= STICK_BITS; b <<= 1) {
+      if (!(STICK_BITS & b)) continue;
+      if ((bits & b) && !(was & b)) this.press(b, 'stick');
+      else if (!(bits & b) && (was & b)) this.release(b, 'stick');
+    }
+  }
+
+  dropStick() {
+    this.stickId = -1;
+    this.setStick(0);
+    this.onStick(false, 0, 0, 0, 0);
+  }
+
   // A one-tick button (drop, ...).
   pulse(bit) {
     this.latched |= bit;
@@ -150,6 +189,7 @@ export class Input {
   clear() {
     this.buttons = this.latched = 0;
     this.holders.clear();
+    this.stickBits = 0;
   }
 
   // Buttons for one simulation tick: held keys plus anything tapped since last tick.
@@ -218,6 +258,7 @@ export class Input {
     if (this.soft) {
       this.locked = this.soft = false;
       this.touchId = this.fireId = -1;
+      if (this.stickId >= 0) this.dropStick();
       if (!this.keepKeys()) this.clear();
       this.onLockChange();
     } else if (document.pointerLockElement) document.exitPointerLock();

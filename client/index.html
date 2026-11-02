@@ -22,6 +22,21 @@
     border-radius: 4px; background: var(--paper); color: var(--ink); box-shadow: 4px 4px 0 var(--ink);
     font: 26px/1.2 var(--display); letter-spacing: 0.1em; touch-action: manipulation; }
   body.softplay #pausebtn { display: block; }
+  /* Touch controls (client/touch.js), under the soft lock only: a floating stick where the
+     finger lands on the left of the canvas, paper buttons bottom right above the ammo. */
+  #touch { position: fixed; inset: 0; display: none; pointer-events: none; user-select: none; -webkit-user-select: none; }
+  body.softplay #touch { display: block; }
+  #touch .stick { position: absolute; display: none; width: 112px; height: 112px; margin: -56px 0 0 -56px;
+    border: 3px solid var(--ink); border-radius: 50%; background: rgba(246, 238, 219, 0.45); box-sizing: border-box; }
+  #touch .knob { position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px;
+    border-radius: 50%; background: var(--ink); box-shadow: 0 0 0 3px var(--paper); }
+  #touch .keys { position: absolute; right: 16px; bottom: 100px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    pointer-events: auto; }
+  #touch .keys button { width: 68px; height: 52px; padding: 0; border: 3px solid var(--ink); border-radius: 6px;
+    background: rgba(246, 238, 219, 0.82); color: var(--ink); box-shadow: 3px 3px 0 var(--ink);
+    font: 17px/1 var(--display); letter-spacing: 0.06em; touch-action: none; -webkit-tap-highlight-color: transparent; }
+  #touch .keys button.on { background: var(--yellow); transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
+  #touch .keys button.jump { height: 72px; font-size: 20px; }
   #status {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
     color: var(--yellow); font: 32px/1.4 var(--display); letter-spacing: 0.04em;
@@ -419,6 +434,17 @@
 <div id="progress"><div></div><div></div></div>
 <div id="usehint"></div>
 <button id="pausebtn" title="Pause">II</button>
+<div id="touch">
+  <div class="stick"><div class="knob"></div></div>
+  <div class="keys">
+    <button type="button" data-cmd="+use">USE</button>
+    <button type="button" class="jump" data-cmd="+jump">JUMP</button>
+    <button type="button" data-cmd="+reload">RELOAD</button>
+    <button type="button" class="jump" data-cmd="+duck" data-toggle>CROUCH</button>
+    <button type="button" data-cmd="invnext">NEXT</button>
+    <button type="button" data-cmd="buymenu">BUY</button>
+  </div>
+</div>
 <div id="scoreboard"></div>
 <div id="buymenu"></div>
 <div id="death"></div>

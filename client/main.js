@@ -73,6 +73,7 @@ import { Spectator, SPEC_EYES, SPEC_ROAM, SPEC_DELAY } from './spectate.js';
 import { DeathPanel } from './deathpanel.js';
 import { ConsoleWindow } from './console.js';
 import { Chat } from './chat.js';
+import { TouchControls } from './touch.js';
 import { takeHandoff } from './handoff.js';
 import { PreviewEditor } from './previewedit.js';
 import { Menu } from './menu.js';
@@ -1836,13 +1837,17 @@ applyDrawHud();
 // In a game, releasing the mouse (Escape) opens the pause menu, unless the console or
 // the buy menu took it; closing those takes the mouse back (the key press allows it).
 function updateOverlay() {
-  document.body.classList.toggle('softplay', input.locked && input.soft); // the pause button (no Escape key on a tablet)
+  document.body.classList.toggle('softplay', input.locked && input.soft); // the pause button and the touch controls
+  if (!input.locked) touch.reset();
   if (preview) return menu.hide(); // the editor's 3D view: Escape only lets the mouse go
   if (!playing) return;
   if (input.locked) menu.hide();
   else if (!conWin.isOpen && !hud.menuOpen) menu.showPause();
 }
 input.onLockChange = updateOverlay;
+// Touch controls (client/touch.js) under the soft lock: the stick, and buttons that run
+// commands as a key named 'touch' would (held bits release with it).
+const touch = new TouchControls(document.getElementById('touch'), input, (cmd) => con.exec(cmd, { key: 'touch' }));
 document.getElementById('pausebtn').addEventListener('click', () => input.unlock());
 // The overlay is decided once the lock request settles: asked at once, the mouse was not
 // back yet and the pause menu flashed up for a frame.
