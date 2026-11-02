@@ -63,6 +63,7 @@ import { modelLight } from './gl/skinned.js';
 import { crosshairLayout } from './gl/crosshair.js';
 import { perspective, viewFromAngles, multiply, invert } from './gl/mat4.js';
 import { Input, SELECT_LAST } from './input.js';
+import { keyName } from './binds.js';
 import { WeaponView } from './weaponview.js';
 import { NetClient } from './net.js';
 import { Hud } from './hud.js';
@@ -1848,6 +1849,12 @@ input.onLockChange = updateOverlay;
 // Touch controls (client/touch.js) under the soft lock: the stick, and buttons that run
 // commands as a key named 'touch' would (held bits release with it).
 const touch = new TouchControls(document.getElementById('touch'), input, (cmd) => con.exec(cmd, { key: 'touch' }));
+// A tablet with a keyboard (iPadOS: the lock is soft, trackpad or not): the touch controls
+// hide once a bound key plays, and come back at the next touch on the canvas.
+document.addEventListener('keydown', (e) => {
+  if (input.soft && !e.repeat && binds.get(keyName(e.code, e.key)) !== undefined) document.body.classList.add('keysonly');
+});
+canvas.addEventListener('touchstart', () => document.body.classList.remove('keysonly'), { passive: true });
 document.getElementById('pausebtn').addEventListener('click', () => input.unlock());
 // The pause button sits beside the round bar: its width goes to CSS as the bar's text changes.
 new ResizeObserver((entries) => {

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>ComicStrike</title>
 <link rel="icon" type="image/svg+xml" href="/client/favicon.svg">
 <style>
@@ -406,21 +406,46 @@
   .menu-drop input { display: none; }
   .menu-error { background: var(--red); color: var(--paper-hi); opacity: 1; padding: 4px 8px; }
   .menu-invite input { font-family: Consolas, monospace; }
-  @media (max-width: 720px) {
-    #menu { flex-direction: column; padding: 16px; gap: 14px; }
+  /* A narrow or short screen (a phone either way round, a small tablet): the actions in a row
+     under a small title, the panel full width below, the whole menu scrolling, inside the
+     notch's safe area; bigger touch targets on a coarse pointer. */
+  @media (max-width: 960px), (max-height: 560px) {
+    #menu { flex-direction: column; gap: 10px;
+      padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+        max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
     .menu-side { flex: none; }
-    #menu h1 { font-size: 48px; }
-    .menu-logo { margin-bottom: 14px; }
-    .menu-logo img { width: 48px; }
-    .menu-nav { flex-direction: row; flex-wrap: wrap; }
-    #menu .menu-nav button { font-size: 18px; }
+    #menu h1 { font-size: 40px; -webkit-text-stroke: 2px var(--ink); text-shadow: 1px 1px 0 var(--ink), 2px 2px 0 var(--ink),
+      3px 3px 0 var(--ink), 4px 4px 0 var(--ink); }
+    .menu-logo { margin-bottom: 10px; gap: 10px; }
+    .menu-logo img { width: 40px; }
+    .menu-nav { flex-direction: row; flex-wrap: wrap; gap: 8px; }
+    #menu .menu-nav button { font-size: 18px; padding: 8px 12px 5px; }
+    .menu-note { margin-top: 8px; }
+    .menu-panel { flex: none; width: 100%; box-sizing: border-box; box-shadow: 6px 6px 0 var(--ink); padding: 14px 16px 18px; }
+    #menu h2 { font-size: 24px; margin-bottom: 10px; }
     .menu-row { flex-wrap: wrap; }
     .menu-row > span:first-child { flex-basis: 100%; }
     .menu-row.check > span:first-child { flex: 1; }
-    .menu-settings { max-height: none; }
+    .menu-choice > span:first-child { flex-basis: 100%; }
+    .menu-settings { max-height: none; overflow: visible; padding-right: 0; }
+    .menu-window-box ~ .menu-settings { max-height: none; }
+    .menu-window { width: min(100%, 40vh * 16 / 9); }
+    .menu-maps { max-height: none; overflow: visible; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+    .menu-tagline, .menu-features { display: none; }
     .hud { font-size: 28px; }
     #banner { font-size: 32px; }
   }
+  @media (pointer: coarse) {
+    #menu button { min-height: 44px; }
+    #menu .menu-choice button, .menu-maps button, .menu-tabs button { min-height: 40px; }
+    .menu-row input[type=checkbox] { width: 26px; height: 26px; }
+    .menu-row input[type=range] { height: 28px; }
+    .menu-row select { padding: 8px 6px; }
+    #menu .menu-bind button.key { min-height: 40px; }
+  }
+  /* A tablet with a keyboard under the soft lock: the touch controls go once a key plays,
+     back at the next touch on the canvas (main.js). */
+  body.keysonly #touch { display: none; }
 </style>
 </head>
 <body>
