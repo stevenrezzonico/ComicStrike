@@ -1849,6 +1849,11 @@ input.onLockChange = updateOverlay;
 // commands as a key named 'touch' would (held bits release with it).
 const touch = new TouchControls(document.getElementById('touch'), input, (cmd) => con.exec(cmd, { key: 'touch' }));
 document.getElementById('pausebtn').addEventListener('click', () => input.unlock());
+// The pause button sits beside the round bar: its width goes to CSS as the bar's text changes.
+new ResizeObserver((entries) => {
+  document.body.style.setProperty('--roundbar-w', `${entries[entries.length - 1].borderBoxSize?.[0]?.inlineSize ??
+    entries[entries.length - 1].target.offsetWidth}px`);
+}).observe(document.getElementById('roundbar'));
 // The overlay is decided once the lock request settles: asked at once, the mouse was not
 // back yet and the pause menu flashed up for a frame.
 function closeBuyMenu() {

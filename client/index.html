@@ -17,10 +17,11 @@
   }
   html, body { margin: 0; height: 100%; background: var(--ink); overflow: hidden; }
   #view { display: block; width: 100%; height: 100%; image-rendering: pixelated; touch-action: none; }
-  /* The pause button, on devices without a Pointer Lock API (a tablet: no Escape key). */
-  #pausebtn { position: fixed; right: 14px; top: 14px; display: none; padding: 4px 16px; border: 3px solid var(--ink);
-    border-radius: 4px; background: var(--paper); color: var(--ink); box-shadow: 4px 4px 0 var(--ink);
-    font: 26px/1.2 var(--display); letter-spacing: 0.1em; touch-action: manipulation; }
+  /* The pause button, on devices without a Pointer Lock API (a tablet: no Escape key): small,
+     at the top beside the round bar (its width in --roundbar-w, kept by main.js). */
+  #pausebtn { position: fixed; left: calc(50% + var(--roundbar-w, 0px) / 2 + 10px); top: 10px; display: none;
+    padding: 4px 12px; border: 3px solid var(--ink); border-radius: 4px; background: var(--paper); color: var(--ink);
+    box-shadow: 3px 3px 0 var(--ink); font: 18px/1.2 var(--display); letter-spacing: 0.1em; touch-action: manipulation; }
   body.softplay #pausebtn { display: block; }
   /* Touch controls (client/touch.js), under the soft lock only: a floating stick where the
      finger lands on the left of the canvas, paper buttons bottom right above the ammo. */
@@ -30,8 +31,13 @@
     border: 3px solid var(--ink); border-radius: 50%; background: rgba(246, 238, 219, 0.45); box-sizing: border-box; }
   #touch .knob { position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px;
     border-radius: 50%; background: var(--ink); box-shadow: 0 0 0 3px var(--paper); }
-  #touch .keys { position: absolute; right: 16px; bottom: 100px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  #touch .keys { position: absolute; right: 116px; bottom: 100px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
     pointer-events: auto; }
+  #touch .fire { position: absolute; right: 16px; bottom: 120px; width: 88px; height: 88px; padding: 0; border-radius: 50%;
+    border: 4px solid var(--ink); background: var(--red); color: var(--paper); box-shadow: 4px 4px 0 var(--ink);
+    font: 22px/1 var(--display); letter-spacing: 0.08em; pointer-events: auto; touch-action: none;
+    -webkit-tap-highlight-color: transparent; }
+  #touch .fire.on { background: var(--yellow); color: var(--ink); transform: translate(2px, 2px); box-shadow: 2px 2px 0 var(--ink); }
   #touch .keys button { width: 68px; height: 52px; padding: 0; border: 3px solid var(--ink); border-radius: 6px;
     background: rgba(246, 238, 219, 0.82); color: var(--ink); box-shadow: 3px 3px 0 var(--ink);
     font: 17px/1 var(--display); letter-spacing: 0.06em; touch-action: none; -webkit-tap-highlight-color: transparent; }
@@ -440,10 +446,11 @@
     <button type="button" data-cmd="+use">USE</button>
     <button type="button" class="jump" data-cmd="+jump">JUMP</button>
     <button type="button" data-cmd="+reload">RELOAD</button>
-    <button type="button" class="jump" data-cmd="+duck" data-toggle>CROUCH</button>
+    <button type="button" class="jump" data-cmd="+duck" data-toggle>DUCK</button>
     <button type="button" data-cmd="invnext">NEXT</button>
     <button type="button" data-cmd="buymenu">BUY</button>
   </div>
+  <button type="button" class="fire" data-cmd="+attack">FIRE</button>
 </div>
 <div id="scoreboard"></div>
 <div id="buymenu"></div>
