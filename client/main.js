@@ -1837,7 +1837,7 @@ menu.onLeaveRoom = () => {
 };
 menu.room = roomCode;
 menu.onPractice = (map, team, opts) => run(() => startPractice(map, team, opts));
-menu.onResume = () => input.lock().catch(() => {});
+menu.onResume = () => input.lock().catch(() => {}).finally(updateOverlay); // already soft-locked: the menu still goes
 menu.onLeave = () => leaveGame();
 menu.onTeam = (team) => {
   con.exec(`jointeam ${team}`);
@@ -2034,7 +2034,7 @@ function enterGame() {
   menu.busy('');
   menu.hide();
   input.lock().catch(() => {});
-  if (!document.pointerLockElement && !preview) menu.showPause(); // locking may need a click: Resume
+  if (!input.locked && !preview) menu.showPause(); // locking may need a click: Resume (a soft lock is on at once)
 }
 
 // Back to the start menu (disconnect, quit practice, or the server went away).

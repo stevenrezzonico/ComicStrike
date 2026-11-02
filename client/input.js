@@ -178,13 +178,22 @@ export class Input {
     // Raw input: bypass OS mouse acceleration where supported (m_rawinput 1). Asked before
     // the fullscreen request, in the same task: entering fullscreen uses up the click's
     // activation, and a pointer lock asked after it was refused (a second click took it).
-    const first = this.rawInput ? this.canvas.requestPointerLock({ unadjustedMovement: true })
-      : this.canvas.requestPointerLock();
+    let first;
+    try {
+      first = this.rawInput ? this.canvas.requestPointerLock({ unadjustedMovement: true })
+        : this.canvas.requestPointerLock();
+    } catch (e) {
+      first = Promise.reject(e); // thrown at once (a browser without the API's options)
+    }
     const fullscreen = this.fullscreen ? this.enterFullscreen() : null;
     try {
       await first;
     } catch {
-      await this.canvas.requestPointerLock();
+      try {
+        await this.canvas.requestPointerLock();
+      } catch (e) {
+        if (!TOUCH_FIRST.matches) throw e; // refused (a desktop: the caller lets the keys go); a tablet goes soft below
+      }
     }
     if (fullscreen) await fullscreen;
     // iOS and iPadOS Safari define requestPointerLock but never lock (no error, no
