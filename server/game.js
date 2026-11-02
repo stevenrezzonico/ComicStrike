@@ -44,7 +44,7 @@ import {
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
-  SHOT_BLOOD, writePrint, printChunks,
+  SHOT_BLOOD, writePrint, printChunks, writeChat, cleanChat, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC,
   KILL_HEADSHOT, KILL_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
   writeWelcome, writeReject, writeInfo, writeItems, writeGrenades, writeHostages, readCmds, writeSnapshot, quantizePitch,
   quantizeYaw,
@@ -70,6 +70,7 @@ const ARMOURY_ITEMS = [
 ];
 const DEMO_RESTOCK = 2; // the demo: seconds from a bomb going off or being defused to the next one
 const DEMO_HEAL = 2; // the demo: seconds from the last hurt to full health
+const CHAT_FLOOD_TICKS = Math.round(0.66 * TICK_RATE); // least gap between a player's chat lines (CS:GO's flood check: ~0.75 s)
 
 // Radar spotting (approx. of CS:GO's: how often, how wide a view, how long a shot shows).
 const SPOT_TICKS = 4;
@@ -110,6 +111,7 @@ class Client {
     this.canBuy = false;
     this.lastBuy = -1; // newest BUY id handled
     this.lastCommand = -1; // newest COMMAND id handled
+    this.lastChat = -Infinity; // server tick of the last chat line delivered (the flood check)
     this.shots = 0; // shots fired mod 256 (E_SHOTS: third-person fire kicks)
     this.useHeld = false; // +use was down last command (E picks up on the press)
     this.controlled = false; // a bot a dead teammate took control of: out of play until it respawns
@@ -181,6 +183,10 @@ export const DEFAULT_RULES = {
   maxMoney: MAX_MONEY,
   warmupTime: 0, // seconds of warmup once both teams have players (0: start at once)
   cheats: false, // sv_cheats: setpos for testing
+  // Chat (say / say_team). CS:GO's defaults are 0 for both; a community server shows all
+  // chat between the teams unless its owner turns it off.
+  talkEnemyDead: true, // sv_talk_enemy_dead: the living see dead enemies' all chat
+  talkEnemyLiving: true, // sv_talk_enemy_living: the living see living enemies' all chat
   // Game mode (server/host.js: game_type / game_mode and the mode convars).
   deathmatch: false, // free weapons (kept for the next life), points instead of money
   wingman: false, // 2 against 2 on one bomb site (B, the second in entity order: approx.)
@@ -1035,12 +1041,45 @@ export class Game {
     for (const c of this.clients) if (c && c.joined) this.print(c, text);
   }
 
+  // A chat line from `from` (a client, or null for the server console: Console to everyone)
+  // to the clients allowed to see it. CS:GO's rules: team chat stays in the team (spectators
+  // among themselves); all chat reaches everyone, except that the living see an enemy's
+  // only under sv_talk_enemy_living (alive) / sv_talk_enemy_dead (dead); the dead and the
+  // spectators see everything. Bots get nothing. One line per CHAT_FLOOD_TICKS per player.
+  chat(from, text, team = false) {
+    text = cleanChat(text);
+    if (!text) return;
+    let flags = team ? CHAT_TEAM : 0;
+    if (from) {
+      if (this.tick - from.lastChat < CHAT_FLOOD_TICKS) return;
+      from.lastChat = this.tick;
+      if (!from.playing) flags |= CHAT_SPEC;
+      else if (!from.alive) flags |= CHAT_DEAD;
+      console.log(`${team ? 'say_team' : 'say'} ${from.id} "${from.name}": ${text}`);
+    }
+    const sender = from ? from.id : CHAT_CONSOLE;
+    for (const c of this.clients) {
+      if (!c || !c.joined || c.bot) continue;
+      if (from && c !== from) {
+        if (team) {
+          if (c.team !== from.team) continue; // the spectators are a team of their own here
+        } else if (c.playing && c.alive && from.playing && this.isEnemy(c, from)) {
+          if (!(from.alive ? this.rules.talkEnemyLiving : this.rules.talkEnemyDead)) continue;
+        }
+      }
+      c.session.send(writeChat(c.writer(), sender, flags, text));
+    }
+  }
+
   // Commands a client's console sends to the server (Source "client commands").
   clientCommand(c, text) {
     const args = parse(text)[0];
     if (!args) return;
     const name = args[0].toLowerCase();
-    if (name === 'name') {
+    if (name === 'say' || name === 'say_team') {
+      // The rest of the line as typed (quotes and ; included: it is text, not commands).
+      this.chat(c, text.replace(/^\s*\S+\s?/, ''), name === 'say_team');
+    } else if (name === 'name') {
       const n = args.slice(1).join(' ').trim().slice(0, 31);
       if (!n || n === c.name) return;
       console.log(`player ${c.id} "${c.name}" is now "${n}"`);

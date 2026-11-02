@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { parseBSP } from '../shared/bsp.js';
-import { TEAM_T, TEAM_CT } from '../shared/player.js';
+import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import { PHASE_WARMUP, PHASE_FREEZE } from '../shared/economy.js';
 import {
   Writer, Reader, CmdRing, writeHello, writeCmds, writeCommand, printChunks, S2C_PRINT, S2C_CHANGELEVEL, S2C_REJECT,
-  MAX_TEXT,
+  MAX_TEXT, S2C_CHAT, readChat, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC,
 } from '../shared/protocol.js';
 import { Host } from '../server/host.js';
 
@@ -48,6 +48,13 @@ async function setup(t) {
       const bytes = writeCommand(w, ++cmdId, text).slice();
       for (let i = 0; i < 3; i++) host.game.receive(c, bytes); // sent 3 times, run once
     };
+    // Chat lines this client received, as "sender/flags: text".
+    c.chats = () => sent.filter((b) => b instanceof Uint8Array && b[0] === S2C_CHAT).map((b) => {
+      const r = new Reader().set(b);
+      r.u8v();
+      const m = readChat(r);
+      return `${m.sender}/${m.flags}: ${m.text}`;
+    });
     return c;
   };
   const run = (ticks, players) => {
@@ -228,6 +235,57 @@ Deno.test('kick and map change: clients are told to reconnect, a new game starts
   assert.equal(r.str(), 'fy_buzzkill');
   assert.equal(a.sent.at(-1), 'changelevel', 'session closed after the notice');
   assert.equal(host.game.rules.roundTime, 115, 'no bomb sites or hostages: mp_roundtime');
+});
+
+Deno.test('chat: say reaches everyone, say_team the team, the dead and spectators tagged, flood dropped', async (t) => {
+  const s = await setup(t);
+  if (!s) return;
+  const { host, join, run } = s;
+  const a = join('alpha', TEAM_T), b = join('bravo', TEAM_T), c = join('charlie', TEAM_CT), d = join('delta', TEAM_SPECTATOR);
+  const bot = host.game.bots.add(TEAM_CT, 0, 'BOT Rob');
+  run(2, [a, b, c]);
+  a.command('say hello "all"; kill'); // the rest of the line is text, not commands
+  const line = `${a.id}/0: hello "all"; kill`;
+  for (const x of [a, b, c, d]) assert.deepEqual(x.chats(), [line], x.name);
+  assert.ok(a.alive, 'nothing after the ; ran');
+  assert.ok(!bot.sent?.length, 'bots get nothing');
+  run(64, [a, b, c]);
+  a.command('say_team rush b');
+  assert.deepEqual(b.chats().at(-1), `${a.id}/${CHAT_TEAM}: rush b`);
+  assert.deepEqual(c.chats().length, 1, 'the other team hears nothing');
+  assert.deepEqual(d.chats().length, 1, 'nor the spectators');
+  run(64, [a, b, c]);
+  a.command('kill');
+  a.command('say im dead');
+  assert.deepEqual(c.chats().at(-1), `${a.id}/${CHAT_DEAD}: im dead`, 'the living see a dead enemy (sv_talk_enemy_dead 1)');
+  d.command('say watching');
+  assert.deepEqual(b.chats().at(-1), `${d.id}/${CHAT_SPEC}: watching`);
+  run(43, [a, b, c]);
+  d.command('say_team spec talk');
+  assert.deepEqual(d.chats().at(-1), `${d.id}/${CHAT_TEAM | CHAT_SPEC}: spec talk`);
+  assert.ok(!b.chats().includes(`${d.id}/${CHAT_TEAM | CHAT_SPEC}: spec talk`), 'spectator team chat stays among spectators');
+  // Flood: a second line within 0.66 s is dropped; a line of spaces too.
+  b.command('say one');
+  b.command('say two');
+  b.command('say    ');
+  assert.deepEqual(c.chats().filter((l) => l.startsWith(`${b.id}/`)), [`${b.id}/0: one`]);
+  run(43, [a, b, c]);
+  b.command('say three');
+  assert.deepEqual(c.chats().at(-1), `${b.id}/0: three`);
+  // The server console's say: Console to everyone.
+  host.con.exec('say server here');
+  for (const x of [a, b, c, d]) assert.equal(x.chats().at(-1), `${CHAT_CONSOLE}/0: server here`);
+  // sv_talk_enemy_*: the living no longer see enemies' all chat; the dead and spectators do.
+  host.con.exec('sv_talk_enemy_living 0; sv_talk_enemy_dead 0');
+  run(43, [a, b, c]);
+  b.command('say quiet');
+  assert.equal(c.chats().at(-1), `${CHAT_CONSOLE}/0: server here`, 'a living enemy hears nothing');
+  assert.equal(a.chats().at(-1), `${b.id}/0: quiet`, 'a teammate does');
+  assert.equal(d.chats().at(-1), `${b.id}/0: quiet`, 'a spectator does');
+  run(43, [a, b, c]);
+  a.command('say dead talk');
+  assert.equal(c.chats().at(-1), `${CHAT_CONSOLE}/0: server here`, 'a dead enemy neither');
+  assert.equal(b.chats().at(-1), `${a.id}/${CHAT_DEAD}: dead talk`);
 });
 
 Deno.test('long console output splits into datagram-sized prints', () => {

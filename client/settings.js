@@ -6,6 +6,7 @@ import { Binds } from './binds.js';
 
 const CONFIG_KEY = 'comicstrike.config.cfg';
 const OLD_CONFIG_KEY = 'webcs.config.cfg'; // saved before the rename to ComicStrike: read once
+const NEW_BINDS = ['messagemode', 'messagemode2']; // defaults added after configs were already being saved
 const SAVE_DELAY_MS = 500;
 
 export function createConsole(print) {
@@ -118,6 +119,9 @@ export function createConsole(print) {
     if (binds.get('mwheelup') === '+jump' && binds.get('mwheeldown') === '+jump') {
       con.exec('bind mwheelup invprev; bind mwheeldown invnext', { print: () => {} });
     }
+    // Binds that came after the first configs (the chat keys): on their default keys where
+    // the config left those free.
+    if (binds.adopt(NEW_BINDS)) save();
   }
   return { con, binds, cv, save };
 }

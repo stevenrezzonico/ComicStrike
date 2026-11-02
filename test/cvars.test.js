@@ -152,3 +152,17 @@ Deno.test('catalog: names, help, values and hints for another console', () => {
   assert.deepEqual(cat.get('map'), ['map <name>', null, ['de_dust2']]);
   assert.equal(cat.get('rcon_password')[1], null, 'protected values stay out');
 });
+
+Deno.test('binds: defaults added later are adopted where a saved config left their keys free', async () => {
+  const { Binds, DEFAULT_BINDS } = await import('../client/binds.js');
+  const { con } = make();
+  const b = new Binds();
+  b.register(con, () => {});
+  con.exec('unbindall; bind w +forward; bind y buymenu'); // an old config: y taken, u free
+  assert.ok(b.adopt(['messagemode', 'messagemode2']));
+  assert.equal(b.get('y'), 'buymenu', 'a taken key is left alone');
+  assert.equal(b.get('u'), DEFAULT_BINDS.u);
+  assert.ok(!b.adopt(['messagemode', 'messagemode2']), 'nothing more to do: u is bound, y is taken');
+  con.exec('unbindall; bind k messagemode2');
+  assert.ok(b.adopt(['messagemode2']) === false, 'the command is bound elsewhere: not bound again');
+});

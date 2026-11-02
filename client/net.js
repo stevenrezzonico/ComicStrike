@@ -4,8 +4,8 @@
 
 import {
   MAX_PLAYERS, Writer, Reader, SnapshotRing, OwnState, EventList, writeHello, writeCmds, readWelcome, readSnapshot,
-  readInfo, readItems, readGrenades, readHostages, writeBuy, writeCommand, S2C_WELCOME, S2C_SNAPSHOT, S2C_REJECT,
-  S2C_INFO, S2C_PRINT, S2C_CHANGELEVEL, S2C_ITEMS, S2C_GRENADES, S2C_HOSTAGES, C2S_CMDS, C2S_BYE,
+  readInfo, readItems, readGrenades, readHostages, readChat, writeBuy, writeCommand, S2C_WELCOME, S2C_SNAPSHOT,
+  S2C_REJECT, S2C_INFO, S2C_PRINT, S2C_CHANGELEVEL, S2C_ITEMS, S2C_GRENADES, S2C_HOSTAGES, S2C_CHAT, C2S_CMDS, C2S_BYE,
 } from '../shared/protocol.js';
 import { Hostages } from '../shared/hostages.js';
 import { Items } from '../shared/items.js';
@@ -55,6 +55,7 @@ export class NetClient {
     this.buyId = 0;
     this.cmdId = 0;
     this.prints = []; // console text from the server, taken by the game loop
+    this.chats = []; // chat lines { sender, flags, text } (S2C_CHAT), taken the same way
     this.items = new Items(); // weapons on the ground (S2C_ITEMS)
     this.itemsVersion = 0; // bumps on every items message
     this.grenades = new Grenades(); // newest grenade lists (S2C_GRENADES)
@@ -287,6 +288,8 @@ export class NetClient {
         readInfo(r, this.names, this.teams, this.kills, this.deaths, this.scores);
       } else if (type === S2C_PRINT) {
         this.prints.push(r.lstr());
+      } else if (type === S2C_CHAT) {
+        this.chats.push(readChat(r));
       } else if (type === S2C_CHANGELEVEL) {
         this.changelevel = r.str();
       } else if (type === S2C_HOSTAGES) {

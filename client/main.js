@@ -44,6 +44,7 @@ import { Grenades, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE } from '../shar
 import { HITGROUP_CHEST, HITGROUP_LEGS } from '../shared/hitgroups.js';
 import {
   MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, E_ACTIVE, E_X,
+  CHAT_CONSOLE, CHAT_TEAM, CHAT_MAX,
   E_Y, E_Z, E_PITCH, E_YAW,
   E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw,
 } from '../shared/protocol.js';
@@ -71,6 +72,7 @@ import { InkWords } from './inkwords.js';
 import { Spectator, SPEC_EYES, SPEC_ROAM, SPEC_DELAY } from './spectate.js';
 import { DeathPanel } from './deathpanel.js';
 import { ConsoleWindow } from './console.js';
+import { Chat } from './chat.js';
 import { takeHandoff } from './handoff.js';
 import { PreviewEditor } from './previewedit.js';
 import { Menu } from './menu.js';
@@ -1014,6 +1016,7 @@ function tick() {
   if (net) {
     if (net.poll()) applySnapshot();
     while (net.prints.length) conWin.print(net.prints.shift());
+    while (net.chats.length) addChat(net.chats.shift());
     if (net.changelevel || (net.closed && net.closeReason === 'changelevel')) {
       reconnect();
       return;
@@ -1632,7 +1635,7 @@ setInterval(() => {
 const MENU_HELD = new Set(['+attack', '+attack2']);
 input.keepKeys = () => hud.menuOpen;
 input.onKey = (key, down) => {
-  if (conWin.isOpen) return false;
+  if (conWin.isOpen || chat.isOpen) return false;
   if (hud.menuOpen && down && (key === 'escape' || /^[0-9]$/.test(key))) {
     if (key === 'escape') closeBuyMenu();
     else hud.menuKey(+key || 10);
@@ -1696,6 +1699,37 @@ con.command('buy', (a, ctx) => {
 }, 'buy <item>: buys a weapon or gear');
 con.hint('buy', (i) => (i === 1 ? [...Object.keys(BUY_NAMES), ...Object.keys(WEAPON_ID).filter((n) => n !== 'none')] : []));
 con.command('toggleconsole', () => conWin.toggle(), 'Opens or closes the console');
+// Chat (client/chat.js): the typed line goes to the server as say / say_team; its lines
+// come back as CHAT messages for the box (and the console).
+// The text goes as the rest of the command line, as typed (the server reads it raw: a `;`
+// or quotes in it are text, not commands; the console's own `say` joins its arguments).
+const say = (text, team) => {
+  if (net) net.command(`${team ? 'say_team' : 'say'} ${text}`);
+  else addChat({ sender: selfId, flags: team ? CHAT_TEAM : 0, text: text.slice(0, CHAT_MAX) }); // the sandbox: nobody else to hear
+};
+const chat = new Chat(document.getElementById('chat'), document.getElementById('chatline'), say,
+  (id) => (net ? net.names[id] : cv.name.value), (id) => (net ? net.teams[id] : player.team));
+chat.onToggle = (open) => {
+  if (open) input.clear(); // the held keys let go (the mouse stays captured)
+};
+function addChat(m) {
+  chat.add(m.sender, m.flags, m.text);
+  const name = m.sender === CHAT_CONSOLE ? 'Console' : (net ? net.names[m.sender] : cv.name.value) || `player${m.sender}`;
+  conWin.print(`${(m.flags & CHAT_TEAM) ? '(team) ' : ''}${name} : ${m.text}`);
+}
+const sayCommand = (a, ctx, team) => {
+  const text = a.slice(1).join(' ').trim();
+  if (!text) return con.out(ctx, `${team ? 'say_team' : 'say'} <text>`);
+  say(text, team);
+};
+con.command('say', (a, ctx) => sayCommand(a, ctx, false), 'say <text>: chat to everyone');
+con.command('say_team', (a, ctx) => sayCommand(a, ctx, true), 'say_team <text>: chat to your team');
+con.command('messagemode', () => {
+  if (playing && !menu.visible) chat.open(false);
+}, 'Types a chat line to everyone (Y)');
+con.command('messagemode2', () => {
+  if (playing && !menu.visible) chat.open(true);
+}, 'Types a chat line to your team (U)');
 con.command('drawradar', () => {
   radar.hidden = false;
 }, 'Shows the radar');
@@ -1882,6 +1916,7 @@ function resetSession() {
   roundSerial = -1;
   words.clear();
   blasts.clear();
+  chat.clear();
   deathPanel.show(false);
   renderer.style.dead = 0;
   renderer.style.smoke = 0;

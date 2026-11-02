@@ -85,6 +85,23 @@
   #killfeed .t { color: var(--t); }
   #killfeed .ct { color: var(--ct); }
   #killfeed .hs { background: var(--yellow); color: var(--ink); padding: 1px 5px 0; font-weight: 400; }
+  /* Chat: paper strips above the HP, the newest at the bottom; the typing line under them. */
+  #chat { position: fixed; left: 20px; bottom: 108px; display: flex; flex-direction: column; align-items: flex-start;
+    gap: 4px; max-width: min(560px, 60vw); font: 16px/1.3 var(--body); pointer-events: none; }
+  #chat div { padding: 3px 9px 2px; background: var(--paper); color: var(--ink); border: 2px solid var(--ink);
+    box-shadow: 3px 3px 0 var(--ink); word-break: break-word; animation: chatfade 12s linear forwards; }
+  #chat.typing div { animation: none; }
+  #chat b { font-family: var(--display); font-weight: 400; letter-spacing: 0.04em; -webkit-text-stroke: 0.6px var(--ink);
+    paint-order: stroke fill; }
+  #chat .t { color: var(--t); }
+  #chat .ct { color: var(--ct); }
+  #chat .spec, #chat .console { color: #6d665c; -webkit-text-stroke: 0; }
+  @keyframes chatfade { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
+  #chatline { position: fixed; left: 20px; bottom: 76px; display: none; align-items: center; gap: 8px;
+    width: min(560px, 60vw); padding: 4px 8px; background: var(--paper-hi); border: 3px solid var(--ink);
+    box-shadow: 4px 4px 0 var(--ink); font: 16px/1.3 var(--body); color: var(--ink); z-index: 5; }
+  #chatline span { font: 17px/1 var(--display); letter-spacing: 0.04em; white-space: nowrap; }
+  #chatline input { flex: 1; min-width: 0; border: 0; background: none; color: var(--ink); font: inherit; outline: none; }
   #hud-money { position: fixed; left: 20px; bottom: 64px; color: var(--money); font: 28px/1 var(--display);
     letter-spacing: 0.03em; pointer-events: none; }
   #roundbar { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); padding: 5px 16px 3px;
@@ -191,7 +208,7 @@
   body.spectator #hud-money, body.spectator #hud-bomb, body.nostats .hud, body.dm #hud-money { display: none; }
   #menu .menu-teams button.spec { color: #6d665c; }
   body.nohud .hud, body.nohud #hud-money, body.nohud #hud-bomb, body.nohud #roundbar, body.nohud #killfeed,
-  body.nohud #fx { display: none; }
+  body.nohud #fx, body.nohud #chat { display: none; }
   /* Death and spectator notice: a caption box. */
   #death {
     position: fixed; left: 50%; top: 30%; transform: translateX(-50%) rotate(-1deg); display: none; max-width: 80vw;
@@ -203,7 +220,7 @@
   #view { transition: transform 0.45s cubic-bezier(0.2, 1.4, 0.4, 1); }
   body.dying #view { transform: rotate(-3deg) scale(1.12); image-rendering: auto; }
   body.dying #death, body.nohud #deathpanel, body.dying .hud, body.dying #hud-money, body.dying #hud-bomb,
-  body.dying #radar, body.dying #roundbar, body.dying #killfeed { display: none !important; }
+  body.dying #radar, body.dying #roundbar, body.dying #killfeed, body.dying #chat { display: none !important; }
   #deathpanel { position: fixed; inset: 0; pointer-events: none; visibility: hidden; overflow: hidden; }
   #deathpanel.on { visibility: visible; }
   .dp-frame { position: absolute; inset: 0; box-shadow: inset 0 0 0 0 var(--paper), inset 0 0 0 0 var(--ink);
@@ -393,6 +410,8 @@
 <canvas id="radar"></canvas>
 <pre id="debug"></pre>
 <div id="killfeed"></div>
+<div id="chat"></div>
+<div id="chatline"></div>
 <div id="roundbar"></div>
 <div id="banner"></div>
 <div id="hud-money"></div>

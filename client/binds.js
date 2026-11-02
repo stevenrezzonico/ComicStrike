@@ -46,6 +46,7 @@ export const KEY_LIST = [...new Set([
 export const DEFAULT_BINDS = {
   w: '+forward', s: '+back', a: '+moveleft', d: '+moveright', space: '+jump', ctrl: '+duck', shift: '+speed',
   e: '+use', r: '+reload', f: '+lookatweapon', g: 'drop', q: 'lastinv', b: 'buymenu', m: 'teammenu', tab: '+showscores',
+  y: 'messagemode', u: 'messagemode2',
   '`': 'toggleconsole', mouse1: '+attack', mouse2: '+attack2', mwheelup: 'invprev', mwheeldown: 'invnext',
   1: 'slot1', 2: 'slot2', 3: 'slot3', 4: 'slot4', 5: 'slot5',
 };
@@ -98,6 +99,21 @@ export class Binds {
     con.command('key_listboundkeys', (_a, ctx) => {
       for (const [k, v] of [...this.map].sort()) con.out(ctx, `"${k}" = ${quote(v)}`);
     }, 'Lists every bound key');
+  }
+
+  // Defaults added after a config was saved (it wipes with unbindall, then lists its own
+  // binds, so a new default never reached it): binds each of `commands` to its default key
+  // where the config binds that command to no key and leaves the key free. Returns whether
+  // anything was bound.
+  adopt(commands) {
+    let changed = false;
+    const bound = new Set(this.map.values());
+    for (const [key, cmd] of Object.entries(DEFAULT_BINDS)) {
+      if (!commands.includes(cmd) || bound.has(cmd) || this.map.has(key)) continue;
+      this.map.set(key, cmd);
+      changed = true;
+    }
+    return changed;
   }
 
   // Config lines: wipe, then every binding.

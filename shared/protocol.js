@@ -18,6 +18,9 @@
 //   WELCOME  u8 type, u16 version, u8 playerId, u32 serverTick, u8 tickRate, str map
 //   REJECT   u8 type, str reason
 //   PRINT    u8 type, lstr text (console output: rcon replies, server messages)
+//   CHAT     u8 type, u8 sender (a player id, CHAT_CONSOLE for the server console), u8 flags
+//            (CHAT_TEAM: team chat, CHAT_DEAD: the sender was dead, CHAT_SPEC: a spectator),
+//            lstr text (a say / say_team line the server chose to deliver to this client)
 //   CHANGELEVEL u8 type, str map (the server is switching maps: reconnect)
 //   INFO     u8 type, u8 n, n x { u8 id, u8 team, u16 kills, u16 deaths, u16 score, str name }
 //            (every player, resent periodically and on changes)
@@ -50,7 +53,7 @@ import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 import { MAX_MOVERS } from './doors.js';
 
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -70,7 +73,13 @@ export const S2C_CHANGELEVEL = 15;
 export const S2C_ITEMS = 16; // weapons on the ground
 export const S2C_GRENADES = 17;
 export const S2C_HOSTAGES = 18;
+export const S2C_CHAT = 19;
 export const MAX_TEXT = 900; // bytes of console text per datagram
+export const CHAT_MAX = 127; // characters of one chat line (CS:GO's)
+export const CHAT_CONSOLE = 255; // CHAT sender: the server console's say
+export const CHAT_TEAM = 1;
+export const CHAT_DEAD = 2;
+export const CHAT_SPEC = 4;
 
 export const SHOT_IMPACT = 0; // bullet hit the world
 export const SHOT_BLOOD = 1; // bullet hit a player
@@ -416,6 +425,28 @@ export function writePrint(w, text) {
   w.u8v(S2C_PRINT);
   w.lstr(text);
   return w.view();
+}
+
+export function writeChat(w, sender, flags, text) {
+  w.reset();
+  w.u8v(S2C_CHAT);
+  w.u8v(sender);
+  w.u8v(flags);
+  w.lstr(text);
+  return w.view();
+}
+
+// After the type byte.
+export function readChat(r) {
+  const sender = r.u8v(), flags = r.u8v();
+  return { sender, flags, text: r.lstr() };
+}
+
+// A chat line as the server delivers it: control characters and line breaks gone, trimmed,
+// at most CHAT_MAX characters (CS:GO's limit); '' for nothing worth sending.
+export function cleanChat(text) {
+  // deno-lint-ignore no-control-regex
+  return String(text).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').trim().slice(0, CHAT_MAX);
 }
 
 // Console output split into datagram-sized PRINT messages (at line breaks when it can).

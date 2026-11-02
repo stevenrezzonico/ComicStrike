@@ -66,6 +66,8 @@ export class Host {
     num('mp_maxmoney', DEFAULT_RULES.maxMoney, 'Money cap', 0, 65535);
     num('mp_warmuptime', DEFAULT_RULES.warmupTime, 'Warmup length once both teams have players (s)', 0, 3600);
     num('sv_cheats', 0, 'Allow cheat commands (setpos)', 0, 1);
+    num('sv_talk_enemy_dead', 1, 'The living see dead enemies\' all chat', 0, 1);
+    num('sv_talk_enemy_living', 1, 'The living see living enemies\' all chat', 0, 1);
     // Game modes (cfg/gamemode_*.cfg set these).
     con.cvar('game_type', 0, { help: 'Game type (0 classic, 1 gun game family); applies on the next map', min: 0, max: 3 });
     con.cvar('game_mode', 1, {
@@ -155,7 +157,7 @@ export class Host {
       if (!c) return con.out(ctx, 'kick <name or #id>: no such player');
       this.game.kick(c, 'kicked by the server');
     }, 'kick <name or #id>');
-    con.command('say', (a) => this.game.printAll(`Console: ${a.slice(1).join(' ')}`), 'say <text>: message to everyone');
+    con.command('say', (a) => this.game.chat(null, a.slice(1).join(' ')), 'say <text>: a chat line from Console to everyone');
     con.command('exec', (a, ctx) => this.execCfg(a[1], ctx), 'exec <file>: runs cfg/<file>.cfg');
     con.command('quit', () => opts.quit && opts.quit(), 'Stops the server');
     con.command('exit', () => opts.quit && opts.quit(), 'Stops the server');
@@ -225,6 +227,8 @@ export class Host {
       maxMoney: v('mp_maxmoney'),
       warmupTime: v('mp_warmuptime'),
       cheats: v('sv_cheats') !== 0,
+      talkEnemyDead: v('sv_talk_enemy_dead') !== 0,
+      talkEnemyLiving: v('sv_talk_enemy_living') !== 0,
       deathmatch: this.modeName === 'deathmatch',
       demo: this.modeName === 'demo',
       wingman: this.modeName === 'wingman',

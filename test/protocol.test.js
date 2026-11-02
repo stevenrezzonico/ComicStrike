@@ -6,8 +6,21 @@ import {
   CmdRing, SnapshotRing, OwnState, writeHello, readHello, writeWelcome, readWelcome, writeCmds, readCmds,
   writeSnapshot, readSnapshot, quantizePitch, dequantizePitch, quantizeYaw, dequantizeYaw, E_ACTIVE, E_X, E_Y, E_Z,
   E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS, E_FIELDS, ANIM_RELOAD, ANIM_HELMET,
-  RoundState,
+  RoundState, writeChat, readChat, cleanChat, S2C_CHAT, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_MAX,
 } from '../shared/protocol.js';
+
+Deno.test('chat round-trip, and the server cleans a line before sending it', () => {
+  const w = new Writer(), r = new Reader();
+  r.set(writeChat(w, 7, CHAT_TEAM | CHAT_DEAD, 'rush b: no stop'));
+  assert.equal(r.u8v(), S2C_CHAT);
+  assert.deepEqual(readChat(r), { sender: 7, flags: CHAT_TEAM | CHAT_DEAD, text: 'rush b: no stop' });
+  r.set(writeChat(w, CHAT_CONSOLE, 0, 'héllo wörld'));
+  r.u8v();
+  assert.equal(readChat(r).text, 'héllo wörld', 'UTF-8');
+  assert.equal(cleanChat('  hi\nthere \x07 '), 'hi there', 'line breaks and control characters become spaces, trimmed');
+  assert.equal(cleanChat('x'.repeat(300)).length, CHAT_MAX);
+  assert.equal(cleanChat('\n\t'), '', 'nothing left: nothing to send');
+});
 
 Deno.test('hello and welcome round-trip', () => {
   const w = new Writer(), r = new Reader();

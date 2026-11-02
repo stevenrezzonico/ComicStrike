@@ -113,7 +113,7 @@ const ACTIONS = [
     ['Drop weapon', 'drop'], ['Last weapon', 'lastinv'], ['Next weapon', 'invnext'], ['Previous weapon', 'invprev'],
     ['Primary', 'slot1'], ['Pistol', 'slot2'], ['Knife', 'slot3'], ['Grenades', 'slot4'], ['Bomb', 'slot5']]],
   ['Game', [['Use', '+use'], ['Buy menu', 'buymenu'], ['Scoreboard', '+showscores'], ['Team menu', 'teammenu'],
-    ['Console', 'toggleconsole']]],
+    ['Chat', 'messagemode'], ['Team chat', 'messagemode2'], ['Console', 'toggleconsole']]],
 ];
 const KEY_COLUMNS = 2;
 
