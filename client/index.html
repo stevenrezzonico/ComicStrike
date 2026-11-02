@@ -31,18 +31,23 @@
     border: 3px solid var(--ink); border-radius: 50%; background: rgba(246, 238, 219, 0.45); box-sizing: border-box; }
   #touch .knob { position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px;
     border-radius: 50%; background: var(--ink); box-shadow: 0 0 0 3px var(--paper); }
-  #touch .keys { position: absolute; right: 116px; bottom: 100px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
-    pointer-events: auto; }
-  #touch .fire { position: absolute; right: 16px; bottom: 120px; width: 88px; height: 88px; padding: 0; border-radius: 50%;
-    border: 4px solid var(--ink); background: var(--red); color: var(--paper); box-shadow: 4px 4px 0 var(--ink);
-    font: 22px/1 var(--display); letter-spacing: 0.08em; pointer-events: auto; touch-action: none;
-    -webkit-tap-highlight-color: transparent; }
-  #touch .fire.on { background: var(--yellow); color: var(--ink); transform: translate(2px, 2px); box-shadow: 2px 2px 0 var(--ink); }
-  #touch .keys button { width: 68px; height: 52px; padding: 0; border: 3px solid var(--ink); border-radius: 6px;
+  /* Two columns up the right edge, the thumb resting on FIRE in the corner: AIM, RELOAD and
+     USE above it; JUMP, DUCK, NEXT and BUY in the column beside. The rest of the canvas
+     stays free to look round with. */
+  #touch .keys { position: absolute; right: 14px; bottom: 14px; display: grid; grid-template-columns: 84px 104px;
+    grid-template-rows: 48px 48px 56px 104px; gap: 10px; align-items: stretch; pointer-events: auto; }
+  #touch .keys button { padding: 0; border: 3px solid var(--ink); border-radius: 8px;
     background: rgba(246, 238, 219, 0.82); color: var(--ink); box-shadow: 3px 3px 0 var(--ink);
     font: 17px/1 var(--display); letter-spacing: 0.06em; touch-action: none; -webkit-tap-highlight-color: transparent; }
   #touch .keys button.on { background: var(--yellow); transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
-  #touch .keys button.jump { height: 72px; font-size: 20px; }
+  #touch .keys button.big { font-size: 20px; }
+  #touch .keys button.fire { border-radius: 50%; border-width: 4px; background: var(--red); color: var(--paper);
+    box-shadow: 4px 4px 0 var(--ink); font-size: 24px; letter-spacing: 0.08em; }
+  #touch .keys button.fire.on { background: var(--yellow); color: var(--ink); }
+  #touch .keys button.aim { background: var(--blue); color: var(--paper-hi); }
+  #touch .keys button.aim.on { background: var(--yellow); color: var(--ink); }
+  /* The ammo moves to the middle of the bottom edge: the buttons take its corner. */
+  body.softplay #hud-right { right: auto; left: 50%; transform: translateX(-50%); align-items: center; }
   #status {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
     color: var(--yellow); font: 32px/1.4 var(--display); letter-spacing: 0.04em;
@@ -468,14 +473,15 @@
 <div id="touch">
   <div class="stick"><div class="knob"></div></div>
   <div class="keys">
-    <button type="button" data-cmd="+use">USE</button>
-    <button type="button" class="jump" data-cmd="+jump">JUMP</button>
-    <button type="button" data-cmd="+reload">RELOAD</button>
-    <button type="button" class="jump" data-cmd="+duck" data-toggle>DUCK</button>
-    <button type="button" data-cmd="invnext">NEXT</button>
     <button type="button" data-cmd="buymenu">BUY</button>
+    <button type="button" data-cmd="+use">USE</button>
+    <button type="button" data-cmd="invnext">NEXT</button>
+    <button type="button" data-cmd="+reload">RELOAD</button>
+    <button type="button" class="big" data-cmd="+duck" data-toggle>DUCK</button>
+    <button type="button" class="big aim" data-cmd="+attack2">AIM</button>
+    <button type="button" class="big" data-cmd="+jump">JUMP</button>
+    <button type="button" class="fire" data-cmd="+attack">FIRE</button>
   </div>
-  <button type="button" class="fire" data-cmd="+attack">FIRE</button>
 </div>
 <div id="scoreboard"></div>
 <div id="buymenu"></div>

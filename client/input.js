@@ -26,7 +26,6 @@ export class Input {
     this.touchId = -1; // the finger that looks round, and where it was
     this.touchX = 0;
     this.touchY = 0;
-    this.fireId = -1; // a second finger on the view: the right mouse button while it is down (the FIRE button fires)
     this.stickId = -1; // the finger on the movement stick (landed on the left STICK_ZONE of the canvas), and where it landed
     this.stickX = 0;
     this.stickY = 0;
@@ -54,10 +53,9 @@ export class Input {
       if (!this.locked && !this.keepKeys()) this.clear();
     });
     // Touch (a tablet, a phone): a finger landing on the left STICK_ZONE of the canvas is
-    // the movement stick (client/touch.js), elsewhere one finger drags the view round and a
-    // second one is the right mouse button (the scope, a burst, the silencer; the FIRE button
-    // fires). Only while locked (a soft lock there: see lock()), so the menus' touches are
-    // their own.
+    // the movement stick (client/touch.js), elsewhere the first finger drags the view round
+    // (the mouse buttons are the FIRE and AIM buttons; more fingers do nothing). Only while
+    // locked (a soft lock there: see lock()), so the menus' touches are their own.
     canvas.addEventListener('touchstart', (e) => {
       if (!this.locked) return;
       e.preventDefault();
@@ -72,9 +70,6 @@ export class Input {
           this.touchId = t.identifier;
           this.touchX = t.clientX;
           this.touchY = t.clientY;
-        } else if (this.fireId < 0) {
-          this.fireId = t.identifier;
-          this.onKey('mouse2', true);
         }
       }
     }, { passive: false });
@@ -98,10 +93,6 @@ export class Input {
       for (const t of e.changedTouches) {
         if (t.identifier === this.stickId) this.dropStick();
         if (t.identifier === this.touchId) this.touchId = -1;
-        if (t.identifier === this.fireId) {
-          this.fireId = -1;
-          this.onKey('mouse2', false);
-        }
       }
     };
     canvas.addEventListener('touchend', touchEnd);
@@ -258,7 +249,7 @@ export class Input {
   unlock() {
     if (this.soft) {
       this.locked = this.soft = false;
-      this.touchId = this.fireId = -1;
+      this.touchId = -1;
       if (this.stickId >= 0) this.dropStick();
       if (!this.keepKeys()) this.clear();
       this.onLockChange();

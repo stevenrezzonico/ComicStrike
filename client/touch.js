@@ -1,10 +1,10 @@
 // Touch controls under the soft lock (client/input.js: iOS and iPadOS Safari, any
 // touch-first device whose browser gives no pointer lock): a floating stick on the left
-// of the canvas moves, the rest of the canvas looks (one finger; a second is the right
-// mouse button: the scope, a burst, the silencer), a big FIRE button fires, and paper
-// buttons do what keys do elsewhere (jump, crouch, reload, use, next weapon, the buy menu).
-// The wire carries buttons only (no analog move), so the stick drives the digital WASD
-// bits, walking (+speed) on a small pull.
+// of the canvas moves, the rest of the canvas looks (one finger), and two columns of paper
+// buttons up the right edge do what the mouse and keys do elsewhere: a big FIRE under the
+// thumb, AIM (the right mouse button: the scope, a burst, the silencer), JUMP, DUCK, RELOAD,
+// USE, NEXT weapon, the BUY menu. The wire carries buttons only (no analog move), so the
+// stick drives the digital WASD bits, walking (+speed) on a small pull.
 
 import { IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_SPEED } from '../shared/constants.js';
 import { releaseOf } from '../shared/cvars.js';
