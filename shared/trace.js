@@ -187,7 +187,7 @@ export class CollisionWorld {
       if (cls === 'func_ladder') kind = ENT_LADDER;
       else if (cls === 'func_water') kind = ENT_WATER;
       else if (cls === 'func_conveyor' && (+(e.spawnflags || 0) & SF_CONVEYOR_NOTSOLID)) return;
-      else if (cls.startsWith('func_') && !NONSOLID.has(cls)) kind = ENT_SOLID;
+      else if ((cls.startsWith('func_') && !NONSOLID.has(cls)) || MOVERS.has(cls)) kind = ENT_SOLID;
       else return;
       parseVec3(e.origin, origin);
       add(kind, m, origin, cls === 'func_conveyor' ? conveyorPush(e) : null, bspEntity);
@@ -195,6 +195,9 @@ export class CollisionWorld {
     return world;
   }
 }
+
+// Solid brush entities not named func_* (shared/doors.js moves them).
+const MOVERS = new Set(['momentary_door', 'momentary_rot_button']);
 
 const SF_CONVEYOR_VISUAL = 1; // scrolls but does not push
 const SF_CONVEYOR_NOTSOLID = 2;

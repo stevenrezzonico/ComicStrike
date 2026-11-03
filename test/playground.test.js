@@ -48,8 +48,10 @@ Deno.test('de_playground: every element is there; spawns stand on the floor insi
   assert.equal(count('func_ladder'), 1);
   assert.equal(count('func_water'), 1);
   assert.equal(count('func_conveyor'), 1);
-  assert.equal(count('func_breakable'), 6);
-  assert.equal(count('func_door') + count('func_door_rotating') + count('func_button'), 4);
+  assert.equal(count('func_breakable'), 10);
+  assert.equal(count('func_door') + count('func_door_rotating') + count('func_button'), 5);
+  assert.equal(count('func_plat') + count('func_train') + count('func_rot_button'), 3);
+  assert.equal(count('path_corner'), 4);
   const { game } = setup();
   const tr = new Trace();
   for (const e of bsp.entities.filter((e) => e.classname.startsWith('info_player'))) {
@@ -96,8 +98,8 @@ Deno.test('de_playground: the ladder climbs the tower; the belt carries; doors a
   const rates = new Set();
   for (let v = 0; v < mesh.numVerts; v++) if (b[v * VERTEX_STRIDE + 31]) rates.add(b[v * VERTEX_STRIDE + 31]);
   assert.deepEqual([...rates], [160 / 64 * SCROLL_UNIT], 'the belt top scrolls, nothing else');
-  assert.equal(game.doors.count, 4, 'three doors and a button');
-  assert.equal(game.breakables.count, 6);
+  assert.equal(game.doors.count, 8, 'four doors, a button, a valve, a lift and a cart');
+  assert.equal(game.breakables.count, 10);
 });
 
 Deno.test('de_playground: baked sun and shade; bots find their way everywhere', () => {

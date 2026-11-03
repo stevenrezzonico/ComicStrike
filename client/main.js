@@ -32,15 +32,15 @@ import {
   BombSites, PLANT_TIME, DEFUSE_TIME, DEFUSE_TIME_KIT, C4_TIMER, BOMB_DROPPED, BOMB_PLANTED, BOMB_DEFUSED,
   BOMB_EXPLODED,
 } from '../shared/bomb.js';
-import { Breakables } from '../shared/breakables.js';
-import { Doors, MapLogic, MAX_MOVERS, MOVER_ROTATING } from '../shared/doors.js';
+import { Breakables, EXPLODE_RANGE, blastDamage } from '../shared/breakables.js';
+import { Doors, MapLogic, Killables, MAX_MOVERS, BLAST } from '../shared/doors.js';
 import { HitTargets, feetOffset } from '../shared/hitgroups.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import {
   Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT, TEAM_SPECTATOR, TEAM_NAMES,
   inBombSite, canReachBomb,
 } from '../shared/player.js';
-import { Grenades, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE } from '../shared/grenades.js';
+import { Grenades, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE, FX_BLAST } from '../shared/grenades.js';
 import { HITGROUP_CHEST, HITGROUP_LEGS } from '../shared/hitgroups.js';
 import {
   MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, E_ACTIVE, E_X,
@@ -200,6 +200,7 @@ const selfTargets = {
     applyDamage(player, damage, w, w.grenade === 'fire' ? HITGROUP_LEGS : HITGROUP_CHEST);
     if (player.health <= 0) offlineRespawn();
   },
+  blast: (x, y, z, damage, radius) => sandboxBlastBreakables(x, y, z, damage, radius),
   flash: (_i, seconds) => {
     if (seconds > flash.left) flash.left = flash.total = seconds;
   },
@@ -253,9 +254,10 @@ function showFlash(left, total) {
   flashBurst.style.setProperty('--k', (0.75 + 0.35 * shown).toFixed(2));
 }
 
-fx.onEffect = (kind, _weapon, x, y, z) => {
+fx.onEffect = (kind, weapon, x, y, z) => {
   tag(kind === FX_HE ? 'HE' : kind === FX_SMOKE ? 'smoke' : kind === FX_FIRE ? 'fire' : kind === FX_FLASH ? 'flashbang' : 'fizzle');
   if (kind === FX_HE) explosion(x, y, z, 0.45);
+  else if (kind === FX_BLAST) explosion(x, y, z, Math.min(1.2, 0.3 + weapon / 250)); // a breakable: its magnitude
   else if (kind === FX_FIZZLE) {
     debris.puff(x, y, z, 0.3, 0.3, 0.3, 20);
     sounds.hiss(x, y, z);
@@ -285,14 +287,21 @@ fx.onBurn = (id, x, y, z, r, k) => renderer.flashes.hold(id, x, y, z, r, k); // 
 let breakables = null;
 let breakableColors = null; // rgb per breakable slot, for debris
 let doors = null; // doors and buttons: placed for the tick each command runs at, as on the server
+let killables = null; // the other brush entities a killtarget removes
 let mapLogic = null; // the sandbox runs the map's triggers itself
+const sandboxRemoved = new Uint32Array(8); // the sandbox's killtargeted slots shown so far
 let cmdOffset = 0; // server tick - command number (newest snapshot): when the server runs a command
 const moverSeen = new Uint8Array(MAX_MOVERS);
 const moverDir = new Int8Array(MAX_MOVERS); // last tick's, for sounds
 const sandboxBodies = [];
 const sandboxAct = { x: 0, y: 0, z: 0, yaw: 0 };
 const sandboxActs = [sandboxAct];
-const sandboxFire = (name, act) => mapLogic.fireAt(tickCount, name, act, 0);
+const sandboxFire = (name, act, kill = '', src = -1) => mapLogic.fireAt(tickCount, name, act, 0, src, kill);
+const sandboxHurt = (_i, damage) => { // crushed by a mover, blown up by a breakable
+  applyDamage(player, damage, BLAST, HITGROUP_CHEST);
+  if (player.health <= 0) offlineRespawn();
+};
+const sandboxBroke = []; // slots a blast broke
 const spawns = { [TEAM_T]: [], [TEAM_CT]: [] }; // offline spawn points [x, y, z, yaw]
 let noclip = false;
 
@@ -396,13 +405,18 @@ async function loadMap(name) {
   breakables = new Breakables(bsp, world);
   breakableColors = mesh.breakableColors;
   doors = new Doors(bsp, world, breakables.count);
-  mapLogic = new MapLogic(bsp, doors);
+  killables = new Killables(bsp, world, breakables.count + doors.count);
+  mapLogic = new MapLogic(bsp, doors, world, breakables, killables);
+  mapLogic.onBreak = (slot, act) => { // the sandbox: a breakable fired by name
+    if (breakables.setBroken(world, slot, true)) brokeSlot(slot, act);
+  };
   moverDir.fill(0);
+  sandboxRemoved.fill(0);
   renderer.setMovers(doors);
   const ms = (performance.now() - t0).toFixed(0);
   console.log(`${name}: ${mesh.numVerts} verts, ${(mesh.opaqueCount + mesh.cutoutCount + mesh.skyCount + mesh.transCount) / 3} tris, ` +
     `lightmap ${mesh.lightmap.width}x${mesh.lightmap.height}, ${world.ents.length} collision ents, ` +
-    `${breakables.count} breakables, ${doors.count} doors / buttons, built in ${ms} ms`);
+    `${breakables.count} breakables, ${doors.count} movers, built in ${ms} ms`);
 
   const o = new Float32Array(3);
   spawns[TEAM_T].length = spawns[TEAM_CT].length = 0;
@@ -437,7 +451,9 @@ function clearRoundMarks() {
 function offlineRespawn() {
   breakables.reset(world);
   doors.reset(world);
+  killables.reset(world);
   mapLogic.reset(tickCount);
+  sandboxRemoved.fill(0);
   renderer.clearBroken();
   clearRoundMarks();
   localGrenades.clear();
@@ -470,6 +486,7 @@ function showImpacts() {
     if (impacts.player[i] >= 0) continue;
     if (impacts.broke[i]) {
       breakVisual(impacts.broke[i]);
+      if (!net) brokeSlot(impacts.broke[i], sandboxAct); // the server runs the chain online
       continue;
     }
     const p = impacts.pos, n = impacts.normal;
@@ -489,6 +506,51 @@ function breakVisual(slot) {
   debris.burst(breakables.mins, breakables.maxs, slot * 3, breakables.material[slot],
     c[slot * 3], c[slot * 3 + 1], c[slot * 3 + 2]);
 }
+
+// A slot the server's mask (or the sandbox's map logic) took away or gave back: a
+// breakable shatters, a killtargeted mover or wall just goes.
+function applySlot(slot, gone) {
+  if (slot <= breakables.count) {
+    if (!breakables.setBroken(world, slot, gone)) return;
+    if (gone) breakVisual(slot);
+    else renderer.setBroken(slot, false);
+    return;
+  }
+  const m = slot - doors.slotBase - 1, q = slot - killables.slotBase - 1;
+  if (m >= 0 && m < doors.count) {
+    if (!doors.setDead(world, m, gone)) return;
+  } else if (q < 0 || q >= killables.count || !killables.setDead(world, q, gone)) return;
+  renderer.setBroken(slot, gone);
+  if (gone) decals.removeOwner(slot);
+}
+
+// The sandbox's side of a break (the server's Game.brokeSlot): its target and
+// killtarget, then its explosion, which may break more.
+function brokeSlot(slot, act) {
+  const b = breakables;
+  if (b.target[slot] || b.kill[slot]) mapLogic.fireAt(tickCount, b.target[slot], act, b.delay[slot], -1, b.kill[slot]);
+  const m = b.magnitude[slot];
+  if (m <= 0) return;
+  const c = b.center(slot, blastAt);
+  localGrenades.addEffect(FX_BLAST, Math.min(255, Math.round(m)), -1, 0, c[0], c[1], c[2]);
+  const d = blastDamage(m, m * EXPLODE_RANGE, Math.hypot(ps.f[PS_ORIGIN] - c[0], ps.f[PS_ORIGIN + 1] - c[1], ps.f[PS_ORIGIN + 2] - c[2]));
+  if (d > 0 && player.health > 0) {
+    traceHull(world, HULL_POINT, c[0], c[1], c[2], ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1], ps.f[PS_ORIGIN + 2], blastTrace);
+    if (blastTrace.fraction >= 1) sandboxHurt(0, d);
+  }
+  sandboxBlastBreakables(c[0], c[1], c[2], m, m * EXPLODE_RANGE);
+}
+
+function sandboxBlastBreakables(x, y, z, damage, radius) {
+  const first = sandboxBroke.length;
+  breakables.blast(world, x, y, z, damage, radius, sandboxBroke);
+  for (const s of sandboxBroke.splice(first)) {
+    breakVisual(s);
+    brokeSlot(s, sandboxAct);
+  }
+}
+const blastAt = new Float64Array(3);
+const blastTrace = new Trace();
 
 // --- Snapshots -------------------------------------------------------------------
 
@@ -733,11 +795,7 @@ function applySnapshot() {
     while (diff) {
       const bit = 31 - Math.clz32(diff);
       diff &= ~(1 << bit);
-      const slot = i * 32 + bit;
-      const broken = (B[base + i] & (1 << bit)) !== 0;
-      if (!breakables.setBroken(world, slot, broken)) continue;
-      if (broken) breakVisual(slot);
-      else renderer.setBroken(slot, false);
+      applySlot(i * 32 + bit, (B[base + i] & (1 << bit)) !== 0);
     }
   }
 
@@ -776,9 +834,9 @@ function applyMovers(mv) {
     const k = mv.mover[m];
     if (k >= doors.count) continue;
     moverSeen[k] = 1;
-    doors.setState(k, mv.from[m], mv.dir[m], mv.sign[m], mv.t0[m]);
+    doors.setState(k, mv.from[m], mv.dir[m], mv.sign[m], mv.t0[m], mv.leg[m], mv.goal[m]);
   }
-  for (let k = 0; k < doors.count; k++) if (!moverSeen[k]) doors.setState(k, 0, 0, 1, 0);
+  for (let k = 0; k < doors.count; k++) if (!moverSeen[k]) doors.setState(k, 0, 0, 1, 0, 0, 0);
 }
 
 // A door starting or stopping: its sound; one that starts moving loses its decals.
@@ -792,7 +850,7 @@ function moverSounds() {
     if (was === 0) {
       decals.removeOwner(doors.slot(k));
       const left = dir > 0 ? 1 - doors.from[k] : doors.from[k];
-      sounds.doorMove(x, y, z, left / doors.rate[k] * TICK_DT, doors.kind[k] === MOVER_ROTATING);
+      sounds.doorMove(x, y, z, left / doors.rateOf(k) * TICK_DT, doors.turns[k] !== 0);
     } else if (dir === 0) {
       sounds.doorStop(x, y, z);
     }
@@ -809,7 +867,16 @@ function sandboxDoors(t, alive) {
   sandboxBodies.length = 0;
   if (alive && !noclip) sandboxBodies.push(ps);
   mapLogic.update(t, alive ? sandboxActs : []);
-  doors.update(world, t, sandboxBodies, sandboxFire);
+  doors.update(world, t, sandboxBodies, sandboxFire, sandboxHurt);
+  for (let i = 0; i < 8; i++) { // what a killtarget took away
+    let diff = mapLogic.removed[i] ^ sandboxRemoved[i];
+    sandboxRemoved[i] = mapLogic.removed[i];
+    while (diff) {
+      const bit = 31 - Math.clz32(diff);
+      diff &= ~(1 << bit);
+      applySlot(i * 32 + bit, (mapLogic.removed[i] & (1 << bit)) !== 0);
+    }
+  }
 }
 
 function sandboxTouches(t, buttons) {
@@ -817,12 +884,13 @@ function sandboxTouches(t, buttons) {
     const k = doors.ofEnt(touched[i]);
     if (k >= 0) doors.touch(k, t, sandboxAct);
   }
-  if (!(buttons & IN_USE) || (lastUseButtons & IN_USE)) return;
+  if (!(buttons & IN_USE)) return;
+  const held = (lastUseButtons & IN_USE) !== 0; // only a wheel keeps turning
   const f = ps.f, cp = Math.cos(angles[0] * DEG);
   const k = doors.findUse(world, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2], f[PS_ORIGIN], f[PS_ORIGIN + 1],
     f[PS_ORIGIN + 2] + eyeOffset(ps), cp * Math.cos(angles[1] * DEG), cp * Math.sin(angles[1] * DEG),
     -Math.sin(angles[0] * DEG));
-  if (k >= 0) doors.use(k, t, sandboxAct);
+  if (k >= 0 && (!held || doors.continuous(k))) doors.use(k, t, sandboxAct);
 }
 
 // Other players' shots and the kill feed.

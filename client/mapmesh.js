@@ -9,7 +9,7 @@ import {
   faceVertex, modelFirstFace, modelNumFaces, entityModelIndex, parseVec3,
 } from '../shared/bsp.js';
 import { breakableEntities, MAX_BREAKABLES } from '../shared/breakables.js';
-import { moverEntities } from '../shared/doors.js';
+import { moverEntities, killableEntities } from '../shared/doors.js';
 import { classify, isSkipped, MAT, FLAG_ALPHATEST, FLAG_ENTITY } from '../shared/materials.js';
 import { withOriginalColor } from './texcolors.js';
 
@@ -71,7 +71,10 @@ function collectModels(bsp) {
   const origin = new Float32Array(3);
   const breakables = breakableEntities(bsp);
   const slotOf = new Map(breakables.map((bi, k) => [bi, k + 1]));
-  moverEntities(bsp, breakables.length).forEach((bi, k) => slotOf.set(bi, breakables.length + 1 + k));
+  const movers = moverEntities(bsp, breakables.length);
+  movers.forEach((bi, k) => slotOf.set(bi, breakables.length + 1 + k));
+  const base = breakables.length + movers.length; // then what a killtarget can remove
+  killableEntities(bsp, base).forEach((bi, k) => slotOf.set(bi, base + 1 + k));
   for (let ei = 0; ei < bsp.entities.length; ei++) {
     const e = bsp.entities[ei];
     const m = entityModelIndex(e);

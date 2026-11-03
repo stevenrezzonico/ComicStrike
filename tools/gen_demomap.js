@@ -1,8 +1,9 @@
 // Builds maps/de_playground.bsp, ComicStrike's own test map (the demo mode's playground):
-// a walled courtyard under the sky with every kind of map element to try out: stairs,
-// a ladder tower, breakable crates and glass, a conveyor belt, a metal yard, a shallow
-// pool with a deeper end, sliding / swinging / button doors, two bomb sites and both
-// spawns with buy zones.
+// a walled courtyard under the sky with every kind of map element to try out: stairs
+// and a lift, a ladder tower, breakable crates and glass and an exploding barrel, a
+// conveyor belt, a metal yard with a cart on rails and a shutter a valve works, a
+// shallow pool with a deeper end, sliding / swinging / button doors, two bomb sites
+// (B's crates blow up with the bomb) and both spawns with buy zones.
 //
 // deno run --allow-write=maps tools/gen_demomap.js
 //
@@ -113,13 +114,20 @@ brushEntity({ classname: 'func_buyzone', team: '1' }, [box(-X, -Y, 0, -1100, Y, 
 brushEntity({ classname: 'func_buyzone', team: '2' }, [box(1100, -Y, 0, X, Y, 128, NONE)]);
 
 // Bomb sites A (north-west) and B (north-east), with crates to plant behind.
+// B's stacked crates are breakables only the bomb sets off (spawnflags 1: bullets do
+// nothing; the site's target names them), each exploding, as de_dust2's do.
 brushEntity({ classname: 'func_bomb_target' }, [box(-1000, 480, 0, -560, 960, 128, NONE)]);
-brushEntity({ classname: 'func_bomb_target' }, [box(560, 480, 0, 1000, 960, 128, NONE)]);
+brushEntity({ classname: 'func_bomb_target', target: 'siteb' }, [box(560, 480, 0, 1000, 960, 128, NONE)]);
 const crate = (x, y, z, s, tex = 'crate08') => box(x, y, z, x + s, y + s, z + s, tex);
 world.push(
   crate(-900, 820, 0, 64), crate(-836, 820, 0, 64), crate(-900, 820, 64, 64), crate(-700, 560, 0, 96),
-  crate(700, 820, 0, 64), crate(764, 820, 0, 64), crate(764, 820, 64, 64), crate(620, 560, 0, 96),
+  crate(620, 560, 0, 96),
 );
+const breakable = (keys, b) => brushEntity({ classname: 'func_breakable', ...keys }, [b]);
+const bombCrate = { targetname: 'siteb', spawnflags: '1', material: '1', health: '1', explodemagnitude: '100' };
+breakable(bombCrate, crate(700, 820, 0, 64));
+breakable(bombCrate, crate(764, 820, 0, 64));
+breakable(bombCrate, crate(764, 820, 64, 64));
 
 // Stairs: eight 16-unit steps up to a platform 128 high.
 for (let k = 0; k < 8; k++) {
@@ -127,15 +135,21 @@ for (let k = 0; k < 8; k++) {
     { top: 'crete4_stp01', bottom: null, side: k === 7 ? 'crete3_wall02' : 'crete4_stp01' }));
 }
 world.push(box(-720, -960, 0, -600, -760, 128, { top: 'crete4_stp01', bottom: null, side: 'crete3_wall02' }));
+// A lift beside the platform: it rests 2 units proud of the floor and rises 128 when
+// stood on (func_plat: drawn at its top, GoldSrc starts it at the bottom).
+brushEntity({ classname: 'func_plat', height: '128', speed: '100' },
+  [box(-600, -960, 114, -520, -880, 130, { top: 'duct_flr01', bottom: 'steel', side: 'steel' })]);
 
 // Ladder tower: 320 high, the ladder up its north face.
 world.push(box(-440, -960, 0, -312, -832, 320, 'crete3_wall02'));
 world.push(box(-408, -832, 0, -344, -828, 320, { top: '{ladder1', bottom: null, side: '{ladder1', ny: null }));
 brushEntity({ classname: 'func_ladder' }, [box(-408, -828, 0, -344, -812, 336, NONE)]);
 
-// Breakables: wooden crates, a metal crate, a glass pane, one that never breaks.
-const breakable = (keys, b) => brushEntity({ classname: 'func_breakable', ...keys }, [b]);
+// Breakables: wooden crates, a metal crate, a glass pane, one that never breaks, and a
+// barrel that explodes (explodemagnitude: 120 damage at its middle falling off to
+// nothing 300 units out; the wooden crates beside it go with it).
 const woodCrate = { top: 'mltrycrtetp', bottom: 'mltrycrtetp', side: 'mltrycrtesd' };
+breakable({ material: '2', health: '60', explodemagnitude: '120' }, box(-300, -560, 0, -252, -512, 56, 'bcrate02'));
 breakable({ material: '1', health: '40' }, box(-240, -560, 0, -176, -496, 64, woodCrate));
 breakable({ material: '1', health: '40' }, box(-240, -560, 64, -176, -496, 128, woodCrate));
 breakable({ material: '1', health: '40' }, box(-160, -560, 0, -112, -512, 48, woodCrate));
@@ -155,6 +169,24 @@ brushEntity({ classname: 'func_conveyor', speed: '160', angles: '0 0 0' },
 
 // Metal yard: steel plates and a metal shed with an open side.
 world.push(box(280, -760, 0, 920, -400, 2, { top: 'duct_flr01', bottom: null, side: 'steel' }));
+// A cart riding round four path_corners (func_train: its center goes corner to corner at
+// its speed, pausing 2 s at the first; it carries whoever stands on it and shoves
+// whoever is in its way).
+brushEntity({ classname: 'func_train', target: 'cart1', speed: '100', dmg: '2' },
+  [box(308, -732, 2, 372, -668, 18, { top: 'stripes2', bottom: 'steel', side: 'steel' })]);
+point({ classname: 'path_corner', targetname: 'cart1', target: 'cart2', origin: '340 -700 10', wait: '2' });
+point({ classname: 'path_corner', targetname: 'cart2', target: 'cart3', origin: '660 -700 10' });
+point({ classname: 'path_corner', targetname: 'cart3', target: 'cart4', origin: '660 -440 10' });
+point({ classname: 'path_corner', targetname: 'cart4', target: 'cart1', origin: '340 -440 10' });
+// The shed's shutter sinks into the ground (angle -2) and stays where it is sent
+// (spawnflags 32); a valve wheel on a post works it (func_rot_button turning a quarter
+// about its own axis x (GoldSrc's "rotate z" flag 64 adds to the roll), back after a
+// second, firing the shutter each time).
+brushEntity({ classname: 'func_door', targetname: 'shutter', angle: '-2', speed: '120', wait: '-1', lip: '8', spawnflags: '32' },
+  [box(720, -744, 2, 728, -576, 192, 'out_w8dr1')]);
+world.push(box(736, -804, 0, 756, -780, 80, 'steel'));
+brushEntity({ classname: 'func_rot_button', target: 'shutter', origin: '734 -792 48', spawnflags: '64', distance: '90',
+  speed: '90', wait: '1' }, [box(732, -804, 36, 736, -780, 60, 'lab1_comp3d')]);
 world.push(
   box(720, -760, 2, 920, -744, 192, 'metal_wall05b'),
   box(904, -744, 2, 920, -560, 192, 'metal_wall05b'),

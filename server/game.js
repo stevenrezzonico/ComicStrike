@@ -9,8 +9,8 @@ import { parseVec3 } from '../shared/bsp.js';
 import { TICK_RATE, TICK_DT } from '../shared/constants.js';
 import { ARMS_RACE, DEMOLITION, armLevel } from '../shared/progression.js';
 import { CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, HULL_STAND, HULL_POINT } from '../shared/trace.js';
-import { Breakables } from '../shared/breakables.js';
-import { Doors, MapLogic } from '../shared/doors.js';
+import { Breakables, EXPLODE_RANGE, blastDamage } from '../shared/breakables.js';
+import { Doors, MapLogic, Killables, BLAST } from '../shared/doors.js';
 import { touched, touchedCount } from '../shared/pmove.js';
 import { PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, FL_ONGROUND, FL_DUCKING, eyeOffset } from '../shared/pmove.js';
 import {
@@ -19,7 +19,7 @@ import {
   ACTION_DEFUSE, SLOT_PRIMARY, SLOT_SECONDARY,
 } from '../shared/weapons.js';
 import { HitTargets, HITGROUP_HEAD, HITGROUP_CHEST, HITGROUP_LEGS, feetOffset } from '../shared/hitgroups.js';
-import { Grenades } from '../shared/grenades.js';
+import { Grenades, FX_BLAST } from '../shared/grenades.js';
 import {
   Hostages, RescueZones, MAX_HOSTAGES, HOSTAGES_PER_ROUND, PICKUP_TIME, HS_IDLE, HS_CARRIED, HS_RESCUED, HS_DEAD,
 } from '../shared/hostages.js';
@@ -229,10 +229,15 @@ export class Game {
     this.world.surfaces = new SurfaceMap(bsp);
     this.breakables = new Breakables(bsp, this.world);
     this.doors = new Doors(bsp, this.world, this.breakables.count);
-    this.logic = new MapLogic(bsp, this.doors);
+    this.killables = new Killables(bsp, this.world, this.breakables.count + this.doors.count);
+    this.logic = new MapLogic(bsp, this.doors, this.world, this.breakables, this.killables);
+    this.logic.onBreak = (slot, act) => this.breakSlot(slot, act);
     this.doorBodies = []; // living players' PlayerStates, refilled every tick
+    this.doorClients = []; // the clients they belong to (a blocking mover hurts them)
     this.doorActs = []; // and where they stand ({ x, y, z, yaw }: trigger activators)
-    this.fireTarget = (name, act) => this.logic.fireAt(this.tick, name, act, 0);
+    this.fireTarget = (name, act, kill = '', src = -1) => this.logic.fireAt(this.tick, name, act, 0, src, kill);
+    this.hurtBlocked = (i, dmg) => this.hurtBy(this.doorClients[i], dmg, null, 0);
+    this.blastOut = []; // slots a blast broke
     this.buyZones = new BuyZones(bsp);
     this.spawns = { [TEAM_T]: [], [TEAM_CT]: [] };
     const o = new Float32Array(3);
@@ -331,6 +336,7 @@ export class Game {
       pitch: (i) => this.clients[i].pitch,
       yaw: (i) => this.clients[i].yaw,
       hurt: (i, damage, weapon, owner, team) => this.grenadeHurt(this.clients[i], damage, weapon, owner, team),
+      blast: (x, y, z, damage, radius, _weapon, owner) => this.blastBreakables(x, y, z, damage, radius, this.clients[owner] || null),
       flash: (i, seconds) => {
         const c = this.clients[i];
         if (seconds > c.flashLeft) {
@@ -705,7 +711,13 @@ export class Game {
     }
     // E on a door or button, else on a weapon on the ground: swap it for the one in its
     // slot (not while defusing).
-    if ((c.buttons & IN_USE) && !c.useHeld && !p.ws.f[WS_ACTION] && !this.useDoor(c)) this.useItem(c);
+    if ((c.buttons & IN_USE) && !p.ws.f[WS_ACTION]) {
+      if (!c.useHeld) {
+        if (!this.useDoor(c)) this.useItem(c);
+      } else {
+        this.useDoor(c, true); // a wheel turns while +use is held
+      }
+    }
     c.useHeld = (c.buttons & IN_USE) !== 0;
     this.useHostage(c);
     if (events & WEV_PLANTED) this.plantBomb(c);
@@ -735,6 +747,7 @@ export class Game {
       const victim = im.player[i] >= 0 ? this.clients[im.player[i]] : null;
       if (!victim) {
         ev.addShot(shooter.id, SHOT_IMPACT, x, y, z, nx, ny, nz, im.owner[i]);
+        if (im.broke[i]) this.brokeSlot(im.broke[i], this.actOf(shooter), shooter);
         continue;
       }
       if (this.tick < victim.immuneUntil) continue; // spawn protection: the bullet does nothing
@@ -924,6 +937,7 @@ export class Game {
   startRound(fresh) {
     this.breakables.reset(this.world);
     this.doors.reset(this.world);
+    this.killables.reset(this.world);
     this.logic.reset(this.tick);
     this.placing = true;
     for (const c of this.clients) if (c) c.placed = false;
@@ -1302,15 +1316,66 @@ export class Game {
   // the tick's commands run against them as the clients predict.
   updateDoors() {
     if (!this.doors.count && !this.logic.triggers.length) return;
-    const bodies = this.doorBodies, acts = this.doorActs;
-    bodies.length = acts.length = 0;
+    const bodies = this.doorBodies, acts = this.doorActs, owners = this.doorClients;
+    bodies.length = acts.length = owners.length = 0;
     for (const c of this.clients) {
-      if (!c || !c.joined || !c.alive) continue;
+      if (!c || !c.joined || !c.alive || !c.placed) continue; // a joiner waits at the origin until its spawn
       bodies.push(c.player.ps);
+      owners.push(c);
       acts.push(this.actOf(c));
     }
     this.logic.update(this.tick, acts);
-    this.doors.update(this.world, this.tick, bodies, this.fireTarget);
+    this.doors.update(this.world, this.tick, bodies, this.fireTarget, this.hurtBlocked);
+  }
+
+  // Damage from the map itself (a crushing mover, an exploding breakable): armor as a
+  // chest hit. `by`: the client whose shot set it off (the kill feed's killer), else the
+  // victim's own doing.
+  hurtBy(c, damage, by, weapon) {
+    if (!c || !c.alive || this.tick < c.immuneUntil) return;
+    applyDamage(c.player, damage, BLAST, HITGROUP_CHEST);
+    if (c.player.health <= 0) this.kill(by && by.joined ? by : c, c, weapon, false);
+  }
+
+  // A breakable fired by name (a trigger, a button, the bomb site's target: CBreakable::Use).
+  breakSlot(slot, act) {
+    if (this.breakables.setBroken(this.world, slot, true)) this.brokeSlot(slot, act, null);
+  }
+
+  // Breakable `slot` just broke: its target fires (after its delay) and its killtarget
+  // goes, and it explodes by its explodemagnitude (CBreakable::Die), which may break
+  // more (the chain runs through here again).
+  brokeSlot(slot, act, by) {
+    const b = this.breakables;
+    if (b.target[slot] || b.kill[slot]) this.logic.fireAt(this.tick, b.target[slot], act, b.delay[slot], -1, b.kill[slot]);
+    const m = b.magnitude[slot];
+    if (m <= 0) return;
+    b.center(slot, this.landing);
+    const x = this.landing[0], y = this.landing[1], z = this.landing[2];
+    this.grenades.addEffect(FX_BLAST, Math.min(255, Math.round(m)), by ? by.id : -1, 0, x, y, z);
+    this.blast(x, y, z, m, m * EXPLODE_RANGE, by);
+  }
+
+  // An explosion of the map's (RadiusDamage): `damage` at (x, y, z) falling off to
+  // nothing at `radius`, blocked by walls, on every living player and breakable.
+  blast(x, y, z, damage, radius, by) {
+    for (const c of this.clients) {
+      if (!c || !c.joined || !c.alive) continue;
+      const f = c.player.ps.f, px = f[PS_ORIGIN], py = f[PS_ORIGIN + 1], pz = f[PS_ORIGIN + 2];
+      const d = blastDamage(damage, radius, Math.hypot(px - x, py - y, pz - z));
+      if (d <= 0) continue;
+      traceHull(this.world, HULL_POINT, x, y, z, px, py, pz, this.bombTrace);
+      if (this.bombTrace.fraction < 1) continue;
+      this.hurtBy(c, d, by, 0);
+    }
+    this.blastBreakables(x, y, z, damage, radius, by);
+  }
+
+  blastBreakables(x, y, z, damage, radius, by) {
+    const out = this.blastOut, first = out.length;
+    this.breakables.blast(this.world, x, y, z, damage, radius, out);
+    const broke = out.splice(first);
+    for (const s of broke) this.brokeSlot(s, null, by);
   }
 
   // The living players as bodies the tick's commands collide with (shared/trace.js): each
@@ -1338,15 +1403,16 @@ export class Game {
     return a;
   }
 
-  // +use on a usable door or button in reach; true if one was used.
-  useDoor(c) {
+  // +use on a usable door or button in reach; true if one was used. `held`: +use is
+  // still down from an earlier tick (only a wheel keeps turning).
+  useDoor(c, held = false) {
     const d = this.doors;
     if (!d.count) return false;
     const f = c.player.ps.f, x = f[PS_ORIGIN], y = f[PS_ORIGIN + 1], z = f[PS_ORIGIN + 2];
     const cp = Math.cos(c.pitch * Math.PI / 180);
     const k = d.findUse(this.world, x, y, z, x, y, z + eyeOffset(c.player.ps), cp * Math.cos(c.yaw * Math.PI / 180),
       cp * Math.sin(c.yaw * Math.PI / 180), -Math.sin(c.pitch * Math.PI / 180));
-    if (k < 0) return false;
+    if (k < 0 || (held && !d.continuous(k))) return false;
     d.use(k, this.tick, this.actOf(c));
     return true;
   }
@@ -1541,7 +1607,10 @@ export class Game {
       applyDamage(c.player, damage, c4, HITGROUP_CHEST);
       if (c.player.health <= 0) this.kill(c, c, WEAPON_ID.c4, false);
     }
-    // CS: the site fires its target (de_torn blows a door open).
+    // Breakables in reach shatter (approx.: the players' falloff is a gaussian over 3.5
+    // radii; here straight to nothing at 1.75 radii).
+    this.blastBreakables(b.x, b.y, b.z + 1, this.bombSites.radius, this.bombSites.radius * 1.75, null);
+    // CS: the site fires its target (de_torn blows a door open, de_dust2's crates at B).
     const site = this.bombSites.siteAt(b.x, b.y, b.z, 16, 16, 16);
     if (site >= 0 && this.bombSites.targets[site]) this.fireTarget(this.bombSites.targets[site], null);
     console.log('bomb exploded');
@@ -1705,8 +1774,9 @@ export class Game {
     }
     const words = ring.broken;
     words.fill(0, k * 8, k * 8 + 8);
-    const b = this.breakables;
+    const b = this.breakables, removed = this.logic.removed;
     for (let s = 1; s <= b.count; s++) if (b.broken[s]) words[k * 8 + (s >> 5)] |= 1 << (s & 31);
+    for (let i = 0; i < 8; i++) words[k * 8 + i] |= removed[i]; // killtargeted movers and walls
 
     for (const c of this.clients) {
       if (!c || !c.joined || c.bot) continue;

@@ -29,8 +29,9 @@
 //            round: u8 phase, u32 ticksLeft, u8 scoreT, u8 scoreCT, u8 roundInfo, u8 round, u8 mode,
 //                   u8 serial (+1 at every round start, restarts too: clients clear the marks),
 //            bomb: u8 state, [f32 x, y, z, u16 ticksLeft if state >= BOMB_DROPPED],
-//            movers (shared/doors.js) not closed at rest: u8 n, n x { u8 mover, u8 bits
-//                        (dir + 1 | sign < 0 << 2), f32 from, u32 t0 },
+//            movers (shared/doors.js) not at rest where they spawned: u8 n, n x { u8 mover,
+//                        u8 bits (dir + 1 | sign < 0 << 2 | more << 3), f32 from, u32 t0,
+//                        [u8 leg, f32 goal if more: a train's leg, a momentary door's goal] },
 //            own player: u8 health, u8 armor (bit 7: helmet), u8 spawnCount, u8 team, f32 spawnYaw,
 //                        u16 money, u8 ownFlags (OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE),
 //                        u8 flash left, u8 flash length (1/32 s: flashbang blindness),
@@ -53,7 +54,7 @@ import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 import { MAX_MOVERS } from './doors.js';
 
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -745,6 +746,8 @@ export class MoverStates {
     this.sign = new Int8Array(MAX_MOVERS);
     this.from = new Float32Array(MAX_MOVERS);
     this.t0 = new Int32Array(MAX_MOVERS);
+    this.leg = new Uint8Array(MAX_MOVERS);
+    this.goal = new Float32Array(MAX_MOVERS);
   }
 }
 
@@ -781,11 +784,16 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
   if (doors) {
     let n = 0;
     for (let m = 0; m < doors.count; m++) {
-      if (doors.atBottom(m)) continue;
+      if (doors.idle(m)) continue;
+      const more = doors.leg[m] !== 0 || doors.goal[m] !== 0;
       w.u8v(m);
-      w.u8v((doors.dir[m] + 1) | (doors.sign[m] < 0 ? 4 : 0));
+      w.u8v((doors.dir[m] + 1) | (doors.sign[m] < 0 ? 4 : 0) | (more ? 8 : 0));
       w.f32v(doors.from[m]);
       w.u32v(doors.t0[m]);
+      if (more) {
+        w.u8v(doors.leg[m]);
+        w.f32v(doors.goal[m]);
+      }
       n++;
     }
     w.u8[moversAt] = n;
@@ -960,6 +968,8 @@ export function readSnapshot(r, ring, own, ev = null) {
     mv.sign[m] = bits & 4 ? -1 : 1;
     mv.from[m] = r.f32v();
     mv.t0[m] = r.u32v();
+    mv.leg[m] = bits & 8 ? r.u8v() : 0;
+    mv.goal[m] = bits & 8 ? r.f32v() : 0;
   }
   own.health = r.u8v();
   const armor = r.u8v();

@@ -41,7 +41,8 @@ export const FX_SMOKE = 3;
 export const FX_FIRE = 4;
 export const FX_DECOY = 5;
 export const FX_FIZZLE = 6; // a molotov burst in the air or in smoke
-const FX_LIFE = [0, 1, 0.5, SMOKE_TIME, FIRE_TIME, DECOY_TIME, 0.6];
+export const FX_BLAST = 7; // an exploding breakable (its weapon byte: the magnitude, at most 255)
+const FX_LIFE = [0, 1, 0.5, SMOKE_TIME, FIRE_TIME, DECOY_TIME, 0.6, 1];
 
 // Smoke radius `age` seconds after it popped: grows, holds, shrinks away.
 export function smokeRadius(age) {
@@ -274,6 +275,7 @@ export class Grenades {
     const weapon = this.weapon[k], owner = this.owner[k], team = this.team[k];
     if (kind === 'he') {
       this.addEffect(FX_HE, weapon, owner, team, x, y, z);
+      if (targets.blast) targets.blast(x, y, z + 1, HE_DAMAGE, HE_RADIUS, weapon, owner, team); // breakables
       for (let i = 0; i < targets.count; i++) {
         if (!targets.alive(i)) continue;
         // Measured to the feet (CS:GO's player origin): one at a target's feet does 98 (a

@@ -82,6 +82,10 @@ Deno.test('every kind compiles into its entity: doors, button, breakable, water,
   add('func_conveyor', [0, 500, 0, 300, 560, 8], { top: 'scroll_conv', bottom: null, side: 'steel' });
   add('func_hostage_rescue', [700, -700, 0, 960, -500, 128], { top: null, bottom: null, side: null });
   add('func_illusionary', [-700, -700, 120, -600, -600, 136]);
+  add('func_rot_button', [-260, 340, 36, -256, 364, 60], undefined, { target: 'gate' });
+  add('func_plat', [100, -200, 112, 180, -120, 128]);
+  add('momentary_door', [-200, 500, 0, -184, 628, 128], undefined, { targetname: 'hatch' });
+  add('momentary_rot_button', [-260, 540, 36, -256, 564, 60], undefined, { target: 'hatch' });
   p.points.push({ id: id++, kind: 'hostage_entity', o: [500, 0, 0], yaw: 90 });
   assert.deepEqual(checkProject(p).errors, []);
   const bsp = compileToBsp(p);
@@ -90,8 +94,10 @@ Deno.test('every kind compiles into its entity: doors, button, breakable, water,
   const rot = bsp.entities.find((e) => e.classname === 'func_door_rotating');
   assert.equal(rot.origin, hingeOf(p.brushes.find((b) => b.kind === 'func_door_rotating')).join(' '), 'hinged at its end');
   assert.equal(rot.hinge, undefined, 'the editor\'s own key stays out');
+  const valve = bsp.entities.find((e) => e.classname === 'func_rot_button');
+  assert.equal(valve.origin, '-258 352 48', 'a valve turns about its middle');
   const game = quiet(() => new Game('my_map', bsp, { rounds: false }));
-  assert.equal(game.doors.count, 3, 'two doors and a button');
+  assert.equal(game.doors.count, 7, 'two doors, a button, a valve, a lift, a follower door and its wheel');
   const world = CollisionWorld.fromBSP(bsp);
   assert.equal(pointContents(world, 500, 500, 10), -3, 'water');
   assert.equal(game.hostages.spots.length, 1);

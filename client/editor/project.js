@@ -74,6 +74,14 @@ export const KINDS = {
     help: 'hinge: start or end of the door\'s long side; distance in degrees (negative: the other way)' },
   func_button: { label: 'Button', keys: { target: '', speed: '40', wait: '1', lip: '2', angle: '0' },
     help: 'target: the targetname of the door it opens; angle: the way it is pushed in' },
+  func_rot_button: { label: 'Valve', keys: { target: '', distance: '90', speed: '90', wait: '1', spawnflags: '64' },
+    help: 'a wheel turning distance degrees about its middle when used (spawnflags 64: about x, 128: about y, 0: about z), firing its target at the end' },
+  func_plat: { label: 'Lift', keys: { height: '128', speed: '150' },
+    help: 'drawn at its top, it rests height lower and rises when stood on, coming down 3 s later' },
+  momentary_door: { label: 'Follower door', keys: { angle: '-1', speed: '100', lip: '0', targetname: '' },
+    help: 'moves to wherever the wheel that targets it stands; angle: -1 up, -2 down, else a direction in degrees' },
+  momentary_rot_button: { label: 'Wheel', keys: { target: '', distance: '180', speed: '90', returnspeed: '0', spawnflags: '64' },
+    help: 'turns while use is held, its follower door following; returnspeed with spawnflags 80 brings it back when let go' },
   func_breakable: { label: 'Breakable', keys: { material: '1', health: '40' },
     help: 'material: 0 glass, 1 wood, 2 metal, 7 unbreakable' },
   func_conveyor: { label: 'Conveyor', keys: { speed: '160', angles: '0 0 0' },
@@ -412,6 +420,9 @@ export function projectToBuilder(p) {
       const keys = { classname: cls };
       for (const [k, v] of Object.entries(list[0].keys)) if (v !== '' && k !== 'hinge') keys[k] = v;
       if (cls === 'func_door_rotating') keys.origin = hingeOf(b).join(' ');
+      if (cls === 'func_rot_button' || cls === 'momentary_rot_button') { // turning about the shape's middle
+        keys.origin = [0, 1, 2].map((a) => (b.b[a] + b.b[a + 3]) / 2).join(' ');
+      }
       if (cls === 'func_water') Object.assign(keys, { skin: '-3', WaveHeight: '0' });
       map.brushEntity(keys, list.map((pc) => pc.brush), KINDS[cls].water ? { contents: CONTENTS_WATER } : {});
     }

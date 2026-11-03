@@ -1,10 +1,12 @@
 // GoldSrc func_breakable: brush entities with health that shatter when damaged.
 // Each breakable gets a slot (1..MAX_BREAKABLES, 0 = not breakable) assigned in BSP
 // entity order, so the client mesh and the simulation agree without sharing objects.
-// State is flat typed arrays, run identically by client and server.
+// State is flat typed arrays, run identically by client and server. What a break sets
+// off (its target, its explosion: `explodemagnitude`) is the game's (server/game.js,
+// the sandbox), which hears of every break through its slot.
 
 import { entityModelIndex } from './bsp.js';
-import { ENT_SOLID, ENT_NONE } from './trace.js';
+import { ENT_SOLID, ENT_NONE, HULL_POINT, Trace, traceHull } from './trace.js';
 
 export const SF_BREAK_TRIGGER_ONLY = 1; // only a trigger breaks it (CS bomb-site crates)
 export const SF_BREAK_CROWBAR = 256; // one melee hit breaks it
@@ -22,6 +24,11 @@ export const MAT_ROCKS = 8;
 
 export const MAX_BREAKABLES = 255; // slots fit in one vertex byte
 
+// An exploding breakable's blast (env_explosion -> RadiusDamage): `explodemagnitude` of
+// damage at its center, falling off in a straight line to nothing at EXPLODE_RANGE times
+// that, blocked by walls.
+export const EXPLODE_RANGE = 2.5;
+
 // bsp.entities indices of the breakables, in slot order (slot = position + 1).
 export function breakableEntities(bsp) {
   const out = [];
@@ -29,6 +36,11 @@ export function breakableEntities(bsp) {
     if (e.classname === 'func_breakable' && entityModelIndex(e) > 0 && out.length < MAX_BREAKABLES) out.push(i);
   });
   return out;
+}
+
+// HL RadiusDamage's falloff: `damage` at the blast, nothing at `radius`.
+export function blastDamage(damage, radius, dist) {
+  return dist >= radius ? 0 : damage - dist * (damage / radius);
 }
 
 export class Breakables {
@@ -42,6 +54,11 @@ export class Breakables {
     this.material = new Uint8Array(n);
     this.flags = new Int32Array(n);
     this.broken = new Uint8Array(n);
+    this.magnitude = new Float32Array(n); // explodemagnitude: its blast's damage (0: none)
+    this.delay = new Float32Array(n); // seconds before its target fires
+    this.name = ['']; // targetname per slot
+    this.target = [''];
+    this.kill = ['']; // killtarget
     this.mins = new Float32Array(n * 3); // world-space bounds
     this.maxs = new Float32Array(n * 3);
     this.slotOfEnt = new Uint8Array(world.ents.length);
@@ -51,6 +68,9 @@ export class Breakables {
     list.forEach((bi, k) => {
       const slot = k + 1;
       const e = bsp.entities[bi];
+      this.name.push(e.targetname || '');
+      this.target.push(e.target || '');
+      this.kill.push(e.killtarget || '');
       const ent = entOfBsp.get(bi);
       if (ent === undefined) return;
       const ce = world.ents[ent];
@@ -60,6 +80,8 @@ export class Breakables {
       this.maxHealth[slot] = +(e.health || 0);
       this.material[slot] = +(e.material || MAT_GLASS);
       this.flags[slot] = +(e.spawnflags || 0);
+      this.magnitude[slot] = Math.max(0, +(e.explodemagnitude || 0));
+      this.delay[slot] = Math.max(0, +(e.delay || 0));
       for (let a = 0; a < 3; a++) {
         const o = a === 0 ? ce.ox : a === 1 ? ce.oy : ce.oz;
         this.mins[slot * 3 + a] = ce.mins[a] + o;
@@ -97,12 +119,43 @@ export class Breakables {
   damage(world, ent, amount, melee = false) {
     const slot = ent > 0 && ent < this.slotOfEnt.length ? this.slotOfEnt[ent] : 0;
     if (!this.canTakeDamage(slot)) return 0;
+    return this.hurt(world, slot, amount, melee);
+  }
+
+  hurt(world, slot, amount, melee = false) {
     if (melee && (this.flags[slot] & SF_BREAK_CROWBAR)) this.health[slot] = 0;
     else this.health[slot] -= amount;
     if (this.health[slot] > 0) return 0;
     this.health[slot] = 0;
     this.broken[slot] = 1;
-    world.ents[ent].kind = ENT_NONE;
+    world.ents[this.ent[slot]].kind = ENT_NONE;
     return slot;
   }
+
+  // The center of slot s's bounds into out.
+  center(s, out) {
+    for (let a = 0; a < 3; a++) out[a] = (this.mins[s * 3 + a] + this.maxs[s * 3 + a]) / 2;
+    return out;
+  }
+
+  // A blast at (x, y, z): every breakable in `radius` with nothing solid between the
+  // blast and its center takes blastDamage (HL RadiusDamage; the ones only a trigger
+  // breaks are left alone). The slots it broke are pushed to `out`; returns their number.
+  blast(world, x, y, z, damage, radius, out) {
+    let n = 0;
+    for (let s = 1; s <= this.count; s++) {
+      if (!this.canTakeDamage(s)) continue;
+      this.center(s, blastCenter);
+      const dist = Math.hypot(blastCenter[0] - x, blastCenter[1] - y, blastCenter[2] - z);
+      const d = blastDamage(damage, radius, dist);
+      if (d <= 0) continue;
+      traceHull(world, HULL_POINT, x, y, z, blastCenter[0], blastCenter[1], blastCenter[2], blastTrace);
+      if (blastTrace.fraction < 1 && blastTrace.ent !== this.ent[s]) continue; // a wall between
+      if (this.hurt(world, s, d)) out.push(s), n++;
+    }
+    return n;
+  }
 }
+
+const blastCenter = new Float64Array(3);
+const blastTrace = new Trace();
