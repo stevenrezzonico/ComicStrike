@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { parseBSP } from '../shared/bsp.js';
 import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
-import { CollisionWorld } from '../shared/trace.js';
+import { CollisionWorld, Trace, traceHull, HULL_POINT } from '../shared/trace.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
-import { giveWeapon, WEAPON_ID } from '../shared/weapons.js';
+import { giveWeapon, WEAPON_ID, WS_ZOOM, WS_GRENADES, GRENADE_IDS } from '../shared/weapons.js';
+import { FX_HE, FX_FLASH } from '../shared/grenades.js';
 import { BOMB_PLANTED } from '../shared/bomb.js';
 import { PHASE_LIVE, END_DEFUSE, END_RESCUE } from '../shared/economy.js';
 import { HS_CARRIED, HS_RESCUED } from '../shared/hostages.js';
@@ -148,9 +149,10 @@ Deno.test({ name: 'bots: a T walks from its spawn to a bomb site', ignore: !dust
 } });
 
 // A duel: a CT bot of `level` (no bomb to carry) facing a T standing 400 units away in
-// plain view on open ground at the T spawn; the bots' random seeded with `seed`. Returns
-// the seconds until the kill (20 if none) and whether it was a headshot.
-function duel(level, seed) {
+// plain view on open ground at the T spawn (`range`: [near, far] instead); the bots'
+// random seeded with `seed`; `weapon` in the bot's hands instead of what it bought.
+// Returns the seconds until the kill (20 if none) and whether it was a headshot.
+function duel(level, seed, { weapon = null, range = [350, 450], watch = null } = {}) {
   const { host, g, join, run } = setup('de_dust2');
   g.bots.random = seeded(seed);
   const target = join('target', TEAM_T);
@@ -163,7 +165,7 @@ function duel(level, seed) {
   let best = -1;
   for (let j = 0; j < nav.count; j++) {
     const d = Math.hypot(nav.x[j] - nav.x[k], nav.y[j] - nav.y[k]);
-    if (d > 350 && d < 450 && Math.abs(nav.z[j] - nav.z[k]) < 8 && nav.direct(nav.x[k], nav.y[k], nav.z[k], nav.x[j], nav.y[j], nav.z[j])) {
+    if (d > range[0] && d < range[1] && Math.abs(nav.z[j] - nav.z[k]) < 8 && nav.direct(nav.x[k], nav.y[k], nav.z[k], nav.x[j], nav.y[j], nav.z[j])) {
       best = j;
       break;
     }
@@ -173,6 +175,7 @@ function duel(level, seed) {
   teleport(target, nav.x[best], nav.y[best], nav.z[best] + 36);
   g.bots.list[0].yaw = Math.atan2(nav.y[best] - nav.y[k], nav.x[best] - nav.x[k]) * 180 / Math.PI;
   g.bots.list[0].c.yaw = g.bots.list[0].yaw;
+  if (weapon) giveWeapon(bot.player.ws, WEAPON_ID[weapon]);
   let headshot = false;
   const kill = g.kill.bind(g);
   g.kill = (killer, victim, weapon, hs) => {
@@ -180,8 +183,11 @@ function duel(level, seed) {
     kill(killer, victim, weapon, hs);
   };
   const t0 = g.tick;
-  run(64 * 20, () => !target.alive);
-  return { bot, target, seconds: (g.tick - t0) / 64, headshot };
+  run(64 * 20, () => {
+    if (watch) watch(bot);
+    return !target.alive;
+  });
+  return { bot, target, g, run, seconds: (g.tick - t0) / 64, headshot };
 }
 
 Deno.test({ name: 'bots: a hard bot kills a player standing in plain view', ignore: !dust2, fn: () => {
@@ -208,6 +214,141 @@ Deno.test({ name: 'bots: an easy bot takes much longer than a hard one and lands
   assert.ok(easy.mean > 2 * hard.mean, `easy ${easy.mean.toFixed(2)} s vs hard ${hard.mean.toFixed(2)} s`);
   assert.ok(easy.heads < hard.heads, `headshot kills: easy ${easy.heads}, hard ${hard.heads}`);
 } });
+
+Deno.test({ name: 'bots: an expert with an AWP scopes, lets the scope settle, kills at 800 and unscopes', ignore: !dust2, fn: () => {
+  let scopedTicks = 0;
+  const r = duel(3, 7, { weapon: 'awp', range: [750, 900], watch: (b) => {
+    if (b.player.ws.f[WS_ZOOM] > 0) scopedTicks++;
+  } });
+  const { bot, target, seconds, run } = r;
+  assert.ok(!target.alive && seconds < 8, `killed within 8 s (${seconds.toFixed(2)})`);
+  assert.ok(scopedTicks >= 0.3 * 64, `scoped ${scopedTicks} ticks before the shot`);
+  run(64 * 3, () => bot.player.ws.f[WS_ZOOM] === 0);
+  assert.equal(bot.player.ws.f[WS_ZOOM], 0, 'unscoped once the fight is over');
+} });
+
+// A bot and a target on the playground's open ground: the target at `far` units in the
+// bot's view. Returns the pieces and the nodes.
+function playgroundPair(cfg, far = [450, 600]) {
+  const { host, g, join, run } = setup('de_playground');
+  const target = join('target', TEAM_T);
+  host.con.exec(cfg);
+  const bot = g.bots.list[0];
+  run(4);
+  while (g.phase !== PHASE_LIVE) run(1);
+  const nav = g.bots.nav, tr = new Trace();
+  const k = nav.nodeAt(-300, 300, 0); // the courtyard
+  assert.ok(k >= 0);
+  let best = -1, away = -1;
+  for (let j = 0; j < nav.count; j++) {
+    const d = Math.hypot(nav.x[j] - nav.x[k], nav.y[j] - nav.y[k]);
+    if (best < 0 && d > far[0] && d < far[1] && Math.abs(nav.z[j] - nav.z[k]) < 8 &&
+      nav.direct(nav.x[k], nav.y[k], nav.z[k], nav.x[j], nav.y[j], nav.z[j])) best = j;
+    if (away < 0 && d > 1800) { // out of sight from k, so the target is lost there
+      traceHull(g.world, HULL_POINT, nav.x[k], nav.y[k], nav.z[k] + 64, nav.x[j], nav.y[j], nav.z[j] + 64, tr);
+      if (tr.fraction < 1) away = j;
+    }
+  }
+  assert.ok(best >= 0 && away >= 0);
+  teleport(bot.c, nav.x[k], nav.y[k], nav.z[k] + 36);
+  teleport(target, nav.x[best], nav.y[best], nav.z[best] + 36);
+  bot.yaw = bot.c.yaw = Math.atan2(nav.y[best] - nav.y[k], nav.x[best] - nav.x[k]) * 180 / Math.PI;
+  return { g, run, bot, target, nav, k, best, away };
+}
+
+Deno.test('bots: a lost enemy gets an HE grenade at the place he was last seen', () => {
+  const { g, run, bot, target, nav, best, away } = playgroundPair('bot_add ct normal');
+  giveWeapon(bot.c.player.ws, WEAPON_ID.hegrenade);
+  run(64 * 3, () => bot.enemy === target);
+  assert.equal(bot.enemy, target, 'seen');
+  teleport(target, nav.x[away], nav.y[away], nav.z[away] + 36); // gone
+  const thrown = [];
+  const throwFn = g.grenades.throw.bind(g.grenades);
+  g.grenades.throw = (...a) => {
+    thrown.push(a[1]);
+    return throwFn(...a);
+  };
+  run(64 * 6, () => thrown.length > 0);
+  assert.deepEqual(thrown, [WEAPON_ID.hegrenade], 'an HE thrown within 6 s of losing him');
+  assert.equal(bot.c.player.ws.f[WS_GRENADES + GRENADE_IDS.indexOf(WEAPON_ID.hegrenade)], 0);
+  run(64 * 4, () => g.grenades.fxCount > 0 && g.grenades.fxKind[0] === FX_HE);
+  assert.ok(g.grenades.fxCount > 0 && g.grenades.fxKind[0] === FX_HE, 'it went off');
+  const d = Math.hypot(g.grenades.fxPos[0] - nav.x[best], g.grenades.fxPos[1] - nav.y[best]);
+  assert.ok(d < 200, `within 200 units of where he was: ${d.toFixed(0)}`);
+  assert.ok(bot.c.alive && bot.c.player.health === 100, 'not hurt by its own throw');
+});
+
+Deno.test('bots: a flashbang goes where the enemy was lost, and the thrower looks away from it', () => {
+  const { g, run, bot, target, nav, away } = playgroundPair('bot_add ct hard', [300, 400]);
+  giveWeapon(bot.c.player.ws, WEAPON_ID.flashbang);
+  run(64 * 3, () => bot.enemy === target);
+  assert.equal(bot.enemy, target);
+  teleport(target, nav.x[away], nav.y[away], nav.z[away] + 36);
+  const thrown = [];
+  const throwFn = g.grenades.throw.bind(g.grenades);
+  g.grenades.throw = (...a) => {
+    thrown.push([a[1], a[8]]);
+    return throwFn(...a);
+  };
+  run(64 * 6, () => thrown.length > 0);
+  assert.equal(thrown.length, 1);
+  assert.equal(thrown[0][0], WEAPON_ID.flashbang);
+  const throwYaw = thrown[0][1];
+  const fromOpposite = () => Math.abs((((bot.yaw - throwYaw) % 360) + 540) % 360 - 180);
+  run(64, () => fromOpposite() < 60);
+  assert.ok(fromOpposite() < 60, `looking away from the throw within a second: ${fromOpposite().toFixed(0)} degrees from opposite`);
+  run(64 * 3, () => g.grenades.fxCount > 0);
+  assert.equal(g.grenades.fxKind[0], FX_FLASH);
+  // Facing away it gets the "behind" share (0.3 of the full 4.87 s), not the full blast.
+  assert.ok(bot.c.flashLeft > 0 && bot.c.flashLeft < 1.8, `only a little of its own flash: ${bot.c.flashLeft.toFixed(2)} s`);
+});
+
+Deno.test('bots: a flashed bot sees nobody until it clears', () => {
+  const { run, bot, target } = playgroundPair('bot_add ct expert');
+  const yaw0 = bot.yaw;
+  bot.objective = () => ({ node: -1, why: 'wait' }); // stays put, facing him
+  bot.idleLook = () => [0, yaw0];
+  bot.c.flashLeft = 2;
+  run(64 * 1.5);
+  assert.equal(bot.enemy, null, 'blind');
+  assert.ok(target.alive);
+  run(64 * 3, () => !target.alive);
+  assert.ok(!target.alive, 'killed once it sees again');
+});
+
+Deno.test('bots: a door a button opens is on the way, and the bot presses the button first', () => {
+  const { host, g, join, run } = setup('de_playground');
+  join('other', TEAM_T); // both teams: the round goes live
+  host.con.exec('bot_add ct normal');
+  const bot = g.bots.list[0];
+  run(4);
+  while (g.phase !== PHASE_LIVE) run(1);
+  const nav = g.bots.nav, d = g.doors;
+  const from = nav.nodeAt(1030, -640, 0), to = nav.nodeAt(1140, -640, 0);
+  assert.ok(from >= 0 && to >= 0);
+  const path = new Int32Array(256), n = nav.path(from, to, path);
+  assert.ok(n > 0, 'a path through the passage');
+  assert.ok(Array.from(path.subarray(0, n)).some((k) => nav.x[k] > 1072 && nav.x[k] < 1096 && nav.y[k] > -720 && nav.y[k] < -560), 'it crosses the garage door');
+  const garage = d.name.indexOf('garage'), button = d.buttonFor('garage');
+  assert.ok(garage >= 0 && button >= 0);
+  teleport(bot.c, nav.x[from], nav.y[from], nav.z[from] + 36);
+  bot.objective = () => ({ node: to, why: 'test' });
+  let pressed = false, opened = false;
+  const use = d.use.bind(d);
+  d.use = (k, ...a) => {
+    if (k === button) pressed = true;
+    return use(k, ...a);
+  };
+  run(64 * 20, () => {
+    if (!d.atBottom(garage)) opened = true;
+    const f = bot.c.player.ps.f;
+    return f[PS_ORIGIN] > 1120 && Math.abs(f[PS_ORIGIN + 1] + 640) < 100;
+  });
+  assert.ok(pressed, 'the button was pressed');
+  assert.ok(opened, 'the door opened');
+  const f = bot.c.player.ps.f;
+  assert.ok(f[PS_ORIGIN] > 1120, `through the passage within 20 s (x ${f[PS_ORIGIN].toFixed(0)})`);
+});
 
 Deno.test({ name: 'bots: a CT goes to the planted bomb and defuses it', ignore: !dust2, fn: () => {
   const { host, g, join, run } = setup('de_dust2');

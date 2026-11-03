@@ -819,12 +819,26 @@ export class Doors {
   }
 
   // Whether walking players open mover k: touch doors without a name, use-only doors,
-  // and doors whose name a trigger fires (`named`: MapLogic.named; not button doors).
-  opens(k, named) {
+  // and doors whose name a trigger fires (`named`: MapLogic.named), or, with `buttons`
+  // (the names the usable buttons fire, `buttonTargets`), a button opens.
+  opens(k, named, buttons = null) {
     const kind = this.kind[k];
     if ((kind !== MOVER_DOOR && kind !== MOVER_ROTATING) || this.travel[k] < 16) return false;
     if (this.flags[k] & SF_DOOR_USE_ONLY) return true;
-    return this.name[k] ? named.has(this.name[k]) : true;
+    return this.name[k] ? named.has(this.name[k]) || (buttons !== null && buttons.has(this.name[k])) : true;
+  }
+
+  // The names fired by the buttons a player's +use works (func_button, func_rot_button).
+  buttonTargets() {
+    const out = new Set();
+    for (let k = 0; k < this.count; k++) if (this.kind[k] === MOVER_BUTTON && this.usable(k) && this.target[k]) out.add(this.target[k]);
+    return out;
+  }
+
+  // A usable button that fires `name`, or -1.
+  buttonFor(name) {
+    for (let k = 0; k < this.count; k++) if (this.kind[k] === MOVER_BUTTON && this.usable(k) && this.target[k] === name) return k;
+    return -1;
   }
 
 }

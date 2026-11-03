@@ -6,18 +6,24 @@
 // gunfire, react after a delay, swing their view toward the target like a spring (the
 // weak ones overshoot), aim with an error that wanders and shrinks the longer they look
 // (CS:GO's aim offset and focus), fire in bursts by distance and skill, pull down part
-// of the recoil, and buy at round start. Skill by bot_difficulty 0-3: the numbers follow
-// CS:GO's bot profile templates (botprofile.db: Easy, Normal, Hard, Expert) where we know
-// them and are estimates (approx.) elsewhere.
+// of the recoil, scope a sniper rifle before a far shot, throw an HE or a flashbang at
+// the place an enemy was lost, press the button that opens a door on their way, and buy
+// at round start. Skill by bot_difficulty 0-3: the numbers follow CS:GO's bot profile
+// templates (botprofile.db: Easy, Normal, Hard, Expert) where we know them and are
+// estimates (approx.) elsewhere.
 
-import { TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_ATTACK, IN_USE, IN_RELOAD }
-  from '../shared/constants.js';
+import {
+  TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_ATTACK, IN_ATTACK2, IN_USE,
+  IN_RELOAD,
+} from '../shared/constants.js';
 import { PS_ORIGIN, PS_FLAGS, PS_DUCK_AMOUNT, FL_ONGROUND, eyeOffset } from '../shared/pmove.js';
 import { feetOffset, crouchScale } from '../shared/hitgroups.js';
+import { HULL_POINT, Trace, traceHull } from '../shared/trace.js';
 import {
-  WEAPON_ID, WS_SLOTS, WS_ACTIVE, WS_PUNCH, WS_RELOAD_END, WS_ACTION, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_C4,
-  activeWeapon,
+  WEAPONS, WEAPON_ID, WS_SLOTS, WS_ACTIVE, WS_PUNCH, WS_RELOAD_END, WS_ACTION, WS_ZOOM, WS_RESUME_ZOOM, WS_DEPLOY_END,
+  WS_THROW, WS_THROW_TIME, WS_GRENADES, GRENADE_IDS, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_GRENADE, SLOT_C4, activeWeapon,
 } from '../shared/weapons.js';
+import { GRENADE_GRAVITY } from '../shared/grenades.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { BOMB_DROPPED, BOMB_PLANTED } from '../shared/bomb.js';
 import { HS_IDLE } from '../shared/hostages.js';
@@ -75,6 +81,32 @@ const ARRIVE = 20; // units from a waypoint that count as there
 const PATH_MAX = 1024;
 const HOLD_MIN = 8, HOLD_MAX = 16; // seconds at a spot before picking another in the same area (approx.)
 const REPATH_FAIL = 2; // seconds before a failed path search is tried again
+// Sniper rifles (AWP, SSG 08, SCAR-20, G3SG1: two scope levels): scoped for an enemy
+// farther than SCOPE_DIST, firing SCOPE_SETTLE after scoping (a quick scope is still
+// inaccurate), unscoped out of a fight; hard and expert bots with AWP_MONEY buy an AWP one
+// round in three, one per team (approx. of CS:GO's profile weapon preferences).
+const SCOPE_DIST = 250;
+const SCOPE_SETTLE = 0.3;
+const AWP_MONEY = 5400;
+// Grenades (normal and up): an HE at the place an enemy was lost (or a shooter heard)
+// NADE_LOST_MIN..MAX seconds ago and HE_RANGE away, else a flashbang within FLASH_RANGE,
+// one throw per loss and at most one every NADE_COOLDOWN seconds; the throw takes the
+// pin out once the grenade is up and the view is on the arc, and is given up after
+// NADE_TIMEOUT. A flashbang's thrower looks away from it for AVERT seconds (approx.: CS:GO's
+// bots flash themselves). A bot with more than BLIND seconds of flash left sees nobody.
+const NADE_LOST_MIN = 0.5, NADE_LOST_MAX = 3;
+const HE_RANGE = [300, 1200], FLASH_RANGE = [200, 800];
+const NADE_COOLDOWN = 6;
+const NADE_TIMEOUT = 3;
+const NADE_ARC_ERROR = 60; // units the solved arc may miss the spot by
+const AVERT = 1.6;
+const BLIND = 0.3;
+// A closed door a button opens within BUTTON_LOOKAHEAD waypoints and BUTTON_RANGE units
+// along the path sends the bot to the button first (given up after BUTTON_TIMEOUT).
+const BUTTON_LOOKAHEAD = 8;
+const BUTTON_RANGE = 500;
+const BUTTON_TIMEOUT = 8;
+const USE_REACH = 60; // from the origin to the button's box (PlayerUse: 64)
 
 export class Bots {
   constructor(game) {
@@ -90,10 +122,16 @@ export class Bots {
   ensureNav() {
     if (!this.nav) {
       const t = performance.now();
-      // Paths go through the doors a player can open (walking into them, +use, triggers).
+      // Paths go through the doors a player can open (walking into them, +use, triggers,
+      // a button: the bot goes and presses it, `buttonDoors`).
       const { doors, logic } = this.game;
-      const open = new Set();
-      for (let k = 0; k < doors.count; k++) if (doors.opens(k, logic.named)) open.add(doors.bspEntity[k]);
+      const open = new Set(), buttons = doors.buttonTargets();
+      this.buttonDoors = [];
+      for (let k = 0; k < doors.count; k++) {
+        if (!doors.opens(k, logic.named, buttons)) continue;
+        open.add(doors.bspEntity[k]);
+        if (!logic.named.has(doors.name[k]) && buttons.has(doors.name[k])) this.buttonDoors.push({ door: k, button: doors.buttonFor(doors.name[k]) });
+      }
       this.nav = new Nav(this.game.bsp, this.game.world, NAV_CELL, (bi) => open.has(bi));
       console.log(`bot navigation: ${this.nav.count} nodes in ${(performance.now() - t).toFixed(0)} ms`);
     }
@@ -148,6 +186,28 @@ export class Bots {
 
   // The bomb site the Terrorists go for this round: one for all of them, as CS:GO's bots
   // pick one together (each picking its own sent the carrier in alone, and it died on the way).
+  // Does a living player of `team` hold a sniper rifle (two scope levels)?
+  teamHasSniper(team) {
+    for (const o of this.game.clients) {
+      if (!o || !o.joined || !o.alive || o.team !== team) continue;
+      const w = WEAPONS[o.player.ws.f[WS_SLOTS + SLOT_PRIMARY * 3]];
+      if (w && w.zoomLevels >= 2) return true;
+    }
+    return false;
+  }
+
+  // The nav node nearest to a point within r (2D) and 72 up or down, or -1.
+  nearestNode(x, y, z, r) {
+    const nav = this.nav;
+    let best = -1, bestD = r;
+    for (let k = 0; k < nav.count; k++) {
+      if (Math.abs(nav.z[k] - z) > 72) continue;
+      const d = Math.hypot(nav.x[k] - x, nav.y[k] - y);
+      if (d < bestD) [best, bestD] = [k, d];
+    }
+    return best;
+  }
+
   teamSite() {
     const g = this.game, n = g.bombSites.count;
     if (!n) return 0;
@@ -213,6 +273,18 @@ class Bot {
     this.idleYaw = 0;
     this.site = 0; // bomb site this round
     this.bought = -1; // the life it bought in
+    this.zoomWas = 0; // the scope level seen last tick
+    this.scopeAt = -1e9; // tick of the last scope press (one press, then a few ticks off)
+    this.scopedAt = 0; // tick the scope came up
+    this.nade = null; // a throw under way: { id, pitch, yaw, phase, hold, until }
+    this.nadeAt = 0; // tick the next throw may start
+    this.nadeFor = -1; // the seenAt a throw was considered for (one per loss)
+    this.avertUntil = 0; // looking away from our flashbang until then
+    this.avertYaw = 0;
+    this.pressButton = -1; // the button to press for a door on our way, its door, the node by it
+    this.pressDoor = -1;
+    this.pressNode = -1;
+    this.pressUntil = 0;
     this.steerOut = { moveYaw: null, buttons: 0, lookYaw: null, lookPitch: 0, sidestep: 0 };
   }
 
@@ -252,6 +324,9 @@ class Bot {
     this.vPitch = this.vYaw = 0;
     this.stuck = 0;
     this.site = this.bots.teamSite();
+    this.nade = null;
+    this.pressButton = -1;
+    this.avertUntil = 0;
   }
 
   // Returns [buttons, weapon slot to select or -1].
@@ -265,7 +340,17 @@ class Bot {
     let buttons = 0, select = this.weaponSlot();
     let wantP = this.pitch, wantY = this.yaw, move = true, strafe = 0;
     const fighting = this.enemy && this.enemy.alive && g.tick - this.seenAt < TICK_RATE / 2;
-    if (fighting) {
+    const held = activeWeapon(p.ws), ws = p.ws.f;
+    const zoom = ws[WS_ZOOM] || ws[WS_RESUME_ZOOM]; // the bolt drops the scope for a moment: still scoped
+    if (zoom > 0 && !this.zoomWas) this.scopedAt = g.tick;
+    this.zoomWas = zoom;
+    if (this.nade && fighting && this.nade.phase === 0) this.nade = null; // an enemy in sight before the pin: the gun comes back
+    if (this.nade) {
+      [buttons, select] = this.throwing();
+      move = false;
+      wantP = this.nade ? this.nade.pitch : wantP;
+      wantY = this.nade ? this.nade.yaw : wantY;
+    } else if (fighting) {
       const e = this.enemy, ef = e.player.ps.f;
       this.updateAim();
       // Lead nothing; aim at the head or the chest, plus the offset that wanders and settles.
@@ -283,8 +368,17 @@ class Bot {
       // A hostage in the way: hold fire and keep going (CS:GO's bots do not shoot them).
       const clear = !this.hostageInLine(x, y, eye, ef[PS_ORIGIN], ef[PS_ORIGIN + 1], tz);
       move = !clear || g.rules.botDontShoot; // else stand still to shoot straight (CS:GO's bots stop too)
-      if (clear && !g.rules.botDontShoot && g.tick >= this.reactAt && off < tolerance) buttons |= this.trigger(dist);
-      const knife = activeWeapon(p.ws)?.melee;
+      // A sniper rifle: scope for a far enemy, then let the scope settle before the shot.
+      let mayFire = true;
+      if (held && held.zoomLevels >= 2) {
+        if (zoom === 0 && dist > SCOPE_DIST && g.tick - this.scopeAt > 4) {
+          buttons |= IN_ATTACK2;
+          this.scopeAt = g.tick;
+        }
+        mayFire = zoom === 0 ? dist <= SCOPE_DIST : g.tick - this.scopedAt >= SCOPE_SETTLE * TICK_RATE;
+      }
+      if (clear && !g.rules.botDontShoot && g.tick >= this.reactAt && off < tolerance && mayFire) buttons |= this.trigger(dist);
+      const knife = held?.melee;
       if (knife) { // only a knife (Arms Race's last level): run at him, slash in reach
         move = false;
         buttons |= IN_FORWARD;
@@ -295,9 +389,14 @@ class Bot {
       }
     }
 
+    // Out of a fight a sniper comes out of its scope (it walks at 100 in it).
+    if (!fighting && !this.nade && zoom > 0 && g.tick - this.scopeAt > 4) {
+      buttons |= IN_ATTACK2;
+      this.scopeAt = g.tick;
+    }
     // Where to go (bots told not to shoot keep to it, watching the enemy).
-    if (!fighting || g.rules.botDontShoot) {
-      const goal = this.objective(x, y, feet);
+    if (!this.nade && (!fighting || g.rules.botDontShoot)) {
+      const goal = this.pressButton >= 0 ? this.buttonGoal(x, y, feet) : this.objective(x, y, feet);
       let repath = goal.node !== this.goal || goal.why !== this.goalWhy;
       if (this.pathFailed && g.tick < this.repathAt) repath = false; // no way found: not searched again for a while
       else if (!repath && goal.moving && g.tick >= this.repathAt) repath = true;
@@ -312,11 +411,13 @@ class Bot {
         this.repathAt = g.tick + (this.pathFailed ? REPATH_FAIL : 1) * TICK_RATE;
         if (this.pathFailed) this.goal = -1; // an area goal picks another spot next time
       }
-      if (goal.action) {
-        buttons |= goal.action;
+      if (goal.action || goal.stop) {
+        buttons |= goal.action || 0;
         move = false;
         if (goal.select >= 0) select = goal.select;
         if (goal.look) [wantP, wantY] = angles(x, y, eye, goal.look[0], goal.look[1], goal.look[2]);
+      } else if (!fighting && this.difficulty >= 1 && !g.rules.botDontShoot && (p.ps.i[PS_FLAGS] & FL_ONGROUND)) {
+        this.considerThrow(x, y, eye);
       }
     }
     let moveYaw = null;
@@ -331,7 +432,11 @@ class Bot {
       }
     }
     if (this.pathIdx >= this.pathLen && this.arrivedAt < 0) this.arrivedAt = g.tick;
-    if (!fighting && this.pathIdx >= this.pathLen && !(buttons & (IN_USE | IN_ATTACK))) [wantP, wantY] = this.idleLook();
+    if (!fighting && !this.nade && this.pathIdx >= this.pathLen && !(buttons & (IN_USE | IN_ATTACK))) [wantP, wantY] = this.idleLook();
+    if (!fighting && !this.nade && g.tick < this.avertUntil) { // our flashbang is about to pop over there
+      wantY = this.avertYaw;
+      wantP = 0;
+    }
 
     // Reload when empty, or with half a magazine and nobody around.
     const w = activeWeapon(p.ws), o = WS_SLOTS + p.ws.f[WS_ACTIVE] * 3;
@@ -345,11 +450,12 @@ class Bot {
     return [buttons, select];
   }
 
-  // Looks for enemies (the spotting test: view cone, no wall or smoke) and listens for
-  // gunfire (the nearest unsilenced shooter); a new enemy starts the reaction time and
-  // the focus, one seen again within a moment a shorter reaction.
+  // Looks for enemies (the spotting test: view cone, no wall or smoke; nothing while
+  // flashed) and listens for gunfire (the nearest unsilenced shooter); a new enemy starts
+  // the reaction time and the focus, one seen again within a moment a shorter reaction.
   perceive(x, y, eye) {
     const c = this.c, g = this.game, sk = this.skill;
+    if (c.flashLeft > BLIND) return;
     let best = null, bestD = Infinity, loud = null, loudD = Infinity;
     for (const o of g.clients) {
       if (!o || !o.joined || !o.alive || !o.playing || !g.isEnemy(c, o)) continue;
@@ -397,6 +503,62 @@ class Bot {
     this.lastZ = z;
     this.seenAt = this.game.tick - TICK_RATE; // hunt there, but there is no one to shoot yet
     this.enemy = null;
+  }
+
+  // --- Grenades -----------------------------------------------------------------------
+
+  carries(id) {
+    return this.c.player.ws.f[WS_GRENADES + GRENADE_IDS.indexOf(id)] > 0;
+  }
+
+  // Lost an enemy a moment ago (or heard one): an HE at the spot if it is in range, else a
+  // flashbang, when an arc from here lands there (once per loss, with a cooldown).
+  considerThrow(x, y, eye) {
+    const g = this.game;
+    if (g.tick < this.nadeAt || this.nadeFor === this.seenAt || !this.lastX) return;
+    const lost = (g.tick - this.seenAt) / TICK_RATE;
+    if (lost < NADE_LOST_MIN || lost > NADE_LOST_MAX) return;
+    const d = Math.hypot(this.lastX - x, this.lastY - y);
+    let id = 0;
+    if (this.carries(WEAPON_ID.hegrenade) && d >= HE_RANGE[0] && d <= HE_RANGE[1]) id = WEAPON_ID.hegrenade;
+    else if (this.carries(WEAPON_ID.flashbang) && d >= FLASH_RANGE[0] && d <= FLASH_RANGE[1]) id = WEAPON_ID.flashbang;
+    if (!id) return;
+    this.nadeFor = this.seenAt;
+    const arc = throwAngles(g.world, x, y, eye, this.lastX, this.lastY, this.lastZ);
+    if (!arc) return;
+    this.nade = { id, pitch: arc[0], yaw: arc[1], phase: 0, hold: 0, until: g.tick + NADE_TIMEOUT * TICK_RATE };
+  }
+
+  // The throw under way: bring the grenade out (4 again cycles the kinds), pull the pin
+  // once it is deployed and the view is on the arc, let go, and once it has left the hand
+  // the gun comes back (weaponSlot). Returns [buttons, select].
+  throwing() {
+    const g = this.game, n = this.nade, f = this.c.player.ws.f;
+    let buttons = 0, select = -1;
+    const done = () => {
+      this.nade = null;
+      this.nadeAt = g.tick + NADE_COOLDOWN * TICK_RATE;
+    };
+    if (g.tick > n.until) {
+      done();
+      return [0, -1];
+    }
+    const out = f[WS_ACTIVE] === SLOT_GRENADE && f[WS_SLOTS + SLOT_GRENADE * 3] === n.id;
+    if (n.phase === 0) {
+      if (!out) select = SLOT_GRENADE;
+      else if (this.cmdTick * TICK_DT >= f[WS_DEPLOY_END] && Math.hypot(angleDiff(n.yaw, this.yaw), n.pitch - this.pitch) < 2) n.phase = 1;
+    }
+    if (n.phase === 1) {
+      buttons |= IN_ATTACK;
+      if (++n.hold >= 2) n.phase = 2;
+    } else if (n.phase === 2 && !f[WS_THROW] && !f[WS_THROW_TIME]) { // thrown
+      if (n.id === WEAPON_ID.flashbang) {
+        this.avertUntil = g.tick + AVERT * TICK_RATE;
+        this.avertYaw = (n.yaw + 180) % 360;
+      }
+      done();
+    }
+    return [buttons, select];
   }
 
   // The aim offset (CS:GO's SetAimOffset / UpdateAimOffset): every so often a new goal
@@ -488,10 +650,14 @@ class Bot {
     this.bought = c.life;
     const free = g.rules.deathmatch;
     const order = [];
-    const rifle = WEAPON_ID[ct ? (this.difficulty >= 2 ? 'm4a1_silencer' : 'm4a1') : 'ak47'];
+    let rifle = WEAPON_ID[ct ? (this.difficulty >= 2 ? 'm4a1_silencer' : 'm4a1') : 'ak47'];
+    if (!free && this.difficulty >= 2 && p.money >= AWP_MONEY && !this.bots.teamHasSniper(c.team) && this.bots.random() < 1 / 3) {
+      rifle = WEAPON_ID.awp;
+    }
     if (!p.ws.f[WS_SLOTS + SLOT_PRIMARY * 3]) order.push(rifle);
     if (!free) order.push(ITEM_ASSAULTSUIT, ITEM_KEVLAR);
     if (ct && g.bombSites.count && !free) order.push(ITEM_DEFUSER);
+    if (!free && this.difficulty >= 1) order.push(WEAPON_ID.hegrenade, WEAPON_ID.flashbang);
     for (const item of order) {
       const price = itemPrice(p, item);
       if (price < 0 || (!free && price > p.money)) continue;
@@ -579,6 +745,54 @@ class Bot {
     return { node: nav.random(rnd), why: 'roam' };
   }
 
+  // The button for a closed door on our way: walk to the node by it, look at it, press
+  // it when in reach and facing it; back to the objective once the door is away from
+  // rest (or after a while).
+  buttonGoal(x, y, feet) {
+    const g = this.game, d = g.doors, b = this.pressButton, k = this.pressDoor;
+    if (!d.atBottom(k) || d.dead[k] || d.dead[b] || g.tick > this.pressUntil) {
+      this.pressButton = -1;
+      return this.objective(x, y, feet);
+    }
+    const cx = (d.mins[b * 3] + d.maxs[b * 3]) / 2, cy = (d.mins[b * 3 + 1] + d.maxs[b * 3 + 1]) / 2;
+    const cz = (d.mins[b * 3 + 2] + d.maxs[b * 3 + 2]) / 2;
+    let d2 = 0;
+    for (let a = 0; a < 3; a++) {
+      const v = a === 0 ? x : a === 1 ? y : feet + 36, lo = d.mins[b * 3 + a], hi = d.maxs[b * 3 + a];
+      const gap = v < lo ? lo - v : v > hi ? v - hi : 0;
+      d2 += gap * gap;
+    }
+    const inReach = d2 <= USE_REACH * USE_REACH;
+    const facing = Math.abs(angleDiff(angles(x, y, feet + 64, cx, cy, cz)[1], this.yaw)) < 25;
+    return { node: this.pressNode, why: 'button', stop: inReach, action: inReach && facing ? IN_USE : 0, look: [cx, cy, cz] };
+  }
+
+  // A closed door a button opens among the next waypoints: go for its button first.
+  checkButtonDoors(x, y) {
+    const g = this.game, d = g.doors, nav = this.bots.nav, P = this.path;
+    const last = Math.min(this.pathLen - 1, this.pathIdx + BUTTON_LOOKAHEAD);
+    for (let j = this.pathIdx; j <= last; j++) {
+      const n = P[j], nx = nav.x[n], ny = nav.y[n], nz = nav.z[n];
+      if (Math.hypot(nx - x, ny - y) > BUTTON_RANGE) return;
+      for (const bd of this.bots.buttonDoors) {
+        const k = bd.door;
+        if (!d.atBottom(k) || d.dead[k] || bd.button < 0) continue;
+        if (nx < d.mins[k * 3] - 24 || nx > d.maxs[k * 3] + 24 || ny < d.mins[k * 3 + 1] - 24 || ny > d.maxs[k * 3 + 1] + 24) continue;
+        if (nz < d.mins[k * 3 + 2] - 40 || nz > d.maxs[k * 3 + 2]) continue;
+        const b = bd.button;
+        const node = this.bots.nearestNode((d.mins[b * 3] + d.maxs[b * 3]) / 2, (d.mins[b * 3 + 1] + d.maxs[b * 3 + 1]) / 2,
+          (d.mins[b * 3 + 2] + d.maxs[b * 3 + 2]) / 2 - 36, 80);
+        if (node < 0) continue;
+        this.pressButton = b;
+        this.pressDoor = k;
+        this.pressNode = node;
+        this.pressUntil = g.tick + BUTTON_TIMEOUT * TICK_RATE;
+        this.goalWhy = ''; // a new goal: the button
+        return;
+      }
+    }
+  }
+
   // A random node within `r` of a point.
   near(x, y, z, r) {
     return this.bots.nav.random(this.bots.random, [x - r, y - r, z - 200, x + r, y + r, z + 200]);
@@ -599,8 +813,8 @@ class Bot {
   doorAhead(x, y, feet) {
     const g = this.game, d = g.doors;
     if (!d.count) return false;
-    const yr = this.yaw * DEG;
-    return d.findUse(g.world, x, y, feet + 36, x, y, feet + 64, Math.cos(yr), Math.sin(yr), 0) >= 0;
+    const yr = this.yaw * DEG, pr = this.pitch * DEG, cp = Math.cos(pr);
+    return d.findUse(g.world, x, y, feet + 36, x, y, feet + 64, cp * Math.cos(yr), cp * Math.sin(yr), -Math.sin(pr)) >= 0;
   }
 
   // --- Walking ------------------------------------------------------------------------
@@ -633,6 +847,7 @@ class Bot {
         }
       }
     }
+    if (this.pressButton < 0 && this.bots.buttonDoors.length && (g.tick + this.c.id) % LOOKAHEAD_TICKS === 1) this.checkButtonDoors(x, y);
     const k = P[this.pathIdx], tx = nav.x[k], ty = nav.y[k];
     const d = Math.hypot(tx - x, ty - y);
     if (this.pathIdx === this.pathLen - 1 && at(k)) {
@@ -678,6 +893,42 @@ class Bot {
     }
     return out;
   }
+}
+
+// The pitch and yaw of a long throw (IN_ATTACK: full strength, standing still) from the
+// eye that lands nearest (tx, ty, tz): the shared throw's speed from the flattened pitch
+// and the grenades' gravity, no bounces, the pitch searched in steps; null when no arc
+// comes within NADE_ARC_ERROR, or the arc's first 70 % hits a wall.
+const nadeTrace = new Trace();
+function throwAngles(world, ex, ey, ez, tx, ty, tz) {
+  const dx = tx - ex, dy = ty - ey, d = Math.hypot(dx, dy), yaw = Math.atan2(dy, dx) / DEG;
+  if (d < 1) return null;
+  let best = null, bestErr = NADE_ARC_ERROR;
+  for (let pitch = -75; pitch <= 15; pitch += 2.5) {
+    const p = -10 + pitch * (80 / 90), speed = Math.min((90 - p) * 6, 750);
+    const vh = Math.cos(p * DEG) * speed, vz = -Math.sin(p * DEG) * speed;
+    const a = GRENADE_GRAVITY / 2, disc = vz * vz - 4 * a * (tz - ez); // z(t) = ez + vz t - a t^2 = tz, the later root
+    if (disc < 0) continue;
+    const t = (vz + Math.sqrt(disc)) / (2 * a);
+    if (t <= 0) continue;
+    const err = Math.abs(vh * t - d);
+    if (err < bestErr) {
+      bestErr = err;
+      best = { pitch, vh, vz, t };
+    }
+  }
+  if (!best) return null;
+  let px = ex, py = ey, pz = ez;
+  for (let i = 1; i <= 8; i++) {
+    const t = best.t * 0.7 * i / 8;
+    const nx = ex + dx / d * best.vh * t, ny = ey + dy / d * best.vh * t, nz = ez + best.vz * t - GRENADE_GRAVITY / 2 * t * t;
+    traceHull(world, HULL_POINT, px, py, pz, nx, ny, nz, nadeTrace);
+    if (nadeTrace.fraction < 1) return null;
+    px = nx;
+    py = ny;
+    pz = nz;
+  }
+  return [best.pitch, yaw];
 }
 
 // Movement keys (8 ways) for walking toward moveYaw while looking along viewYaw.
