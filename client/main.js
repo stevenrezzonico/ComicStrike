@@ -25,7 +25,7 @@ import {
   WEAPONS, WEAPON_ID, ShotList, giveWeapon, weaponTick, viewPunchPitch, viewPunchYaw, hash32, WS_LAST_SLOT,
   WS_EVENTS, WS_SIZE, WS_SLOTS, WS_ACTIVE, WS_ACTION, WS_ACTION_END, SLOT_C4, NUM_SLOTS, ACTION_PLANT, ACTION_DEFUSE,
   SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, SLOT_GRENADE,
-  WS_ZOOM, WS_THROWN, WEV_THROW, WEV_FIRE, activeWeapon, silenced,
+  WS_ZOOM, WS_THROWN, WEV_THROW, WEV_FIRE, activeWeapon, silenced, RECOIL, shotKick,
 } from '../shared/weapons.js';
 import { ARMS_RACE, DEMOLITION, levelWeapon } from '../shared/progression.js';
 import {
@@ -355,6 +355,10 @@ let lastBeep = -1e9;
 
 const prevOrigin = new Float32Array(3);
 let prevEye = 0, prevPunchP = 0, prevPunchY = 0;
+// The camera's own jolt per shot (weapon_recoil_view_punch_extra), decaying every frame:
+// never in the weapon state, so the bullets and the server know nothing of it.
+const viewKick = new Float64Array(2);
+const shotKickOut = new Float64Array(2);
 
 const eye = new Float32Array(3);
 const angles = new Float32Array(2); // pitch, yaw (without recoil); f32 like the wire format
@@ -1158,6 +1162,9 @@ function tick() {
     if ((ws.f[WS_EVENTS] & WEV_FIRE) && w && w.gun) {
       words.shot(gunProfile(w, silenced(ws, ws.f[WS_ACTIVE])), performance.now());
       tag('shot');
+      shotKick(ws, shotKickOut);
+      viewKick[0] += shotKickOut[0];
+      viewKick[1] += shotKickOut[1];
       // Our own flash, a little ahead of the eye along the view.
       const p = angles[0] * DEG, yw = angles[1] * DEG, c = Math.cos(p) * 24;
       muzzleLight(eye[0] + Math.cos(yw) * c, eye[1] + Math.sin(yw) * c, eye[2] - Math.sin(p) * 24,
@@ -1435,9 +1442,13 @@ function draw(now, alpha, dt) {
   eye[1] = prevOrigin[1] + (f[PS_ORIGIN + 1] - prevOrigin[1]) * alpha + smooth[1];
   eye[2] = prevOrigin[2] + (f[PS_ORIGIN + 2] - prevOrigin[2]) * alpha + smooth[2];
   eye[2] += prevEye + (eyeOffset(ps) - prevEye) * alpha;
-  // The camera shows a fraction of the aim punch (view_recoil_tracking).
-  let pitch = angles[0] + prevPunchP + (viewPunchPitch(ws) - prevPunchP) * alpha;
-  let yaw = angles[1] + prevPunchY + (viewPunchYaw(ws) - prevPunchY) * alpha;
+  // The camera shows a fraction of the aim punch (view_recoil_tracking) plus its own
+  // jolt per shot, which decays at view_punch_decay.
+  const kk = Math.exp(-dt * RECOIL.viewPunchDecay);
+  viewKick[0] *= kk;
+  viewKick[1] *= kk;
+  let pitch = angles[0] + prevPunchP + (viewPunchPitch(ws) - prevPunchP) * alpha + viewKick[0];
+  let yaw = angles[1] + prevPunchY + (viewPunchYaw(ws) - prevPunchY) * alpha + viewKick[1];
 
   // Dead: after a moment, follow a living player (client/spectate.js). The spectator
   // team follows anyone at once or roams free.

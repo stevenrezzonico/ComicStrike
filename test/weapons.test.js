@@ -4,7 +4,7 @@ import { createPlayerState, PS_VEL, PS_FLAGS, PS_EVENTS, FL_ONGROUND, FL_DUCKING
 import {
   WEAPONS, WEAPON_ID, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, ShotList, createWeaponState, giveWeapon,
   weaponTick, getInaccuracy, recoveryTime, UniformRandomStream, WS_ACTIVE, WS_SLOTS, WS_PUNCH, WS_EVENTS, WEV_FIRE, WEV_RELOADED,
-  WEV_SHELL, WS_RELOAD_END, WEV_DRYFIRE, WS_PENALTY, refillAmmo,
+  WEV_SHELL, WS_RELOAD_END, WEV_DRYFIRE, WS_PENALTY, WS_PUNCH_VEL, refillAmmo, RECOIL, shotKick,
 } from '../shared/weapons.js';
 
 const DEG = Math.PI / 180;
@@ -267,6 +267,93 @@ Deno.test('every CS:GO gun builds from game data; shotguns fire pellets', () => 
   const ctx = setup('nova');
   hold(ctx, IN_ATTACK, 1000, 1);
   assert.equal(ctx.shots.count, 9);
+});
+
+// The pellets' directions of one shot fired at rest with the aim punch taken out (the
+// same aim each time), so the spread offsets and the standing inaccuracy are in them.
+function pellets(ctx, t) {
+  ctx.shots.count = 0;
+  ctx.ws.f[WS_PUNCH] = ctx.ws.f[WS_PUNCH + 1] = ctx.ws.f[WS_PUNCH_VEL] = ctx.ws.f[WS_PUNCH_VEL + 1] = 0;
+  hold(ctx, IN_ATTACK, t, 1);
+  const out = [];
+  for (let i = 0; i < ctx.shots.count; i++) out.push([...ctx.shots.dir.subarray(i * 3, i * 3 + 3)]);
+  return out;
+}
+
+Deno.test('shotguns fire a fixed pellet pattern from their spread seed', () => {
+  for (const name of ['nova', 'xm1014', 'sawedoff', 'mag7']) {
+    const w = WEAPONS[WEAPON_ID[name]];
+    assert.ok(w.spreadSeed > 0, name);
+  }
+  // Shot after shot the pellets land in the same places but for the inaccuracy (at rest
+  // the standing 7 mrad at most on each shot: the penalty never goes below it), where a
+  // random spread of 40 mrad would scatter them anew.
+  const ctx = setup('nova');
+  const nova = WEAPONS[WEAPON_ID.nova];
+  const a = pellets(ctx, 1000);
+  hold(ctx, 0, 1001, 999); // the trigger let go (a pump gun fires once per pull), the penalty recovered
+  const b = pellets(ctx, 2000); // another tick: the inaccuracy stream is seeded anew, the pattern not
+  assert.equal(a.length, 9);
+  const between = (p, q) => Math.acos(Math.min(1, p[0] * q[0] + p[1] * q[1] + p[2] * q[2]));
+  const slack = 2 * nova.modes[0].inaccuracyStand + 1e-6;
+  for (let i = 0; i < 9; i++) assert.ok(between(a[i], b[i]) < slack, `pellet ${i}: ${between(a[i], b[i])}`);
+  const spreadOf = (p) => Math.acos(p[0]); // angle from straight ahead (aim along +x)
+  assert.ok(a.some((p) => spreadOf(p) > nova.spread * 0.6), 'the pattern is spread out');
+  assert.ok(a.every((p) => spreadOf(p) <= nova.spread + slack), 'within the spread');
+  assert.ok(a.some((p) => a.some((q) => between(p, q) > nova.spread)), 'pellets across the disc');
+  // Another shotgun's seed makes another pattern.
+  const c = pellets(setup('mag7'), 1000);
+  assert.ok(between(c[0], a[0]) > slack || between(c[1], a[1]) > slack);
+  // The spread seed is a cheat check: with it gone the pattern changes with the tick.
+  const seed = nova.spreadSeed;
+  nova.spreadSeed = 0;
+  try {
+    const ctx3 = setup('nova');
+    const d = pellets(ctx3, 1000);
+    hold(ctx3, 0, 1001, 999);
+    const e = pellets(ctx3, 2000);
+    assert.ok(d.some((p, i) => between(p, e[i]) > slack), 'random spread scatters the pellets anew');
+  } finally {
+    nova.spreadSeed = seed;
+  }
+});
+
+Deno.test('the Negev tightens into a laser after its first dozen shots (recovery time data)', () => {
+  const ctx = setup('negev');
+  const negev = WEAPONS[WEAPON_ID.negev];
+  assert.ok(negev.recoveryStandFinal < negev.recoveryStand);
+  const inacc = [];
+  for (let t = 1000; t < 1000 + 64 * 3 && inacc.length < 20; t++) {
+    const before = getInaccuracy(ctx.ws, ctx.ps, IN_ATTACK) * 1000; // mrad, as this shot would use it
+    weaponTick(ctx.ws, ctx.ps, IN_ATTACK, -1, 0, 0, t, ctx.shots);
+    if (ctx.ws.f[WS_EVENTS] & WEV_FIRE) inacc.push(before);
+  }
+  assert.equal(inacc.length, 20);
+  // Shots 7-10 fire at ~51 mrad (the recovery at its base 0.3 s cannot keep up), then the
+  // recovery time falls to 0.1 s over bullets 9-12 and from shot 14 on it holds at ~19.
+  for (let i = 6; i < 10; i++) assert.ok(inacc[i] > 45, `shot ${i + 1} is wild: ${inacc[i].toFixed(1)}`);
+  for (let i = 13; i < 20; i++) assert.ok(Math.abs(inacc[i] - 19) < 1.5, `shot ${i + 1}: ${inacc[i].toFixed(1)}`);
+  assert.ok(Math.abs(inacc[19] - inacc[14]) < 0.5, 'settled');
+  // The kick goes straight up: no sideways drift in its pattern.
+  for (let j = 0; j < 20; j++) assert.ok(Math.abs(negev.recoilPattern[j * 2 + 1]) < 1e-6);
+  assert.ok(negev.recoilPattern[0] < 0);
+});
+
+Deno.test('a shot\'s camera jolt is its recoil kick times the extra', () => {
+  const ctx = setup('ak47');
+  const ak = WEAPONS[WEAPON_ID.ak47];
+  const out = new Float64Array(2);
+  let n = 0;
+  for (let t = 1000; t < 1000 + 7 * 3; t++) {
+    weaponTick(ctx.ws, ctx.ps, IN_ATTACK, -1, 0, 0, t, ctx.shots);
+    if (!(ctx.ws.f[WS_EVENTS] & WEV_FIRE)) continue;
+    shotKick(ctx.ws, out);
+    assert.equal(out[0], ak.recoilPattern[n * 2] * RECOIL.viewPunchExtra);
+    assert.equal(out[1], ak.recoilPattern[n * 2 + 1] * RECOIL.viewPunchExtra);
+    n++;
+  }
+  assert.equal(n, 3);
+  assert.ok(out[0] < 0, 'up');
 });
 
 Deno.test('knife swings without ammo at its cycle rate', () => {

@@ -37,3 +37,11 @@ Grenades and bomb: prices, limits (1, flashbang 2, 4 in all), throw speed formul
 | Defuse reach | eye to bomb 90 units, cone 0.8 | +use reach ~62 | approximation |
 | Hostage hit / kill money | −30 / −1000 | −30 / −1000 | *unsure* |
 | Suicide | no kill change | −1 kill | *unsure* |
+
+## Weapon leftovers (Phase 14i)
+
+| Rule | Was | CS:GO | Now |
+|---|---|---|---|
+| Negev spray tightening | listed as not modeled | `recovery time stand` 0.3 s falling to `recovery time stand final` 0.1 s over bullets 9-12: a wild start, then a laser | already in the data and the accuracy model: ~51 mrad through shot 10, ~19 from shot 14 on (the AK's steady ~19); recoil angle 0 with no variance, straight up; pinned in `test/weapons.test.js` |
+| Shotgun pellet patterns | every pellet's spread offset random per shot | `weapon_accuracy_shotgun_spread_patterns` 1: the spread offsets come from a random stream seeded with the gun's `spread seed` at each shot, so each shotgun fires one fixed pattern; the inaccuracy offsets stay random | the same, from the bit-exact `UniformRandomStream` (angle, then radius per pellet); the order of the draws is *unsure* |
+| Camera jolt per shot | none: the camera showed 45 % of the aim punch only | `weapon_recoil_view_punch_extra` 0.055 of the shot's kick as a view punch, decaying at `view_punch_decay` 18 | the same, client side only (`shotKick`, `viewKick` in main); the decay's shape (exponential here) is an approximation |

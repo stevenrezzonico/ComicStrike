@@ -23,6 +23,10 @@ export const RECOIL = {
   suppressionShots: 4, // weapon_recoil_suppression_shots
   suppressionFactor: 0.75, // weapon_recoil_suppression_factor: first shot's kick scale, ramping to 1
   patternLength: 64,
+  // weapon_recoil_view_punch_extra: each shot also jolts the camera alone (never the
+  // bullets) by this much of its kick, and view_punch_decay (per second) takes it away.
+  viewPunchExtra: 0.055,
+  viewPunchDecay: 18,
 };
 
 export const SLOT_PRIMARY = 0;
@@ -95,6 +99,7 @@ function fromGameData(name) {
     recoveryCrouch: d.recoveryTimeCrouch, recoveryCrouchFinal: d.recoveryTimeCrouchFinal,
     recoveryStartBullet: d.recoveryTransitionStartBullet, recoveryEndBullet: d.recoveryTransitionEndBullet,
     recoilSeed: d.recoilSeed,
+    spreadSeed: d.spreadSeed, // shotguns: the seed of their fixed pellet pattern (0: random spread)
     flinchLarge: d.flinchVelocityModifierLarge, flinchSmall: d.flinchVelocityModifierSmall,
     teams: d.teams, // who can buy it: 1 T, 2 CT, 3 both
   };
@@ -202,6 +207,7 @@ export class UniformRandomStream {
 // random value, so patterns sweep instead of jittering, and their first shots kick less.
 // Stored as the aim-punch velocity kick (pitch, yaw) in deg/s.
 const recoilRandom = new UniformRandomStream();
+const spreadRandom = new UniformRandomStream(); // a shotgun's pellet pattern, reseeded per shot
 export function buildRecoilPattern(w) {
   const n = RECOIL.patternLength;
   const out = new Float32Array(n * 2);
@@ -824,11 +830,22 @@ function fire(ws, ps, aw, o, buttons, pitch, yaw, tick, time, ex, ey, ez, shots,
   const ux = ry * fz, uy = -rx * fz, uz = rx * fy - ry * fx; // up = right x forward
 
   // CS:GO FX_FireBullets: inaccuracy and spread each add a random polar offset,
-  // drawn per pellet for shotguns.
+  // drawn per pellet for shotguns. A shotgun's spread offsets come from a stream seeded
+  // with its spread seed at every shot (weapon_accuracy_shotgun_spread_patterns): the
+  // same pellet pattern each time, only the inaccuracy still scattering it.
   seedRandom(hash32(tick + 1));
+  const pattern = aw.spreadSeed > 0;
+  if (pattern) spreadRandom.setSeed(aw.spreadSeed);
   for (let b = 0; b < aw.bullets; b++) {
     const t0 = random() * 2 * Math.PI, r0 = random() * inacc;
-    const t1 = random() * 2 * Math.PI, r1 = random() * w.spread;
+    let t1, r1;
+    if (pattern) {
+      t1 = spreadRandom.randomFloat(0, 2 * Math.PI);
+      r1 = spreadRandom.randomFloat(0, 1) * w.spread;
+    } else {
+      t1 = random() * 2 * Math.PI;
+      r1 = random() * w.spread;
+    }
     const x = r0 * Math.cos(t0) + r1 * Math.cos(t1);
     const y = r0 * Math.sin(t0) + r1 * Math.sin(t1);
     let dx = fx + x * rx + y * ux, dy = fy + x * ry + y * uy, dz = fz + y * uz;
@@ -853,4 +870,21 @@ export function viewPunchPitch(ws) {
 }
 export function viewPunchYaw(ws) {
   return ws.f[WS_PUNCH + 1] * RECOIL.scale * RECOIL.viewTracking;
+}
+
+// The camera's own jolt from the shot this tick just fired (WEV_FIRE): its kick from the
+// recoil table times weapon_recoil_view_punch_extra, as (pitch, yaw) degrees into `out`.
+// The index was moved past the shot's entry by the shot itself, and does not decay in
+// the shot's tick. Camera only, so no state carries it.
+export function shotKick(ws, out) {
+  const s = weaponStats(ws);
+  if (!s || !s.recoilPattern) {
+    out[0] = out[1] = 0;
+    return out;
+  }
+  const n = RECOIL.patternLength;
+  const idx = (Math.floor(ws.f[WS_RECOIL_INDEX]) - 1 + n) % n;
+  out[0] = s.recoilPattern[idx * 2] * RECOIL.viewPunchExtra;
+  out[1] = s.recoilPattern[idx * 2 + 1] * RECOIL.viewPunchExtra;
+  return out;
 }
