@@ -32,7 +32,8 @@ export class Radar {
     this.fontPx = 0; // bomb site letters' font, rebuilt when the size changes
     this.font = '';
     this.overview = null;
-    this.image = null; // canvas holding the overview pixels
+    this.images = []; // a canvas of the overview's pixels per level
+    this.level = 0; // the level drawn (the one under the feet of whoever we see through)
     this.sites = []; // [x, y, letter]
     this.hidden = false; // hideradar / drawradar
     this.cssSize = 0;
@@ -41,24 +42,32 @@ export class Radar {
     this.drawnYaw = 0;
   }
 
-  // A new map: its overview and bomb sites (A, B in entity order, approx.).
+  // A new map: its overview (an image per level) and bomb sites (A, B in entity order,
+  // approx.).
   setMap(overview, bombSites) {
     this.overview = overview;
-    const img = this.image = document.createElement('canvas');
-    img.width = overview.width;
-    img.height = overview.height;
-    img.getContext('2d').putImageData(new ImageData(overview.rgba, overview.width, overview.height), 0, 0);
+    this.images = overview.levels.map((l) => {
+      const img = document.createElement('canvas');
+      img.width = overview.width;
+      img.height = overview.height;
+      img.getContext('2d').putImageData(new ImageData(l.rgba, overview.width, overview.height), 0, 0);
+      return img;
+    });
+    this.level = 0;
     this.setSites(bombSites);
   }
 
   // The bomb sites drawn (Wingman keeps one).
   setSites(bombSites) {
-    this.sites = bombSites.boxes.map((b, i) => [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, bombSites.names[i]]);
+    this.sites = bombSites.boxes.map((b, i) => [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, bombSites.names[i], b[2]]);
   }
 
-  // view: { x, y, z (camera), yaw (degrees) }; rows: interpolated snapshot rows (or
-  // null offline); selfId / watched: our id and the one we see through (-1); team: ours
-  // (TEAM_SPECTATOR sees all); ffa: free for all; bomb: BombState or null; hostages or null.
+  // view: { x, y, z (the feet of whoever we see through), yaw (degrees) }; rows:
+  // interpolated snapshot rows (or null offline); selfId / watched: our id and the one we
+  // see through (-1); team: ours (TEAM_SPECTATOR sees all); ffa: free for all; bomb:
+  // BombState or null; hostages or null. On a map of several levels (shared/overview.js)
+  // the level under those feet is drawn; what is on another level (players, the bomb,
+  // hostages, the sites) is drawn faint, players with their up / down mark.
   draw(show, cx, cy, cz, yaw, rows, selfId, watched, team, ffa, bomb, hostages, now) {
     const c = this.canvas;
     show = show && !this.hidden && this.overview !== null;
@@ -83,10 +92,14 @@ export class Radar {
     // turns, so the rotating map stays smooth.
     let turn = Math.abs(yaw - this.drawnYaw) % 360;
     if (turn > 180) turn = 360 - turn;
-    if (now - this.drawnAt < REDRAW_MS && turn < REDRAW_TURN) return;
+    const level = this.overview.levelOf(cz);
+    if (now - this.drawnAt < REDRAW_MS && turn < REDRAW_TURN && level === this.level) return;
     this.drawnAt = now;
     this.drawnYaw = yaw;
+    this.level = level;
     const ctx = this.ctx, o = this.overview, R = D / 2, selfX = cx, selfY = cy;
+    const onLevel = (z) => o.levelOf(z) === level; // (z: feet)
+    const faint = (z) => ctx.globalAlpha = onLevel(z) ? 1 : 0.45;
     const k = D / (RANGE * this.cv.cl_radar_scale.number); // screen pixels per world unit
     const rotate = this.cv.cl_radar_rotate.bool;
     if (!this.cv.cl_radar_always_centered.bool && !rotate) { // stop at the map's edges
@@ -116,7 +129,7 @@ export class Radar {
     ctx.setTransform(k * s * ca, -k * s * sa, k * s * sa, k * s * ca, R + k * (ox * ca - oy * sa), R - k * (ox * sa + oy * ca));
     ctx.imageSmoothingEnabled = true;
     ctx.globalAlpha = 0.9;
-    ctx.drawImage(this.image, 0, 0);
+    ctx.drawImage(this.images[level], 0, 0);
     ctx.globalAlpha = 1;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
@@ -132,6 +145,7 @@ export class Radar {
     for (let i = 0; i < this.sites.length; i++) {
       const site = this.sites[i], x = site[0], y = site[1], letter = site[2];
       if (!this.place(x, y, false)) continue;
+      faint(site[3]);
       ctx.lineWidth = dpr * 2;
       ctx.strokeStyle = 'rgba(0,0,0,0.7)';
       ctx.strokeText(letter, this.sx, this.sy);
@@ -141,6 +155,7 @@ export class Radar {
     if (hostages) {
       for (let h = 0; h < hostages.count; h++) {
         if (hostages.state[h] !== HS_IDLE || !this.place(hostages.x[h], hostages.y[h], false)) continue;
+        faint(hostages.z[h]);
         ctx.fillStyle = '#e6e6e0';
         ctx.fillRect(this.sx - r * 0.8, this.sy - r * 0.8, r * 1.6, r * 1.6);
       }
@@ -149,6 +164,7 @@ export class Radar {
     if (bomb && (all || team === TEAM_T) && (bomb.state === BOMB_DROPPED || bomb.state === BOMB_PLANTED) &&
       this.place(bomb.x, bomb.y, true)) {
       const blink = bomb.state === BOMB_PLANTED && Math.floor(now / 400) % 2;
+      faint(bomb.z);
       ctx.fillStyle = blink ? '#ff3b2f' : COLOR.bomb;
       ctx.strokeStyle = '#000';
       ctx.lineWidth = dpr;
@@ -169,11 +185,14 @@ export class Radar {
           if (!visible) continue;
           const color = mate || all ? COLOR[t] || '#ccc' : COLOR.enemy;
           if (!this.place(rows[q + E_X], rows[q + E_Y], mate && alive)) continue;
+          const feet = rows[q + E_Z] - 36; // the origin is the hull's center (approx. when ducked)
+          faint(feet);
           if (!alive) this.cross(color, r);
-          else this.dot(color, r, dequantizeYaw(rows[q + E_YAW]), rows[q + E_Z] - cz);
+          else this.dot(color, r, dequantizeYaw(rows[q + E_YAW]), feet - cz);
         }
       }
     }
+    ctx.globalAlpha = 1;
     // Us (or whoever we watch): an arrow along the view (straight up when the radar turns).
     if (this.place(selfX, selfY, true)) {
       this.arrow(r * 1.5, yaw, team === TEAM_CT ? COLOR[TEAM_CT] : team === TEAM_T ? COLOR[TEAM_T] : '#f2ecd8');

@@ -12,9 +12,14 @@ import {
 } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
 
-let bsp = null;
+import { BombSites } from '../shared/bomb.js';
+
+let bsp = null, nuke = null;
 try {
   bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_dust2.bsp', import.meta.url)).buffer);
+} catch { /* map-dependent tests skip */ }
+try {
+  nuke = parseBSP(Deno.readFileSync(new URL('../maps/de_nuke.bsp', import.meta.url)).buffer);
 } catch { /* map-dependent tests skip */ }
 
 Deno.test({ name: 'overview: the reachable floors, lighter higher; spawns on them; north up', ignore: !bsp, fn: () => {
@@ -51,6 +56,36 @@ Deno.test({ name: 'overview: the reachable floors, lighter higher; spawns on the
     if (o.layers[i * 6] > -Infinity) standable++;
   }
   assert.ok(shown > standable * 0.5 && shown < standable * 0.95, `${shown} of ${standable}`);
+  // One level: nothing lies over anything for long.
+  assert.equal(o.levels.length, 1);
+  assert.equal(o.levelOf(-1000), 0);
+  assert.equal(o.levels[0].rgba, o.rgba);
+} });
+
+Deno.test({ name: 'overview: de_nuke is two levels, site B on the lower one under A', ignore: !nuke, fn: () => {
+  const world = CollisionWorld.fromBSP(nuke);
+  const o = new Overview(nuke, world, 256);
+  assert.equal(o.levels.length, 2, `cuts ${o.cuts}`);
+  assert.ok(o.cuts[0] > -700 && o.cuts[0] < -450, `the cut between the floors: ${o.cuts[0]}`); // CS:GO's lower section ends at -495
+  const sites = new BombSites(nuke), [a, b] = sites.boxes; // A over B
+  const ax = (a[0] + a[3]) / 2, ay = (a[1] + a[4]) / 2, bx = (b[0] + b[3]) / 2, by = (b[1] + b[4]) / 2;
+  assert.equal(o.levelOf(a[2]), 1);
+  assert.equal(o.levelOf(b[2]), 0);
+  // Under B's middle the lower level shows B's floor, the upper level A's over it.
+  const lower = o.floorAt(bx, by, 0), upper = o.floorAt(bx, by, 1);
+  assert.ok(Math.abs(lower - b[2]) < 48, `B's floor on the lower level: ${lower} vs ${b[2]}`);
+  assert.ok(upper > lower + 200, `A's floor over it on the upper level: ${upper}`);
+  assert.ok(Math.abs(o.floorAt(ax - 80, ay, 1) - a[2]) < 48, 'A on the upper level (a crate stands at its middle)');
+  assert.equal(o.floorAt(bx, by), upper, 'the all-levels view shows the top');
+  // Each level has its own pixels, transparent where it has no floor.
+  for (const l of o.levels) {
+    let shown = 0;
+    for (let i = 0; i < o.width * o.height; i++) {
+      assert.equal(l.rgba[i * 4 + 3], l.floor[i] === -Infinity ? 0 : 255);
+      if (l.floor[i] > -Infinity) shown++;
+    }
+    assert.ok(shown > o.width * o.height * 0.05, `level shows ${shown} px`);
+  }
 } });
 
 Deno.test('smoke blocks a line of sight through it, not one beside it', () => {

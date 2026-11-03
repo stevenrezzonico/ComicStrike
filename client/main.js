@@ -1538,7 +1538,7 @@ function draw(now, alpha, dt) {
   // The radar centers on whoever we see the game through.
   const watched = spectating && !roaming ? spectator.target : -1, w = watched * E_FIELDS;
   radar.draw(playing, watched >= 0 ? interp[w + E_X] : eye[0], watched >= 0 ? interp[w + E_Y] : eye[1],
-    watched >= 0 ? interp[w + E_Z] : eye[2], yaw, interpolated ? interp : null, selfId, watched, player.team,
+    watched >= 0 ? interp[w + E_Z] - 36 : eye[2] - eyeOffset(ps), yaw, interpolated ? interp : null, selfId, watched, player.team,
     (gameMode() & GAME_FFA) !== 0, net ? net.own.bomb : null, net ? net.hostages : null, now);
   lap(3);
   hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now, leader(), progress());
