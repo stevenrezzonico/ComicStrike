@@ -2,6 +2,8 @@ maps/*
 !maps/de_playground.bsp
 !maps/de_inkwell.bsp
 !maps/de_inkwell.cmap.json
+!maps/cs_polaris.bsp
+!maps/cs_polaris.cmap.json
 certs/
 node_modules/
 .claude/
