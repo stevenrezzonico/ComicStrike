@@ -4,7 +4,7 @@
 
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import {
-  PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, END_MATCH, GAME_FFA, GAME_DM,
+  PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, END_MATCH, reasonOf, GAME_FFA, GAME_DM,
   GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION,
   BUY_MENU, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER, itemLabel, itemPrice,
 } from '../shared/economy.js';
@@ -105,11 +105,11 @@ export class Hud {
       : dm ? `DEATHMATCH   ${mid}${lead}` : armsRace ? `ARMS RACE   ${mid}   ${progress}${lead}`
       : `CT ${rs.scoreCT}   ${mid}   ${rs.scoreT} T${rs.mode & GAME_DEMOLITION ? `   ${progress}` : ''}`);
     let banner = '';
-    if (rs.phase === PHASE_OVER && rs.info >> 2 === END_MATCH) {
+    if (rs.phase === PHASE_OVER && reasonOf(rs.info) === END_MATCH) {
       banner = !leader || leader.tied ? 'Match over: a draw'
         : `${leader.self ? 'You win' : `${leader.name} wins`} the match` + (armsRace ? '' : ` (${leader.score} points)`);
     } else if (rs.phase === PHASE_OVER) {
-      const winner = rs.info & 3, reason = rs.info >> 2;
+      const winner = rs.info & 3, reason = reasonOf(rs.info);
       banner = winner === TEAM_CT ? 'Counter-Terrorists Win' : winner === TEAM_T ? 'Terrorists Win' : 'Round Draw';
       if (reason === END_TIME) banner += ' (time)';
       else if (reason === END_BOMB) banner = 'Target Bombed: ' + banner;
@@ -139,12 +139,12 @@ export class Hud {
       }
       return;
     }
-    const matchEnd = rs.info >> 2 === END_MATCH, report = net.report && net.report.round === rs.round ? net.report : null;
+    const matchEnd = reasonOf(rs.info) === END_MATCH, report = net.report && net.report.round === rs.round ? net.report : null;
     const key = `${rs.serial}|${rs.info}|${rs.mvp}|${rs.scoreCT}|${rs.scoreT}|${this.panelTitle}|${report ? report.rows.length : -1}|` +
       `${matchEnd ? net.names.join() + net.kills.join() + net.deaths.join() + net.mvps.join() : net.names[rs.mvp] || ''}`;
     if (key === this.panelKey) return;
     this.panelKey = key;
-    const winner = rs.info & 3, reason = rs.info >> 2;
+    const winner = rs.info & 3, reason = reasonOf(rs.info);
     const el = this.elPanel;
     el.replaceChildren();
     el.className = `on ${winner === TEAM_CT ? 'ct' : winner === TEAM_T ? 't' : ''}`;

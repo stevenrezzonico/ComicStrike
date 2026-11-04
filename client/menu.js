@@ -100,6 +100,7 @@ const TABS = [
   ['Audio', [
     ['slider', 'volume', 'Master volume', 0, 1, 0.01],
     ['slider', 'snd_footstep_volume', 'Footsteps', 0, 2, 0.01],
+    ['slider', 'snd_musicvolume', 'Jingles (0: off)', 0, 1, 0.01],
   ]],
   ['Weapons', [
     ['gunwindow'],

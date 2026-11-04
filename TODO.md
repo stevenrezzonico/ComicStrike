@@ -4,17 +4,7 @@ Improvements proposed and kept, not yet built. Each has a plan grounded in the c
 was when the plan was written; check the files named before starting one. Done so far from
 these lists: text chat (14g), movers and breakables (14h), weapon leftovers (14i), bots'
 grenades, AWP and buttons (14j), radar levels (14k), point lights (14l), the round-end panel
-and damage report (14m), sun shadows for players (14n), gun looks.
-
-## Comic jingles
-
-Synthesized stingers (`client/audio.js`): round start (a two-note brass hit), bomb planted
-(a low drone with a ticking pulse), the last 10 seconds (rising), round won / lost (a major
-or minor cadence, 1.2 s), match end (a longer fanfare); `snd_musicvolume` (0-1, Audio tab)
-scales them, 0 off. Triggered from the round block's phase and info changes and the bomb
-state in `client/main.js` (where the plant notice is flashed). Rendered through the same
-bus as the sounds (the compressor keeps them from ducking the game). Keep each under 2 s
-and never on top of a flashbang's ringing.
+and damage report (14m), sun shadows for players (14n), gun looks, comic jingles.
 
 ## Practice tools in Demo mode
 

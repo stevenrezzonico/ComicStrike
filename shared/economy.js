@@ -47,6 +47,11 @@ export const END_BOMB = 4; // target bombed
 export const END_DEFUSE = 5;
 export const END_RESCUE = 6; // a hostage reached a rescue zone
 export const END_MATCH = 7; // deathmatch: the time limit ended the match (winner: top score)
+// roundInfo bit 7: this round decided the match (a side past half the rounds; END_MATCH
+// says so itself). The reason is (info >> 2) & 7 (reasonOf).
+export const ROUND_FINAL = 0x80;
+export const reasonOf = (info) => (info >> 2) & 7;
+export const matchOver = (info) => (info & ROUND_FINAL) !== 0 || reasonOf(info) === END_MATCH;
 
 // Game modes (RoundState.mode bits, set by the server's game_type / game_mode and the
 // mode convars).

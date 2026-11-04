@@ -110,6 +110,7 @@ export function createConsole(print) {
   // Sound, network, identity.
   add('volume', 1, 'Master volume', 0, 1);
   add('snd_footstep_volume', 1, 'Footstep volume (ours and other players)', 0, 2);
+  add('snd_musicvolume', 0.5, 'Comic jingles: round start and end, bomb planted, the last 10 seconds, match end (0: off)', 0, 1);
   add('cl_interp_ratio', 2, 'Other players are drawn this many ticks behind', 1, 2);
   add('name', 'player', 'Your name');
   add('rcon_password', '', 'Password for rcon commands', undefined, undefined, FCVAR_PROTECTED);

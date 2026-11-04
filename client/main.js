@@ -57,6 +57,7 @@ import { Players } from './gl/players.js';
 import { PlayerModels } from './gl/playermodels.js';
 import { GunMeshes } from './gl/gunmeshes.js';
 import { LOOK_GUNS, lookOf } from './models/looks.js';
+import { JingleCues } from './jingles.js';
 import { GrenadeFx } from './gl/grenadefx.js';
 import { Blasts } from './gl/blast.js';
 import { PASS } from './gl/gputimer.js';
@@ -342,6 +343,7 @@ const predictedWs = new Uint8Array(HISTORY * WS_SIZE * 8);
 const predictedTick = new Int32Array(HISTORY).fill(-1);
 const serverBroken = new Uint32Array(8); // breakable mask of the last applied snapshot
 let roundSerial = -1; // the server's round starts (RoundState.serial) last seen
+const jingleCues = new JingleCues();
 let lastOwnTeam = 0; // our team in the last snapshot (a swap at a round start is the half-time)
 const replayShots = new ShotList();
 const smooth = new Float32Array(3); // visual offset hiding prediction corrections
@@ -838,6 +840,9 @@ function applySnapshot() {
     }
     lastBombState = bomb.state;
   }
+  // The comic jingles (client/jingles.js).
+  const jingle = jingleCues.update(own.round, bomb, own.team);
+  if (jingle) sounds.jingle(jingle);
 
   // Keep the server clock estimate near the newest snapshot (it drifts with jitter).
   const seq = net.latestSeq;
@@ -1341,6 +1346,7 @@ function frame(now) {
   input.rawInput = cv.m_rawinput.bool;
   if (sounds.volume !== cv.volume.number) sounds.setVolume(cv.volume.number);
   sounds.stepVolume = cv.snd_footstep_volume.number;
+  if (sounds.music !== cv.snd_musicvolume.number) sounds.setMusic(cv.snd_musicvolume.number);
   pollPads(elapsed, now);
   input.applyMouse(angles);
   const t0 = performance.now();
@@ -2067,6 +2073,7 @@ const NO_ITEMS = new Items(), NO_HOSTAGES = new Hostages();
 function resetSession() {
   synced = false;
   roundSerial = -1;
+  jingleCues.reset();
   lastOwnTeam = 0;
   words.clear();
   blasts.clear();

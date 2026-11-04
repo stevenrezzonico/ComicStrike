@@ -40,7 +40,7 @@ import {
   MAX_ROUNDS, OVERTIME_ROUNDS, OVERTIME_MONEY, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD,
   PLANT_LOSS_BONUS, LOSS_STREAK_MAX, TEAMKILL_PENALTY, END_ELIMINATION, END_TIME, END_DRAW, END_BOMB, END_DEFUSE,
   END_RESCUE, RESCUE_WIN_REWARD, RESCUE_REWARD, HOSTAGE_TOUCH_REWARD, HOSTAGE_HIT_PENALTY, HOSTAGE_KILL_PENALTY,
-  END_MATCH, GAME_FFA, GAME_DM, GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION, GAME_WINGMAN, GAME_GHOST_TEAM, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
+  END_MATCH, ROUND_FINAL, matchOver, GAME_FFA, GAME_DM, GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION, GAME_WINGMAN, GAME_GHOST_TEAM, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
@@ -888,12 +888,10 @@ export class Game {
       // Regulation: first past half the rounds wins, a tie after all of them goes to
       // overtime (CS:GO's MR3: periods of 6 rounds, swap after 3, first to 4 of them;
       // 3-3 plays another period). Without overtime a tie restarts the match.
-      const max = this.rules.maxRounds, half = Math.floor(max / 2);
-      const ot = this.overtime > 0, otMax = this.rules.overtimeRounds, otHalf = Math.floor(otMax / 2);
+      const max = this.rules.maxRounds, ot = this.overtime > 0, otMax = this.rules.overtimeRounds;
       const played = ot ? this.roundsPlayed - max - (this.overtime - 1) * otMax : this.roundsPlayed;
-      const winsT = ot ? rs.scoreT - this.otScoreT : rs.scoreT, winsCT = ot ? rs.scoreCT - this.otScoreCT : rs.scoreCT;
-      const need = ot ? otHalf : half, limit = ot ? otMax : max;
-      if (rs.info >> 2 === END_MATCH || winsT > need || winsCT > need) this.startMatch();
+      const need = Math.floor((ot ? otMax : max) / 2), limit = ot ? otMax : max;
+      if (matchOver(rs.info) || this.matchWon()) this.startMatch();
       else if (played >= limit) {
         if (this.rules.overtime && this.rules.halftime) this.startOvertime();
         else this.startMatch();
@@ -1009,12 +1007,19 @@ export class Game {
   }
 
   // `hero`: the client whose plant, defuse or rescue ended it (the MVP).
+  // A side has won more than half the rounds of regulation (or of this overtime period).
+  matchWon() {
+    const rs = this.round, ot = this.overtime > 0;
+    const need = Math.floor((ot ? this.rules.overtimeRounds : this.rules.maxRounds) / 2);
+    return (ot ? rs.scoreT - this.otScoreT : rs.scoreT) > need || (ot ? rs.scoreCT - this.otScoreCT : rs.scoreCT) > need;
+  }
+
   endRound(winner, reason, hero = null) {
     const rs = this.round;
     this.roundsPlayed++;
     if (winner === TEAM_T) rs.scoreT++;
     if (winner === TEAM_CT) rs.scoreCT++;
-    rs.info = winner | (reason << 2);
+    rs.info = winner | (reason << 2) | (this.matchWon() ? ROUND_FINAL : 0); // the clients' match-end fanfare
     this.roundMvp(winner, hero);
     this.sendReports();
     for (const team of [TEAM_T, TEAM_CT]) {

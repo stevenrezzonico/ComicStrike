@@ -37,6 +37,59 @@ const CLICKS = {
 const ATTACK = 0.008; // s a noise burst takes to swell to its level (tones: 3/4 of it)
 const ROOM = 0.18; // room echo send near the listener
 const ROOM_FAR = 0.35; // more of it far away
+const MUSIC_LEVEL = 0.6; // the jingles at snd_musicvolume 1: their chords stay under the compressor's knee
+const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
+
+// The comic jingles (client/jingles.js says when): short synthesized stingers, each under 2 s,
+// played by Sounds.jingle into `out` from time t; each returns its length. A cartoon
+// brass section (two detuned saws through a lowpass that opens on the attack), plucks,
+// a drone, ticks.
+export const JINGLES = {
+  // The round goes live: a two-note brass hit, up a fourth, on a soft kick.
+  start(out, t) {
+    this.brass(out, t, 67, 0.1, 0.07);
+    for (const m of [72, 76]) this.brass(out, t + 0.13, m, 0.38, m === 72 ? 0.08 : 0.05);
+    this.tone(out, t, 110, 55, 0.22, 0.18, 0.13);
+    return 0.7;
+  },
+  // The bomb is planted: a low drone on A with its fifth, pulsing, under a ticking clock.
+  planted(out, t) {
+    this.drone(out, t, 45, 1.6, 0.11);
+    this.drone(out, t, 52, 1.6, 0.05);
+    for (let i = 0; i < 6; i++) this.tone(out, t, 1500, 1500, 0.05, 0.03, 0.15 + i * 0.25, 'triangle');
+    return 1.75;
+  },
+  // The last 10 seconds: a rising run of plucks over a rising swish.
+  ten(out, t) {
+    [72, 74, 76, 79, 81, 84].forEach((m, i) => this.pluck(out, t + i * 0.08, m, 0.06));
+    this.riser(out, t, 0.65, 0.05);
+    return 0.85;
+  },
+  // Our side won the round: a major cadence, IV - V - I.
+  won(out, t) {
+    this.chord(out, t, [65, 69, 72], 0.18, 0.055);
+    this.chord(out, t + 0.22, [67, 71, 74], 0.18, 0.055);
+    this.chord(out, t + 0.44, [72, 76, 79], 0.62, 0.055);
+    return 1.2;
+  },
+  // Our side lost: the minor one, iv - V - i, duller, the last chord sagging.
+  lost(out, t) {
+    this.chord(out, t, [65, 68, 72], 0.22, 0.05, 0.7);
+    this.chord(out, t + 0.27, [67, 71, 74], 0.22, 0.05, 0.7);
+    this.chord(out, t + 0.54, [60, 63, 67], 0.5, 0.055, 0.6, -60);
+    return 1.2;
+  },
+  // The match is over (won, or a mode without sides): a fanfare up the C major triad to a
+  // held chord with a cymbal.
+  match(out, t) {
+    [[67, 0, 0.1], [72, 0.13, 0.1], [76, 0.26, 0.1], [79, 0.39, 0.22], [76, 0.66, 0.12]]
+      .forEach(([m, at, d]) => this.brass(out, t + at, m, d, 0.07));
+    this.chord(out, t + 0.84, [72, 76, 79, 84], 0.75, 0.045);
+    this.tone(out, t, 110, 50, 0.22, 0.25, 0.84);
+    this.burst(out, t, 5000, 12000, 0.05, 0.9, 0.84);
+    return 1.85;
+  },
+};
 
 export class Sounds {
   constructor() {
@@ -57,6 +110,15 @@ export class Sounds {
     this.fwdY = 0;
     this.occluded = null; // (x, y, z) -> true when a wall is between it and the listener
     this.ring = null; // the flashbang's ear ring (oscillator + gain), while it lasts
+    this.music = 0.5; // snd_musicvolume: the jingles
+    this.musicBus = null;
+    this.jingleOut = null; // the jingle playing (its gain), until jingleEnd
+    this.jingleEnd = 0;
+  }
+
+  setMusic(v) {
+    this.music = v;
+    if (this.musicBus) this.musicBus.gain.value = v * MUSIC_LEVEL;
   }
 
   setVolume(v) {
@@ -114,6 +176,10 @@ export class Sounds {
     this.room = ctx.createConvolver();
     this.room.buffer = ir;
     this.room.connect(this.bus);
+    // The jingles: dry, through the same chain as the game (muffled by a flash too).
+    this.musicBus = ctx.createGain();
+    this.musicBus.gain.value = this.music * MUSIC_LEVEL;
+    this.musicBus.connect(this.bus);
   }
 
   get ready() {
@@ -439,6 +505,105 @@ export class Sounds {
     f.cancelScheduledValues(t);
     f.setValueAtTime(500, t);
     f.exponentialRampToValueAtTime(20000, t + seconds + 0.5);
+  }
+
+  // Jingle `name` (JINGLES; client/jingles.js), unless the music is off or a flashbang's
+  // ringing is on: one at a time, a new one cutting the last short. Returns whether it plays.
+  jingle(name) {
+    if (!this.ready || this.music <= 0 || !JINGLES[name] || this.ring) return false;
+    const ctx = this.ctx, t = ctx.currentTime + 0.02;
+    if (this.jingleOut && t < this.jingleEnd) {
+      const g = this.jingleOut.gain;
+      g.cancelScheduledValues(t);
+      g.setValueAtTime(1, t);
+      g.linearRampToValueAtTime(0, t + 0.06);
+    }
+    const out = ctx.createGain();
+    out.connect(this.musicBus);
+    this.jingleOut = out;
+    this.jingleEnd = t + JINGLES[name].call(this, out, t);
+    return true;
+  }
+
+  // A brass note (midi) into `out` at t for dur s: two saws a little apart through a
+  // lowpass that opens on the attack (`bright` scales it), swelling in, settling, dying
+  // after; `bend`: cents it sags by the end.
+  brass(out, t, midi, dur, level, bright = 1, bend = 0) {
+    const ctx = this.ctx, f = mtof(midi), end = t + dur + 0.15;
+    const g = ctx.createGain(), lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.Q.value = 2;
+    lp.frequency.setValueAtTime(f * 1.2, t);
+    lp.frequency.linearRampToValueAtTime(f * 5 * bright, t + 0.035);
+    lp.frequency.exponentialRampToValueAtTime(f * 2.5 * bright, t + dur);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(level, t + 0.02);
+    g.gain.linearRampToValueAtTime(level * 0.75, t + Math.min(0.12, dur));
+    g.gain.setValueAtTime(level * 0.75, t + dur);
+    g.gain.exponentialRampToValueAtTime(0.001, end);
+    lp.connect(g).connect(out);
+    for (const det of [-8, 8]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = f;
+      o.detune.setValueAtTime(det, t);
+      if (bend) o.detune.linearRampToValueAtTime(det + bend, t + dur);
+      o.connect(lp);
+      o.start(t);
+      o.stop(end + 0.02);
+    }
+  }
+
+  chord(out, t, notes, dur, level, bright = 1, bend = 0) {
+    for (const m of notes) this.brass(out, t, m, dur, level, bright, bend);
+  }
+
+  // A plucked note: a triangle and a quieter octave over it, dying fast.
+  pluck(out, t, midi, level, decay = 0.25) {
+    const f = mtof(midi);
+    this.tone(out, t, f, f, level, decay, 0, 'triangle');
+    this.tone(out, t, f * 2, f * 2, level * 0.3, decay * 0.6);
+  }
+
+  // A low drone (midi) for dur s: a saw under a dark lowpass, swelling in, pulsing four
+  // times a second, dying at the end.
+  drone(out, t, midi, dur, level) {
+    const ctx = this.ctx, o = ctx.createOscillator(), lp = ctx.createBiquadFilter();
+    const trem = ctx.createGain(), lfo = ctx.createOscillator(), depth = ctx.createGain(), env = ctx.createGain();
+    o.type = 'sawtooth';
+    o.frequency.value = mtof(midi);
+    lp.type = 'lowpass';
+    lp.frequency.value = 320;
+    trem.gain.value = 0.7;
+    lfo.frequency.value = 4;
+    depth.gain.value = 0.3;
+    lfo.connect(depth).connect(trem.gain);
+    env.gain.setValueAtTime(0, t);
+    env.gain.linearRampToValueAtTime(level, t + 0.4);
+    env.gain.setValueAtTime(level, t + dur - 0.3);
+    env.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(lp).connect(trem).connect(env).connect(out);
+    for (const s of [o, lfo]) {
+      s.start(t);
+      s.stop(t + dur + 0.02);
+    }
+  }
+
+  // Noise through a band that rises from 400 Hz to 4 kHz over dur s, swelling and fading.
+  riser(out, t, dur, level) {
+    const ctx = this.ctx, src = ctx.createBufferSource(), bp = ctx.createBiquadFilter(), g = ctx.createGain();
+    src.buffer = this.noise;
+    src.loop = true;
+    bp.type = 'bandpass';
+    bp.Q.value = 1.5;
+    bp.frequency.setValueAtTime(400, t);
+    bp.frequency.exponentialRampToValueAtTime(4000, t + dur);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(level, t + dur * 0.8);
+    g.gain.linearRampToValueAtTime(0, t + dur);
+    src.connect(bp).connect(g).connect(out);
+    src.start(t);
+    src.stop(t + dur + 0.02);
   }
 
   // The C4's beep: a short triangle-wave chirp.

@@ -6,7 +6,7 @@ import { WEAPON_ID, WS_SLOTS, SLOT_PRIMARY, SLOT_SECONDARY } from '../shared/wea
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, START_MONEY, WIN_REWARD, LOSS_BONUS, END_ELIMINATION,
-  END_TIME, ITEM_KEVLAR, ITEM_ASSAULTSUIT, MAX_ROUNDS, OVERTIME_MONEY, lossBonus,
+  END_TIME, ITEM_KEVLAR, ITEM_ASSAULTSUIT, MAX_ROUNDS, OVERTIME_MONEY, lossBonus, ROUND_FINAL, matchOver, reasonOf,
 } from '../shared/economy.js';
 import { Writer, CmdRing, writeHello, writeCmds, writeBuy } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
@@ -190,5 +190,31 @@ Deno.test('overtime: a 15-15 tie plays MR3 periods with $10000, swapping after 3
   // Four wins in a period end the match (a new match starts: scores 0).
   for (let i = 0; i < 4; i++) winRound(ct);
   assert.equal(game.overtime, 0, 'match over');
+  assert.equal(game.round.scoreT + game.round.scoreCT, 0, 'a new match');
+});
+
+Deno.test('rounds: the round that decides the match says so (the clients\' fanfare)', async (t) => {
+  const s = await setup(t);
+  if (!s) return;
+  const { game, t1, ct, run } = s;
+  run(1 + 64 + 2);
+  assert.equal(game.phase, PHASE_LIVE);
+  // 14-14: a win is not the match.
+  game.roundsPlayed = 28;
+  game.round.scoreT = 14;
+  game.round.scoreCT = 14;
+  game.kill(ct, t1, WEAPON_ID.usp_silencer, false);
+  run(1);
+  assert.equal(game.round.info, TEAM_CT | (END_ELIMINATION << 2));
+  assert.ok(!matchOver(game.round.info));
+  run(1 + 64 + 64 + 4);
+  // 15-14: the 16th win is.
+  game.kill(ct, t1, WEAPON_ID.usp_silencer, false);
+  run(1);
+  assert.equal(game.round.info, TEAM_CT | (END_ELIMINATION << 2) | ROUND_FINAL);
+  assert.ok(matchOver(game.round.info));
+  assert.equal(reasonOf(game.round.info), END_ELIMINATION);
+  assert.equal(game.round.info & 3, TEAM_CT);
+  run(1 + 64 + 64 + 4);
   assert.equal(game.round.scoreT + game.round.scoreCT, 0, 'a new match');
 });
