@@ -1351,7 +1351,7 @@ function lap(part) {
 
 // The scene's render resolution relative to the canvas, as a percentage (r_dynres, mat_viewportscale).
 const renderScale = () =>
-  `${Math.round(100 * renderer.renderScale)}%${renderer.capped ? ' (capped)' : ''}${cv.r_dynres.bool && dynres.print < 1 ? `, print ${Math.round(100 * dynres.print)}%` : ''}${renderer.style.fast ? ', fast ink' : ''}`;
+  `${Math.round(100 * renderer.renderScale)}%${renderer.capped ? ' (capped)' : ''}${cv.r_dynres.bool && dynres.print < 1 ? `, print ${Math.round(100 * dynres.print)}%` : ''}`;
 
 function benchmarkReport() {
   const { gaps, n, frames: n0 } = bench; // n: the gaps kept (the first of a long run), n0: every drawn frame
@@ -1781,7 +1781,6 @@ function applyVideoSettings() {
   renderer.novis = cv.r_novis.bool;
   models.farLod = cv.r_lod_dist.number;
   models.sunOn = cv.r_playershadows.bool;
-  style.fast = cv.r_inkfast.bool;
   style.inkaa = cv.r_inkaa.bool;
   style.hatch = cv.r_hatching.bool;
   return aspect;

@@ -910,11 +910,9 @@ void main() {
     // The diagonals read as the sample itself (no silhouette, crease or character term from
     // them) unless fetched below.
     DTEX tDL = Dc, tUR = Dc, tUL = Dc, tDR = Dc;
-#ifndef INK_FAST
     // The diagonals (5 fetches more) only where the four direct neighbors show anything at
     // all: a depth bulge, a crease or another surface well under the line's start, other
-    // flags. On a plane, inside one surface (most pixels) they would add nothing; the
-    // r_inkfast print leaves them out everywhere.
+    // flags. On a plane, inside one surface (most pixels) they would add nothing.
     if (lap > 0.01 * wc || nd > 0.06 || eI > 0.0 ||
       flagsOf(tL) != fc || flagsOf(tR) != fc || flagsOf(tD) != fc || flagsOf(tU) != fc) {
       tDL = dtex(pc + ivec2(-s, -s));
@@ -925,7 +923,6 @@ void main() {
       bool ad = across(tUR) || (cc && !isChar(tUR));
       if (!ad) nd = max(nd, crease(c, ntex(pc + ivec2(s, s))));
     }
-#endif
     float eD = smoothstep(0.05, 0.16, lap / wc);
     float eN = smoothstep(0.22, 0.45, nd);
     float fade = 1.0 - 0.65 * smoothstep(1000.0 * u_zoom, 3400.0 * u_zoom, dC);
@@ -982,8 +979,6 @@ void main() {
   }
   o_ink = vec4(edge, 0.0, 0.0, 1.0);
 }`;
-// r_inkfast: lines from the four direct neighbors only (a slower GPU's print).
-export const INK_FAST_FS = INK_FS.replace('#version 300 es\n', '#version 300 es\n#define INK_FAST\n');
 
 export const COMPOSITE_FS = `#version 300 es
 precision highp float;

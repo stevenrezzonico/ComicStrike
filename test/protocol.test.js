@@ -6,7 +6,7 @@ import {
   CmdRing, SnapshotRing, OwnState, writeHello, readHello, writeWelcome, readWelcome, writeCmds, readCmds,
   writeSnapshot, readSnapshot, quantizePitch, dequantizePitch, quantizeYaw, dequantizeYaw, E_ACTIVE, E_X, E_Y, E_Z,
   E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS, E_FIELDS, ANIM_RELOAD, ANIM_HELMET,
-  RoundState, writeChat, readChat, cleanChat, S2C_CHAT, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_MAX,
+  RoundState, EventList, writeChat, readChat, cleanChat, S2C_CHAT, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_MAX,
   writeInfo, readInfo, writeReport, readReport, S2C_INFO, S2C_REPORT, NO_MVP, cleanName, NAME_BYTES,
 } from '../shared/protocol.js';
 
@@ -191,4 +191,30 @@ Deno.test('names: control characters out, at most NAME_BYTES bytes, a full serve
     players.push({ team: 2, name, kills: 65535, deaths: 65535, score: 65535, mvps: 255 });
   }
   assert.ok(writeInfo(w, players).length <= MAX_DATAGRAM);
+});
+
+// The worst case: every player's full row, a weapon state with 32 fields set (a rifle firing
+// with every slot and four grenades: planting, throwing and scoping exclude each other; all 48
+// would not fit even with no movers), 16 kills and 64 shots, and all 64 movers away from rest. The writer ran past the datagram and threw, so
+// that tick went out to nobody; movers past the room are left out, kills and shots fit.
+Deno.test('snapshots: the busiest tick still fits a datagram and decodes', () => {
+  const server = new SnapshotRing(), own = new OwnState(), ev = new EventList();
+  const w = new Writer(), r = new Reader(), player = new Player();
+  const k = server.claim(1);
+  for (let id = 0; id < MAX_PLAYERS; id++) fillRow(server, k, id, id * 100);
+  for (let i = 0; i < 64; i++) ev.addShot(1, 0, 1, 2, 3, 0, 0, 1, 0);
+  for (let i = 0; i < 16; i++) ev.addKill(i, 1, 2, 3, 0, 1);
+  const n = 64, doors = {
+    count: n, idle: () => false, leg: new Uint8Array(n).fill(1), goal: new Float32Array(n).fill(0.5),
+    dir: new Int8Array(n).fill(1), sign: new Int8Array(n).fill(1), from: new Float32Array(n), t0: new Int32Array(n),
+  };
+  for (const fields of [32, 0]) {
+    player.ws.f.fill(0).fill(1, 0, fields);
+    const bytes = writeSnapshot(w, server, k, -1, 0, { lastCmd: 1, spawnYaw: 0, player, hurtRecent: true, hurtSerial: 1, hurtFrom: [1, 2, 3] }, ev, new RoundState(), undefined, doors);
+    assert.ok(bytes.length <= MAX_DATAGRAM, `${bytes.length} bytes`);
+    r.set(bytes);
+    r.u8v();
+    assert.ok(readSnapshot(r, new SnapshotRing(), own, new EventList()) >= 0);
+    assert.ok(own.movers.count > 0, 'movers fill what is left');
+  }
 });

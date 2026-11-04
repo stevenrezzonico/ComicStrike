@@ -339,3 +339,22 @@ Deno.test('sessions per address', () => {
   assert.ok(counts.add('1.2.3.4'), 'a closed one frees its place');
   for (let i = 0; i < 10; i++) assert.ok(counts.add('127.0.0.1') && counts.add('::1'));
 });
+
+// The per-address count alone let an IPv6 /48 (65,536 addresses) guess ~327k times a minute:
+// after 60 bad passwords in a minute from anywhere, rcon refuses everyone until it is over.
+Deno.test('rcon: a server-wide cap on bad passwords a minute', async (t) => {
+  const s = await setup(t);
+  if (!s) return;
+  const { host, join, clock } = s;
+  host.con.exec('rcon_password hunter2');
+  for (let i = 0; i < 15; i++) {
+    const c = join(`v${i}`, TEAM_T, `2001:db8:0:${i.toString(16)}::1`);
+    for (let k = 0; k < 4; k++) c.command(`rcon guess${k} status`);
+  }
+  const admin = join('admin', TEAM_CT, '198.51.100.9');
+  admin.command('rcon hunter2 status');
+  assert.match(admin.prints().at(-1), /too many bad passwords on this server/);
+  clock.ms += 60000;
+  admin.command('rcon hunter2 status');
+  assert.match(admin.prints().at(-1), /admin/);
+});

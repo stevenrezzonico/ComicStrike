@@ -9,6 +9,7 @@
 
 import { program } from './program.js';
 import { TRAIL_VS, TRAIL_FS, DEBRIS_VS, DEBRIS_FS } from './shaders.js';
+import { cubeInstances } from './debris.js';
 import { WEAPON_ID } from '../../shared/weapons.js';
 
 export const TRAIL_KEEP = 3; // seconds a landed grenade's arc stays
@@ -139,36 +140,7 @@ export class PracticeMarks {
     // Boxes: a unit cube (debris shader), one instance an impact.
     this.inst = new Float32Array(MAX_IMPACTS * I);
     this.boxProg = program(gl, DEBRIS_VS, DEBRIS_FS, ['u_viewProj']);
-    const cube = [];
-    for (const [n, u, v] of [[0, 1, 2], [1, 2, 0], [2, 0, 1]]) {
-      for (const s of [-1, 1]) {
-        for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]]) {
-          const p = [0, 0, 0], nrm = [0, 0, 0];
-          p[n] = s * 0.5;
-          p[u] = a * 0.5;
-          p[v] = b * 0.5;
-          nrm[n] = s;
-          cube.push(...p, ...nrm);
-        }
-      }
-    }
-    this.boxVao = gl.createVertexArray();
-    gl.bindVertexArray(this.boxVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cube), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
-    this.boxVbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.boxVbo);
-    gl.bufferData(gl.ARRAY_BUFFER, this.inst.byteLength, gl.DYNAMIC_DRAW);
-    for (let a = 0; a < 4; a++) {
-      gl.enableVertexAttribArray(2 + a);
-      gl.vertexAttribPointer(2 + a, 3, gl.FLOAT, false, I * 4, a * 12);
-      gl.vertexAttribDivisor(2 + a, 1);
-    }
-    gl.bindVertexArray(null);
+    ({ vao: this.boxVao, vbo: this.boxVbo } = cubeInstances(gl, MAX_IMPACTS));
     this.addBox = (x, y, z) => {
       const d = this.inst, o = this.boxCount++ * I;
       d[o] = x; d[o + 1] = y; d[o + 2] = z;
@@ -231,7 +203,7 @@ export class PracticeMarks {
         gl.bindBuffer(gl.ARRAY_BUFFER, this.boxVbo);
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.inst, 0, this.boxCount * I);
         gl.bindVertexArray(this.boxVao);
-        gl.disable(gl.CULL_FACE); // the cube's sides wind either way (client/gl/players.js's)
+        gl.disable(gl.CULL_FACE); // drawn with culling off (cubeInstances)
         gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.boxCount);
         gl.enable(gl.CULL_FACE);
       }

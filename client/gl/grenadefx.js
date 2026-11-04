@@ -10,7 +10,7 @@
 
 import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN, modelLight, eyeOf } from './skinned.js';
 import { MeshBuilder } from './meshkit.js';
-import { buildBurst } from './blast.js';
+import { buildBurst, rng } from './blast.js';
 import {
   Grenades, smokeRadius, fireRadius, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE, MAX_GRENADES, MAX_EFFECTS,
   FIRE_TIME,
@@ -95,12 +95,6 @@ const COLUMN_LIGHT = 1.0; // the column is lit at least this much (darker it pri
 const CRACKLE_EVERY = 1.3; // s between CRACKLE! words (onCrackle)
 const PER_EFFECT = BASE_FLAMES + TALL_FLAMES + 1 + EMBERS + SMOKE_COLUMN;
 const DRAWS = MAX_GRENADES + MAX_EFFECTS * PER_EFFECT;
-
-// Park-Miller, so the shapes are the same every load.
-function rng(seed) {
-  let s = seed;
-  return () => ((s = (s * 16807) % 2147483647) / 2147483647);
-}
 
 // A comic flame tongue of width 1 and height 1 in the x-z plane (base at z = 0), thin
 // along y: the knots of its outline, counter-clockwise from the base's right corner, with

@@ -12,4 +12,7 @@ remote=$(git rev-parse origin/main)
 [ "$local" = "$remote" ] && exit 0
 git reset -q --hard origin/main
 echo "deployed $(git log --oneline -1)"
+# Only a change the running game uses restarts it (and drops every player): pages and scripts
+# under client/ are served fresh, docs and tests do nothing.
+git diff --quiet "$local" "$remote" -- server shared cfg maps deno.json && exit 0
 systemctl restart comicstrike

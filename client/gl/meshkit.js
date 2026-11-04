@@ -26,6 +26,14 @@ export function finish(rgb, fin) {
   return c;
 }
 
+// A color k times as bright (capped at 1), keeping its finish: a detail's lighter or darker
+// shade of its part, so the ink outlines it (the gun and player models).
+export function shade(c, k) {
+  const s = c.map((v) => Math.min(1, v * k));
+  if (c.finish !== undefined) s.finish = c.finish;
+  return s;
+}
+
 const DEFAULT_CREASE = 50; // degrees: flatter edges are smoothed
 
 // Affine transform as a 3x4 row-major array [r00 r01 r02 tx, r10 r11 r12 ty, r20 r21 r22 tz].

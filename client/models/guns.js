@@ -8,7 +8,7 @@
 // magazine, so reloads can drop it) and GUN_BOLT (slide, bolt, pump). Each model also
 // reports the points hands and effects need (see buildGun).
 
-import { MeshBuilder, FINISH, finish } from '../gl/meshkit.js';
+import { MeshBuilder, FINISH, finish, shade } from '../gl/meshkit.js';
 import { WEAPONS } from '../../shared/weapons.js';
 
 export const GUN_ROOT = 0;
@@ -48,14 +48,6 @@ function withBevel(b, r, fn) {
   b.bevel(r);
   fn();
   b.bevel(bev);
-}
-
-// A lighter or darker print of a color, keeping its finish: details in another color get
-// their own ink outline (ribs, serrations).
-function shade(c, k) {
-  const s = c.map((v) => Math.min(1, v * k));
-  if (c.finish !== undefined) s.finish = c.finish;
-  return s;
 }
 
 // Long-gun receiver from x0 to x1, bottom at z0, height h, width w, its rear corners cut;

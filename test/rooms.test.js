@@ -185,3 +185,13 @@ Deno.test('uploads are refused before their body is read', async () => {
   clock.ms += 1;
   await refused('1.1.1.1', /every room|already host/, 503);
 });
+
+// The cooldown list kept one entry per address that ever uploaded: the sweep drops those past it.
+Deno.test('the upload cooldown list is pruned', () => {
+  const { rooms, clock } = makeRooms({ cooldownMs: 1000 });
+  assert.throws(() => rooms.create(new Uint8Array(4000), { address: '1.1.1.1' }), RoomError);
+  assert.equal(rooms.lastUpload.size, 1);
+  clock.ms += 1000;
+  rooms.sweep();
+  assert.equal(rooms.lastUpload.size, 0);
+});

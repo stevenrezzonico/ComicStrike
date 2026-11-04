@@ -4,7 +4,7 @@
 // bulk of the world draws with a shader that never discards.
 import assert from 'node:assert/strict';
 import {
-  GBUFFER_SHADERS, WORLD_FS, WORLD_SOLID_FS, DECAL_FS, SHADOW_FS, COMPOSITE_FS, INK_FS, INK_FAST_FS, G_FLAGS,
+  GBUFFER_SHADERS, WORLD_FS, WORLD_SOLID_FS, DECAL_FS, SHADOW_FS, COMPOSITE_FS, INK_FS, G_FLAGS,
   CLOUD_PERIOD,
 } from '../client/gl/shaders.js';
 import { FlashLights, MAX_FLASHES } from '../client/gl/flashes.js';
@@ -39,7 +39,7 @@ Deno.test('comic: every G-buffer shader writes all three targets through gbuffer
     const main = src.slice(src.lastIndexOf('void main()'));
     assert.match(main, /gbuffer\(/, `${name} never calls gbuffer()`);
   }
-  for (const src of [COMPOSITE_FS, INK_FS, INK_FAST_FS]) {
+  for (const src of [COMPOSITE_FS, INK_FS]) {
     const main = src.slice(src.indexOf('void main()'));
     assert.doesNotMatch(main, /\.a & G_|uvec4/, 'the print reads depth texels through DTEX only');
   }
@@ -167,25 +167,6 @@ Deno.test({ name: 'comic: alpha-tested faces draw apart; the opaque bulk never d
   for (let i = 0; i < mesh.opaqueCount; i++) assert.ok(!cut(i), 'opaque range');
   for (let i = mesh.opaqueCount; i < mesh.opaqueCount + mesh.cutoutCount; i++) assert.ok(cut(i), 'alpha-tested range');
 } });
-
-Deno.test('comic: the fast ink (r_inkfast) is the print without the diagonal fetches', () => {
-  assert.ok(INK_FAST_FS.startsWith('#version 300 es\n#define INK_FAST\n'));
-  // The fetches the GLSL preprocessor keeps for each variant.
-  const kept = (src, fast) => {
-    const on = [true];
-    let n = 0;
-    for (const line of src.split('\n')) {
-      const t = line.trim();
-      if (t === '#ifdef INK_FAST') on.push(fast);
-      else if (t === '#ifndef INK_FAST') on.push(!fast);
-      else if (t === '#else' && on.length > 1) on.push(!on.pop());
-      else if (t === '#endif' && on.length > 1) on.pop();
-      else if (on.every(Boolean)) n += (t.match(/\b(dtex|ntex)\(pc/g) || []).length;
-    }
-    return n;
-  };
-  assert.equal(kept(INK_FS, false) - kept(INK_FS, true), 5, 'four diagonal depths and one normal');
-});
 
 Deno.test('comic: the sky cloud noise tiles and has the clouds and the gaps the shader had', () => {
   const size = 128;

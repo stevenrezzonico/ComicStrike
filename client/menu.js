@@ -72,7 +72,6 @@ const TABS = [
     ['toggle', 'r_playershadows', 'Sun shadows of players'],
     ['section', null, 'Resolution'],
     ['toggle', 'r_dynres', 'Automatic resolution (keeps 60 fps)'],
-    ['select', 'r_inkfast', 'Ink lines', ['Full', 'Fast']],
     ['toggle', 'r_inkaa', 'Smooth ink lines'],
     ['toggle', 'r_hatching', 'Ink hatching in corners'],
     ['slider', 'mat_viewportscale', 'Render resolution (most; over 1: supersampling)', 0.5, 8, 0.05],
@@ -133,7 +132,7 @@ function swatchStyle(key) {
 // The print settings the Video tab's window compares against their defaults while the
 // compare button is held.
 const PRINT_CVARS = ['r_comic', 'r_inkwidth', 'r_halftone', 'r_halftone_style', 'r_crosshair_clearzone',
-  'r_shadebands', 'r_shadowlift', 'mat_viewportscale', 'r_inkfast', 'r_inkaa', 'r_hatching'];
+  'r_shadebands', 'r_shadowlift', 'mat_viewportscale', 'r_inkaa', 'r_hatching'];
 
 // The Controls tab's touch settings (client/touch.js).
 const TOUCH_ROWS = [

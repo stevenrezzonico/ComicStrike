@@ -156,6 +156,7 @@ export class Rooms {
   // Closes rooms nobody plays in any more (call it now and then).
   sweep() {
     const now = this.now(), L = this.limits;
+    for (const [key, at] of this.lastUpload) if (now - at >= L.cooldownMs) this.lastUpload.delete(key); // it only grew
     for (const room of [...this.rooms.values()]) {
       if (this.humans(room) > 0) {
         room.emptySince = null;

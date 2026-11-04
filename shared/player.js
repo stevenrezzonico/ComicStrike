@@ -12,7 +12,7 @@ import {
 import {
   createWeaponState, copyWeaponState, giveWeapon, weaponTick, infiniteAmmo, activeWeapon, weaponStats, removeWeapon, refillAmmo,
   deploy, WS_THROW,
-  WEAPONS, WEAPON_ID,
+  WEAPONS, WEAPON_ID, damageAtRange,
   SLOT_PRIMARY,
   SLOT_SECONDARY, SLOT_C4, NUM_SLOTS, WS_ACTIVE, WS_SLOTS, WS_EVENTS, WS_ACTION, WS_ACTION_END, WEV_PLANTED, WEV_DEFUSED,
   ACTION_PLANT, ACTION_DEFUSE, WS_ALT, WS_GRENADES, GRENADE_IDS,
@@ -307,7 +307,7 @@ export function resolveShots(world, breakables, ws, shots, impacts, targets = nu
       if (hit >= 0) {
         const d = targets.dist;
         traveled += d;
-        if (!w.melee) damage *= Math.pow(w.rangeModifier, traveled / 500);
+        if (!w.melee) damage = damageAtRange(w, damage, traveled);
         else if (w.backstab) {
           // A backstab: the victim faces away from the attacker (CS:GO: the dot of his view
           // and the line of sight to him over 0.475). The stab is known by its damage.
@@ -331,7 +331,7 @@ export function resolveShots(world, breakables, ws, shots, impacts, targets = nu
       if (t.fraction >= 1) break;
 
       traveled += seg;
-      if (!w.melee) damage *= Math.pow(w.rangeModifier, traveled / 500);
+      damage = damageAtRange(w, damage, traveled);
       const ent = t.ent;
       const hx = t.endx, hy = t.endy, hz = t.endz;
       const slot = ent > 0 ? world.ents[ent].slot : 0; // breakable or door: decals go with it

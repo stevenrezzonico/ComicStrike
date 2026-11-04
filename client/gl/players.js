@@ -3,6 +3,7 @@
 
 import { program } from './program.js';
 import { DEBRIS_VS, DEBRIS_FS } from './shaders.js';
+import { cubeInstances } from './debris.js';
 import { TEAM_CT } from '../../shared/player.js';
 import { BOX_DATA, BOX_STRIDE, HITGROUP_HEAD, feetOffset, crouchScale } from '../../shared/hitgroups.js';
 import {
@@ -19,37 +20,7 @@ export class Players {
     this.count = 0;
     this.inst = new Float32Array(MAX_PLAYERS * (BOX_DATA.length / BOX_STRIDE) * I);
     this.prog = program(gl, DEBRIS_VS, DEBRIS_FS, ['u_viewProj']);
-
-    const cube = [];
-    for (const [n, u, v] of [[0, 1, 2], [1, 2, 0], [2, 0, 1]]) {
-      for (const s of [-1, 1]) {
-        for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]]) {
-          const p = [0, 0, 0], nrm = [0, 0, 0];
-          p[n] = s * 0.5;
-          p[u] = a * 0.5;
-          p[v] = b * 0.5;
-          nrm[n] = s;
-          cube.push(...p, ...nrm);
-        }
-      }
-    }
-    this.vao = gl.createVertexArray();
-    gl.bindVertexArray(this.vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cube), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
-    this.vbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, this.inst.byteLength, gl.DYNAMIC_DRAW);
-    for (let a = 0; a < 4; a++) {
-      gl.enableVertexAttribArray(2 + a);
-      gl.vertexAttribPointer(2 + a, 3, gl.FLOAT, false, I * 4, a * 12);
-      gl.vertexAttribDivisor(2 + a, 1);
-    }
-    gl.bindVertexArray(null);
+    ({ vao: this.vao, vbo: this.vbo } = cubeInstances(gl, this.inst.length / I));
   }
 
   // Builds instances from snapshot rows `ents` (slot base `row0`), skipping `self`; none

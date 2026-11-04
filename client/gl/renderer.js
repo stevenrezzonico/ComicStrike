@@ -5,7 +5,7 @@
 // composite() prints the whole frame to the canvas in one pass (ink lines, halftone).
 
 import {
-  WORLD_VS, WORLD_FS, WORLD_SOLID_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS, COMPOSITE_VS, COMPOSITE_FS, INK_FS, INK_FAST_FS,
+  WORLD_VS, WORLD_FS, WORLD_SOLID_FS, SKY_MESH_VS, SKY_FILL_VS, SKY_FS, COMPOSITE_VS, COMPOSITE_FS, INK_FS,
   CLOUD_PERIOD,
 } from './shaders.js';
 import { VERTEX_STRIDE } from '../mapmesh.js';
@@ -82,7 +82,6 @@ export class Renderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
     this.comp = program(gl, COMPOSITE_VS, COMPOSITE_FS, COMPOSITE_UNIFORMS);
     this.inkFull = program(gl, COMPOSITE_VS, INK_FS, INK_UNIFORMS);
-    this.inkFast = null; // r_inkfast's, built when first asked for
     this.afterimage = new Afterimage(gl); // the flashbang's frozen frame
     this.timer = new GpuTimer(gl); // GPU time per pass (cl_showfps 3)
     this.gate = new FrameGate(gl); // frames in flight (r_frames_ahead)
@@ -102,7 +101,7 @@ export class Renderer {
     // dead: 0..1, our death's red-brown print (client/deathpanel.js).
     // smoke: 0..1, the camera inside a smoke cloud: the print fogs over with distance.
     this.style = {
-      comic: true, ink: 1, dots: 1, bands: 0, lift: 0.3, calm: 0, soft: false, fast: false, inkaa: true, hatch: true, dead: 0, smoke: 0,
+      comic: true, ink: 1, dots: 1, bands: 0, lift: 0.3, calm: 0, soft: false, inkaa: true, hatch: true, dead: 0, smoke: 0,
     };
     this.novis = false; // r_novis: draw the whole world (no visibility culling)
     this.zoom = 1; // 90 / fov
@@ -365,8 +364,7 @@ export class Renderer {
     gl.bindVertexArray(this.emptyVao);
     this.gbuf.bindTextures();
     if (line > 0) {
-      if (st.fast && !this.inkFast) this.inkFast = program(gl, COMPOSITE_VS, INK_FAST_FS, INK_UNIFORMS);
-      const ink = st.fast ? this.inkFast : this.inkFull, k = ink.loc;
+      const ink = this.inkFull, k = ink.loc;
       this.gbuf.beginInk();
       gl.useProgram(ink.p);
       gl.uniform1i(k.u_normal, 1);

@@ -688,12 +688,17 @@ export class EventList {
 
 const SHOT_BYTES = 18;
 const KILL_BYTES = 6;
+const OWN_BYTES = 21; // the own block before the player state, with a hurt place
+const ROW_BYTES = 25; // another player's row with every field
 const quantizeNormal = (v) => Math.max(-127, Math.min(127, Math.round(v * 127)));
 
 // Appends a tick's events for player `self`, as many shots as the datagram has room
 // for. The shooter's own world impacts are left out: it predicted and drew them.
 function writeEvents(w, ev, self) {
-  const killBytes = 1 + ev.kills * KILL_BYTES;
+  // Kills as many as fit (each repeats for KILL_REPEAT_TICKS, so one left out goes next tick),
+  // then shots in what is left.
+  const kills = Math.min(ev.kills, Math.floor((MAX_DATAGRAM - w.pos - 2) / KILL_BYTES));
+  const killBytes = 1 + kills * KILL_BYTES;
   const room = Math.floor((MAX_DATAGRAM - w.pos - 1 - killBytes) / SHOT_BYTES);
   const countAt = w.pos;
   w.u8v(0);
@@ -712,8 +717,8 @@ function writeEvents(w, ev, self) {
     n++;
   }
   w.u8[countAt] = n;
-  w.u8v(ev.kills);
-  for (let k = 0; k < ev.kills; k++) {
+  w.u8v(kills);
+  for (let k = 0; k < kills; k++) {
     w.u16v(ev.killId[k]);
     w.u8v(ev.killer[k]);
     w.u8v(ev.victim[k]);
@@ -870,13 +875,23 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
     w.f32v(bomb.z);
     w.u16v(Math.min(Math.max(bomb.ticksLeft, 0), 65535));
   }
+  const p = own.player;
   const moversAt = w.pos;
   w.u8v(0);
   if (doors) {
+    // What must still fit after the movers: the own block with its weapon state, every other
+    // player's full row and the event counts. Movers past that are left out of this snapshot
+    // (drawn at rest for a tick): the writer ran past the datagram and threw, and that tick
+    // went out to nobody (a map with many doors open and a full server).
+    let wsFields = 0;
+    for (let i = 0; i < WS_SIZE; i++) if (!Object.is(p.ws.f[i], 0)) wsFields++;
+    const end = MAX_DATAGRAM - (OWN_BYTES + p.psBytes.length + WS_MASK_BYTES + 8 * wsFields + 1 +
+      (MAX_PLAYERS - 1) * ROW_BYTES + 2);
     let n = 0;
     for (let m = 0; m < doors.count; m++) {
       if (doors.idle(m)) continue;
       const more = doors.leg[m] !== 0 || doors.goal[m] !== 0;
+      if (w.pos + (more ? 15 : 10) > end) break;
       w.u8v(m);
       w.u8v((doors.dir[m] + 1) | (doors.sign[m] < 0 ? 4 : 0) | (more ? 8 : 0));
       w.f32v(doors.from[m]);
@@ -890,7 +905,6 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
     w.u8[moversAt] = n;
   }
 
-  const p = own.player;
   w.u8v(Math.min(Math.max(Math.ceil(p.health), 0), 255));
   w.u8v(Math.min(p.armor, 127) | (p.helmet ? 128 : 0));
   w.u8v(p.spawnCount);

@@ -12,6 +12,10 @@ const PHASE_NAMES = ['warmup', 'freeze time', 'live', 'round over'];
 const CHANGELEVEL_CLOSE_MS = 500;
 const RCON_MAX_FAILS = 5; // bad passwords from one address before it is ignored for a while
 const RCON_BLOCK_MS = 60000;
+// Bad passwords from everyone in a minute, then rcon refuses everyone for the rest of it (the
+// terminal still works): an IPv6 /48, free from tunnel brokers, is 65,536 addresses of 5
+// guesses a minute each, ~327k guesses a minute against the per-address count alone.
+const RCON_FAILS_PER_MINUTE = 60;
 
 // CS:GO game modes by game_type / game_mode. A mode is a cfg of mode convars run when a
 // map loads (cfg/gamemode_<name>.cfg, then cfg/gamemode_<name>_server.cfg for the
@@ -78,6 +82,8 @@ export class Host {
     // counted here, not per player, so reconnecting does not reset them, and kept across
     // map changes. Address key -> { fails, blockedUntil }.
     this.rconGuard = new Map();
+    this.rconFailsSince = -Infinity; // the minute the server-wide count of bad passwords is for
+    this.rconFails = 0;
     this.failedTicks = 0; // ticks that threw since the last report
     this.failReportAt = -Infinity;
     const con = this.con = new Console(opts.print || ((s) => console.log(s)));
@@ -374,9 +380,16 @@ export class Host {
     const key = addressKey(c.session && c.session.address);
     let g = this.rconGuard.get(key);
     if (g && now < g.blockedUntil) return 'rcon: too many bad passwords, try later';
+    if (now - this.rconFailsSince >= 60000) {
+      this.rconFailsSince = now;
+      this.rconFails = 0;
+    }
+    if (this.rconFails >= RCON_FAILS_PER_MINUTE) return 'rcon: too many bad passwords on this server, try later';
     if (password !== pw) {
+      this.rconFails++;
       if (!g) {
-        if (this.rconGuard.size >= 4096) this.rconGuard.clear(); // a flood of addresses: start over
+        // A flood of addresses: the oldest goes (clearing them all lifted every block).
+        if (this.rconGuard.size >= 4096) this.rconGuard.delete(this.rconGuard.keys().next().value);
         this.rconGuard.set(key, g = { fails: 0, blockedUntil: 0 });
       }
       if (++g.fails >= RCON_MAX_FAILS) {

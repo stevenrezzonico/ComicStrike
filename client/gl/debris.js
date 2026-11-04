@@ -37,6 +37,30 @@ const CUBE = (() => {
 
 const rand = (lo, hi) => lo + Math.random() * (hi - lo);
 
+// The debris shader's vertex layout: the unit cube (position, normal) and a dynamic buffer
+// of `count` instances (pos, scale, rot, color). Shared with the hit boxes (gl/players.js)
+// and the practice impact boxes (gl/practice.js). Draw it with culling off.
+export function cubeInstances(gl, count) {
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, CUBE, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
+  const vbo = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferData(gl.ARRAY_BUFFER, count * I * 4, gl.DYNAMIC_DRAW);
+  for (let a = 0; a < 4; a++) {
+    gl.enableVertexAttribArray(2 + a);
+    gl.vertexAttribPointer(2 + a, 3, gl.FLOAT, false, I * 4, a * 12);
+    gl.vertexAttribDivisor(2 + a, 1);
+  }
+  gl.bindVertexArray(null);
+  return { vao, vbo };
+}
+
 export class Debris {
   constructor(gl, capacity = 384) {
     this.gl = gl;
@@ -48,25 +72,7 @@ export class Debris {
     this.inst = new Float32Array(capacity * I);
     this.trace = new Trace();
     this.prog = program(gl, DEBRIS_VS, DEBRIS_FS, ['u_viewProj']);
-
-    this.vao = gl.createVertexArray();
-    gl.bindVertexArray(this.vao);
-    const cube = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, cube);
-    gl.bufferData(gl.ARRAY_BUFFER, CUBE, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
-    this.vbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, this.inst.byteLength, gl.DYNAMIC_DRAW);
-    for (let a = 0; a < 4; a++) {
-      gl.enableVertexAttribArray(2 + a);
-      gl.vertexAttribPointer(2 + a, 3, gl.FLOAT, false, I * 4, a * 12);
-      gl.vertexAttribDivisor(2 + a, 1);
-    }
-    gl.bindVertexArray(null);
+    ({ vao: this.vao, vbo: this.vbo } = cubeInstances(gl, capacity));
   }
 
   clear() {

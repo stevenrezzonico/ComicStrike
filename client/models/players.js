@@ -6,7 +6,7 @@
 // 22 wide, stomach 31..42, legs 0..31. The gun in hand is drawn separately
 // (client/models/guns.js).
 
-import { MeshBuilder, FINISH, finish } from '../gl/meshkit.js';
+import { MeshBuilder, FINISH, finish, shade } from '../gl/meshkit.js';
 import { PLAYER_SKELETON as S } from '../anim/skeleton.js';
 
 // How a weapon is held (client/anim/playeranim.js).
@@ -46,11 +46,6 @@ const B = (name) => S.bone(name);
 const bind = (name) => {
   const i = S.bone(name);
   return [S.bind[i * 3], S.bind[i * 3 + 1], S.bind[i * 3 + 2]];
-};
-const shade = (c, k) => {
-  const s = c.map((v) => Math.min(1, v * k));
-  if (c.finish !== undefined) s.finish = c.finish;
-  return s;
 };
 
 // Skinning along one coordinate: stops [[coordinate, bone], ...] in increasing order; a

@@ -26,8 +26,8 @@ const SMOKE = [0.94, 0.93, 0.89];
 const SMOKE_LIGHT = 1.35; // smoke is lit at least this much (the map's full light is about 1.1)
 const SPHERE = [[0, -1], [0.7, -0.7], [1, 0], [0.7, 0.7], [0, 1]];
 
-// Park-Miller, so the shapes are the same every load.
-function rng(seed) {
+// A seeded random stream in [0, 1) (Park-Miller): the same shapes every load.
+export function rng(seed) {
   let s = seed;
   return () => ((s = (s * 16807) % 2147483647) / 2147483647);
 }
