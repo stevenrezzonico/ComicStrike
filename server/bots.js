@@ -813,7 +813,7 @@ class Bot {
     this.order = null;
     if (g.phase !== PHASE_LIVE && g.phase !== PHASE_WARMUP) return { node: -1, why: 'wait' };
     const bomb = g.bomb, f = c.player.ps.f;
-    if (!g.rules.deathmatch && g.bombSites.count && g.rules.giveC4) {
+    if (!g.rules.deathmatch && g.bombSites.count && (g.rules.giveC4 || g.rules.retakes)) {
       const site = g.bombSites.boxes[this.site % g.bombSites.count];
       if (c.team === TEAM_T) {
         if (carrier) { // the bomb: to the site, then plant

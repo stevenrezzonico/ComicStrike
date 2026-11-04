@@ -40,7 +40,7 @@ import {
   MAX_ROUNDS, OVERTIME_ROUNDS, OVERTIME_MONEY, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD,
   PLANT_LOSS_BONUS, LOSS_STREAK_MAX, TEAMKILL_PENALTY, END_ELIMINATION, END_TIME, END_DRAW, END_BOMB, END_DEFUSE,
   END_RESCUE, RESCUE_WIN_REWARD, RESCUE_REWARD, HOSTAGE_TOUCH_REWARD, HOSTAGE_HIT_PENALTY, HOSTAGE_KILL_PENALTY,
-  END_MATCH, ROUND_FINAL, matchOver, GAME_FFA, GAME_DM, GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION, GAME_WINGMAN, GAME_GHOST_TEAM, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
+  END_MATCH, ROUND_FINAL, matchOver, GAME_FFA, GAME_DM, GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION, GAME_WINGMAN, GAME_GHOST_TEAM, GAME_RETAKES, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
@@ -74,6 +74,9 @@ const DEMO_RESTOCK = 2; // the demo: seconds from a bomb going off or being defu
 const DEMO_HEAL = 2; // the demo: seconds from the last hurt to full health
 const BOT_PLACE_GAP = 40; // bot_place all: units between the bots in a row
 const CHAT_FLOOD_TICKS = Math.round(0.66 * TICK_RATE); // least gap between a player's chat lines (CS:GO's flood check: ~0.75 s)
+// Retakes: the Ts start RETAKE_T units from the planted bomb, the CTs RETAKE_CT, at most
+// RETAKE_RISE above or below it (approx.: CS:GO's retakes maps had hand-placed spawns).
+const RETAKE_T = [150, 700], RETAKE_CT = [1000, 1800], RETAKE_RISE = 300;
 const PING_TICKS = TICK_RATE; // least gap between a player's pings (approx.)
 const PING_REACH = 4096; // a ping marks the first thing the view meets within this
 
@@ -211,6 +214,7 @@ export const DEFAULT_RULES = {
   wingman: false, // 2 against 2 on one bomb site (B, the second in entity order: approx.)
   armsRace: false, // a new weapon for every kill, the knife last; a knife kill there wins
   demolition: false, // bomb rounds; a kill earns the next weapon for the next round
+  retakes: false, // the bomb planted on a random site at the round start, loadouts (retakeSetup)
   halftime: true, // mp_halftime: teams swap sides after half the rounds
   teamSizeMax: 0, // mp_teamsize_max: most players on one team (0 no limit)
   demo: false, // the demo: free buying anywhere and anytime, infinite ammo, humans cannot die, anyone
@@ -523,9 +527,9 @@ export class Game {
 
   // Free spawn point of the player's team: one no other live player stands on (at a
   // round start: no one placed yet this round).
-  respawn(c, keepGear = false, withLoadout = false) {
+  respawn(c, keepGear = false, withLoadout = false, at = null) {
     if (!c.playing) return;
-    const pick = this.rules.randomSpawn ? this.randomSpawn(c) : this.teamSpawn(c);
+    const pick = at || (this.rules.randomSpawn ? this.randomSpawn(c) : this.teamSpawn(c));
     spawnPlayer(c.player, pick[0], pick[1], pick[2], keepGear, withLoadout);
     const list = this.progression();
     if (list) armLevel(c.player.ws, list, c.level, c.team === TEAM_CT);
@@ -648,7 +652,7 @@ export class Game {
   // The gun game modes earn their weapons instead.
   canBuy(c) {
     const ph = this.phase, r = this.rules;
-    if (r.armsRace || r.demolition) return false;
+    if (r.armsRace || r.demolition || r.retakes) return false;
     if (r.demo) return c.alive && ph !== PHASE_OVER; // anywhere, anytime
     const inTime = r.deathmatch ? ph !== PHASE_OVER && this.tick < c.spawnTick + r.buyTime * TICK_RATE
       : ph === PHASE_WARMUP || ph === PHASE_FREEZE || (ph === PHASE_LIVE && this.tick < this.buyEnd);
@@ -887,6 +891,7 @@ export class Game {
     const ready = this.ready(t, ct), r = this.rules;
     rs.mode = (r.teammatesAreEnemies ? GAME_FFA : 0) | (r.deathmatch ? GAME_DM : 0) | (r.demo ? GAME_DEMO : 0) |
       (r.armsRace ? GAME_ARMSRACE : 0) | (r.demolition ? GAME_DEMOLITION : 0) | (r.wingman ? GAME_WINGMAN : 0) |
+      (r.retakes ? GAME_RETAKES : 0) |
       (!r.solidTeammates && !r.teammatesAreEnemies ? GAME_GHOST_TEAM : 0);
     if (rs.phase === PHASE_WARMUP) {
       if (!ready) this.warmupReady = -1;
@@ -990,7 +995,7 @@ export class Game {
     this.logic.reset(this.tick);
     this.placing = true;
     for (const c of this.clients) if (c) c.placed = false;
-    const demolition = this.rules.demolition;
+    const demolition = this.rules.demolition, retake = this.rules.retakes ? this.retakeSetup() : null;
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
       if (demolition && c.roundKills > 0) c.level = Math.min(c.level + 1, DEMOLITION.length - 1); // a kill: the next weapon
@@ -1002,7 +1007,10 @@ export class Game {
       c.takenHits.fill(0);
       // Survivors keep their gear (deathmatch: the weapons picked); Demolition arms everyone
       // for their level instead.
-      this.respawn(c, !fresh && c.alive && !demolition, this.rules.deathmatch);
+      if (retake) {
+        this.respawn(c, false, false, this.retakeSpot(retake, c));
+        this.retakeLoadout(c);
+      } else this.respawn(c, !fresh && c.alive && !demolition, this.rules.deathmatch);
     }
     this.placing = false;
     this.resetBomb();
@@ -1028,11 +1036,79 @@ export class Game {
       this.bomb.state = BOMB_CARRIED;
       this.bombCarrier = c;
     }
+    if (retake) this.retakePlant(retake);
     this.round.round++;
     this.round.serial = (this.round.serial + 1) & 255;
     this.round.mvp = NO_MVP;
     if (demolition) this.rosterDirty = true; // the new levels
     this.setPhase(PHASE_FREEZE, this.rules.freezeTime);
+  }
+
+  // Retakes (CS:GO's, approx.): the site of the round, a planted spot in it from the bots'
+  // navigation, and standing spots for the Ts round it (RETAKE_T units off) and the CTs at
+  // its entrances (RETAKE_CT off), each at most RETAKE_RISE above or below it, shuffled.
+  // Null on a map with no bomb site or no floor in it.
+  retakeSetup() {
+    const sites = this.bombSites;
+    if (!sites.count) return null;
+    const nav = this.bots.ensureNav(), box = sites.boxes[Math.floor(Math.random() * sites.count)];
+    const k = nav.random(Math.random, box);
+    if (k < 0) return null;
+    const bx = nav.x[k], by = nav.y[k], bz = nav.z[k];
+    const spots = ([lo, hi]) => {
+      const out = [];
+      for (let j = 0; j < nav.count; j++) {
+        const d = Math.hypot(nav.x[j] - bx, nav.y[j] - by);
+        if (d >= lo && d <= hi && Math.abs(nav.z[j] - bz) <= RETAKE_RISE && nav.open(j)) out.push(j);
+      }
+      for (let i = out.length - 1; i > 0; i--) {
+        const r = Math.floor(Math.random() * (i + 1));
+        [out[i], out[r]] = [out[r], out[i]];
+      }
+      return out;
+    };
+    return { x: bx, y: by, z: bz, spots: { [TEAM_T]: spots(RETAKE_T), [TEAM_CT]: spots(RETAKE_CT) }, used: [] };
+  }
+
+  // A spot for c from the setup: 64 units clear of the ones handed out, facing the bomb
+  // (else its team's spawn as usual).
+  retakeSpot(setup, c) {
+    const nav = this.bots.nav, list = setup.spots[c.team] || [];
+    for (const j of list) {
+      const x = nav.x[j], y = nav.y[j];
+      if (setup.used.some(([ux, uy]) => Math.hypot(ux - x, uy - y) < 64)) continue;
+      setup.used.push([x, y]);
+      return [x, y, nav.z[j] + 36, Math.atan2(setup.y - y, setup.x - x) * 180 / Math.PI];
+    }
+    return null;
+  }
+
+  // The round's loadout instead of buying: pistols and kevlar the first two rounds, then a
+  // rifle (one round in four an SMG) with kevlar and helmet and a grenade; a kit for the CTs.
+  retakeLoadout(c) {
+    const p = c.player, ct = c.team === TEAM_CT, pistols = this.round.round < 2;
+    if (!pistols) {
+      const light = Math.random() < 0.25;
+      giveWeapon(p.ws, WEAPON_ID[light ? (ct ? 'mp9' : 'mac10') : ct ? 'm4a1_silencer' : 'ak47']);
+      giveWeapon(p.ws, WEAPON_ID[['hegrenade', 'flashbang', 'smokegrenade'][Math.floor(Math.random() * 3)]]);
+      p.ws.f[WS_ACTIVE] = SLOT_PRIMARY;
+    }
+    p.armor = 100;
+    p.helmet = !pistols;
+    if (ct) p.defuser = true;
+  }
+
+  // The bomb down at the setup's spot, ticking from the end of the freeze; a T its planter.
+  retakePlant(setup) {
+    const b = this.bomb, ts = this.clients.filter((o) => o && o.joined && o.alive && o.team === TEAM_T);
+    b.state = BOMB_PLANTED;
+    b.x = setup.x;
+    b.y = setup.y;
+    b.z = setup.z;
+    this.explodeTick = this.tick + (this.rules.freezeTime + this.rules.c4Timer) * TICK_RATE;
+    b.ticksLeft = this.explodeTick - this.tick;
+    this.planted = true;
+    this.lastPlanter = ts.length ? ts[Math.floor(Math.random() * ts.length)] : null;
   }
 
   // `hero`: the client whose plant, defuse or rescue ended it (the MVP).

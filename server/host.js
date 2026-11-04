@@ -20,7 +20,7 @@ const RCON_BLOCK_MS = 60000;
 // earned by kills (shared/progression.js).
 export const GAME_MODES = {
   '0/0': 'casual', '0/1': 'competitive', '0/2': 'wingman', '1/0': 'armsrace', '1/1': 'demolition', '1/2': 'deathmatch',
-  '2/0': 'demo',
+  '2/0': 'demo', '0/3': 'retakes',
 };
 
 // The part of an address rcon guesses are counted by: an IPv4 address, or an IPv6 address's
@@ -239,6 +239,7 @@ export class Host {
       wingman: this.modeName === 'wingman',
       armsRace: this.modeName === 'armsrace',
       demolition: this.modeName === 'demolition',
+      retakes: this.modeName === 'retakes',
       halftime: v('mp_halftime') !== 0,
       overtime: v('mp_overtime_enable') !== 0,
       overtimeRounds: v('mp_overtime_maxrounds'),

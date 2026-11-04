@@ -11,6 +11,7 @@ import {
   Writer, Reader, CmdRing, writeHello, writeCmds, writeCommand, readChat, readPing, writePing, S2C_CHAT, S2C_PING,
   CHAT_RADIO, CHAT_TEAM, RADIO, RADIO_MENUS, radioIndex,
 } from '../shared/protocol.js';
+import { WS_SLOTS, SLOT_C4 } from '../shared/weapons.js';
 import { Host } from '../server/host.js';
 
 const bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url)).buffer);
@@ -87,6 +88,7 @@ Deno.test('radio: "Follow me." sends the team bots after the speaker', () => {
   host.con.exec('bot_add t normal; bot_dont_shoot 1');
   run(8);
   const bot = game.bots.list[0], bf = bot.c.player.ps.f, af = a.player.ps.f;
+  bot.c.player.ws.f[WS_SLOTS + SLOT_C4 * 3] = 0; // a bomb carrier keeps to its site whatever it hears
   // the bot a way off across the open yard
   const nav = game.bots.nav;
   let far = -1;

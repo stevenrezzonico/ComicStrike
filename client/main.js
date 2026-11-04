@@ -96,7 +96,7 @@ import { NetGraph } from './netgraph.js';
 import { createConsole, watch } from './settings.js';
 import { releaseOf, quote } from '../shared/cvars.js';
 import {
-  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_DM, GAME_DEMO, GAME_WINGMAN, GAME_ARMSRACE, GAME_DEMOLITION, GAME_GHOST_TEAM, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
+  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_DM, GAME_DEMO, GAME_WINGMAN, GAME_ARMSRACE, GAME_DEMOLITION, GAME_GHOST_TEAM, GAME_RETAKES, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
 } from '../shared/economy.js';
 
 const DEG = Math.PI / 180;
@@ -745,7 +745,7 @@ function useHint(off) {
 
 const demo = () => (gameMode() & GAME_DEMO) !== 0;
 const freeBuys = () => (gameMode() & (GAME_DM | GAME_DEMO)) !== 0; // deathmatch and the demo: no money
-const gunGame = () => (gameMode() & (GAME_ARMSRACE | GAME_DEMOLITION)) !== 0; // weapons earned by kills: no money
+const gunGame = () => (gameMode() & (GAME_ARMSRACE | GAME_DEMOLITION | GAME_RETAKES)) !== 0; // weapons handed out: no money
 // Our place in the gun game modes' weapon list for the round bar ('' in the others), rebuilt
 // only when it changes.
 const progressKey = [-1, -1, -1];

@@ -5,7 +5,7 @@
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, END_MATCH, reasonOf, GAME_FFA, GAME_DM,
-  GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION,
+  GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION, GAME_RETAKES,
   BUY_MENU, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER, itemLabel, itemPrice,
 } from '../shared/economy.js';
 import { WEAPONS } from '../shared/weapons.js';
@@ -103,7 +103,7 @@ export class Hud {
       (armsRace ? `level ${Math.min(leader.score + 1, ARMS_RACE.length)}` : leader.score) : '';
     this.set(this.elRound, 'round', rs.mode & GAME_DEMO ? `DEMO   ${mid}`
       : dm ? `DEATHMATCH   ${mid}${lead}` : armsRace ? `ARMS RACE   ${mid}   ${progress}${lead}`
-      : `CT ${rs.scoreCT}   ${mid}   ${rs.scoreT} T${rs.mode & GAME_DEMOLITION ? `   ${progress}` : ''}`);
+      : `${rs.mode & GAME_RETAKES ? 'RETAKES   ' : ''}CT ${rs.scoreCT}   ${mid}   ${rs.scoreT} T${rs.mode & GAME_DEMOLITION ? `   ${progress}` : ''}`);
     let banner = '';
     if (rs.phase === PHASE_OVER && reasonOf(rs.info) === END_MATCH) {
       banner = !leader || leader.tied ? 'Match over: a draw'

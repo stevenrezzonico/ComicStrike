@@ -14,7 +14,7 @@ const ESCAPE_GRACE_MS = 300; // the Escape that released the mouse must not resu
 // Game mode names (server/host.js GAME_MODES) as shown.
 const MODE_LABELS = {
   casual: 'Casual', competitive: 'Competitive', wingman: 'Wingman', armsrace: 'Arms Race', demolition: 'Demolition',
-  deathmatch: 'Deathmatch', demo: 'Demo',
+  deathmatch: 'Deathmatch', demo: 'Demo', retakes: 'Retakes',
 };
 
 // The Bots row of the practice panel by mode: [label, [[bot_quota, text], ...]]. Team modes
@@ -450,7 +450,7 @@ export class Menu {
     const feats = el('ul', 'menu-features');
     for (const t of [
       'Play online against others, or practice against bots in your browser.',
-      'Competitive, casual, wingman, deathmatch, arms race, demolition and a demo playground.',
+      'Competitive, casual, wingman, deathmatch, arms race, demolition, retakes and a demo playground.',
       'Procedural everything: no textures, models or sounds are downloaded.',
     ]) feats.append(el('li', '', t));
     body.append(feats);
@@ -676,7 +676,8 @@ export class Menu {
     };
     if (!demo) {
       choice('Mode', [['casual', 'Casual'], ['competitive', 'Competitive'], ['wingman', 'Wingman'],
-        ['deathmatch', 'Deathmatch'], ['armsrace', 'Arms Race'], ['demolition', 'Demolition']], this.practiceMode, (v) => {
+        ['deathmatch', 'Deathmatch'], ['armsrace', 'Arms Race'], ['demolition', 'Demolition'], ['retakes', 'Retakes']],
+        this.practiceMode, (v) => {
         this.practiceMode = v;
       });
     }

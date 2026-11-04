@@ -5,7 +5,7 @@ was when the plan was written; check the files named before starting one. Done s
 these lists: text chat (14g), movers and breakables (14h), weapon leftovers (14i), bots'
 grenades, AWP and buttons (14j), radar levels (14k), point lights (14l), the round-end
 panel and damage report (14m), sun shadows for players (14n), gun looks, comic jingles,
-the demo's practice tools, demo recording, the hurt indicator and the killer's health, characters culled by the PVS, bots' smokes and molotovs, tracers and casings, visibility for our own maps (opt-in: cs_polaris and editor exports), radio and pings.
+the demo's practice tools, demo recording, the hurt indicator and the killer's health, characters culled by the PVS, bots' smokes and molotovs, tracers and casings, visibility for our own maps (opt-in: cs_polaris and editor exports), radio and pings, Retakes.
 
 ## Server QoL (first list, item 9; on hold)
 
@@ -18,20 +18,15 @@ the demo's practice tools, demo recording, the hurt indicator and the killer's h
 
 ## Second list (proposed 2026-11-04, in the order to build)
 
-1. **Retakes mode.** Each round the bomb is already planted on a random site, the Ts start
-   round it defending and the CTs at the entrances; no money, fixed loadouts per round type
-   (pistol, light, full). Spawns from `Nav.open` nodes in and around the site's zone, so maps
-   need no extra data. `cfg/gamemode_retakes.cfg`, a `GAME_MODES` entry, the round start in
-   `server/game.js`, the Practice menu; the bots' planted-bomb goals already fit.
-2. **Ink hatching in corners.** Screen-space ambient occlusion from the depth target in the
+1. **Ink hatching in corners.** Screen-space ambient occlusion from the depth target in the
    ink pass (`INK_FS`, G-buffer resolution, ~8 samples), printed as diagonal hatch lines on a
    fixed screen grid (like the dots, so it never crawls) where corners and contacts darken.
    `r_hatching` (Video), dropped first by r_dynres; budget under 0.15 ms at full clock.
-3. **Comic skies with a backdrop.** The sun as an inked disc with rays where `sunOf` puts it,
+2. **Comic skies with a backdrop.** The sun as an inked disc with rays where `sunOf` puts it,
    and a distant silhouette ring by map name (dunes for dust, a skyline for office and
    polaris, mountains for snow), procedural, printed flat in the sky pass (`SKY_FS`), one
    draw.
-4. **Map load time.** Measure click to first frame on de_dust2 and cs_polaris, step by step
+3. **Map load time.** Measure click to first frame on de_dust2 and cs_polaris, step by step
     (download, parse, mesh, lightmap atlas, overview, floor grid, warm-up draws, the practice
     worker's nav). Then likely: the overview built in a worker, the overview and nav cached
     per map in IndexedDB, a progress bar in the menu. Target: half.
