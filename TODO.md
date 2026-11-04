@@ -3,8 +3,9 @@
 Improvements proposed and kept, not yet built. Each has a plan grounded in the code as it
 was when the plan was written; check the files named before starting one. Done so far from
 these lists: text chat (14g), movers and breakables (14h), weapon leftovers (14i), bots'
-grenades, AWP and buttons (14j), radar levels (14k), point lights (14l), the round-end panel
-and damage report (14m), sun shadows for players (14n), gun looks, comic jingles, the demo's practice tools, demo recording.
+grenades, AWP and buttons (14j), radar levels (14k), point lights (14l), the round-end
+panel and damage report (14m), sun shadows for players (14n), gun looks, comic jingles,
+the demo's practice tools, demo recording.
 
 ## Server QoL (first list, item 9; on hold)
 
