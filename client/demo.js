@@ -35,6 +35,13 @@ export const DEMO_FORMAT = 'comicstrike-demo';
 export const DEMO_VERSION = 1;
 export const DIR_IN = 0, DIR_OUT = 1;
 export const MAX_DEMO_BYTES = 512 * 1024 * 1024; // ~4 hours of a 5v5
+// Frames a demo may hold (~6 hours at the ~190 a second of a 5v5): a file of 1-byte frames
+// made one object per 8 bytes, gigabytes for a file under MAX_DEMO_BYTES.
+export const MAX_FRAMES = 1 << 22;
+// The most demo time one step delivers (ms of real time): a hidden tab steps once a second,
+// and over 2 s of frames at once overflowed the NetClient's queue, losing the snapshots the
+// next ones are deltas of: playback froze for good.
+const MAX_STEP_MS = 250;
 const MAX_HEADER = 64 * 1024;
 // A SnapshotRing's state, as bytes: sequence numbers, rows, breakable masks.
 const RING_PARTS = (ring) => [ring.seq, ring.ents, ring.broken];
@@ -115,6 +122,7 @@ export function decodeDemo(bytes) {
     if ((dir !== DIR_IN && dir !== DIR_OUT) || len === 0 || len > MAX_DATAGRAM || o + 7 + len > bytes.length || t < last) {
       throw new Error('a damaged demo (frames)');
     }
+    if (frames.length >= MAX_FRAMES) throw new Error('a damaged demo (too many frames)');
     frames.push({ dir, t, bytes: bytes.subarray(o + 7, o + 7 + len) });
     last = t;
     o += 7 + len;
@@ -208,7 +216,7 @@ export class DemoPlayer extends EventTarget {
   // Advances the clock and delivers what is due.
   step() {
     const t = this.now();
-    if (!this.paused) this.time += (t - this.lastAt) * this.timescale;
+    if (!this.paused) this.time += Math.min(t - this.lastAt, MAX_STEP_MS) * this.timescale;
     this.lastAt = t;
     while (this.next < this.frames.length && this.frames[this.next].t <= this.time) {
       const f = this.frames[this.next++];

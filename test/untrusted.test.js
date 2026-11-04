@@ -32,6 +32,7 @@ Deno.test('broken indices, cycles, deep trees and far coordinates are turned awa
     'model head node': (b) => { b.modelsI[9] = b.numNodes; },
     'entity model': (b) => { b.entities.push({ classname: 'func_wall', model: `*${b.numModels}` }); },
     'leaf faces': (b) => { b.leavesI16[1 * 14 + 11] = b.marksurfaces.length + 1; },
+    'model 0 leaf count': (b) => { b.modelsI[13] = b.numLeaves; },
   };
   assert.doesNotThrow(() => validateBSP(fresh()));
   for (const [what, spoil] of Object.entries(cases)) {

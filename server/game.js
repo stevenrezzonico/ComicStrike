@@ -58,6 +58,11 @@ const CMD_BANK = 8; // commands a client may run ahead of server time (absorbs j
 const MAX_CMDS_PER_TICK = 8;
 const TIMEOUT_TICKS = 30 * TICK_RATE; // clients in hidden tabs send a 1 Hz keepalive
 const INFO_INTERVAL = TICK_RATE; // roster resent every second (datagrams can be lost)
+// Console commands a client may send in a second, and the least time (250 ms) between its
+// name or team changes: each resends the roster to everyone and logs a line, so one tiny packet a
+// tick made ~500 times its size in traffic and flooded the log.
+const COMMANDS_PER_SECOND = 32;
+const ROSTER_CHANGE_TICKS = TICK_RATE / 4;
 const SEND_BUFFERS = 8; // rotating send buffers: a datagram may still be queued when the next is written
 const hits = (n) => (n === 1 ? '1 hit' : `${n} hits`); // the damage report's wording
 const WARMUP_MONEY = 16000; // CS:GO warmup: buy anything
@@ -91,6 +96,9 @@ const DM_SPAWN_GAP = 512;
 
 // Lag compensation: how far back shots may rewind other players (CS:GO sv_maxunlag 1 s).
 const HISTORY = 64; // ticks, power of two
+const VIEW_WRAP = 2 ** 24; // a command's viewTick crosses the wire as ticks x 256 in 32 bits
+const VIEW_SLACK = 13; // ticks (~200 ms, CS:GO's) a shooter's view may lag its newest snapshot
+const MAX_INTERP = 2; // cl_interp_ratio's most
 const H_X = 0, H_Y = 1, H_Z = 2, H_YAW = 3, H_FLAGS = 4, H_DUCK = 5, H_LIFE = 6, H_FIELDS = 7;
 
 class Client {
@@ -119,6 +127,11 @@ class Client {
     this.canBuy = false;
     this.lastBuy = -1; // newest BUY id handled
     this.lastCommand = -1; // newest COMMAND id handled
+    this.commandWindow = -Infinity; // server tick the current second of commands began
+    this.commandCount = 0; // commands in it (COMMANDS_PER_SECOND)
+    this.lastRename = -Infinity; // server ticks of the last name and team changes
+    this.lastTeamChange = -Infinity;
+    this.switchedTeam = false; // changed teams this round: no bot takeover
     this.lastChat = -Infinity; // server tick of the last chat line delivered (the flood check)
     this.lastPing = -Infinity;
     this.shots = 0; // shots fired mod 256 (E_SHOTS: third-person fire kicks)
@@ -487,6 +500,11 @@ export class Game {
       const ahead = (id - c.lastCommand) & 0xffff; // sent 3 times, like BUY
       if (c.lastCommand >= 0 && (ahead === 0 || ahead >= 0x8000)) return;
       c.lastCommand = id;
+      if (this.tick - c.commandWindow >= TICK_RATE) {
+        c.commandWindow = this.tick;
+        c.commandCount = 0;
+      }
+      if (++c.commandCount > COMMANDS_PER_SECOND) return; // a flood: dropped
       this.clientCommand(c, text);
     } else if (type === C2S_CMDS && c.joined) {
       const ack = readCmds(r, c.inbox, c.nextCmd < 0 ? 0 : c.nextCmd);
@@ -554,6 +572,7 @@ export class Game {
   takeOver(c, id) {
     const o = this.clients[id];
     if (!c.playing || c.alive) return 'only the dead can take control of a bot';
+    if (c.switchedTeam) return 'not in the round you changed teams';
     if (this.respawns(c) || (this.phase !== PHASE_FREEZE && this.phase !== PHASE_LIVE)) return 'not now';
     if (!o || !o.bot || !o.joined || !o.alive || o.team !== c.team) return 'not a living bot of your team';
     const p = c.player, b = o.player;
@@ -706,6 +725,15 @@ export class Game {
     if (this.hostages.count && (this.hostagesDirty || this.tick % INFO_INTERVAL === 0)) this.sendHostages();
   }
 
+  // The server tick a command's shooter saw the others at (lag compensation): its viewTick
+  // unwrapped (after 2^24 ticks, 72.8 hours on one map, every shot rewound a second), and no
+  // older than VIEW_SLACK ticks before the newest snapshot it had less the interpolation (a
+  // modified client claimed a second ago and hit players already behind cover).
+  viewOf(c, view) {
+    const v = view + Math.round((this.tick - view) / VIEW_WRAP) * VIEW_WRAP;
+    return c.ackSeq ? Math.max(v, c.ackSeq - MAX_INTERP - VIEW_SLACK) : v;
+  }
+
   runCommands(c) {
     c.bank = Math.min(c.bank + 1, CMD_BANK);
     const frozen = this.phase === PHASE_FREEZE;
@@ -717,7 +745,7 @@ export class Game {
         c.buttons = c.inbox.buttons[k];
         c.pitch = c.inbox.pitch[k];
         c.yaw = c.inbox.yaw[k];
-        c.view = c.inbox.view[k];
+        c.view = this.viewOf(c, c.inbox.view[k]);
         select = c.inbox.select[k];
       } else if (c.newestCmd < t + CMD_REDUNDANCY) {
         break; // not here yet
@@ -1001,6 +1029,7 @@ export class Game {
       if (demolition && c.roundKills > 0) c.level = Math.min(c.level + 1, DEMOLITION.length - 1); // a kill: the next weapon
       if (demolition) c.player.score = c.level; // clients show the level from the score
       c.roundKills = 0;
+      c.switchedTeam = false;
       c.given.fill(0);
       c.givenHits.fill(0);
       c.taken.fill(0);
@@ -1309,6 +1338,8 @@ export class Game {
     } else if (name === 'name') {
       const n = cleanName(args.slice(1).join(' '));
       if (!n || n === c.name) return;
+      if (this.tick - c.lastRename < ROSTER_CHANGE_TICKS) return this.print(c, 'name: too soon after the last change');
+      c.lastRename = this.tick;
       console.log(`player ${c.id} "${c.name}" is now "${n}"`);
       c.name = n;
       this.rosterDirty = true;
@@ -1357,11 +1388,14 @@ export class Game {
     const team = n === 1 ? TEAM_SPECTATOR : n === 2 ? TEAM_T : n === 3 ? TEAM_CT : 0;
     if (!team) return this.print(c, 'jointeam 1 (Spectators), 2 (Terrorists) or 3 (Counter-Terrorists)');
     if (team === c.team) return;
+    if (this.tick - c.lastTeamChange < ROSTER_CHANGE_TICKS) return this.print(c, 'jointeam: too soon after the last change');
     if (team !== TEAM_SPECTATOR && this.teamFull(team, c)) {
       return this.print(c, `The ${TEAM_NAMES[team]}s are full (mp_teamsize_max ${this.rules.teamSizeMax})`);
     }
     if (this.bombCarrier === c) this.dropBomb(c, false);
     this.dropHostage(c);
+    c.lastTeamChange = this.tick;
+    c.switchedTeam = true; // no bot takeover until the next round (it switched sides with a living body)
     c.player.team = team;
     c.player.health = 0;
     c.life++;
@@ -1536,7 +1570,8 @@ export class Game {
   // Map logic, then doors move (pushing living players) to where they are this tick, so
   // the tick's commands run against them as the clients predict.
   updateDoors() {
-    if (!this.doors.count && !this.logic.triggers.length) return;
+    // (Delayed fires too: a map with no doors and no triggers never fired a trigger_auto's.)
+    if (!this.doors.count && !this.logic.triggers.length && !this.logic.queue.length) return;
     const bodies = this.doorBodies, acts = this.doorActs, owners = this.doorClients;
     bodies.length = acts.length = owners.length = 0;
     for (const c of this.clients) {

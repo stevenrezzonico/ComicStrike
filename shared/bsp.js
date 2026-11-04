@@ -274,6 +274,8 @@ export function validateBSP(b, L = BSP_LIMITS) {
     if (vis >= b.visibility.length) fail(`leaf ${i} visibility`);
     if (first + n > b.marksurfaces.length) fail(`leaf ${i} faces`);
   }
+  // Model 0's leaf count sizes a visibility row (client/gl/worldvis.js).
+  if (!(b.modelsI[13] >= 0 && b.modelsI[13] < b.numLeaves)) fail('model 0 leaf count');
   // Trees: nodes (hull 0) end in leaves, clipnodes (hulls 1-3) in contents.
   for (let i = 0; i < b.numNodes; i++) {
     if (b.nodesI32[i * 6] < 0 || b.nodesI32[i * 6] >= b.numPlanes) fail(`node ${i} plane`);

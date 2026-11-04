@@ -6,7 +6,8 @@ import {
   Writer, Reader, CmdRing, writeHello, writeCmds, writeCommand, printChunks, S2C_PRINT, S2C_CHANGELEVEL, S2C_REJECT,
   MAX_TEXT, S2C_CHAT, readChat, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC,
 } from '../shared/protocol.js';
-import { Host } from '../server/host.js';
+import { Host, AddressCounts } from '../server/host.js';
+import { TICK_RATE } from '../shared/constants.js';
 
 const maps = {};
 function loadMap(name) {
@@ -294,4 +295,47 @@ Deno.test('long console output splits into datagram-sized prints', () => {
   assert.ok(chunks.length > 1);
   assert.equal(chunks.join(''), text);
   for (const c of chunks) assert.ok(new TextEncoder().encode(c).length <= MAX_TEXT);
+});
+
+// A client's console commands: at most 32 a second (each name or team change resent the
+// roster to everyone and logged a line: one packet a tick was a flood), names and teams
+// changed at most four times a second.
+Deno.test('client commands: a flood is cut, names and teams change at most 4 times a second', async (t) => {
+  const s = await setup(t);
+  if (!s) return;
+  const { host, join, run } = s;
+  const a = join('ann', TEAM_T), b = join('bob', TEAM_CT);
+  run(2, [a, b]);
+  a.command('name ann2');
+  a.command('name ann3');
+  assert.equal(a.name, 'ann2');
+  assert.match(a.prints().join(' '), /too soon/);
+  a.command('jointeam 3');
+  a.command('jointeam 2');
+  assert.equal(a.team, TEAM_CT);
+  run(TICK_RATE, [a, b]);
+  a.command('name ann3');
+  a.command('jointeam 2');
+  assert.deepEqual([a.name, a.team], ['ann3', TEAM_T]);
+  const game = host.game, real = game.clientCommand.bind(game);
+  let ran = 0;
+  game.clientCommand = (c, text) => {
+    ran++;
+    real(c, text);
+  };
+  run(TICK_RATE, [a, b]);
+  for (let i = 0; i < 40; i++) b.command('player_ping');
+  assert.equal(ran, 32);
+});
+
+// Sessions per address (server/main.js): a household fits, one machine cannot take every
+// slot; loopback is free (a tab per player in development).
+Deno.test('sessions per address', () => {
+  const counts = new AddressCounts(2);
+  assert.ok(counts.add('1.2.3.4') && counts.add('::ffff:1.2.3.4'));
+  assert.ok(!counts.add('1.2.3.4'), 'a third from the same address');
+  assert.ok(counts.add('2001:db8::1') && counts.add('2001:db8::2') && !counts.add('2001:db8::3'), 'IPv6 by /64');
+  counts.remove('1.2.3.4');
+  assert.ok(counts.add('1.2.3.4'), 'a closed one frees its place');
+  for (let i = 0; i < 10; i++) assert.ok(counts.add('127.0.0.1') && counts.add('::1'));
 });

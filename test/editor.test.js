@@ -214,3 +214,13 @@ Deno.test('lamps: a lamp point compiles to a light entity with its keys, reads b
   assert.deepEqual(errors, []);
   assert.ok(warnings.some((w) => w.id === 702 && /lights nothing/.test(w.text)));
 });
+
+// A crafted project hung the editor (and, autosaved first, at every visit): stairs 4e9 units
+// tall were a billion pieces. Coordinates are kept within twice the limit, a stairs shape
+// has at most MAX_STAIR_STEPS steps.
+Deno.test('a crafted project cannot make the editor build millions of pieces', async () => {
+  const { piecesOf, LIMITS, MAX_STAIR_STEPS } = await import('../client/editor/project.js');
+  const p = readProject({ format: 'comicstrike-map', version: 3, brushes: [{ shape: 'stairs', b: [0, 0, 0, 64, 64, 4e9], step: 4 }] });
+  assert.equal(p.brushes[0].b[5], 2 * LIMITS.coord);
+  assert.equal(piecesOf(p.brushes[0]).length, MAX_STAIR_STEPS);
+});

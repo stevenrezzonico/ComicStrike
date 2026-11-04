@@ -61,11 +61,14 @@ export class WorldVis {
     let ofs = b.leavesI32[l * 7 + 1];
     const v = ++this.visframe;
     let i = 0;
-    while (i < this.rowBytes) { // run-length: a zero byte is followed by a count of zero bytes
+    // Run-length: a zero byte is followed by a count of zero bytes. A row running off the end
+    // of the lump (a crafted map: it looped forever, hanging the tab) sees the rest.
+    while (i < this.rowBytes && ofs < vis.length) {
       const c = vis[ofs++];
       if (c) row[i++] = c;
       else for (let z = vis[ofs++]; z > 0 && i < this.rowBytes; z--) row[i++] = 0;
     }
+    row.fill(255, i);
     for (let k = 1; k <= this.visleafs; k++) {
       if (!(row[(k - 1) >> 3] & (1 << ((k - 1) & 7)))) continue;
       this.leafMark[k] = v;

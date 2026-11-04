@@ -12,7 +12,7 @@ import {
 import {
   createWeaponState, copyWeaponState, giveWeapon, weaponTick, infiniteAmmo, activeWeapon, weaponStats, removeWeapon, refillAmmo,
   deploy, WS_THROW,
-  WEAPON_ID,
+  WEAPONS, WEAPON_ID,
   SLOT_PRIMARY,
   SLOT_SECONDARY, SLOT_C4, NUM_SLOTS, WS_ACTIVE, WS_SLOTS, WS_EVENTS, WS_ACTION, WS_ACTION_END, WEV_PLANTED, WEV_DEFUSED,
   ACTION_PLANT, ACTION_DEFUSE, WS_ALT, WS_GRENADES, GRENADE_IDS,
@@ -81,9 +81,14 @@ export function spawnPlayer(p, x, y, z, keepGear = false, withLoadout = true) {
     p.ws.f[WS_ALT] = savedAlt;
     refillAmmo(p.ws); // the guns come back loaded
   } else {
+    // The loadout's guns (HELLO, unchecked) only when they fit the slot and the team buys them.
+    const fits = (id, slot) => {
+      const w = WEAPONS[id];
+      return w && w.gun && w.slot === slot && (w.teams & (ct ? 2 : 1)) ? id : 0;
+    };
     giveWeapon(p.ws, WEAPON_ID.knife);
-    giveWeapon(p.ws, (withLoadout && p.secondary) || (ct ? WEAPON_ID.usp_silencer : WEAPON_ID.glock));
-    if (withLoadout) giveWeapon(p.ws, p.primary || (ct ? WEAPON_ID.m4a1 : WEAPON_ID.ak47));
+    giveWeapon(p.ws, (withLoadout && fits(p.secondary, SLOT_SECONDARY)) || (ct ? WEAPON_ID.usp_silencer : WEAPON_ID.glock));
+    if (withLoadout) giveWeapon(p.ws, fits(p.primary, SLOT_PRIMARY) || (ct ? WEAPON_ID.m4a1 : WEAPON_ID.ak47));
     p.armor = 0;
     p.helmet = false;
     p.defuser = false;

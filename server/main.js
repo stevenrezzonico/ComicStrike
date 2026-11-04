@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { ensureCert } from './cert.js';
 import { staticPath } from './static.js';
 import { listen } from './transport.js';
-import { Host, GAME_MODES } from './host.js';
+import { Host, GAME_MODES, AddressCounts } from './host.js';
 import { Rooms, RoomError } from './rooms.js';
 import { parseBSP } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
@@ -84,9 +84,17 @@ host.start(MAP);
 const rooms = new Rooms({ readCfg: (name) => readText(new URL(`cfg/${name}`, ROOT)) });
 
 // A session belongs to the game its first HELLO asks for: the server's own (no room code)
-// or a room's. Datagrams before it are dropped.
+// or a room's. Datagrams before it are dropped. At most SESSIONS_PER_ADDRESS players from one
+// address in all games (a household behind one IPv4 address fits).
+const SESSIONS_PER_ADDRESS = 5;
+const sessionsByAddress = new AddressCounts(SESSIONS_PER_ADDRESS);
 listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key }, (session) => {
   let game = null, client = null, refused = false;
+  const refuse = (reason) => {
+    refused = true;
+    session.send(writeReject(new Writer(), reason).slice());
+    session.close(reason);
+  };
   return {
     onDatagram(bytes) {
       if (!client) {
@@ -94,15 +102,12 @@ listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key
         const code = helloRoom(bytes);
         if (code === null) return;
         const room = code ? rooms.get(code) : null;
-        if (code && !room) {
-          refused = true;
-          session.send(writeReject(new Writer(), 'no such room: it may have closed').slice());
-          session.close('no such room');
-          return;
-        }
+        if (code && !room) return refuse('no such room: it may have closed');
+        if (!sessionsByAddress.add(session.address)) return refuse('too many players from your address');
         game = (room ? room.host : host).game; // a map change replaces the game; this session stays with its own
         client = game.connect(session);
         if (!client) {
+          sessionsByAddress.remove(session.address);
           refused = true;
           return;
         }
@@ -112,6 +117,7 @@ listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key
     },
     onClose() {
       if (!client) return;
+      sessionsByAddress.remove(session.address);
       if (client.joined) console.log(`player ${client.id} "${client.name}" left`);
       game.disconnect(client);
     },

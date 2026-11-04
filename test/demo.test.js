@@ -163,3 +163,17 @@ Deno.test({
     net.close('done');
   },
 });
+
+// A hidden tab steps once a second: over 2 s of frames at once overflowed the NetClient's
+// queue and playback froze for good. One step delivers at most 250 ms of demo time.
+Deno.test('demo playback: one late step delivers a quarter second at most', () => {
+  const frames = [];
+  for (let t = 0; t <= 5000; t += 10) frames.push({ dir: DIR_IN, t, bytes: new Uint8Array([1]) });
+  let now = 0, got = 0;
+  const dp = new DemoPlayer({ header: {}, ring: null, frames }, () => now);
+  dp.addEventListener('message', (e) => e.data.type === 'dgram' && got++);
+  dp.step();
+  now = 5000;
+  dp.step();
+  assert.equal(got, 26, 'frames at 0, 10, ..., 250 ms');
+});

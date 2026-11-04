@@ -35,6 +35,38 @@ export function addressKey(address) {
   return groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(':') + '::/64';
 }
 
+// Live game sessions per address (addressKey): one machine opening 20 sessions took every
+// player slot. `add(address)` is false when the address has `max` already; loopback is
+// free (development opens a browser tab per player).
+export class AddressCounts {
+  constructor(max) {
+    this.max = max;
+    this.counts = new Map();
+  }
+
+  key(address) {
+    const key = addressKey(address);
+    return /^127\./.test(key) || address === '::1' ? null : key;
+  }
+
+  add(address) {
+    const key = this.key(address);
+    if (key === null) return true;
+    const n = this.counts.get(key) || 0;
+    if (n >= this.max) return false;
+    this.counts.set(key, n + 1);
+    return true;
+  }
+
+  remove(address) {
+    const key = this.key(address);
+    if (key === null || !this.counts.has(key)) return;
+    const n = this.counts.get(key) - 1;
+    if (n > 0) this.counts.set(key, n);
+    else this.counts.delete(key);
+  }
+}
+
 export class Host {
   // opts: loadMap(name) -> parsed BSP (throws if missing), listMaps() -> names,
   //       readCfg(name) -> text or null, quit(), print(text), rules (test overrides),

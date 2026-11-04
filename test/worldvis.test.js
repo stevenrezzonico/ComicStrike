@@ -103,3 +103,14 @@ Deno.test({ name: 'worldvis: sees() a box in the camera\'s PVS, a point by its l
   vis.update([eye[0], eye[1], -5000], viewProj(eye, 0, 0)); // in solid: draws everything
   assert.ok(box(cts[0], 40), 'not culling: everything');
 }});
+
+// A crafted visibility row that runs off the end of the lump (here a zero run of nothing,
+// then the end) looped forever and hung the tab; it now ends, the rest of the row seen.
+Deno.test('worldvis: a visibility row running off the lump ends, seeing the rest', () => {
+  const bsp = load('cs_polaris');
+  const vis = new WorldVis(bsp, buildMapMesh(bsp));
+  bsp.visibility = new Uint8Array([0, 0]);
+  bsp.leavesI32[1 * 7 + 1] = 0;
+  vis.mark(1);
+  assert.ok(vis.row.every((x) => x === 255));
+});

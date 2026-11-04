@@ -74,7 +74,7 @@ Deno.test({ name: 'spectators: jointeam 1 leaves the game (no death), jointeam 2
   assert.equal(a.team, TEAM_SPECTATOR);
   assert.ok(!a.alive);
   assert.equal(a.deaths, 0, 'not counted as a death');
-  run(1);
+  run(16); // team changes at most every 250 ms
   assert.ok(!inSnapshot(a));
   game.clientCommand(a, 'jointeam 3');
   assert.equal(a.team, TEAM_CT);

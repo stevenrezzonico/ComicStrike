@@ -270,7 +270,7 @@ async function strafeAndShoot(t, viewFromPast) {
     game.step();
     seen.set(game.tick, [...b.client.player.ps.f.subarray(PS_ORIGIN, PS_ORIGIN + 3)]);
   }
-  const past = game.tick - 20;
+  const past = game.tick - 14; // the server takes a view up to ~200 ms behind the newest snapshot (Game.viewOf)
   const [x, y, z] = seen.get(past);
   const [pitch, yaw] = aimAt(a, x, y, z + 14); // chest
   a.play(IN_ATTACK, yaw, false, pitch, viewFromPast ? past : game.tick);
@@ -335,4 +335,17 @@ Deno.test('a headshot kills; everyone gets the kill; the victim respawns after 2
   b.poll();
   assert.equal(b.own.health, 100, 'respawned');
   assert.notEqual(b.own.spawnCount, spawnCount);
+});
+
+// Lag compensation's view tick: unwrapped past 2^24 ticks (72.8 hours on one map: it read 98
+// and every shot rewound a second), and never more than ~200 ms older than the shooter's
+// newest snapshot less the interpolation (a modified client could claim a second ago).
+Deno.test('the view tick of a command: unwrapped, and no older than the shooter could see', () => {
+  const game = new Game('de_playground', parseBSP(Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url)).buffer), { rounds: false });
+  game.tick = 2 ** 24 + 100;
+  assert.equal(game.viewOf({ ackSeq: 0 }, (2 ** 24 + 98) % 2 ** 24), 2 ** 24 + 98);
+  assert.equal(game.viewOf({ ackSeq: 0 }, 98.5), 2 ** 24 + 98.5);
+  game.tick = 1000;
+  assert.equal(game.viewOf({ ackSeq: 998 }, 995.25), 995.25, 'an honest view');
+  assert.equal(game.viewOf({ ackSeq: 998 }, 938), 998 - 2 - 13, 'a second ago: clamped');
 });

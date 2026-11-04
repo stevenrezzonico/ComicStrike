@@ -489,3 +489,17 @@ Deno.test('looping map logic is bounded', () => {
   logic.fireAt(tick, 'self', null, 0);
   assert.equal(logic.fires, MAX_FIRES + 1, 'the self relay stopped at the budget');
 });
+
+// A map with no doors and no triggers skipped the map logic altogether, so a trigger_auto's
+// delayed fire never came (here: it breaks a crate by name half a second into the round).
+Deno.test('delayed fires happen on a map with no doors or triggers', () => {
+  const bsp = yard((map) => {
+    map.point({ classname: 'trigger_auto', target: 'crate', delay: '0.5', origin: '0 0 64' });
+    map.brushEntity({ classname: 'func_breakable', targetname: 'crate', material: '1', health: '40' }, [box(64, -32, 0, 128, 32, 64, 'crate08')]);
+  });
+  const g = quiet(() => new Game('yard', bsp, { rounds: false }));
+  assert.equal(g.doors.count + g.logic.triggers.length, 0);
+  g.logic.reset(g.tick);
+  for (let i = 0; i < TICK_RATE; i++) g.step();
+  assert.equal(g.breakables.broken[1], 1);
+});

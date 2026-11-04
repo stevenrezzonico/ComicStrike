@@ -522,4 +522,11 @@ Deno.test({ name: 'bots: a dead player takes control of a teammate bot until the
   run(2);
   assert.ok(bot.alive && !bot.controlled);
   assert.equal(row(), 1);
+  // Switching sides mid-round (a living body on the other team) takes no bot that round.
+  run(8, () => g.phase === PHASE_LIVE);
+  ct.lastTeamChange = -Infinity;
+  g.joinTeam(ct, 2);
+  assert.match(g.takeOver(ct, bot.id), /changed teams/);
+  g.startRound(false);
+  assert.ok(!ct.switchedTeam, 'the next round it may');
 } });

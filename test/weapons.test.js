@@ -368,3 +368,21 @@ Deno.test('knife swings without ammo at its cycle rate', () => {
   assert.equal(swings, 3); // 0.4 s cycle -> ticks 0, 26, 52
   assert.equal(ctx.ws.f[WS_SLOTS + SLOT_KNIFE * 3 + 1], 0);
 });
+
+// HELLO's loadout guns arrive unchecked: a spawn with a loadout gives them only when they fit
+// their slot and the player's team buys them (warmup and deathmatch respawns).
+Deno.test('spawn loadout: only guns of the slot and the team', async () => {
+  const { Player, spawnPlayer, TEAM_CT } = await import('../shared/player.js');
+  const p = new Player();
+  p.team = TEAM_CT;
+  p.primary = WEAPON_ID.ak47; // a T rifle
+  p.secondary = WEAPON_ID.hegrenade; // not a pistol
+  spawnPlayer(p, 0, 0, 0);
+  assert.equal(p.ws.f[WS_SLOTS + SLOT_PRIMARY * 3], WEAPON_ID.m4a1);
+  assert.equal(p.ws.f[WS_SLOTS + SLOT_SECONDARY * 3], WEAPON_ID.usp_silencer);
+  p.primary = WEAPON_ID.awp;
+  p.secondary = WEAPON_ID.deagle;
+  spawnPlayer(p, 0, 0, 0);
+  assert.equal(p.ws.f[WS_SLOTS + SLOT_PRIMARY * 3], WEAPON_ID.awp);
+  assert.equal(p.ws.f[WS_SLOTS + SLOT_SECONDARY * 3], WEAPON_ID.deagle);
+});

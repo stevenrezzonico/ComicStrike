@@ -111,6 +111,7 @@ export const POINTS = {
 };
 
 export const LIMITS = { coord: 8192, brushes: 3000, points: 256 };
+export const MAX_STAIR_STEPS = 64; // steps one stairs shape is built of (1024 units at 16)
 const HULL = [16, 16, 36]; // standing player: half extents (the origin is the hull center)
 
 // A brush with the shape fields filled in.
@@ -148,6 +149,9 @@ export function readProject(text) {
   if (!p || p.format !== FORMAT) throw new Error('not a ComicStrike map project');
   if (p.version > VERSION) throw new Error('made by a newer editor');
   const num = (x) => (Number.isFinite(+x) ? Math.round(+x) : 0);
+  // Coordinates within twice the limit (checkProject reports past it): a stair 4e9 units tall
+  // was a billion pieces, and autosaved first, it hung the editor at every visit.
+  const coord = (x) => Math.max(-2 * LIMITS.coord, Math.min(2 * LIMITS.coord, num(x)));
   const out = { format: FORMAT, version: VERSION, name: String(p.name || 'my_map').replace(/[^\w-]/g, '_').slice(0, 31) || 'my_map',
     brushes: [], points: [], textures: {}, nextId: 1 };
   let extra = 0;
@@ -156,7 +160,7 @@ export function readProject(text) {
     out.textures[name] = [0, 1].map((k) => Math.max(1, Math.min(1024, num(size[k]) || 64)));
   }
   const texOf = (name) => (typeof name === 'string' && textureSize(out, name) ? name : null);
-  for (const b of Array.isArray(p.brushes) ? p.brushes : []) {
+  for (const b of Array.isArray(p.brushes) ? p.brushes.slice(0, 4 * LIMITS.brushes) : []) {
     const kind = KINDS[b.kind] ? b.kind : 'world';
     const tex = {};
     for (const s of ['top', 'bottom', 'side']) tex[s] = b.tex ? texOf(b.tex[s]) : null;
@@ -169,16 +173,16 @@ export function readProject(text) {
         .map((f) => [...f.slice(0, 4).map((x) => Math.round(+x * 1e6) / 1e6), texOf(f[4])]);
       if (faces.length < 4) shape = 'box';
     }
-    const br = makeBrush(out.nextId++, (b.b || []).slice(0, 6).map(num), tex, kind, keys, {
+    const br = makeBrush(out.nextId++, (b.b || []).slice(0, 6).map(coord), tex, kind, keys, {
       shape, yaw: num(b.yaw) % 360, up: UPS.includes(b.up) ? b.up : 'px',
       sides: SIDE_COUNTS.includes(+b.sides) ? +b.sides : 8, step: Math.max(4, Math.min(64, num(b.step) || 16)),
     });
     if (shape === 'convex') br.faces = faces;
     out.brushes.push(br);
   }
-  for (const q of Array.isArray(p.points) ? p.points : []) {
+  for (const q of Array.isArray(p.points) ? p.points.slice(0, 4 * LIMITS.points) : []) {
     if (!POINTS[q.kind]) continue;
-    const pt = { id: out.nextId++, kind: q.kind, o: (q.o || []).slice(0, 3).map(num), yaw: num(q.yaw) % 360 };
+    const pt = { id: out.nextId++, kind: q.kind, o: (q.o || []).slice(0, 3).map(coord), yaw: num(q.yaw) % 360 };
     if (POINTS[q.kind].keys) {
       pt.keys = { ...POINTS[q.kind].keys };
       for (const [k, v] of Object.entries(q.keys || {})) if (/^\w{1,32}$/.test(k)) pt.keys[k] = String(v).replace(/"/g, "'").slice(0, 128);
@@ -206,7 +210,9 @@ export function piecesOf(br) {
       return one(prism(br.b, br.sides || 8, yaw, tex));
     case 'stairs': {
       // Each step reaches from its front edge to the high end (overlaps compile away).
-      const n = Math.max(1, Math.round((z1 - z0) / (br.step || 16))), lo = br.b[along], hi = br.b[along + 3];
+      // At most MAX_STAIR_STEPS (a taller flight gets taller steps; checkProject warns).
+      const n = Math.max(1, Math.min(MAX_STAIR_STEPS, Math.round((z1 - z0) / (br.step || 16))));
+      const lo = br.b[along], hi = br.b[along + 3];
       const out = [];
       for (let i = 0; i < n; i++) {
         const b = br.b.slice();
