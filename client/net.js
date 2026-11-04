@@ -76,6 +76,13 @@ export class NetClient {
     this.gapCount = 0;
     this.lastPacketAt = 0;
     this.arrival = 0; // performance.now() when the newest snapshot arrived
+    // Demos (client/demo.js): the newest datagrams a recording starting now needs besides
+    // the snapshot ring (the WELCOME, INFO, items and hostages lists), kept as they arrived
+    // (references: nothing writes into a datagram).
+    this.keep = { welcome: null, info: null, items: null, hostages: null };
+    this.recorder = null; // a DemoRecorder taking every datagram in and our commands out
+    this.onSnapshot = null; // (slot, own) after each snapshot is decoded (playback: the recorder's row)
+    this.playback = false; // fed by a DemoPlayer: a demo, not a game
   }
 
   // Opens the WebTransport session: with the server's pinned certificate hash (its own
@@ -164,6 +171,7 @@ export class NetClient {
     this.bytesIn += value.byteLength + 28; // + UDP/IP headers, like net_graph counts
     this.packetsIn++;
     const t = performance.now();
+    if (this.recorder) this.recorder.incoming(value, t);
     if (this.lastPacketAt) this.gaps[this.gapCount++ & 127] = t - this.lastPacketAt;
     this.lastPacketAt = t;
     if (this.qLen === QUEUE) { // tick loop stalled: drop the oldest
@@ -201,6 +209,7 @@ export class NetClient {
   send(bytes) {
     if (this.closed) return;
     this.lastSend = performance.now();
+    if (this.recorder) this.recorder.outgoing(bytes, this.lastSend);
     this.bytesOut += bytes.byteLength + 28;
     this.packetsOut++;
     if (this.local) {
@@ -268,6 +277,7 @@ export class NetClient {
       const type = r.u8v();
       if (type === S2C_SNAPSHOT) {
         const k = readSnapshot(r, this.ring, this.scratch, this.events);
+        if (k >= 0 && this.onSnapshot) this.onSnapshot(k, this.scratch);
         if (k < 0) {
           this.dropped++;
           continue;
@@ -284,10 +294,14 @@ export class NetClient {
           fresh = true;
         }
       } else if (type === S2C_WELCOME) {
-        if (!this.welcome) this.welcome = readWelcome(r);
+        if (!this.welcome) {
+          this.welcome = readWelcome(r);
+          this.keep.welcome = bytes;
+        }
       } else if (type === S2C_REJECT) {
         this.rejected = r.str();
       } else if (type === S2C_INFO) {
+        this.keep.info = bytes;
         readInfo(r, this.names, this.teams, this.kills, this.deaths, this.scores, this.mvps);
       } else if (type === S2C_REPORT) {
         this.report = readReport(r);
@@ -298,6 +312,7 @@ export class NetClient {
       } else if (type === S2C_CHANGELEVEL) {
         this.changelevel = r.str();
       } else if (type === S2C_HOSTAGES) {
+        this.keep.hostages = bytes;
         readHostages(r, this.hostages);
       } else if (type === S2C_GRENADES) {
         const tick = readGrenades(r, this.grenadeScratch);
@@ -309,6 +324,7 @@ export class NetClient {
           this.grenadesVersion++;
         }
       } else if (type === S2C_ITEMS) {
+        this.keep.items = bytes;
         readItems(r, this.items);
         this.itemsVersion++;
       }

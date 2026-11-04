@@ -197,7 +197,7 @@ export class Menu {
     this.demoPlayers = 0; // the demo: no bots unless asked for (targets)
     this.practiceDifficulty = 1;
     this.practiceArmoury = true; // the map's own weapons laid out (armoury_entity, the fy_ maps)
-    this.panel = ''; // open panel: '', 'play', 'practice', 'demo', 'own', 'team', 'settings'
+    this.panel = ''; // open panel: '', 'play', 'practice', 'demo', 'own', 'recordings', 'team', 'settings'
     this.room = ''; // a room's code (a hosted map, server/rooms.js): Play joins it
     this.roomGone = false; // the room's code did not answer (it closed)
     this.ownMap = ''; // the map file picked in Your map (its name; the page holds the bytes)
@@ -230,6 +230,13 @@ export class Menu {
     this.onHost = (_map, _team, _opts) => {};
     this.onLeaveRoom = () => {};
     this.onWindow = (_open) => {}; // the Video tab's window opened or closed
+    // Recordings (client/demo.js): the saved demos, and what to do with one.
+    this.onDemoList = () => Promise.resolve([]); // [{ name, map, seconds, size, at }]
+    this.onDemoPlay = (_name) => {};
+    this.onDemoFile = (_file) => {}; // a .csdemo file picked: kept and played
+    this.onDemoDownload = (_name) => {};
+    this.onDemoDelete = (_name) => Promise.resolve();
+    this.demoError = '';
 
     root.innerHTML = '';
     this.side = el('div', 'menu-side');
@@ -412,6 +419,7 @@ export class Menu {
       item('Practice', 'practice');
       item('Demo', 'demo');
       item('Your map', 'own');
+      item('Recordings', 'recordings');
       item('Map editor', '', () => open('/client/editor.html', '_blank'));
       item('Settings', 'settings');
     }
@@ -424,6 +432,7 @@ export class Menu {
     else if (this.panel === 'practice') this.renderPractice(body);
     else if (this.panel === 'demo') this.renderPractice(body, 'demo');
     else if (this.panel === 'own') this.renderPractice(body, 'own');
+    else if (this.panel === 'recordings') this.renderRecordings(body);
     else if (this.panel === 'team') this.renderTeam(body, (team) => this.onTeam(team));
     else if (this.panel === 'settings') this.renderSettings(body);
     else if (!this.inGame) this.renderWelcome(body);
@@ -514,6 +523,56 @@ export class Menu {
     body.append(row);
     body.append(el('p', 'menu-hint', 'The server holds the map in memory only and drops it a couple of minutes ' +
       'after the last player leaves.'));
+  }
+
+  // Recordings: the demos recorded in this browser (record <name> ... stop in a game), each
+  // played back, downloaded or deleted, and a .csdemo file from the disk to play.
+  renderRecordings(body) {
+    body.append(el('h2', '', 'Recordings'));
+    body.append(el('p', 'menu-hint', 'In a game, type record <name> in the console (`) to record it as a demo, and stop ' +
+      'to end it. A demo plays back as a spectator: fly freely, or jump to watch through a player\'s eyes. ' +
+      'demo_pause and demo_timescale control it.'));
+    const pick = el('label', 'menu-drop');
+    const input = el('input');
+    input.type = 'file';
+    input.accept = '.csdemo';
+    const take = (file) => {
+      if (file) this.onDemoFile(file);
+    };
+    input.addEventListener('change', () => take(input.files[0]));
+    pick.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      pick.classList.add('over');
+    });
+    pick.addEventListener('dragleave', () => pick.classList.remove('over'));
+    pick.addEventListener('drop', (e) => {
+      e.preventDefault();
+      pick.classList.remove('over');
+      take(e.dataTransfer.files[0]);
+    });
+    pick.append(input, el('span', '', 'Drop a .csdemo file here, or click to choose one'));
+    body.append(pick);
+    if (this.demoError) body.append(el('p', 'menu-hint menu-error', this.demoError));
+    const list = el('div', 'menu-demos');
+    list.append(el('p', 'menu-hint', 'Loading...'));
+    body.append(list);
+    this.onDemoList().then((demos) => {
+      if (!list.isConnected) return;
+      list.replaceChildren();
+      if (!demos.length) list.append(el('p', 'menu-hint', 'No recordings yet.'));
+      for (const d of demos) {
+        const row = el('div', 'menu-row menu-demo');
+        const when = new Date(d.at).toLocaleString();
+        row.append(el('span', '', d.name), el('span', 'menu-hint',
+          `${d.map} · ${Math.floor(d.seconds / 60)}:${String(Math.floor(d.seconds % 60)).padStart(2, '0')} · ` +
+          `${(d.size / 1048576).toFixed(1)} MB · ${when}`),
+        button('Play', () => this.onDemoPlay(d.name)), button('Download', () => this.onDemoDownload(d.name)),
+        button('Delete', () => this.onDemoDelete(d.name).then(() => this.render())));
+        list.append(row);
+      }
+    }, (err) => {
+      if (list.isConnected) list.replaceChildren(el('p', 'menu-hint menu-error', `Could not read the recordings: ${err.message || err}`));
+    });
   }
 
   // Your map: a .bsp from the disk, played alone (practice: nothing leaves the page) or

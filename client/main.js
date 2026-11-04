@@ -47,8 +47,10 @@ import {
   MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, E_ACTIVE, E_X,
   CHAT_CONSOLE, CHAT_TEAM, CHAT_MAX,
   E_Y, E_Z, E_PITCH, E_YAW,
-  E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw,
+  E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw, PROTOCOL_VERSION,
 } from '../shared/protocol.js';
+import { DemoRecorder, DemoPlayer, decodeDemo, fillRecorderRow, restoreRing, demoName } from './demo.js';
+import { saveDemo, loadDemo, listDemos, deleteDemo, downloadDemo } from './demostore.js';
 import { buildMapMesh } from './mapmesh.js';
 import { Renderer } from './gl/renderer.js';
 import { Decals } from './gl/decals.js';
@@ -752,9 +754,12 @@ function applySnapshot() {
   applyMovers(own.movers);
   player.defuser = (own.flags & OWN_DEFUSER) !== 0; // before any replay: it sets the defuse time
   player.carrying = (own.flags & OWN_CARRYING) !== 0; // and this the speed
-  if (own.flags & OWN_IMMUNE) hud.flash('Spawn protection', 250, performance.now()); // until we shoot
+  if (own.flags & OWN_IMMUNE && !net.playback) hud.flash('Spawn protection', 250, performance.now()); // until we shoot
 
-  if (own.spawnCount !== player.spawnCount || !synced) {
+  if (net.playback) { // a demo: we watch, the recorder is a row of their own (client/demo.js)
+    player.spawnCount = own.spawnCount;
+    synced = true;
+  } else if (own.spawnCount !== player.spawnCount || !synced) {
     // (Re)spawned by the server: take its state and replay what it has not run yet.
     player.psBytes.set(own.ps);
     player.wsBytes.set(own.ws);
@@ -796,8 +801,8 @@ function applySnapshot() {
       }
     }
   }
-  player.health = own.health;
-  player.team = own.team; // jointeam without a respawn (spectators, mid-round)
+  player.health = net.playback ? 0 : own.health;
+  player.team = net.playback ? TEAM_SPECTATOR : own.team; // jointeam without a respawn (spectators, mid-round)
   player.armor = own.armor;
   player.helmet = own.helmet;
   player.money = own.money;
@@ -1112,6 +1117,7 @@ function tick() {
     if (net.poll()) applySnapshot();
     while (net.prints.length) conWin.print(net.prints.shift());
     while (net.chats.length) addChat(net.chats.shift());
+    if (net.playback && (net.changelevel || net.closed)) return leaveGame(`Demo ${demoTitle} ended`);
     if (net.changelevel || (net.closed && net.closeReason === 'changelevel')) {
       reconnect();
       return;
@@ -1322,6 +1328,16 @@ function frame(now) {
   if (paused !== localPaused) {
     localPaused = paused;
     if (localWorker) localWorker.postMessage({ type: 'pause', on: paused });
+  }
+  if (demoPlayer) { // a demo holds still under the pause menu and with demo_pause
+    demoPlayer.paused = demoHeld || (menu.visible && menu.inGame);
+    demoPlayer.timescale = cv.demo_timescale.number;
+    if (now - demoShownAt > 1000) {
+      demoShownAt = now;
+      const at = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+      hud.flash(`DEMO ${demoTitle}   ${at(demoPlayer.time / 1000)} / ${at(demoPlayer.length / 1000)}` +
+        (demoHeld ? '   (paused)' : demoPlayer.timescale !== 1 ? `   x${demoPlayer.timescale}` : ''), 1200, now);
+    }
   }
   const elapsed = paused ? 0 : (now - last) / 1000;
   last = now;
@@ -1902,6 +1918,121 @@ con.command('setpos', (a, ctx) => {
   ps.f[PS_ORIGIN + 1] = v[1];
   ps.f[PS_ORIGIN + 2] = v[2] + feetOffset(ps.i[PS_FLAGS]);
 }, 'setpos <x> <y> <z>: moves your feet there (online: needs sv_cheats 1 on the server)');
+// Demos (client/demo.js): record a game we are in, play one back (a spectator, free).
+let recorder = null; // DemoRecorder while recording
+let demoPlayer = null; // DemoPlayer while a demo plays
+let demoTitle = '', demoHeld = false, demoShownAt = 0;
+const recorderState = { pitch: 0, yaw: 0, shots: 0, lastCmd: -1 }; // the recorder's row between snapshots
+function stopRecording() {
+  if (!recorder) return;
+  const r = recorder, bytes = r.finish();
+  recorder = null;
+  if (net) net.recorder = null;
+  saveDemo({ name: r.name, map: r.map, seconds: r.seconds }, bytes).then(
+    () => {
+      conWin.print(`demo ${r.name} saved: ${r.seconds.toFixed(1)} s, ${(bytes.length / 1024).toFixed(0)} KB (playback ${r.name})`);
+      if (!demoList.includes(r.name)) demoList.push(r.name);
+    },
+    (err) => {
+      conWin.print(`could not keep demo ${r.name} (${err.message || err}): downloading it`);
+      downloadDemo(r.name, bytes);
+    });
+}
+async function playDemo(name, bytes) {
+  const demo = decodeDemo(bytes);
+  if (demo.header.protocol !== PROTOCOL_VERSION) {
+    throw new Error(`recorded with protocol ${demo.header.protocol}, this game speaks ${PROTOCOL_VERSION}`);
+  }
+  if (playing) leaveGame();
+  resetSession();
+  menu.busy(`Loading demo ${name}...`);
+  demoTitle = name;
+  demoHeld = false;
+  Object.assign(recorderState, { pitch: 0, yaw: 0, shots: 0, lastCmd: -1 });
+  const dp = demoPlayer = new DemoPlayer(demo);
+  dp.paused = true; // the kept state at once, the rest once the map is in
+  net = new NetClient();
+  net.playback = true;
+  const n = net;
+  net.onSnapshot = (k, own) => fillRecorderRow(n.ring, k, n.welcome ? n.welcome.playerId : -1, own, dp.cmds, recorderState);
+  restoreRing(net.ring, dp.ring); // the first deltas' bases
+  net.connectLocal(dp, '');
+  const welcome = await net.join(TEAM_SPECTATOR, 0, 0, cv.name.value); // the HELLO goes nowhere: the WELCOME is the demo's
+  selfId = -1; // nobody is us: the recorder is one of the players
+  menu.busy(`Loading ${welcome.map}...`);
+  await loadMap(welcome.map);
+  spectator.mode = SPEC_ROAM;
+  conWin.print(`playing demo ${name}: ${demo.header.map}, ${(dp.length / 1000).toFixed(1)} s (demo_pause, demo_timescale; jump: eyes, chase, free)`);
+  enterGame();
+}
+// The start menu's Recordings.
+menu.onDemoList = () => listDemos();
+menu.onDemoPlay = (name) => playback(['playback', name], { print: (s) => (menu.demoError = s) });
+menu.onDemoDownload = (name) => loadDemo(name).then((b) => b && downloadDemo(name, b));
+menu.onDemoDelete = (name) => deleteDemo(name).then(() => (demoList = demoList.filter((n) => n !== name)));
+menu.onDemoFile = (file) => {
+  menu.demoError = '';
+  file.arrayBuffer().then(async (buf) => {
+    const bytes = new Uint8Array(buf), demo = decodeDemo(bytes); // a bad file goes no further
+    const name = demoName(demo.header.name) || demoName(file.name.replace(/\.csdemo$/i, '').replace(/[^\w-]/g, '_').slice(0, 40)) || 'demo';
+    await saveDemo({ name, map: demo.header.map, seconds: demo.header.seconds || 0 }, bytes).catch(() => {});
+    if (!demoList.includes(name)) demoList.push(name);
+    run(() => playDemo(name, bytes));
+  }).catch((err) => {
+    menu.demoError = `That file is not a demo this game can play: ${err.message || err}`;
+    menu.render();
+  });
+};
+con.command('record', (a, ctx) => {
+  const name = demoName(a[1]);
+  if (!name) return con.out(ctx, 'record <name>: letters, digits, _ and - (up to 40)');
+  if (!net || net.playback || !synced) return con.out(ctx, 'record: in a game (online or practice)');
+  if (recorder) return con.out(ctx, `record: already recording ${recorder.name} (stop first)`);
+  recorder = net.recorder = new DemoRecorder(net, name, currentMap, performance.now());
+  con.out(ctx, `recording ${name} (stop ends it)`);
+  hud.flash(`Recording ${name}`, 1500, performance.now());
+}, 'record <name>: records this game as a demo, until stop (playback <name> plays it)');
+con.command('stop', (_a, ctx) => {
+  if (!recorder) return con.out(ctx, 'stop: not recording');
+  stopRecording();
+}, 'Ends the demo recording and keeps it (demos lists them)');
+const playback = (a, ctx) => {
+  const name = demoName(a[1]);
+  if (!name) return con.out(ctx, 'playback <name>: a demo from demos');
+  loadDemo(name).then((bytes) => {
+    if (!bytes) return con.out(ctx, `playback: no demo ${name} (demos lists them)`);
+    run(() => playDemo(name, bytes));
+  }, (err) => con.out(ctx, `playback: ${err.message || err}`));
+};
+con.command('playback', playback, 'playback <name>: plays a recorded demo (as a spectator: free camera, jump to watch players)');
+con.command('playdemo', playback, 'playdemo <name>: same as playback (CS:GO)');
+con.command('demos', (_a, ctx) => {
+  listDemos().then((list) => con.out(ctx, list.length ? list.map((d) =>
+    `${d.name}  ${d.map}  ${d.seconds.toFixed(1)} s  ${(d.size / 1024).toFixed(0)} KB  ${new Date(d.at).toLocaleString()}`).join('\n')
+    : 'no demos (record <name> in a game)'), (err) => con.out(ctx, `demos: ${err.message || err}`));
+}, 'Lists the recorded demos');
+con.command('demo_download', (a, ctx) => {
+  const name = demoName(a[1]);
+  if (!name) return con.out(ctx, 'demo_download <name>');
+  loadDemo(name).then((bytes) => bytes ? downloadDemo(name, bytes) : con.out(ctx, `no demo ${name}`),
+    (err) => con.out(ctx, `demo_download: ${err.message || err}`));
+}, 'demo_download <name>: saves a demo as a .csdemo file');
+con.command('demo_delete', (a, ctx) => {
+  const name = demoName(a[1]);
+  if (!name) return con.out(ctx, 'demo_delete <name>');
+  deleteDemo(name).then(() => {
+    demoList = demoList.filter((n) => n !== name);
+    con.out(ctx, `demo ${name} deleted`);
+  }, (err) => con.out(ctx, `demo_delete: ${err.message || err}`));
+}, 'demo_delete <name>: removes a recorded demo');
+con.command('demo_pause', (_a, ctx) => {
+  if (!demoPlayer) return con.out(ctx, 'demo_pause: no demo playing');
+  demoHeld = !demoHeld;
+}, 'Pauses or resumes the demo playing');
+const demoNames = (i) => (i === 1 ? demoList : []);
+let demoList = []; // the names for suggestions, refreshed when the console opens a demo command
+for (const name of ['playback', 'playdemo', 'demo_download', 'demo_delete']) con.hint(name, demoNames);
+listDemos().then((l) => (demoList = l.map((d) => d.name)), () => {});
 con.command('setang', (a, ctx) => {
   if (a.length < 3) return con.out(ctx, 'setang <pitch> <yaw>');
   angles[0] = Math.max(-89, Math.min(89, +a[1] || 0));
@@ -2274,6 +2405,9 @@ function enterGame() {
 
 // Back to the start menu (disconnect, quit practice, or the server went away).
 function leaveGame(message = '') {
+  stopRecording();
+  if (demoPlayer) demoPlayer.stop();
+  demoPlayer = null;
   if (net && !net.closed) net.close('disconnect');
   net = null;
   if (localWorker) {
@@ -2295,6 +2429,7 @@ let reconnecting = false;
 async function reconnect() {
   if (reconnecting || !net) return;
   reconnecting = true;
+  stopRecording(); // a demo holds one map
   const team = player.team;
   if (net && !net.closed) net.close('reconnect');
   resetSession();

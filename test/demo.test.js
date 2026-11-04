@@ -1,170 +1,165 @@
+// Demos (client/demo.js): the file format and its checks, and a recording of a live game
+// (a NetClient on a practice-style channel to a Game with a bot, the recording started
+// mid-game) played back through another NetClient: every snapshot decodes again, the
+// other players' rows are the same as live, and the recorder's own row, rebuilt from their
+// own block and recorded commands, is where the server had them.
 import assert from 'node:assert/strict';
 import { parseBSP } from '../shared/bsp.js';
-import { IN_ATTACK, IN_USE, IN_FORWARD } from '../shared/constants.js';
-import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
-import { traceHull, hullFits, Trace, HULL_POINT, HULL_STAND } from '../shared/trace.js';
+import { TEAM_CT } from '../shared/player.js';
+import { IN_FORWARD, IN_MOVELEFT } from '../shared/constants.js';
 import {
-  WEAPON_ID, WS_SLOTS, WS_ACTIVE, WS_GRENADES, GRENADE_IDS, SLOT_PRIMARY, SLOT_GRENADE, SLOT_C4,
-} from '../shared/weapons.js';
-import { TEAM_T } from '../shared/player.js';
-import { BOMB_CARRIED, BOMB_PLANTED, BOMB_DEFUSED, BOMB_EXPLODED } from '../shared/bomb.js';
-import { PHASE_LIVE, GAME_DEMO } from '../shared/economy.js';
-import { Writer, CmdRing, writeHello, writeCmds, writeBuy } from '../shared/protocol.js';
-import { Game } from '../server/game.js';
+  PROTOCOL_VERSION, CmdRing, E_ACTIVE, E_X, E_Y, E_Z, E_PITCH, E_YAW, E_WEAPON, E_HEALTH, E_TEAM, E_FIELDS, MAX_PLAYERS,
+} from '../shared/protocol.js';
 import { Host } from '../server/host.js';
+import { NetClient } from '../client/net.js';
+import {
+  DemoRecorder, DemoPlayer, encodeDemo, decodeDemo, fillRecorderRow, restoreRing, demoName, DIR_IN, DIR_OUT, DEMO_FORMAT,
+  RING_BYTES,
+} from '../client/demo.js';
 
-let bsp = null;
-try {
-  bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_dust2.bsp', import.meta.url)).buffer);
-} catch { /* map-dependent tests skip */ }
+const MAP = 'de_playground';
+const bsp = parseBSP(Deno.readFileSync(new URL(`../maps/${MAP}.bsp`, import.meta.url)).buffer);
 
-// The demo's rules as cfg/gamemode_demo.cfg and the mode set them; one T alone.
-function setup(rules = {}) {
-  const game = new Game('de_dust2', bsp, {
-    demo: true, freezeTime: 0, warmupTime: 0, roundTime: 3600, buyTime: 3600, ignoreWinConditions: true,
-    buyAnywhere: true, giveC4: false, respawnT: true, respawnCT: true, deathDropGun: false, ...rules,
-  });
-  const w = new Writer();
-  const c = game.connect({ send() {}, close() {} });
-  game.receive(c, writeHello(w, TEAM_T, 0, 0, 'tester').slice());
-  c.cmds = new CmdRing();
-  c.tick = 1;
-  c.input = { buttons: 0, select: -1, pitch: 0, yaw: 0 };
-  let buyId = 0;
-  c.buy = (item) => game.receive(c, writeBuy(w, ++buyId, item).slice());
-  const run = (ticks) => {
-    for (let i = 0; i < ticks; i++) {
-      const k = c.input;
-      c.cmds.put(c.tick, k.buttons, k.select, k.pitch, k.yaw, 0);
-      k.select = -1;
-      game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
+Deno.test('demo: the file reads back, and anything else is refused', () => {
+  const header = { format: DEMO_FORMAT, version: 1, protocol: PROTOCOL_VERSION, map: MAP, name: 'x' };
+  const frames = [
+    { dir: DIR_IN, t: 0, bytes: new Uint8Array([1, 2, 3]) },
+    { dir: DIR_OUT, t: 16, bytes: new Uint8Array([2, 0, 0, 0, 0, 0, 0]) },
+    { dir: DIR_IN, t: 17, bytes: new Uint8Array(1024).fill(7) },
+  ];
+  const ring = new Uint8Array(RING_BYTES).map((_, i) => i & 255);
+  const bytes = encodeDemo(header, ring, frames);
+  const d = decodeDemo(bytes);
+  assert.deepEqual(d.header, header);
+  assert.deepEqual([...d.ring.subarray(0, 4)], [0, 1, 2, 3]);
+  assert.equal(d.ring.length, RING_BYTES);
+  assert.equal(d.frames.length, 3);
+  assert.deepEqual(d.frames.map((f) => [f.dir, f.t, f.bytes.length]), [[0, 0, 3], [1, 16, 7], [0, 17, 1024]]);
+  assert.deepEqual([...d.frames[2].bytes.subarray(0, 3)], [7, 7, 7]);
+  const bad = (b, why) => assert.throws(() => decodeDemo(b), Error, why);
+  bad(new Uint8Array(4), 'too short');
+  bad(bytes.slice(0, bytes.length - 3), 'cut in a frame');
+  const magic = bytes.slice();
+  magic[0] = 0x41;
+  bad(magic, 'magic');
+  const dir = bytes.slice();
+  dir[bytes.length - 1024 - 7] = 9;
+  bad(dir, 'direction');
+  bad(encodeDemo({ ...header, map: '../x' }, ring, frames), 'map name');
+  bad(encodeDemo({ ...header, format: 'other' }, ring, frames), 'format');
+  bad(encodeDemo(header, ring, [frames[2], frames[0]]), 'time going back');
+  bad(encodeDemo(header, ring, [{ dir: DIR_IN, t: 0, bytes: new Uint8Array(1025) }]), 'over a datagram');
+  bad(encodeDemo(header, ring.subarray(4), frames), 'a ring of another size');
+  assert.equal(demoName('mid_smokes-2'), 'mid_smokes-2');
+  assert.equal(demoName('../x'), '');
+  assert.equal(demoName(''), '');
+});
+
+// A Host on the playground (competitive, no cfg files) and a NetClient joined to it over a
+// practice-style message channel (the worker's role played by `link`).
+async function liveGame() {
+  const host = new Host({ loadMap: () => bsp, listMaps: () => [MAP], print: () => {}, defer: (fn) => fn(), now: () => 0 });
+  host.con.exec('mp_freezetime 0; mp_warmuptime 0');
+  host.start(MAP);
+  host.con.exec('bot_quota 0; bot_stop 1; bot_add_t');
+  const game = host.game;
+  const link = new EventTarget();
+  let c = null;
+  link.postMessage = (m) => {
+    if (m.type === 'open') {
+      c = game.connect({
+        send: (b) => link.dispatchEvent(new MessageEvent('message', { data: { id: m.id, type: 'dgram', bytes: b.slice().buffer } })),
+        close() {}, closed: false,
+      });
+    } else if (m.type === 'dgram') game.receive(c, new Uint8Array(m.bytes));
+  };
+  const net = new NetClient();
+  net.connectLocal(link, '');
+  const welcome = await net.join(TEAM_CT, 0, 0, 'recorder');
+  return { host, game, net, welcome, client: () => c };
+}
+
+Deno.test({
+  name: 'demo: a recording played back decodes every snapshot and shows everyone where they were',
+  sanitizeOps: false, sanitizeResources: false, // the NetClients' keepalive timers
+  fn: async () => {
+    const { game, net, welcome } = await liveGame();
+    const me = welcome.playerId, cmds = new CmdRing();
+    let tick = 1;
+    const live = new Map(); // seq -> rows as the live client decoded them
+    const server = new Map(); // seq -> the recorder's row as the server had it
+    let recorder = null;
+    const step = (buttons, pitch, yaw) => {
       game.step();
+      net.poll();
+      cmds.put(tick, buttons, -1, pitch, yaw, net.latestSeq);
+      net.sendCmds(cmds, tick++);
+      const ring = game.snapshots, seq = Math.max(...ring.seq), k = ring.find(seq);
+      if (recorder && k >= 0) server.set(seq, ring.ents.slice(ring.row(k, me), ring.row(k, me) + E_FIELDS));
+      if (recorder && net.latest >= 0) live.set(net.latestSeq, net.ring.ents.slice(net.ring.row(net.latest, 0), net.ring.row(net.latest, MAX_PLAYERS)));
+    };
+    for (let i = 0; i < 150; i++) step(0, 0, 0); // into the game: deltas going
+    assert.ok(net.received > 100 && net.own.team === TEAM_CT);
+    recorder = net.recorder = new DemoRecorder(net, 'test', MAP, performance.now()); // the NetClient's clock
+    for (let i = 0; i < 256; i++) {
+      // Running and turning: the view goes into the recorded commands.
+      step(i < 128 ? IN_FORWARD : IN_MOVELEFT, 10 - i * 0.05, (i * 1.7) % 360);
     }
-  };
-  return { game, c, run };
-}
+    net.recorder = null;
+    const bytes = recorder.finish();
+    const demo = decodeDemo(bytes);
+    assert.equal(demo.header.map, MAP);
+    assert.equal(demo.header.player, me);
+    assert.ok(demo.frames.some((f) => f.dir === DIR_OUT) && demo.frames.some((f) => f.dir === DIR_IN));
 
-const slot = (c, s) => c.player.ws.f[WS_SLOTS + s * 3];
-
-// A standable spot inside bomb site `i` (hull center).
-function siteSpot(game, i) {
-  const b = game.bombSites.boxes[i], tr = new Trace();
-  for (let x = b[0] + 24; x < b[3] - 24; x += 16) {
-    for (let y = b[1] + 24; y < b[4] - 24; y += 16) {
-      traceHull(game.world, HULL_POINT, x, y, b[5] - 1, x, y, b[2] - 64, tr);
-      if (tr.startsolid || tr.fraction >= 1) continue;
-      const z = tr.endz + 37;
-      if (z - 36 <= b[5] && hullFits(game.world, HULL_STAND, x, y, z)) return [x, y, z];
+    // Play it back, the clock driven by hand.
+    let now = 0;
+    const dp = new DemoPlayer(demo, () => now);
+    const pb = new NetClient();
+    pb.playback = true;
+    const state = { pitch: 0, yaw: 0, shots: 0, lastCmd: -1 };
+    const decoded = new Map(); // seq -> rows, every snapshot as playback decoded it
+    pb.onSnapshot = (k, own) => {
+      fillRecorderRow(pb.ring, k, pb.welcome ? pb.welcome.playerId : -1, own, dp.cmds, state);
+      decoded.set(pb.ring.seq[k], pb.ring.ents.slice(pb.ring.row(k, 0), pb.ring.row(k, MAX_PLAYERS)));
+    };
+    restoreRing(pb.ring, dp.ring);
+    pb.connectLocal(dp, '');
+    dp.stop(); // no timer: stepped below
+    const take = () => pb.poll();
+    take();
+    assert.ok(pb.welcome && pb.welcome.playerId === me, 'the WELCOME comes first');
+    for (let ms = 0; ms <= dp.length + 50; ms += 4) {
+      now = ms;
+      dp.step();
+      take();
     }
-  }
-  throw new Error('no spot in the bomb site');
-}
-
-function teleport(c, [x, y, z]) {
-  const f = c.player.ps.f;
-  f[PS_ORIGIN] = x;
-  f[PS_ORIGIN + 1] = y;
-  f[PS_ORIGIN + 2] = z;
-  f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
-}
-
-Deno.test({ name: 'demo: game_type 2 / game_mode 0 loads the demo with its cfg', ignore: !bsp, fn: () => {
-  const readCfg = (name) => {
-    try {
-      return Deno.readTextFileSync(new URL(`../cfg/${name}`, import.meta.url));
-    } catch {
-      return null;
+    assert.equal(pb.closed, true, 'closed at the end ("demo over")');
+    assert.equal(pb.closeReason, 'demo over');
+    // Every snapshot the live client had since the recording began decoded again.
+    let compared = 0;
+    for (const [seq, rows] of live) {
+      const got = decoded.get(seq);
+      if (!got) continue;
+      compared++;
+      for (let id = 0; id < MAX_PLAYERS; id++) {
+        if (id === me) continue;
+        for (let f = 0; f < E_FIELDS; f++) assert.equal(got[id * E_FIELDS + f], rows[id * E_FIELDS + f], `seq ${seq} player ${id} field ${f}`);
+      }
+      // The recorder: rebuilt where the server had them, looking where they looked.
+      const want = server.get(seq);
+      if (!want) continue;
+      const o = me * E_FIELDS;
+      assert.equal(got[o + E_ACTIVE], 1);
+      for (const f of [E_X, E_Y, E_Z, E_WEAPON, E_HEALTH, E_TEAM]) assert.equal(got[o + f], want[f], `recorder field ${f} at ${seq}`);
+      for (const f of [E_PITCH, E_YAW]) assert.ok(Math.abs(got[o + f] - want[f]) <= 1, `recorder view ${f} at ${seq}: ${got[o + f]} vs ${want[f]}`);
     }
-  };
-  const host = new Host({ loadMap: () => bsp, listMaps: () => ['de_dust2'], readCfg, print: () => {} });
-  host.con.exec('game_type 2; game_mode 0');
-  host.start('de_dust2');
-  const r = host.game.rules;
-  assert.ok(r.demo && r.ignoreWinConditions && r.buyAnywhere && !r.giveC4 && r.freezeTime === 0);
-  assert.equal(host.modeName, 'demo');
-} });
-
-Deno.test({ name: 'demo: alone, live at once; free buying anywhere; infinite ammo and grenades', ignore: !bsp, fn: () => {
-  const { game, c, run } = setup();
-  run(2);
-  assert.equal(game.phase, PHASE_LIVE, 'no second team needed');
-  assert.equal(game.round.mode & GAME_DEMO, GAME_DEMO, 'clients are told');
-  const money = c.player.money;
-  teleport(c, siteSpot(game, 1)); // far from the buy zone
-  c.buy(WEAPON_ID.ak47);
-  c.buy(WEAPON_ID.hegrenade);
-  run(70);
-  assert.equal(slot(c, SLOT_PRIMARY), WEAPON_ID.ak47, 'bought away from the buy zone');
-  assert.equal(c.player.money, money, 'for free');
-  c.player.ws.f[WS_ACTIVE] = SLOT_PRIMARY;
-  c.input.buttons = IN_ATTACK;
-  run(64);
-  c.input.buttons = 0;
-  run(2);
-  assert.ok(c.shots > 5, `it fired (${c.shots} shots)`);
-  assert.equal(c.player.ws.f[WS_SLOTS + SLOT_PRIMARY * 3 + 1], 30, 'the magazine stays full');
-  // A grenade thrown comes back, in hand again.
-  c.input.select = SLOT_GRENADE;
-  run(64);
-  c.input.buttons = IN_ATTACK;
-  run(16);
-  c.input.buttons = 0;
-  run(16);
-  assert.equal(game.grenades.count, 1, 'thrown');
-  const he = GRENADE_IDS.indexOf(WEAPON_ID.hegrenade);
-  assert.equal(c.player.ws.f[WS_GRENADES + he], 1, 'and still carried');
-  assert.equal(c.player.ws.f[WS_ACTIVE], SLOT_GRENADE, 'up again');
-} });
-
-Deno.test({ name: 'demo: humans take the hit but never die, then heal; the kill command still kills', ignore: !bsp, fn: () => {
-  const { game, c, run } = setup();
-  run(2);
-  c.player.health = 30;
-  game.grenadeHurt(c, 80, WEAPON_ID.hegrenade, c.id, c.team);
-  assert.equal(c.player.health, 1, 'down to 1');
-  assert.ok(c.alive);
-  run(64);
-  assert.equal(c.player.health, 1, 'still hurt a second later');
-  run(80);
-  assert.equal(c.player.health, 100, 'healed after 2 s');
-  game.clientCommand(c, 'kill');
-  assert.ok(!c.alive, 'kill works');
-} });
-
-Deno.test({ name: 'demo: the player gets the bomb, plants and defuses it himself; the next one comes', ignore: !bsp, fn: () => {
-  const { game, c, run } = setup({ c4Timer: 40 });
-  run(4);
-  assert.equal(game.bomb.state, BOMB_CARRIED);
-  assert.equal(slot(c, SLOT_C4), WEAPON_ID.c4, 'the bomb is handed to the player');
-  const spot = siteSpot(game, 0);
-  teleport(c, spot);
-  c.input.select = SLOT_C4;
-  run(8);
-  c.input.buttons = IN_ATTACK | IN_FORWARD;
-  run(4 * 64);
-  c.input.buttons = 0;
-  assert.equal(game.bomb.state, BOMB_PLANTED);
-  assert.equal(game.phase, PHASE_LIVE);
-  c.input.pitch = 89; // straight down at it
-  c.input.buttons = IN_USE;
-  run(11 * 64);
-  c.input.buttons = 0;
-  assert.equal(game.bomb.state, BOMB_DEFUSED, 'a T defused it');
-  assert.equal(game.phase, PHASE_LIVE, 'and the round goes on');
-  run(3 * 64);
-  assert.equal(game.bomb.state, BOMB_CARRIED, 'a new bomb');
-  assert.equal(slot(c, SLOT_C4), WEAPON_ID.c4);
-  // Planted and left: it blows up, the player lives, and the next one comes.
-  c.input.select = SLOT_C4;
-  run(8);
-  c.input.pitch = 0;
-  c.input.buttons = IN_ATTACK | IN_FORWARD;
-  run(4 * 64);
-  c.input.buttons = 0;
-  assert.equal(game.bomb.state, BOMB_PLANTED);
-  run(41 * 64);
-  assert.equal(game.bomb.state, BOMB_EXPLODED);
-  assert.ok(c.alive, 'standing on it, and alive');
-  run(3 * 64);
-  assert.equal(game.bomb.state, BOMB_CARRIED);
-} });
+    assert.ok(compared > 200, `compared ${compared} of ${live.size}`);
+    assert.equal(pb.dropped, 0, 'no snapshot lacked its base');
+    assert.equal(compared, live.size, 'every one decoded again');
+    // Somebody moved: the bot stood (bot_stop), the recorder ran.
+    const first = decoded.get(Math.min(...decoded.keys())), last = decoded.get(Math.max(...decoded.keys()));
+    assert.ok(Math.hypot(last[me * E_FIELDS + E_X] - first[me * E_FIELDS + E_X], last[me * E_FIELDS + E_Y] - first[me * E_FIELDS + E_Y]) > 100);
+    net.close('done');
+  },
+});

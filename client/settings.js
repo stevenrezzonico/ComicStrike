@@ -69,6 +69,7 @@ export function createConsole(print) {
   add('r_playershadows', 1, 'Players and hostages cast shadows along the sun where they stand in sunlight', 0, 1);
   add('r_lod_dist', 520, 'Players farther than this (units) draw as their coarse models (0: always; the models pass is triangle-bound)', 0, 100000, 0);
   add('cl_showhitboxes', 0, 'Draw other players as their hit boxes instead of their models', 0, 1);
+  add('demo_timescale', 1, 'Demo playback speed', 0.1, 4, 0);
   // Practice marks (client/gl/practice.js): the demo mode and the sandbox only.
   add('sv_grenade_trajectory', 1, 'The demo and the sandbox: every grenade\'s arc as a line, kept 3 s after it lands', 0, 1);
   add('sv_showimpacts', 1, 'The demo and the sandbox: your bullets\' impacts as small red boxes for 2 s', 0, 1);

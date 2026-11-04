@@ -414,6 +414,11 @@
     box-shadow: 4px 4px 0 var(--ink); background: var(--paper-hi); box-sizing: border-box; margin-bottom: 4px; }
   .menu-gun ~ .menu-settings { max-height: calc(100vh - 12vh - 215px - min(150px, 22vh)); }
   .menu-looks > span:first-child { flex-basis: 150px; }
+  /* Recordings: one row a demo (name, what and when, Play / Download / Delete). */
+  .menu-demo { flex-wrap: wrap; }
+  .menu-demo > span:first-child { flex: 0 0 140px; overflow: hidden; text-overflow: ellipsis; }
+  .menu-demo > .menu-hint { flex: 1 1 180px; }
+  #menu .menu-demo button { padding: 4px 10px 2px; font-size: 14px; }
   .menu-swatches { display: flex; gap: 8px; }
   #menu button.swatch { width: 40px; height: 28px; padding: 0; border: 3px solid var(--ink); box-shadow: 2px 2px 0 var(--ink); }
   #menu button.swatch.on { outline: 3px solid var(--red); outline-offset: 2px; }
