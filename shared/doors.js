@@ -199,6 +199,7 @@ export class Doors {
     this.applied = new Float64Array(n).fill(NaN); // position the collision entity is at
     this.rot = []; // per mover: Float64Array(9), for turning movers
     this.matrix = new Float32Array(MAX_MOVERS * 12); // 3x4 rows per mover, for the world shader
+    this.lockedSound = new Uint8Array(n); // the map gives it a locked_sound (clients rattle it)
 
     const corners = new Map(); // path_corner targetname -> entity
     for (const e of bsp.entities) if (e.classname === 'path_corner' && e.targetname) corners.set(e.targetname, e);
@@ -208,6 +209,7 @@ export class Doors {
       const kind = this.kind[k] = CLASS[e.classname];
       const turns = this.turns[k] = TURNS.has(e.classname) ? 1 : 0;
       const flags = this.flags[k] = +(e.spawnflags || 0);
+      this.lockedSound[k] = +(e.locked_sound || 0) > 0 ? 1 : 0;
       this.ent[k] = entOfBsp.get(bi);
       ce.slot = slotBase + 1 + k;
       const passable = (kind === MOVER_DOOR || kind === MOVER_ROTATING || kind === MOVER_MOMENTARY) && (flags & SF_DOOR_PASSABLE) ||
@@ -773,6 +775,14 @@ export class Doors {
   ofEnt(ent) {
     for (let k = 0; k < this.count; k++) if (this.ent[k] === ent) return k;
     return -1;
+  }
+
+  // Running into mover k plays its locked sound (DoorTouch): a door with a locked_sound that
+  // only what targets it opens (named), not one opened by +use.
+  rattlesOnTouch(k) {
+    const kind = this.kind[k];
+    return this.lockedSound[k] === 1 && (kind === MOVER_DOOR || kind === MOVER_ROTATING) && this.name[k] !== '' &&
+      !(this.flags[k] & SF_DOOR_USE_ONLY);
   }
 
   // Whether a player's +use can work mover k (use-only doors, buttons that are not

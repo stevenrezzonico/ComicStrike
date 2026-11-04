@@ -551,3 +551,20 @@ Deno.test('breakables: pressure breaks when stood on, touch when run into fast e
   game.startRound(true);
   assert.ok(!b.broken[1] && !b.broken[2] && game.pressed.size === 0, 'back at the round start');
 });
+
+// GoldSrc's locked sound: running into a named door (only what targets it opens it) with a
+// locked_sound rattles it; an unnamed one opens, a use-only one is used, one without the
+// key is silent.
+Deno.test('doors: which ones rattle when run into', () => {
+  const door = (keys, x) => (map) => map.brushEntity({ classname: 'func_door', ...keys }, [box(x, -64, 0, x + 16, 64, 128, 'steel')]);
+  const bsp = yard((map) => {
+    door({ targetname: 'gate', locked_sound: '2' }, -400)(map);
+    door({ locked_sound: '2' }, -200)(map);
+    door({ targetname: 'hatch', locked_sound: '2', spawnflags: '256' }, 0)(map);
+    door({ targetname: 'quiet' }, 200)(map);
+  });
+  const game = quiet(() => new Game('yard', bsp, { rounds: false }));
+  const d = game.doors;
+  assert.deepEqual([0, 1, 2, 3].map((k) => d.rattlesOnTouch(k)), [true, false, false, false]);
+  assert.deepEqual([...d.lockedSound], [1, 1, 1, 0]);
+});

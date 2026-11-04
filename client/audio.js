@@ -483,6 +483,16 @@ export class Sounds {
   }
 
   // A door or button reaching the end of its travel.
+  // A locked door or button tried (its locked_sound): a metal latch rattling twice.
+  locked(x, y, z) {
+    const v = this.voice(x, y, z, 0.6, 300, 2000);
+    if (!v) return;
+    for (const d of [0, 0.09]) {
+      this.burst(v.out, v.t, 900, 3200, 0.5, 0.05, d, 0.003);
+      this.tone(v.out, v.t, 520, 380, 0.25, 0.06, d);
+    }
+  }
+
   doorStop(x, y, z) {
     const v = this.voice(x, y, z, 0.7, 300, 2500);
     if (!v) return;

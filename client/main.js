@@ -988,6 +988,41 @@ function sandboxDoors(t, alive) {
   }
 }
 
+// GoldSrc's locked sound (approx.: only we hear ours): running into a named door (only what
+// targets it opens it), or +use on a door or button that has still not moved LOCKED_WAIT
+// later (a master holds it), rattles where the map gives it a locked_sound; once a second
+// per door at most.
+const LOCKED_WAIT = 300, LOCKED_GAP = 1000;
+const lockedAt = new Map(); // mover -> when it last rattled
+let lockedTry = -1, lockedTryAt = 0; // a +use on a mover with a locked_sound, and when
+function lockedSounds(buttons) {
+  const now = performance.now();
+  const rattle = (k) => {
+    if (now - (lockedAt.get(k) ?? -Infinity) < LOCKED_GAP) return;
+    lockedAt.set(k, now);
+    const e = world.ents[doors.ent[k]];
+    sounds.locked((e.amin[0] + e.amax[0]) / 2, (e.amin[1] + e.amax[1]) / 2, (e.amin[2] + e.amax[2]) / 2);
+  };
+  for (let i = 0; i < touchedCount; i++) {
+    const k = doors.ofEnt(touched[i]);
+    if (k >= 0 && doors.rattlesOnTouch(k)) rattle(k);
+  }
+  if ((buttons & IN_USE) && !(lastUseButtons & IN_USE)) {
+    const f = ps.f, cp = Math.cos(angles[0] * DEG);
+    const k = doors.findUse(world, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2], f[PS_ORIGIN], f[PS_ORIGIN + 1],
+      f[PS_ORIGIN + 2] + eyeOffset(ps), cp * Math.cos(angles[1] * DEG), cp * Math.sin(angles[1] * DEG),
+      -Math.sin(angles[0] * DEG));
+    if (k >= 0 && doors.lockedSound[k]) {
+      lockedTry = k;
+      lockedTryAt = now;
+    }
+  }
+  if (lockedTry >= 0 && now - lockedTryAt >= LOCKED_WAIT) {
+    if (doors.dir[lockedTry] === 0 && doors.atBottom(lockedTry)) rattle(lockedTry);
+    lockedTry = -1;
+  }
+}
+
 function sandboxTouches(t, buttons) {
   for (let i = 0; i < touchedCount; i++) {
     const k = doors.ofEnt(touched[i]);
@@ -1231,6 +1266,7 @@ function tick() {
     if (!net) sandboxTouches(t, buttons);
     if (died && !net) offlineRespawn();
   }
+  if (alive && !noclip) lockedSounds(buttons);
   lastUseButtons = buttons;
   moverSounds();
   if (shots.count) {
