@@ -76,3 +76,30 @@ Deno.test({ name: 'worldvis: looking away culls what is behind, turning round br
   const all = new Set(sets.flatMap((x) => [...x]));
   for (const x of sets) assert.ok(x.size < all.size, 'each direction draws less than all four together');
 } });
+
+Deno.test({ name: 'worldvis: sees() a box in the camera\'s PVS, a point by its leaf, everything when not culling', ignore: !dust2, fn: () => {
+  const vis = new WorldVis(dust2, buildMapMesh(dust2));
+  const spawns = dust2.entities.filter((e) => e.classname === 'info_player_deathmatch').map((e) => e.origin.split(' ').map(Number));
+  const cts = dust2.entities.filter((e) => e.classname === 'info_player_start').map((e) => e.origin.split(' ').map(Number));
+  const eye = [spawns[0][0], spawns[0][1], spawns[0][2] + 28];
+  assert.ok(vis.sees(-9999, -9999, -9999, 9999, 9999, 9999), 'before any update: everything');
+  assert.ok(vis.update(eye, viewProj(eye, 0, 0)) > 0);
+  const box = (p, r) => vis.sees(p[0] - r, p[1] - r, p[2] - r, p[0] + r, p[1] + r, p[2] + r);
+  assert.ok(box(eye, 16), 'where the camera is');
+  assert.ok(spawns.every((p) => box(p, 40)), 'the other T spawns');
+  assert.ok(!cts.some((p) => box(p, 40)), 'not the CT spawn across the map');
+  // A point is seen exactly when its own leaf is marked.
+  let seen = 0, n = 0;
+  for (let i = 0; i < 2000; i++) {
+    const p = [-2000 + (i * 977) % 4000, -1000 + (i * 613) % 4200, -200 + (i * 37) % 400];
+    const leaf = vis.leafAt(p[0], p[1], p[2]);
+    if (leaf === 0) continue;
+    n++;
+    const marked = vis.leafMark[leaf] === vis.visframe;
+    assert.equal(vis.sees(p[0], p[1], p[2], p[0], p[1], p[2]), marked, `point ${p}`);
+    if (marked) seen++;
+  }
+  assert.ok(n > 300 && seen < n / 2, `${seen} of ${n} points seen`);
+  vis.update([eye[0], eye[1], -5000], viewProj(eye, 0, 0)); // in solid: draws everything
+  assert.ok(box(cts[0], 40), 'not culling: everything');
+}});

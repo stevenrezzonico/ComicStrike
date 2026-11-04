@@ -7,6 +7,7 @@
 // drawn front to back the GPU skips the hidden pixels of the far ones before shading them.
 // Brush entities, sky, alpha-tested and see-through faces are drawn as before. A map with no
 // visibility lump (de_playground), or a camera in solid (noclip), gets -1: draw everything.
+// sees() asks the same of a box (players, items, shadows: client/gl/playermodels.js).
 
 const MARGIN = 32; // frustum slack (units): a face's leaf box may sit just outside the view
 
@@ -38,6 +39,7 @@ export class WorldVis {
     this.visframe = 0;
     this.frame = 0;
     this.leaf = -1;
+    this.on = false; // the marks hold for the camera (the last update culled)
     this.stack = new Int32Array(nn + 1);
     this.planes = new Float32Array(16); // left, right, bottom, top: a b c d
   }
@@ -86,10 +88,12 @@ export class WorldVis {
   // Fills `out` with the visible world's opaque triangles, nearest first, for a camera at
   // `eye` with view-projection `m` (column-major). Returns the index count, or -1: draw all.
   update(eye, m) {
+    this.on = false;
     if (!this.usable) return -1;
     const b = this.b;
     const l = this.leafAt(eye[0], eye[1], eye[2]);
     if (l === 0 || b.leavesI32[l * 7 + 1] < 0) return -1; // in solid, or a leaf with no row
+    this.on = true;
     if (l !== this.leaf) {
       this.leaf = l;
       this.mark(l);
@@ -136,5 +140,28 @@ export class WorldVis {
       stack[sp++] = n16[node * 12 + 2 + (front ? 0 : 1)];
     }
     return n;
+  }
+
+  // Could anything in the box be seen from the camera's leaf (in its PVS as of the last
+  // update)? Walks the tree down to the leaves the box touches (SV_FindTouchedLeafs), only
+  // through marked nodes. True whenever the last update drew everything.
+  sees(x0, y0, z0, x1, y1, z1) {
+    if (!this.on) return true;
+    const b = this.b, pf = b.planesF, n16 = b.nodesI16, v = this.visframe, stack = this.stack;
+    let sp = 0;
+    stack[sp++] = b.modelsI[9];
+    while (sp > 0) {
+      const node = stack[--sp];
+      if (node < 0) {
+        if (this.leafMark[-1 - node] === v) return true;
+        continue;
+      }
+      if (this.nodeMark[node] !== v) continue; // no visible leaf under it
+      const p = b.nodesI32[node * 6] * 5, a = pf[p], bb = pf[p + 1], c = pf[p + 2], d = pf[p + 3];
+      // The box's corners furthest along and against the plane's normal.
+      if (a * (a >= 0 ? x1 : x0) + bb * (bb >= 0 ? y1 : y0) + c * (c >= 0 ? z1 : z0) >= d) stack[sp++] = n16[node * 12 + 2];
+      if (a * (a >= 0 ? x0 : x1) + bb * (bb >= 0 ? y0 : y1) + c * (c >= 0 ? z0 : z1) < d) stack[sp++] = n16[node * 12 + 3];
+    }
+    return false;
   }
 }

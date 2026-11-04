@@ -410,6 +410,7 @@ async function loadMap(name) {
   const bsp = untrusted ? parseUntrustedBSP(buffer) : parseBSP(buffer);
   const mesh = buildMapMesh(bsp);
   renderer.loadMap(mesh, bsp);
+  models.vis = renderer.vis;
   models.setSun(sunOf(bsp.entities));
   decals.clear();
   debris.clear();
@@ -2586,6 +2587,7 @@ globalThis.comicstrike = {
   netStats,
   interp,
   targets,
+  models,
   hud,
   menu,
   weaponView,

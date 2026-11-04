@@ -279,6 +279,7 @@ export class Renderer {
       this.setWorldUniforms(this.solid, viewProj, time);
       // The visible world nearest first (r_novis 0), then the brush entities' opaque faces.
       const n = this.vis && !this.novis ? this.vis.update(eye, viewProj) : -1;
+      if (this.vis && this.novis) this.vis.on = false; // nothing culled by it, models neither
       if (n < 0) gl.drawElements(gl.TRIANGLES, this.opaqueCount, gl.UNSIGNED_INT, 0);
       else {
         const at = this.visBase + this.visTurn * this.worldOpaque;
