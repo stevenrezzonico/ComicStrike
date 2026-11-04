@@ -459,6 +459,7 @@ async function loadMap(name) {
   renderer.loadMap(mesh, bsp);
   models.vis = renderer.vis;
   models.setSun(sunOf(bsp.entities));
+  renderer.setSky(sunOf(bsp.entities), name);
   decals.clear();
   debris.clear();
   // Every effect's program draws once now, clipped away, not on its first use in a fight.

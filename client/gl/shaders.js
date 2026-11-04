@@ -400,7 +400,10 @@ void main() {
 // white clouds (their own id, so they get an ink outline). The cloud noise is a tiling
 // texture made at load (cloudNoise in client/gl/renderer.js, CLOUD_PERIOD cells across):
 // one fetch, where two octaves of value noise (eight hashes a pixel) were a quarter of the
-// GPU frame on a map with a wide sky.
+// GPU frame on a map with a wide sky. Behind them the map's sun as a comic one (a disc with
+// a ring of spikes, its own id so it is outlined) where its light_environment puts it, and
+// a far silhouette round the horizon by the map's kind (BACKDROPS in client/gl/renderer.js:
+// dunes, a city's skyline, mountains), printed like a hazy wall with its own outline.
 export const CLOUD_PERIOD = 16;
 export const SKY_FS = `#version 300 es
 precision highp float;
@@ -409,10 +412,29 @@ in vec3 v_dir;
 uniform vec3 u_horizon;
 uniform float u_time;
 uniform sampler2D u_clouds;
+uniform vec3 u_sun;       // toward the sun (0: none)
+uniform vec4 u_backdrop;  // rgb its color, a its kind (0 none, 1 dunes, 2 skyline, 3 mountains)
 ${GBUFFER}
+const float PI = 3.14159265;
+float hashB(float n) { return fract(sin(n * 127.1) * 43758.5453); }
+// The silhouette's top at azimuth a (radians), in degrees over the horizon.
+float backdropTop(float a, float kind) {
+  if (kind < 1.5) return 1.4 + 1.3 * (0.5 + 0.5 * sin(a * 3.0 + 1.0)) + 0.8 * pow(sin(a * 7.0 + 2.0), 2.0);
+  if (kind < 2.5) { // blocks of towers, a few taller
+    float n = floor(a * 48.0 / (2.0 * PI)), h = hashB(n);
+    return 1.2 + 2.6 * h * h + (hashB(n + 91.0) > 0.86 ? 2.2 : 0.0);
+  }
+  return 1.0 + 3.6 * pow(abs(sin(a * 2.0 + 0.5)), 0.7) + 1.6 * pow(abs(sin(a * 5.0 + 1.3)), 0.9) +
+    0.6 * abs(sin(a * 13.0 + 0.2));
+}
 
 void main() {
   vec3 dir = normalize(v_dir);
+  float elev = degrees(asin(clamp(dir.z, -1.0, 1.0)));
+  if (u_backdrop.a > 0.5 && elev < backdropTop(atan(dir.y, dir.x), u_backdrop.a)) {
+    gbuffer(u_backdrop.rgb, 0.78, vec3(0.0, 0.0, 1.0), 4u, DEPTH_FAR, 0u);
+    return;
+  }
   // Clouds on a dome rather than a plane: the lookup stays bounded at the horizon.
   vec2 p = dir.xy / max(dir.z + 0.3, 0.05) * 1.6 + u_time * 0.01;
   float n = texture(u_clouds, p / ${CLOUD_PERIOD}.0).r;
@@ -420,6 +442,18 @@ void main() {
   float footprint = length(fwidth(p)) * 2.7;
   bool cloud = n > 0.66 && footprint < 0.5 && dir.z > 0.02;
   float dark = cloud ? 0.0 : clamp(0.06 + dir.z * 0.55, 0.03, 0.42);
+  // The sun: a disc 3.5 degrees round with twelve spikes out to 6.5, in front of the clouds.
+  float c = dot(dir, u_sun);
+  if (c > 0.99) {
+    vec3 side = normalize(cross(u_sun, abs(u_sun.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0)));
+    vec3 up = cross(u_sun, side);
+    float ang = atan(dot(dir, up), dot(dir, side)), off = degrees(acos(min(c, 1.0)));
+    float spike = 1.0 - abs(fract(ang * 6.0 / PI) - 0.5) * 2.0; // 0..1 twelve times round
+    if (off < 3.5 + 3.0 * spike * spike) {
+      gbuffer(off < 3.5 ? vec3(1.0, 0.9, 0.45) : vec3(1.0, 0.78, 0.3), 1.0, vec3(0.0, 0.0, 1.0), 3u, DEPTH_FAR, G_SKY | G_FLAT);
+      return;
+    }
+  }
   gbuffer(cloud ? vec3(0.98, 0.97, 0.93) : u_horizon, 1.0 - dark, vec3(0.0, 0.0, 1.0), cloud ? 1u : 0u,
     DEPTH_FAR, G_SKY);
 }`;

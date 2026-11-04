@@ -67,7 +67,7 @@ export class Renderer {
     this.world = program(gl, WORLD_VS, WORLD_FS, worldUniforms);
     this.broken = new Uint32Array(8); // bit per breakable slot
     this.movers = null; // shared/doors.js Doors: slots above slotBase are drawn moved
-    const skyUniforms = ['u_eye', 'u_horizon', 'u_time', 'u_clouds'];
+    const skyUniforms = ['u_eye', 'u_horizon', 'u_time', 'u_clouds', 'u_sun', 'u_backdrop'];
     this.skyMesh = program(gl, SKY_MESH_VS, SKY_FS, ['u_viewProj', ...skyUniforms]);
     this.skyFill = program(gl, SKY_FILL_VS, SKY_FS, ['u_invViewProj', ...skyUniforms]);
     // The clouds' tiling noise, on unit 1 for the sky (the lightmap keeps unit 0).
@@ -93,6 +93,8 @@ export class Renderer {
     this.skyCount = 0;
     this.transCount = 0;
     this.horizon = new Float32Array([0.76, 0.89, 0.93]);
+    this.sun = new Float32Array(3); // toward the map's sun (0: none), for the sky
+    this.backdrop = new Float32Array(4); // its far silhouette: color, kind (setSky)
     // The print (client/settings.js r_* cvars): comic or plain, ink line width and dot
     // size relative to the screen height, light bands.
     // calm: the radius (px) of the dot-free zone round the screen center (the crosshair);
@@ -251,10 +253,21 @@ export class Renderer {
     gl.useProgram(s.p);
     gl.uniform3fv(s.loc.u_eye, eye);
     gl.uniform3fv(s.loc.u_horizon, this.horizon);
+    gl.uniform3fv(s.loc.u_sun, this.sun);
+    gl.uniform4fv(s.loc.u_backdrop, this.backdrop);
     gl.uniform1f(s.loc.u_time, time);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.cloudTex);
     gl.uniform1i(s.loc.u_clouds, 1);
+  }
+
+  // The map's sky: its sun (shared/sun.js sunOf, toward it; null: none) and the far
+  // silhouette its name suggests (backdropOf).
+  setSky(sun, name) {
+    this.sun.fill(0);
+    if (sun) this.sun.set(sun);
+    const b = backdropOf(name);
+    this.backdrop.set(b ? [...b.color, b.kind] : [0, 0, 0, 0]);
   }
 
   // Starts a frame in the G-buffer.
@@ -393,6 +406,20 @@ export class Renderer {
     gl.enable(gl.CULL_FACE);
     gl.enable(gl.DEPTH_TEST);
   }
+}
+
+// The far silhouette round a map's horizon (SKY_FS), by words in its name: dunes for the
+// desert maps, a city's skyline for the towns and offices, mountains for the snow and the
+// hills; none for the rest (an aim map's void, a playground).
+const BACKDROPS = [
+  { words: ['dust', 'mirage', 'desert', 'oasis', 'airstrip', 'aztec', 'dune'], kind: 1, color: [0.86, 0.74, 0.55] },
+  { words: ['office', 'polaris', 'italy', 'assault', 'estate', 'havana', 'inkwell', 'nuke', 'train', 'overpass',
+    'backalley', 'siege', 'chateau', 'india', 'cache'], kind: 2, color: [0.58, 0.63, 0.72] },
+  { words: ['snow', 'militia', 'cbble', 'inferno', 'oilrig', 'survivor', 'alpine'], kind: 3, color: [0.6, 0.67, 0.76] },
+];
+export function backdropOf(name = '') {
+  const n = name.toLowerCase();
+  return BACKDROPS.find((b) => b.words.some((w) => n.includes(w))) || null;
 }
 
 // The sky's cloud noise (SKY_FS): two octaves of value noise, the same shape the shader

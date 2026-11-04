@@ -73,3 +73,15 @@ Deno.test('sun: a character is flattened onto its floor away from the sun', () =
   const h2 = shadowMatrix(new Float32Array(16), high, 0);
   assert.ok(Math.abs(h2[8] * 72) < 72 * Math.tan(10 * Math.PI / 180) + 1e-3);
 });
+
+Deno.test('sky: the far silhouette by the map\'s name', async () => {
+  const { backdropOf } = await import('../client/gl/renderer.js');
+  assert.equal(backdropOf('de_dust2').kind, 1, 'dunes');
+  assert.equal(backdropOf('css_mirage_go').kind, 1);
+  assert.equal(backdropOf('cs_polaris').kind, 2, 'a skyline');
+  assert.equal(backdropOf('de_inkwell').kind, 2);
+  assert.equal(backdropOf('de_cbble').kind, 3, 'mountains');
+  assert.equal(backdropOf('fy_snow_pool').kind, 3);
+  assert.equal(backdropOf('awp_cs16'), null, 'none');
+  assert.equal(backdropOf('de_playground'), null);
+});
