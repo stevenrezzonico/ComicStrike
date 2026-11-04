@@ -100,12 +100,25 @@ export class NetClient {
       serverCertificateHashes: [{ algorithm: 'sha-256', value: new Uint8Array(info.certHash) }],
     } : {});
     let timer;
-    await Promise.race([
-      this.wt.ready,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('connection timed out')), timeoutMs);
-      }),
-    ]).finally(() => clearTimeout(timer));
+    try {
+      await Promise.race([
+        this.wt.ready,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('connection timed out')), timeoutMs);
+        }),
+      ]);
+    } catch (err) {
+      // Never opened: give the session up (its closed promise rejects too) and let the
+      // caller say why; close() then has nothing to send through.
+      this.wt.closed.catch(ignore);
+      try {
+        this.wt.close();
+      } catch { /* not open */ }
+      this.ended(err.message || 'could not connect');
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
     this.writer = this.wt.datagrams.writable.getWriter();
     this.wt.closed
       .then((info) => info && info.reason, (err) => err.message)
@@ -207,7 +220,7 @@ export class NetClient {
   }
 
   send(bytes) {
-    if (this.closed) return;
+    if (this.closed || (!this.local && !this.writer)) return; // (no session: connect() failed or is under way)
     this.lastSend = performance.now();
     if (this.recorder) this.recorder.outgoing(bytes, this.lastSend);
     this.bytesOut += bytes.byteLength + 28;
