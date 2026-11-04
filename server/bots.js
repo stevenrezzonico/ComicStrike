@@ -20,11 +20,11 @@ import { PS_ORIGIN, PS_FLAGS, PS_DUCK_AMOUNT, FL_ONGROUND, eyeOffset } from '../
 import { feetOffset, crouchScale } from '../shared/hitgroups.js';
 import { HULL_POINT, Trace, traceHull } from '../shared/trace.js';
 import {
-  WEAPONS, WEAPON_ID, WS_SLOTS, WS_ACTIVE, WS_PUNCH, WS_RELOAD_END, WS_ACTION, WS_ZOOM, WS_RESUME_ZOOM, WS_DEPLOY_END,
+  WEAPONS, WEAPON_ID, WS_SLOTS, WS_ACTIVE, WS_PUNCH, WS_RELOAD_END, WS_ACTION, WS_ACTION_END, WS_ZOOM, WS_RESUME_ZOOM, WS_DEPLOY_END,
   WS_THROW, WS_THROW_TIME, WS_GRENADES, GRENADE_IDS, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_GRENADE, SLOT_C4, activeWeapon,
   ACTION_DEFUSE,
 } from '../shared/weapons.js';
-import { GRENADE_GRAVITY, FX_DECOY, FX_FIRE, fireRadius } from '../shared/grenades.js';
+import { GRENADE_GRAVITY, FX_DECOY, FX_FIRE, FIRE_DPS, fireRadius } from '../shared/grenades.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { BOMB_DROPPED, BOMB_PLANTED } from '../shared/bomb.js';
 import { HS_IDLE } from '../shared/hostages.js';
@@ -174,11 +174,26 @@ export class Bots {
     }
     if (!this.marks) this.marks = [new Uint8Array(nav.count), new Uint8Array(nav.count)]; // in turns
     const was = this.burning, now = this.marks[was === this.marks[0] ? 1 : 0];
-    let changed = !was;
-    for (let k = 0; k < nav.count; k++) {
-      now[k] = this.fireAt(nav.x[k], nav.y[k], nav.z[k]) >= 0 ? 1 : 0;
-      if (was && was[k] !== now[k]) changed = true;
+    now.fill(0);
+    // Only the grid cells under each fire (every node against every fire was 0.5 ms on
+    // de_dust2, ten times that on a map at the node limit).
+    const grid = nav.grid, layers = nav.nodeOf.length / (grid.w * grid.h);
+    for (let f = 0; f < gr.fxCount; f++) {
+      if (gr.fxKind[f] !== FX_FIRE) continue;
+      const o = f * 3, fx = gr.fxPos[o], fy = gr.fxPos[o + 1], r = fireRadius(gr.fxAge[f]) + FIRE_MARGIN;
+      const x0 = Math.max(0, Math.floor(grid.px(fx - r))), x1 = Math.min(grid.w - 1, Math.floor(grid.px(fx + r)));
+      const y0 = Math.max(0, Math.floor(grid.py(fy + r))), y1 = Math.min(grid.h - 1, Math.floor(grid.py(fy - r)));
+      for (let py = y0; py <= y1; py++) {
+        for (let px = x0; px <= x1; px++) {
+          for (let l = 0, s = (py * grid.w + px) * layers; l < layers; l++) {
+            const k = nav.nodeOf[s + l];
+            if (k >= 0 && !now[k] && this.fireAt(nav.x[k], nav.y[k], nav.z[k]) >= 0) now[k] = 1;
+          }
+        }
+      }
     }
+    let changed = !was;
+    for (let k = 0; k < nav.count && !changed; k++) changed = was[k] !== now[k];
     this.burning = now;
     if (changed) this.fireSerial++;
   }
@@ -420,6 +435,7 @@ class Bot {
     this.avertUntil = 0; // looking away from our flashbang until then
     this.playAt = 0; // tick considerPlay() may try a smoke at the site again
     this.decoyRound = -1; // the round (RoundState.serial) this bot threw its decoy
+    this.decoyTryAt = 0; // tick decoyPlay() may look for an arc again
     this.decoyHeard = -1; // the decoy (effect id) heard last, and when the next may be
     this.decoyHeardAt = 0;
     this.fireSerial = 0; // Bots.fireSerial when the path was searched (fires changed: again)
@@ -541,7 +557,7 @@ class Bot {
     // Where to go (bots told not to shoot keep to it, watching the enemy).
     if (!this.nade && (!fighting || g.rules.botDontShoot)) {
       const goal = this.pressButton >= 0 ? this.buttonGoal(x, y, feet) : this.objective(x, y, feet);
-      let repath = goal.node !== this.goal || goal.why !== this.goalWhy || this.fireSerial !== this.bots.fireSerial;
+      let repath = goal.node !== this.goal || goal.why !== this.goalWhy || this.fireMatters();
       if (this.pathFailed && g.tick < this.repathAt) repath = false; // no way found: not searched again for a while
       else if (!repath && goal.moving && g.tick >= this.repathAt) repath = true;
       if (repath) {
@@ -594,6 +610,9 @@ class Bot {
       if (fire >= 0) {
         moveYaw = Math.atan2(y - at[fire * 3 + 1], x - at[fire * 3]) / DEG;
         strafe = 0;
+        // A defuse or plant pins the player while the key is held: one that would end after
+        // the fire killed it is let go (a defusing CT burned to death under the Ts' molotov).
+        if (ws[WS_ACTION] && ws[WS_ACTION_END] - this.cmdTick * TICK_DT > p.health / FIRE_DPS) buttons &= ~(IN_USE | IN_ATTACK);
       }
     }
     this.turn(wantP, wantY, fighting);
@@ -655,6 +674,20 @@ class Bot {
     this.lastX = of[PS_ORIGIN];
     this.lastY = of[PS_ORIGIN + 1];
     this.lastZ = of[PS_ORIGIN + 2];
+  }
+
+  // The fire marks changed since this bot's path search: search again only when the rest of
+  // its path or its goal burns, or it waits outside a fire for a goal inside one (every change
+  // of a growing fire sent every bot searching: a 10-bot de_dust2 tick went from 0.07 to
+  // 0.30 ms on average, 5.8 at worst).
+  fireMatters() {
+    const bots = this.bots, burning = bots.burning;
+    if (this.fireSerial === bots.fireSerial) return false;
+    this.fireSerial = bots.fireSerial;
+    if (this.pathLen && this.path[this.pathLen - 1] !== this.goal) return true; // waiting at a fire's edge
+    if (!burning) return false;
+    for (let i = this.pathIdx; i < this.pathLen; i++) if (burning[this.path[i]]) return true;
+    return this.goal >= 0 && burning[this.goal] === 1;
   }
 
   // A live decoy of the other team within earshot: gunfire to hunt (DECOY_HEAR_GAP).
@@ -745,13 +778,16 @@ class Bot {
   // A T's decoy toward the site the team is not going for, early in the round (DECOY_*).
   decoyPlay(x, y, eye) {
     const g = this.game, sites = g.bombSites;
-    if (g.phase !== PHASE_LIVE || sites.count < 2 || this.decoyRound === g.round.serial || !this.carries(WEAPON_ID.decoy) ||
-      g.phaseEnd - g.tick < (g.rules.roundTime - DECOY_WINDOW) * TICK_RATE) return false;
+    if (g.phase !== PHASE_LIVE || sites.count < 2 || this.decoyRound === g.round.serial || g.tick < this.decoyTryAt ||
+      !this.carries(WEAPON_ID.decoy) || g.phaseEnd - g.tick < (g.rules.roundTime - DECOY_WINDOW) * TICK_RATE) return false;
     const b = sites.boxes[(this.site + 1) % sites.count], tx = (b[0] + b[3]) / 2, ty = (b[1] + b[4]) / 2;
     const d = Math.hypot(tx - x, ty - y);
     if (d < DECOY_RANGE[0] || d > DECOY_RANGE[1]) return false;
-    this.decoyRound = g.round.serial; // tried once: an arc that does not get there is not tried again
-    return this.aimThrow(WEAPON_ID.decoy, x, y, eye, tx, ty, b[2] + 16);
+    // Tried once a second as it walks: the other site is mostly behind a wall from the way.
+    this.decoyTryAt = g.tick + TICK_RATE;
+    if (!this.aimThrow(WEAPON_ID.decoy, x, y, eye, tx, ty, b[2] + 16)) return false;
+    this.decoyRound = g.round.serial;
+    return true;
   }
 
   // The throw under way: bring the grenade out (4 again cycles the kinds), pull the pin

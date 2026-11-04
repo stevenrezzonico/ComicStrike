@@ -508,18 +508,25 @@ Deno.test('delayed fires happen on a map with no doors or triggers', () => {
 // it takes one tick), 4 fires its message once (2 was read as fire once before).
 Deno.test('path_corner: teleport, wait for a trigger, fire once', () => {
   const bsp = yard((map) => {
-    map.brushEntity({ classname: 'func_train', target: 'c1', speed: '160' }, [box(-32, -32, 0, 32, 32, 16, 'steel')]);
+    map.brushEntity({ classname: 'func_train', target: 'c1', speed: '160', targetname: 'tram' }, [box(-32, -32, 0, 32, 32, 16, 'steel')]);
     map.point({ classname: 'path_corner', targetname: 'c1', target: 'c2', origin: '0 0 8', message: 'ding', spawnflags: '4' });
     map.point({ classname: 'path_corner', targetname: 'c2', target: 'c3', origin: '800 0 8', spawnflags: '2' });
     map.point({ classname: 'path_corner', targetname: 'c3', target: 'c1', origin: '800 300 8', spawnflags: '1' });
   });
-  const { game, run } = walker(bsp);
+  const { game, c, run, put, pos } = walker(bsp);
   const d = game.doors, p = d.path[0], e = game.world.ents[d.ent[0]];
   assert.equal(p.rate[0], 1, 'into the teleport corner in one tick');
   assert.deepEqual([p.wait[2], p.once[0], p.once[1]], [-1, 1, 0]);
+  put(0, 0, 16); // on the train (named: it waits for a trigger)
+  run(8);
+  assert.equal(c.player.ps.i[PS_GROUNDENT], d.ent[0], 'riding');
+  game.logic.fireAt(game.tick, 'tram', null, 0);
   run(3);
-  assert.equal(d.leg[0], 1, 'already at the second corner');
+  assert.equal(d.leg[0], 1, 'at the second corner the tick it left');
   assert.ok(Math.abs(e.ox - 800) < 0.01 && e.oy < 20, `jumped there (${e.ox}, ${e.oy})`);
+  // The leg into a teleport corner is all arrival: the train is set there, nobody carried
+  // or shoved (GoldSrc sets its origin).
+  assert.ok(Math.abs(pos()[PS_ORIGIN]) < 40 && c.alive, `its rider stayed behind (x ${pos()[PS_ORIGIN].toFixed(0)})`);
   run(Math.ceil(300 / 160 * TICK_RATE) + 2);
   assert.equal(d.leg[0], 2);
   assert.equal(d.stopped[0], 1, 'waits at the third for a trigger');

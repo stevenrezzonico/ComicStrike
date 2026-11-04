@@ -445,6 +445,36 @@ Deno.test({ name: 'bots: a CT goes to the planted bomb and defuses it', ignore: 
   assert.equal(g.round.info >> 2, END_DEFUSE, 'defused before it went off');
 } });
 
+// A molotov on the bomb under a defusing CT bot: the defuse would end after the fire killed
+// it, so it lets go and steps out (it kept defusing and burned to death: defusing pins you).
+Deno.test({ name: 'bots: a defusing CT caught in a fire lets go and steps out', ignore: !dust2, fn: async () => {
+  const { FX_FIRE } = await import('../shared/grenades.js');
+  const { host, g, join, run } = setup('de_dust2');
+  const t = join('planter', TEAM_T);
+  host.con.exec('bot_add ct hard; bot_dont_shoot 1');
+  run(4);
+  while (g.phase !== PHASE_LIVE) run(1);
+  const ct = g.spawns[TEAM_CT][0], nav = g.bots.nav;
+  const box = g.bombSites.boxes.slice().sort((a, b) =>
+    Math.hypot((a[0] + a[3]) / 2 - ct[0], (a[1] + a[4]) / 2 - ct[1]) -
+    Math.hypot((b[0] + b[3]) / 2 - ct[0], (b[1] + b[4]) / 2 - ct[1]))[0];
+  const spot = nav.random(seeded(3), box);
+  teleport(t, nav.x[spot], nav.y[spot], nav.z[spot] + 36);
+  giveWeapon(t.player.ws, WEAPON_ID.c4);
+  g.bombCarrier = t;
+  g.plantBomb(t);
+  teleport(t, -10000, -10000, -10000);
+  g.kill(t, t, 0, false);
+  const bot = g.bots.list[0];
+  run(64 * 39, () => bot.c.player.ws.f[WS_ACTION] === ACTION_DEFUSE);
+  assert.equal(bot.c.player.ws.f[WS_ACTION], ACTION_DEFUSE, 'defusing');
+  const k = g.grenades.addEffect(FX_FIRE, WEAPON_ID.molotov, t.id, TEAM_T, g.bomb.x, g.bomb.y, g.bomb.z);
+  g.grenades.fxAge[k] = 2; // grown to its full reach
+  run(64 * 2);
+  assert.ok(bot.c.alive, `alive (${bot.c.player.health} HP)`);
+  assert.notEqual(bot.c.player.ws.f[WS_ACTION], ACTION_DEFUSE, 'let go');
+} });
+
 Deno.test({ name: 'bots: the T bots take the bomb to one site together and plant it', ignore: !dust2, fn: () => {
   for (const seed of [1, 2, 3, 4]) {
     const { host, g, join, run } = setup('de_dust2');
@@ -571,15 +601,23 @@ Deno.test('bots: throw decoys at the other site, and fall for the other team\'s'
   run(TICK_RATE * 2, () => g.phase === PHASE_LIVE);
   assert.equal(g.phase, PHASE_LIVE);
   const t = g.bots.list.find((b) => b.c.team === TEAM_T), ct = g.bots.list.find((b) => b.c.team === TEAM_CT);
-  // The T: going for site 0, 800 units from site 1, a decoy in hand's reach.
+  // The T, going for site 0 with a decoy: from a spot where a wall hides site 1 it looks
+  // again a second later (the round's try is not spent); from one with an arc, it throws.
   t.site = 0;
-  const s1 = g.bombSites.boxes[1], sx = (s1[0] + s1[3]) / 2, sy = (s1[1] + s1[4]) / 2;
-  const node = g.bots.nearestNode(sx + 800, sy, s1[2] + 37, 400);
-  assert.ok(node >= 0);
-  teleport(t.c, g.bots.nav.x[node], g.bots.nav.y[node], g.bots.nav.z[node]);
   giveWeapon(t.c.player.ws, WEAPON_ID.decoy);
-  run(TICK_RATE * 4, () => t.decoyRound === g.round.serial && !t.nade);
-  assert.equal(t.decoyRound, g.round.serial, 'it tried the decoy play');
+  const s1 = g.bombSites.boxes[1], sx = (s1[0] + s1[3]) / 2, sy = (s1[1] + s1[4]) / 2, nav = g.bots.nav;
+  assert.equal(t.decoyPlay(sx + 800, sy + 4, 64), false, 'a wall in the way');
+  assert.notEqual(t.decoyRound, g.round.serial);
+  assert.equal(t.decoyPlay(sx + 800, sy + 4, 64), false, 'not again within the second');
+  let from = -1;
+  for (let k = 0; k < nav.count && from < 0; k++) {
+    const d = Math.hypot(nav.x[k] - sx, nav.y[k] - sy);
+    t.decoyTryAt = 0;
+    if (d > 600 && d < 1400 && t.decoyPlay(nav.x[k], nav.y[k], nav.z[k] + 64)) from = k;
+  }
+  assert.ok(from >= 0 && t.nade && t.nade.id === WEAPON_ID.decoy, 'a decoy throw toward site 1');
+  assert.equal(t.decoyRound, g.round.serial, 'once a round');
+  t.nade = null;
   // The CT: a T decoy popping 600 units off is gunfire to hunt.
   const cf = ct.c.player.ps.f;
   const k = g.grenades.addEffect(FX_DECOY, WEAPON_ID.decoy, t.c.id, TEAM_T, cf[0] + 600, cf[1], cf[2]);
@@ -616,5 +654,8 @@ Deno.test('bots: keep out of fires', async () => {
   assert.ok(n > 0);
   const burnt = [...path.subarray(0, n)].filter((m) => bots.burning[m]).length;
   assert.ok(through > 0 && burnt < through, `straight: ${through} burning nodes, round: ${burnt}`);
+  // A goal inside the fire waits at the nearest node outside it (a defuser at its edge).
+  const inside = bots.burning.indexOf(1), edge = bots.safeNear(inside);
+  assert.ok(edge !== inside && !bots.burning[edge], 'the goal moves out of the fire');
   g.grenades.fxAge[k] = FIRE_TIME + 1;
 });

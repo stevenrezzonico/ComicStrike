@@ -990,8 +990,9 @@ function sandboxDoors(t, alive) {
 
 // GoldSrc's locked sound (approx.: only we hear ours): running into a named door (only what
 // targets it opens it), or +use on a door or button that has still not moved LOCKED_WAIT
-// later (a master holds it), rattles where the map gives it a locked_sound; once a second
-// per door at most.
+// plus a round trip later (a master holds it; the door's start comes back with the server's
+// reply, so at 300 ms of ping every door used rattled), rattles where the map gives it a
+// locked_sound; once a second per door at most.
 const LOCKED_WAIT = 300, LOCKED_GAP = 1000;
 const lockedAt = new Map(); // mover -> when it last rattled
 let lockedTry = -1, lockedTryAt = 0; // a +use on a mover with a locked_sound, and when
@@ -1017,7 +1018,7 @@ function lockedSounds(buttons) {
       lockedTryAt = now;
     }
   }
-  if (lockedTry >= 0 && now - lockedTryAt >= LOCKED_WAIT) {
+  if (lockedTry >= 0 && now - lockedTryAt >= LOCKED_WAIT + netStats.rtt) {
     if (doors.dir[lockedTry] === 0 && doors.atBottom(lockedTry)) rattle(lockedTry);
     lockedTry = -1;
   }
