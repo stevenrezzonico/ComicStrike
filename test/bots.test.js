@@ -3,6 +3,7 @@ import { parseBSP } from '../shared/bsp.js';
 import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
 import { CollisionWorld, Trace, traceHull, HULL_POINT } from '../shared/trace.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
+import { TICK_RATE } from '../shared/constants.js';
 import {
   giveWeapon, WEAPONS, WEAPON_ID, WS_ZOOM, WS_GRENADES, GRENADE_IDS, WS_ACTION, ACTION_DEFUSE, WS_SLOTS, SLOT_PRIMARY,
 } from '../shared/weapons.js';
@@ -558,4 +559,32 @@ Deno.test('bots: buy the AWP, an auto-sniper or an SSG 08 by money', () => {
   assert.ok(!rich.ssg08 && !rich.g3sg1, 'a CT, with money for a rifle');
   assert.ok(poor.ssg08 > 50 && poor.ssg08 < 110, `SSG 08 ${poor.ssg08} of 300`);
   assert.equal(poor.ssg08 + (poor.none || 0), 300, 'else nothing: no rifle money');
+});
+
+// Decoys: a T bot throws its decoy toward the site the team is not going for early in the
+// round, and a CT bot hears a T decoy as gunfire and goes to look.
+Deno.test('bots: throw decoys at the other site, and fall for the other team\'s', async () => {
+  const { FX_DECOY } = await import('../shared/grenades.js');
+  const { g, host, join, run } = setup('de_playground');
+  host.con.exec('bot_add_t; bot_add_ct');
+  join('human', TEAM_CT);
+  run(TICK_RATE * 2, () => g.phase === PHASE_LIVE);
+  assert.equal(g.phase, PHASE_LIVE);
+  const t = g.bots.list.find((b) => b.c.team === TEAM_T), ct = g.bots.list.find((b) => b.c.team === TEAM_CT);
+  // The T: going for site 0, 800 units from site 1, a decoy in hand's reach.
+  t.site = 0;
+  const s1 = g.bombSites.boxes[1], sx = (s1[0] + s1[3]) / 2, sy = (s1[1] + s1[4]) / 2;
+  const node = g.bots.nearestNode(sx + 800, sy, s1[2] + 37, 400);
+  assert.ok(node >= 0);
+  teleport(t.c, g.bots.nav.x[node], g.bots.nav.y[node], g.bots.nav.z[node]);
+  giveWeapon(t.c.player.ws, WEAPON_ID.decoy);
+  run(TICK_RATE * 4, () => t.decoyRound === g.round.serial && !t.nade);
+  assert.equal(t.decoyRound, g.round.serial, 'it tried the decoy play');
+  // The CT: a T decoy popping 600 units off is gunfire to hunt.
+  const cf = ct.c.player.ps.f;
+  const k = g.grenades.addEffect(FX_DECOY, WEAPON_ID.decoy, t.c.id, TEAM_T, cf[0] + 600, cf[1], cf[2]);
+  const id = g.grenades.fxId[k], x = cf[0] + 600;
+  run(TICK_RATE);
+  assert.equal(ct.decoyHeard, id, 'heard it');
+  assert.equal(ct.lastX, x, 'and hunts there');
 });

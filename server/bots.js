@@ -24,7 +24,7 @@ import {
   WS_THROW, WS_THROW_TIME, WS_GRENADES, GRENADE_IDS, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_GRENADE, SLOT_C4, activeWeapon,
   ACTION_DEFUSE,
 } from '../shared/weapons.js';
-import { GRENADE_GRAVITY } from '../shared/grenades.js';
+import { GRENADE_GRAVITY, FX_DECOY } from '../shared/grenades.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { BOMB_DROPPED, BOMB_PLANTED } from '../shared/bomb.js';
 import { HS_IDLE } from '../shared/hostages.js';
@@ -115,6 +115,14 @@ const BLIND = 0.3;
 const MOLLY_RANGE = [250, 900], SMOKE_RANGE = [400, 1400], MOLLY_BOMB = 1100;
 const SMOKE_EXEC = [300, 1500], SMOKE_AHEAD = 400;
 const SMOKE_ROLL = 220; // a smoke bounces and rolls on before it pops: aimed this much short
+// Decoys (approx. of CS:GO's bots, which buy and throw them now and then): a T bot buys one
+// instead of a flashbang one round in three (by round and id, no extra random draws), and
+// in the first DECOY_WINDOW seconds of the round throws it toward the site the team is not
+// going for, DECOY_RANGE off. A live decoy of the other team within HEAR_RANGE sounds like
+// gunfire to a bot (they fall for it): each decoy heard once, at most every DECOY_HEAR_GAP.
+const DECOY_RANGE = [500, 1500];
+const DECOY_WINDOW = 30;
+const DECOY_HEAR_GAP = 2;
 // Radio (approx. of CS:GO's bots): a human's "Follow me." / "Regroup, team!" sends the
 // team's bots within ORDER_REACH after him for ORDER_SECONDS (stopping FOLLOW_NEAR away),
 // "Hold this position." keeps them where they stand; a bot calls "Enemy spotted." on a new
@@ -349,6 +357,9 @@ class Bot {
     this.nadeFor = -1; // the seenAt a throw was considered for (one per loss)
     this.avertUntil = 0; // looking away from our flashbang until then
     this.playAt = 0; // tick considerPlay() may try a smoke at the site again
+    this.decoyRound = -1; // the round (RoundState.serial) this bot threw its decoy
+    this.decoyHeard = -1; // the decoy (effect id) heard last, and when the next may be
+    this.decoyHeardAt = 0;
     this.order = null; // a teammate's radio order: { kind: 'follow' | 'hold', who, until, x, y, z }
     this.avertYaw = 0;
     this.pressButton = -1; // the button to press for a door on our way, its door, the node by it
@@ -544,9 +555,11 @@ class Bot {
     }
     if (!best) {
       // Gunfire with nobody in sight (not just lost: the fight goes on for half a second).
-      if (loud && g.tick - this.seenAt >= TICK_RATE / 2) {
-        const of = loud.player.ps.f;
-        this.heard(of[PS_ORIGIN], of[PS_ORIGIN + 1], of[PS_ORIGIN + 2]);
+      if (g.tick - this.seenAt >= TICK_RATE / 2) {
+        if (loud) {
+          const of = loud.player.ps.f;
+          this.heard(of[PS_ORIGIN], of[PS_ORIGIN + 1], of[PS_ORIGIN + 2]);
+        } else this.hearDecoy(x, y, eye);
       }
       return;
     }
@@ -570,6 +583,21 @@ class Bot {
     this.lastX = of[PS_ORIGIN];
     this.lastY = of[PS_ORIGIN + 1];
     this.lastZ = of[PS_ORIGIN + 2];
+  }
+
+  // A live decoy of the other team within earshot: gunfire to hunt (DECOY_HEAR_GAP).
+  hearDecoy(x, y, z) {
+    const g = this.game, gr = g.grenades;
+    if (g.tick < this.decoyHeardAt) return;
+    for (let f = 0; f < gr.fxCount; f++) {
+      if (gr.fxKind[f] !== FX_DECOY || gr.fxTeam[f] === this.c.team || gr.fxId[f] === this.decoyHeard) continue;
+      const o = f * 3;
+      if (Math.hypot(gr.fxPos[o] - x, gr.fxPos[o + 1] - y, gr.fxPos[o + 2] - z) > HEAR_RANGE) continue;
+      this.decoyHeard = gr.fxId[f];
+      this.decoyHeardAt = g.tick + DECOY_HEAR_GAP * TICK_RATE;
+      this.heard(gr.fxPos[o], gr.fxPos[o + 1], gr.fxPos[o + 2]);
+      return;
+    }
   }
 
   heard(x, y, z) {
@@ -628,6 +656,7 @@ class Bot {
       }
       return heard && this.aimThrow(WEAPON_ID.molotov, x, y, eye, bomb.x, bomb.y, bomb.z + 4);
     }
+    if (this.decoyPlay(x, y, eye)) return true;
     if (g.phase !== PHASE_LIVE || !g.bombSites.count || this.bots.smokedRound === g.round.serial ||
       !this.carries(WEAPON_ID.smokegrenade) || g.tick < this.playAt) return false;
     this.playAt = g.tick + TICK_RATE;
@@ -639,6 +668,18 @@ class Bot {
     if (!this.aimThrow(WEAPON_ID.smokegrenade, x, y, eye, x + (spot[0] - x) * k, y + (spot[1] - y) * k, spot[2])) return false;
     this.bots.smokedRound = g.round.serial;
     return true;
+  }
+
+  // A T's decoy toward the site the team is not going for, early in the round (DECOY_*).
+  decoyPlay(x, y, eye) {
+    const g = this.game, sites = g.bombSites;
+    if (g.phase !== PHASE_LIVE || sites.count < 2 || this.decoyRound === g.round.serial || !this.carries(WEAPON_ID.decoy) ||
+      g.phaseEnd - g.tick < (g.rules.roundTime - DECOY_WINDOW) * TICK_RATE) return false;
+    const b = sites.boxes[(this.site + 1) % sites.count], tx = (b[0] + b[3]) / 2, ty = (b[1] + b[4]) / 2;
+    const d = Math.hypot(tx - x, ty - y);
+    if (d < DECOY_RANGE[0] || d > DECOY_RANGE[1]) return false;
+    this.decoyRound = g.round.serial; // tried once: an arc that does not get there is not tried again
+    return this.aimThrow(WEAPON_ID.decoy, x, y, eye, tx, ty, b[2] + 16);
   }
 
   // The throw under way: bring the grenade out (4 again cycles the kinds), pull the pin
@@ -773,7 +814,9 @@ class Bot {
     if (!free) order.push(ITEM_ASSAULTSUIT, ITEM_KEVLAR);
     if (ct && g.bombSites.count && !free) order.push(ITEM_DEFUSER);
     if (!free && this.difficulty >= 1) {
-      order.push(WEAPON_ID.hegrenade, WEAPON_ID.flashbang, WEAPON_ID.smokegrenade, WEAPON_ID[ct ? 'incgrenade' : 'molotov']);
+      const decoy = !ct && (g.round.round + c.id) % 3 === 0;
+      order.push(WEAPON_ID.hegrenade, WEAPON_ID[decoy ? 'decoy' : 'flashbang'], WEAPON_ID.smokegrenade,
+        WEAPON_ID[ct ? 'incgrenade' : 'molotov']);
     }
     for (const item of order) {
       const price = itemPrice(p, item);
