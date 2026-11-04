@@ -3,7 +3,9 @@ import { parseBSP } from '../shared/bsp.js';
 import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
 import { CollisionWorld, Trace, traceHull, HULL_POINT } from '../shared/trace.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
-import { giveWeapon, WEAPON_ID, WS_ZOOM, WS_GRENADES, GRENADE_IDS, WS_ACTION, ACTION_DEFUSE } from '../shared/weapons.js';
+import {
+  giveWeapon, WEAPONS, WEAPON_ID, WS_ZOOM, WS_GRENADES, GRENADE_IDS, WS_ACTION, ACTION_DEFUSE, WS_SLOTS, SLOT_PRIMARY,
+} from '../shared/weapons.js';
 import { FX_HE, FX_FLASH, FX_SMOKE } from '../shared/grenades.js';
 import { BOMB_PLANTED } from '../shared/bomb.js';
 import { PHASE_LIVE, END_DEFUSE, END_RESCUE } from '../shared/economy.js';
@@ -530,3 +532,30 @@ Deno.test({ name: 'bots: a dead player takes control of a teammate bot until the
   g.startRound(false);
   assert.ok(!ct.switchedTeam, 'the next round it may');
 } });
+
+// The other snipers (hard and expert, a team with no sniper yet): with $5400 an AWP one round
+// in three or an auto-sniper one in ten, short of a rifle an SSG 08 one in four.
+Deno.test('bots: buy the AWP, an auto-sniper or an SSG 08 by money', () => {
+  const { g, host, join, run } = setup('de_playground');
+  host.con.exec('bot_difficulty 3; bot_stop 1; bot_add_ct');
+  join('human', TEAM_T);
+  run(4);
+  const bot = g.bots.list[0], p = bot.c.player, slot = WS_SLOTS + SLOT_PRIMARY * 3;
+  const tally = (money) => {
+    const got = {};
+    for (let i = 0; i < 300; i++) {
+      p.ws.f[slot] = p.ws.f[slot + 1] = p.ws.f[slot + 2] = 0;
+      p.money = money;
+      bot.buy();
+      const name = WEAPONS[p.ws.f[slot]]?.name || 'none';
+      got[name] = (got[name] || 0) + 1;
+    }
+    return got;
+  };
+  const rich = tally(6000), poor = tally(2500);
+  assert.ok(rich.awp > 70 && rich.awp < 130, `AWP ${rich.awp} of 300`);
+  assert.ok(rich.scar20 > 12 && rich.scar20 < 50, `SCAR-20 ${rich.scar20}`);
+  assert.ok(!rich.ssg08 && !rich.g3sg1, 'a CT, with money for a rifle');
+  assert.ok(poor.ssg08 > 50 && poor.ssg08 < 110, `SSG 08 ${poor.ssg08} of 300`);
+  assert.equal(poor.ssg08 + (poor.none || 0), 300, 'else nothing: no rifle money');
+});

@@ -84,11 +84,14 @@ const HOLD_MIN = 8, HOLD_MAX = 16; // seconds at a spot before picking another i
 const REPATH_FAIL = 2; // seconds before a failed path search is tried again
 // Sniper rifles (AWP, SSG 08, SCAR-20, G3SG1: two scope levels): scoped for an enemy
 // farther than SCOPE_DIST, firing SCOPE_SETTLE after scoping (a quick scope is still
-// inaccurate), unscoped out of a fight; hard and expert bots with AWP_MONEY buy an AWP one
-// round in three, one per team (approx. of CS:GO's profile weapon preferences).
+// inaccurate), unscoped out of a fight. Hard and expert bots on a team with no sniper yet:
+// with AWP_MONEY an AWP one round in three, else an auto-sniper (SCAR-20, G3SG1) one in ten;
+// short of a rifle but with SCOUT_MONEY an SSG 08 one round in four (approx. of CS:GO's
+// profile weapon preferences).
 const SCOPE_DIST = 250;
 const SCOPE_SETTLE = 0.3;
 const AWP_MONEY = 5400;
+const SCOUT_MONEY = 2350; // an SSG 08 ($1700) and kevlar
 // Grenades (normal and up): an HE at the place an enemy was lost (or a shooter heard)
 // NADE_LOST_MIN..MAX seconds ago and HE_RANGE away, else a flashbang within FLASH_RANGE,
 // one throw per loss and at most one every NADE_COOLDOWN seconds; the throw takes the
@@ -760,8 +763,11 @@ class Bot {
     const free = g.rules.deathmatch;
     const order = [];
     let rifle = WEAPON_ID[ct ? (this.difficulty >= 2 ? 'm4a1_silencer' : 'm4a1') : 'ak47'];
-    if (!free && this.difficulty >= 2 && p.money >= AWP_MONEY && !this.bots.teamHasSniper(c.team) && this.bots.random() < 1 / 3) {
-      rifle = WEAPON_ID.awp;
+    if (!free && this.difficulty >= 2 && !p.ws.f[WS_SLOTS + SLOT_PRIMARY * 3] && !this.bots.teamHasSniper(c.team)) {
+      const roll = this.bots.random();
+      if (p.money >= AWP_MONEY && roll < 1 / 3) rifle = WEAPON_ID.awp;
+      else if (p.money >= AWP_MONEY && roll < 1 / 3 + 0.1) rifle = WEAPON_ID[ct ? 'scar20' : 'g3sg1'];
+      else if (p.money < itemPrice(p, rifle) && p.money >= SCOUT_MONEY && roll < 0.25) rifle = WEAPON_ID.ssg08;
     }
     if (!p.ws.f[WS_SLOTS + SLOT_PRIMARY * 3]) order.push(rifle);
     if (!free) order.push(ITEM_ASSAULTSUIT, ITEM_KEVLAR);
