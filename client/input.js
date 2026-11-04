@@ -44,6 +44,9 @@ export class Input {
     this.keepKeys = () => false;
     // False while a click on the canvas must not take the mouse (the menu's window).
     this.canLock = () => true;
+    // True while a gamepad is in use (client/gamepad.js): a pad press is no user gesture,
+    // so it cannot take the pointer lock, and the lock goes soft instead.
+    this.padActive = () => false;
 
     canvas.addEventListener('click', () => {
       if (this.canLock()) this.lock();
@@ -212,8 +215,8 @@ export class Input {
 
   async lock() {
     if (this.locked) return;
-    if (!this.canvas.requestPointerLock || TOUCH_FIRST.matches) {
-      // No Pointer Lock API, or a phone or tablet (iOS and iPadOS Safari define
+    if (!this.canvas.requestPointerLock || TOUCH_FIRST.matches || this.padActive()) {
+      // No Pointer Lock API, a phone or tablet, or a gamepad (iOS and iPadOS Safari define
       // requestPointerLock but never lock; Android Chrome locks, and then showed no touch
       // controls, a drag turning the view twice: by the lock's movement and by the touch):
       // the game plays with the cursor free, the view turned by the trackpad's movement and

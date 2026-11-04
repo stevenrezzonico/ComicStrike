@@ -2,7 +2,7 @@
 // cvars + binds, kept in this browser's localStorage like CS:GO's config.cfg).
 
 import { Console, FCVAR_ARCHIVE, FCVAR_PROTECTED } from '../shared/cvars.js';
-import { Binds } from './binds.js';
+import { Binds, PAD_NAMES } from './binds.js';
 
 const CONFIG_KEY = 'comicstrike.config.cfg';
 const OLD_CONFIG_KEY = 'webcs.config.cfg'; // saved before the rename to ComicStrike: read once
@@ -81,11 +81,19 @@ export function createConsole(print) {
   add('r_crosshair_clearzone', 1, 'Dots melt into flat tone round the crosshair: size of that zone (0: off)', 0, 3);
   add('r_inkfast', 0, 'Fast ink: lines from the four direct neighbors only (looks the same; saves little since the print fetches the diagonals only near edges)', 0, 1);
   add('r_inkaa', 1, 'Smooth ink lines: at the full render resolution the steps of a slanted line get grey corners (below it the lines are filtered anyway)', 0, 1);
-  add('mat_viewportscale', 1, 'Render resolution of the scene, relative to the window (the most r_dynres uses; over 1 supersamples: smoother edges and lines, for a strong GPU); the dots are always printed at the window resolution', 0.25, 2);
+  add('mat_viewportscale', 2, 'Render resolution of the scene, relative to the window (the most r_dynres uses; over 1 supersamples: smoother edges and lines, for a strong GPU; capped by the GPU and r_supersample_max); the dots are always printed at the window resolution', 0.25, 8);
+  add('r_supersample_max', 64, 'Supersampling: the most megapixels the scene is rendered at (the GPU memory it takes: ~15 bytes a pixel)', 1, 512);
   add('r_dynres', 1, 'Automatic render resolution: lowers the scene resolution while frames come late (under 60 fps), raises it again when they keep up', 0, 1);
   add('r_hidpi', 0, 'Sharp: render at the screen pixel density on high-DPI screens (up to 2x; costs up to 4x the pixels)', 0, 1);
   add('r_lowlatency', 1, 'Low-latency display: frames go to the screen without the browser compositor (a frame less of mouse lag where the browser allows it; 0 if it tears during fast turns; takes effect on reload)', 0, 1);
   add('fullscreen', 0, 'Fullscreen while playing: the page fills the screen when it takes the mouse; in Chrome and Edge the keyboard is locked too, so Ctrl+W, Ctrl+T and Alt+Tab stay in the game (hold Escape 2 s to leave)', 0, 1);
+  // Gamepads (client/gamepad.js).
+  add('joy_yaw', 180, 'Gamepad: degrees a second the view turns at full deflection of the look stick', 10, 720);
+  add('joy_pitch', 120, 'Gamepad: degrees a second the view pitches at full deflection', 10, 720);
+  add('joy_deadzone', 0.2, 'Gamepad: the look stick does nothing within this much of its travel', 0, 0.9);
+  add('joy_response', 2, 'Gamepad: the look stick\'s response curve, the deflection to this power (1 linear; 2 fine near the center)', 0.5, 4);
+  add('joy_invert', 0, 'Gamepad: invert the look stick\'s pitch', 0, 1);
+  add('joy_swap', 0, 'Gamepad: swap the sticks (move with the right, look with the left)', 0, 1);
   // Touch controls (client/touch.js).
   add('touch_opacity', 0.45, 'Touch buttons: how opaque (a pressed one is always solid)', 0.1, 1);
   add('touch_scale', 1, 'Touch buttons: size', 0.7, 1.4);
@@ -127,6 +135,8 @@ export function createConsole(print) {
     // Binds that came after the first configs (the chat keys): on their default keys where
     // the config left those free.
     if (binds.adopt(NEW_BINDS)) save();
+    // The gamepad's keys (added later too) on their defaults where the config leaves them free.
+    if (binds.adoptKeys(PAD_NAMES)) save();
   }
   return { con, binds, cv, save };
 }

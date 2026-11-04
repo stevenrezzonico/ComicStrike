@@ -4,7 +4,7 @@
 // Disconnect. Settings edit the client cvars and binds through the console (so the
 // console and the menu always agree, and every change is saved with the config).
 
-import { keyName, MOUSE_NAMES } from './binds.js';
+import { keyName, MOUSE_NAMES, PAD_NAMES } from './binds.js';
 import { drawCrosshair2d } from './gl/crosshair.js';
 import { quote } from '../shared/cvars.js';
 
@@ -71,7 +71,7 @@ const TABS = [
     ['toggle', 'r_dynres', 'Automatic resolution (keeps 60 fps)'],
     ['select', 'r_inkfast', 'Ink lines', ['Full', 'Fast']],
     ['toggle', 'r_inkaa', 'Smooth ink lines'],
-    ['slider', 'mat_viewportscale', 'Render resolution (most; over 1: supersampling)', 0.5, 2, 0.05],
+    ['slider', 'mat_viewportscale', 'Render resolution (most; over 1: supersampling)', 0.5, 8, 0.05],
     ['select', 'r_hidpi', 'High-DPI screens', ['Page pixels', 'Sharp (screen pixels)']],
     ['toggle', 'r_lowlatency', 'Low-latency display (may tear; takes effect on reload)'],
     ['slider', 'fps_max', 'Frame rate cap (0: none; only with vsync off)', 0, 1000, 10],
@@ -112,6 +112,13 @@ const TOUCH_ROWS = [
   ['slider', 'touch_opacity', 'Button opacity', 0.1, 1, 0.05],
   ['slider', 'touch_scale', 'Button size', 0.7, 1.4, 0.05],
   ['toggle', 'touch_fire_left', 'Second fire button on the left'],
+  ['section', null, 'Gamepad'],
+  ['slider', 'joy_yaw', 'Look speed (degrees a second)', 30, 540, 10],
+  ['slider', 'joy_pitch', 'Look speed up and down', 30, 540, 10],
+  ['slider', 'joy_deadzone', 'Look stick dead zone', 0, 0.6, 0.05],
+  ['slider', 'joy_response', 'Look response curve (1 linear, 2 fine near the center)', 1, 4, 0.25],
+  ['toggle', 'joy_invert', 'Invert the look stick'],
+  ['toggle', 'joy_swap', 'Swap the sticks'],
 ];
 // The controls tab: [label, command] per action, in groups.
 const ACTIONS = [
@@ -123,7 +130,7 @@ const ACTIONS = [
   ['Game', [['Use', '+use'], ['Buy menu', 'buymenu'], ['Scoreboard', '+showscores'], ['Team menu', 'teammenu'],
     ['Chat', 'messagemode'], ['Team chat', 'messagemode2'], ['Console', 'toggleconsole']]],
 ];
-const KEY_COLUMNS = 2;
+const KEY_COLUMNS = 3; // a keyboard key, a mouse button, a gamepad button
 
 // Online play goes over WebTransport (client/net.js): Chrome, Edge and Firefox have it,
 // Safari from 26.4 (macOS and iOS 26.4). Without it the page can still practice (the
@@ -759,10 +766,10 @@ export class Menu {
 
   // --- Key binds -----------------------------------------------------------------------
 
-  // Keys bound to exactly `command`: keyboard keys first, then mouse buttons, the wheel last
-  // (the saved config lists binds alphabetically).
+  // Keys bound to exactly `command`: keyboard keys first, then mouse buttons, the wheel,
+  // the gamepad's last (the saved config lists binds alphabetically).
   keysOf(command) {
-    const rank = (k) => (k.startsWith('mwheel') ? 2 : k.startsWith('mouse') ? 1 : 0);
+    const rank = (k) => (PAD_NAMES.includes(k) ? 3 : k.startsWith('mwheel') ? 2 : k.startsWith('mouse') ? 1 : 0);
     const keys = [];
     for (const [k, v] of this.binds.map) if (v === command) keys.push(k);
     return keys.sort((a, b) => rank(a) - rank(b));
@@ -784,8 +791,8 @@ export class Menu {
         list.append(row);
       }
     }
-    list.append(el('p', 'menu-hint', 'Click a key, then press the new key or mouse button. Backspace clears it, ' +
-      'Escape cancels. Everything else is in the console (bind, unbind).'));
+    list.append(el('p', 'menu-hint', 'Click a key, then press the new key, mouse button or gamepad button. ' +
+      'Backspace clears it, Escape cancels. Everything else is in the console (bind, unbind).'));
     list.append(el('p', 'menu-hint', 'Crouch on Ctrl: Ctrl+W closes the tab in Firefox, and in Chrome and Edge ' +
       'unless Fullscreen is on (Video). Bind crouch to C there, or play fullscreen.'));
   }

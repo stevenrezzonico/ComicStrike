@@ -56,8 +56,8 @@ Deno.test('comic: every G-buffer shader writes all three targets through gbuffer
   assert.doesNotMatch(comp, /u_normal|ntex\(/, 'the composite needs no normals');
   assert.match(comp, /ivec2\(frag \* u_gscale\)/);
   assert.match(comp, /bool exact = u_gscale\.x == 1\.0;/);
-  assert.match(comp, /exact \? texelFetch\(u_albedo[^\n]*: texture\(u_albedo/);
-  assert.match(comp, /exact \? texelFetch\(u_ink[^\n]*: texture\(u_ink/);
+  assert.match(comp, /exact \? texelFetch\(u_albedo[^\n]*: textureLod\(u_albedo/); // filtered between texels off the exact scale, through the mipmaps over 2x
+  assert.match(comp, /exact \? texelFetch\(u_ink[^\n]*: textureLod\(u_ink/);
   // Smooth ink (r_inkaa): only at the canvas's own scale, where the ink is not filtered.
   assert.match(comp, /if \(exact && u_inkaa > 0\.0 && u_line > 0\.0\) edge = smoothInk\(p, edge\);/);
   const smooth = COMPOSITE_FS.slice(COMPOSITE_FS.indexOf('float smoothInk('), COMPOSITE_FS.indexOf('void main()'));

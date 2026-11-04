@@ -32,18 +32,22 @@ export class GBuffer {
     if (this.packed) shaderDefines.prefix += '#define DEPTH_PACKED\n';
   }
 
-  resize(w, h) {
-    if (w === this.width && h === this.height) return;
+  // mips: the color plate and the ink get full mip chains (supersampling over 2x: the
+  // composite reads them through `textureLod`, a box filter over the texels under a pixel).
+  resize(w, h, mips = false) {
+    if (w === this.width && h === this.height && mips === this.mips) return;
     const gl = this.gl;
     this.width = w;
     this.height = h;
+    this.mips = mips;
+    const levels = mips ? 1 + Math.floor(Math.log2(Math.max(w, h))) : 1;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
     for (let i = 0; i < 3; i++) {
       if (this.tex[i]) gl.deleteTexture(this.tex[i]);
       const t = this.tex[i] = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
-      gl.texStorage2D(gl.TEXTURE_2D, 1, i === 2 && !this.packed ? gl.RG16F : gl.RGBA8, w, h);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, i === 0 ? gl.LINEAR : gl.NEAREST);
+      gl.texStorage2D(gl.TEXTURE_2D, i === 0 ? levels : 1, i === 2 && !this.packed ? gl.RG16F : gl.RGBA8, w, h);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, i === 0 ? (mips ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR) : gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, i === 0 ? gl.LINEAR : gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -63,8 +67,8 @@ export class GBuffer {
     if (this.ink) gl.deleteTexture(this.ink);
     const ink = this.ink = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, ink);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R8, w, h);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texStorage2D(gl.TEXTURE_2D, levels, gl.R8, w, h);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mips ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -72,6 +76,19 @@ export class GBuffer {
     const inkStatus = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
     if (inkStatus !== gl.FRAMEBUFFER_COMPLETE) throw new Error(`ink target incomplete (0x${inkStatus.toString(16)})`);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  // The mip chains of the color plate and (with lines) the ink, for this frame's composite.
+  buildMips(ink) {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex[0]);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    if (ink) {
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, this.ink);
+      gl.generateMipmap(gl.TEXTURE_2D);
+    }
   }
 
   // Binds the ink target for the ink pass (no depth test: a fullscreen triangle).

@@ -50,6 +50,7 @@ const UP_CLEAN_MS = 3000; // clean time (with room to spare) before a step up
 export class DynamicResolution {
   constructor() {
     this.factor = 1; // the scene's render scale, of the largest (mat_viewportscale)
+    this.most = 1; // that largest scale, of the canvas: the steps are of the canvas (0.05), so 0.05 / most of the factor
     this.print = 1; // the print's (the canvas), of the page's pixels
     this.min = 0.5;
     this.upAfter = UP_AFTER_MS;
@@ -110,7 +111,7 @@ export class DynamicResolution {
       this.cleanSince = now;
       if (now - this.raisedAt < PROBE_MS) this.upAfter = Math.min(this.upAfter * 2, UP_AFTER_MAX_MS);
       this.raisedAt = -Infinity;
-      const step = share > SLOW_SHARE || ms > budget * OVER_SHARE ? 2 * GPU_STEP : GPU_STEP;
+      const step = (share > SLOW_SHARE || ms > budget * OVER_SHARE ? 2 * GPU_STEP : GPU_STEP) / this.most;
       if (this.factor > this.min) return this.set(this.factor - step, now);
       return this.print > PRINT_MIN && this.setPrint(this.print - PRINT_STEP, now);
     }
@@ -123,12 +124,13 @@ export class DynamicResolution {
     }
     // The next scale's GPU time, growing with the pixels (the print's only partly: conservative).
     const raisePrint = this.print < 1;
-    const k = raisePrint ? Math.min(1, this.print + PRINT_STEP) / this.print : Math.min(1, this.factor + GPU_STEP) / this.factor;
+    const up = GPU_STEP / this.most;
+    const k = raisePrint ? Math.min(1, this.print + PRINT_STEP) / this.print : Math.min(1, this.factor + up) / this.factor;
     if (ms * k * k > budget * UP_SHARE) return false;
     this.raisedAt = now;
     this.cleanSince = now;
     this.raisedPrint = raisePrint;
-    return raisePrint ? this.setPrint(this.print + PRINT_STEP, now) : this.set(this.factor + GPU_STEP, now);
+    return raisePrint ? this.setPrint(this.print + PRINT_STEP, now) : this.set(this.factor + up, now);
   }
 
   // Without timings: late frames take a step down, clean stretches try a step up.
@@ -138,9 +140,9 @@ export class DynamicResolution {
       if (now - this.raisedAt < PROBE_MS) { // the try failed: back to the step that kept up
         this.upAfter = Math.min(this.upAfter * 2, UP_AFTER_MAX_MS);
         this.raisedAt = -Infinity;
-        return this.raisedPrint ? this.setPrint(this.print - PRINT_STEP, now) : this.set(this.factor - STEP_UP, now);
+        return this.raisedPrint ? this.setPrint(this.print - PRINT_STEP, now) : this.set(this.factor - STEP_UP / this.most, now);
       }
-      if (this.factor > this.min) return this.set(this.factor - STEP_DOWN, now);
+      if (this.factor > this.min) return this.set(this.factor - STEP_DOWN / this.most, now);
       return this.print > PRINT_MIN && this.setPrint(this.print - PRINT_STEP, now);
     }
     if (share > CLEAN_SHARE) {
@@ -151,7 +153,7 @@ export class DynamicResolution {
     this.raisedAt = now;
     this.cleanSince = now;
     this.raisedPrint = this.print < 1;
-    return this.raisedPrint ? this.setPrint(this.print + PRINT_STEP, now) : this.set(this.factor + STEP_UP, now);
+    return this.raisedPrint ? this.setPrint(this.print + PRINT_STEP, now) : this.set(this.factor + STEP_UP / this.most, now);
   }
 
   // Held for `ms` without a change: the scales are worth remembering for the next map.
@@ -160,7 +162,8 @@ export class DynamicResolution {
   }
 
   set(f, now) {
-    const next = Math.min(1, Math.max(this.min, Math.round(f * 20) / 20));
+    const n = 20 * this.most; // whole steps of the canvas
+    const next = Math.min(1, Math.max(this.min, Math.round(f * n) / n));
     if (next === this.factor) return false;
     this.factor = next;
     this.changed(now);

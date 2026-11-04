@@ -155,3 +155,16 @@ Deno.test('dynres timed: reset starts at the remembered scales', () => {
   assert.equal(d.print, 0.85);
   assert.ok(!d.settled(5000) && d.settled(10000));
 });
+
+Deno.test('dynres: with a larger most (mat_viewportscale 2) the steps stay 0.05 of the canvas', () => {
+  const d = new DynamicResolution();
+  d.most = 2;
+  d.min = 0.25; // half the canvas: 0.5 / most
+  let t = run(d, 0, 2.5, 16.7);
+  t = run(d, t, 0.6, 33.3);
+  assert.equal(d.factor, 0.95, 'a step of 0.1 of the canvas is 0.05 of the factor');
+  t = run(d, t, 30, 33.3);
+  assert.equal(d.factor, 0.25, 'down to half the canvas');
+  run(d, t, 400, 16.7);
+  assert.equal(d.factor, 1);
+});

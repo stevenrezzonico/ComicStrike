@@ -937,7 +937,10 @@ void main() {
   // The color plate is printed 1 px off the ink plate; not on characters (on a small figure
   // that left a pale sliver of the background inside its outline).
   ivec2 off = ivec2((fl & G_CHAR) != 0u ? 0 : 1, 0);
-  vec4 C = exact ? texelFetch(u_albedo, cl(p + off), 0) : texture(u_albedo, (frag + vec2(off)) / u_res);
+  // Over 2x the plates are read through their mipmaps: the level whose texel is the pixel
+  // (a box filter over the texels under it; LINEAR alone reads 4 of them and aliases).
+  float lod = u_gscale.x > 2.0 ? log2(u_gscale.x) : 0.0;
+  vec4 C = exact ? texelFetch(u_albedo, cl(p + off), 0) : textureLod(u_albedo, (frag + vec2(off)) / u_res, lod);
   vec3 alb = C.rgb;
   float light = C.a;
   if (u_bands > 0.5) light = floor(light * u_bands + 0.5) / u_bands;
@@ -946,7 +949,7 @@ void main() {
     o_color = vec4(alb * mix(0.3, 1.15, light), 1.0);
     return;
   }
-  float edge = u_line > 0.0 ? (exact ? texelFetch(u_ink, p, 0).r : texture(u_ink, frag / u_res).r) : 0.0;
+  float edge = u_line > 0.0 ? (exact ? texelFetch(u_ink, p, 0).r : textureLod(u_ink, frag / u_res, lod).r) : 0.0;
   if (exact && u_inkaa > 0.0 && u_line > 0.0) edge = smoothInk(p, edge);
   vec3 col;
   float size = max(u_dot, 1.0) * (1.0 - 0.25 * u_soft);

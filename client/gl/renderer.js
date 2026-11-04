@@ -26,6 +26,12 @@ const COMPOSITE_UNIFORMS = ['u_albedo', 'u_depth', 'u_ink', 'u_res', 'u_gscale',
 const INK_UNIFORMS = ['u_normal', 'u_depth', 'u_line', 'u_gscale', 'u_zoom'];
 const CLOUD_TEX_SIZE = 512; // the sky's cloud noise (cloudNoise): CLOUD_PERIOD cells across
 
+// The render scale the GPU can hold for a w x h canvas: at most `scale`, within the largest
+// texture side and `maxPixels` texels.
+export function clampScale(scale, w, h, maxSize, maxPixels) {
+  return Math.min(scale, maxSize / w, maxSize / h, Math.sqrt(maxPixels / (w * h)));
+}
+
 export class Renderer {
   // lowLatency (r_lowlatency): a desynchronized canvas, presented without the browser's
   // compositor where the browser allows it (Chrome on Windows): a frame less between the
@@ -44,6 +50,12 @@ export class Renderer {
     });
     if (!gl) throw new Error('WebGL2 is not available');
     this.gl = gl;
+    // Supersampling (a render scale over 1) is capped by what the GPU can hold: the largest
+    // texture and `maxPixels` texels (r_supersample_max; a 5x G-buffer of a 1440p window would
+    // be 92 Mpx, ~1.4 GB of targets). `capped` says the scale asked for was cut.
+    this.maxSize = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));
+    this.maxPixels = 64e6;
+    this.capped = false;
     this.canvas = canvas;
     this.gbuf = new GBuffer(gl); // first: it sets the shader defines (DEPTH_PACKED)
     const worldUniforms = ['u_viewProj', 'u_lightmap', 'u_time', 'u_zoom', 'u_dot', 'u_lightFull', 'u_broken',
@@ -195,10 +207,11 @@ export class Renderer {
       c.height = h;
       changed = true;
     }
-    const s = Math.min(2, scale);
+    const s = clampScale(scale, w, h, this.maxSize, this.maxPixels);
+    this.capped = s < scale - 1e-6;
     const gw = Math.max(1, Math.round(w * s)), gh = Math.max(1, Math.round(h * s));
     if (gw !== this.gbuf.width || gh !== this.gbuf.height) changed = true;
-    this.gbuf.resize(gw, gh);
+    this.gbuf.resize(gw, gh, s > 2 + 1e-6);
     if (changed) this.timer.reset(); // the GPU's work per frame changed: its readings start over
     return w / h;
   }
@@ -350,6 +363,9 @@ export class Renderer {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
     this.timer.mark(PASS.PRINT);
+    // Over 2x the color plate and the ink are read through their mipmaps (a box filter over
+    // the texels under each pixel; LINEAR alone reads 4 of them and aliases).
+    if (this.gbuf.mips) this.gbuf.buildMips(line > 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.canvas.width, h);
     const c = this.comp.loc;

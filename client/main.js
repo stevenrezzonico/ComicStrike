@@ -75,6 +75,7 @@ import { DeathPanel } from './deathpanel.js';
 import { ConsoleWindow } from './console.js';
 import { Chat } from './chat.js';
 import { TouchControls, altLabel } from './touch.js';
+import { Gamepads } from './gamepad.js';
 import { takeHandoff } from './handoff.js';
 import { PreviewEditor } from './previewedit.js';
 import { Menu } from './menu.js';
@@ -399,6 +400,9 @@ async function loadMap(name) {
   decals.clear();
   debris.clear();
   // Every effect's program draws once now, clipped away, not on its first use in a fight.
+  // The G-buffer is sized first: on the page's first map it had no attachments yet, and the
+  // warm-up draws failed (GL_INVALID_FRAMEBUFFER_OPERATION, warming nothing).
+  applyVideoSettings();
   renderer.gbuf.begin();
   decals.warm(renderer.gbuf);
   debris.warm();
@@ -1211,7 +1215,7 @@ function dynresMemory() {
 function saveDynres() {
   dynresSaved = true;
   const m = dynresMemory();
-  m[screenKey()] = [dynres.factor, dynres.print];
+  m[screenKey()] = [dynres.factor * dynres.most, dynres.print]; // the scene's scale of the canvas, whatever the most is
   try {
     localStorage.setItem(DYNRES_KEY, JSON.stringify(m));
   } catch { /* storage blocked: start from full scale next time */ }
@@ -1239,7 +1243,7 @@ function lap(part) {
 
 // The scene's render resolution relative to the canvas, as a percentage (r_dynres, mat_viewportscale).
 const renderScale = () =>
-  `${Math.round(100 * renderer.renderScale)}%${cv.r_dynres.bool && dynres.print < 1 ? `, print ${Math.round(100 * dynres.print)}%` : ''}${renderer.style.fast ? ', fast ink' : ''}`;
+  `${Math.round(100 * renderer.renderScale)}%${renderer.capped ? ' (capped)' : ''}${cv.r_dynres.bool && dynres.print < 1 ? `, print ${Math.round(100 * dynres.print)}%` : ''}${renderer.style.fast ? ', fast ink' : ''}`;
 
 function benchmarkReport() {
   const { gaps, n, frames: n0 } = bench; // n: the gaps kept (the first of a long run), n0: every drawn frame
@@ -1293,6 +1297,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   if (menu.visible) menu.frameWindow(backdrop);
   if (!playing) { // the start menu: nothing runs; the settings window shows a backdrop scene
+    pollPads(0, now); // the pad's buttons still reach the menu (the key capture)
     last = now;
     accumulator = 0;
     if (backdrop) drawBackdrop(now);
@@ -1333,6 +1338,7 @@ function frame(now) {
   input.rawInput = cv.m_rawinput.bool;
   if (sounds.volume !== cv.volume.number) sounds.setVolume(cv.volume.number);
   sounds.stepVolume = cv.snd_footstep_volume.number;
+  pollPads(elapsed, now);
   input.applyMouse(angles);
   const t0 = performance.now();
   accumulator += elapsed;
@@ -1627,7 +1633,9 @@ function draw(now, alpha, dt) {
 // The video cvars into the renderer, sizing the canvas and the G-buffer; returns the aspect.
 function applyVideoSettings() {
   const most = cv.mat_viewportscale.number;
+  dynres.most = most;
   dynres.min = Math.min(1, 0.5 / most);
+  renderer.maxPixels = cv.r_supersample_max.number * 1e6;
   const aspect = renderer.resize(most * (cv.r_dynres.bool ? dynres.factor : 1),
     (cv.r_hidpi.bool ? Math.min(2, devicePixelRatio || 1) : 1) * (cv.r_dynres.bool ? dynres.print : 1));
   const style = renderer.style;
@@ -1734,7 +1742,7 @@ input.onKey = (key, down) => {
   }
   const b = binds.get(key);
   if (b === undefined) return false;
-  if (menu.visible && b !== 'toggleconsole') return false; // the menu takes the keys (typing a name)
+  if (menu.visible && b !== 'toggleconsole' && b !== 'togglemenu') return false; // the menu takes the keys (typing a name)
   if (down) {
     if (b[0] === '+' && !input.locked && !(hud.menuOpen && playing && !MENU_HELD.has(b))) return false;
     con.exec(b, { key });
@@ -1751,6 +1759,11 @@ for (const [name, bit] of [['forward', IN_FORWARD], ['back', IN_BACK], ['movelef
   con.command(`+${name}`, (_a, ctx) => input.press(bit, ctx.key), `Hold: ${name}`);
   con.command(`-${name}`, (_a, ctx) => input.release(bit, ctx.key), `Release: ${name}`);
 }
+con.command('togglemenu', () => { // Escape's job for a gamepad's Start: the pause menu, or back to the game
+  if (!playing) return;
+  if (input.locked) input.unlock();
+  else if (!conWin.isOpen && !hud.menuOpen) input.lock();
+}, 'Opens the pause menu, or resumes the game');
 con.command('+lookatweapon', () => weaponView.inspect((tickCount - 1) * TICK_DT), 'Inspect the weapon');
 con.command('-lookatweapon', () => {});
 for (let n = 1; n <= NUM_SLOTS; n++) {
@@ -1926,8 +1939,11 @@ applyDrawHud();
 // In a game, releasing the mouse (Escape) opens the pause menu, unless the console or
 // the buy menu took it; closing those takes the mouse back (the key press allows it).
 function updateOverlay() {
-  document.body.classList.toggle('softplay', input.locked && input.soft); // the pause button and the touch controls
-  if (!input.locked) touch.reset();
+  document.body.classList.toggle('softplay', input.locked && input.soft && !pads.connected); // the pause button and the touch controls (not for a pad's soft lock)
+  if (!input.locked) {
+    touch.reset();
+    pads.reset();
+  }
   if (preview) return menu.hide(); // the editor's 3D view: Escape only lets the mouse go
   if (!playing) return;
   if (input.locked) menu.hide();
@@ -1937,6 +1953,27 @@ input.onLockChange = updateOverlay;
 // Touch controls (client/touch.js) under the soft lock: the stick, and buttons that run
 // commands as a key named 'touch' would (held bits release with it).
 const touch = new TouchControls(document.getElementById('touch'), input, (cmd) => con.exec(cmd, { key: 'touch' }));
+// Gamepads (client/gamepad.js): polled every frame; the buttons are keys through the binds
+// (or the Controls tab's key capture), the sticks move and look; a pad in use makes the
+// lock soft (a pad press cannot take the pointer lock).
+const pads = new Gamepads(input);
+pads.onKey = (name, down) => {
+  if (menu.capture) {
+    if (down) menu.captured(name);
+    return;
+  }
+  input.onKey(name, down);
+};
+input.padActive = () => pads.active(performance.now());
+function pollPads(dt, now) {
+  pads.yaw = cv.joy_yaw.number;
+  pads.pitch = cv.joy_pitch.number;
+  pads.dead = cv.joy_deadzone.number;
+  pads.curve = cv.joy_response.number;
+  pads.invert = cv.joy_invert.bool;
+  pads.swap = cv.joy_swap.bool;
+  pads.poll(pads.list(), dt, now);
+}
 const applyTouch = () => touch.setOptions({
   opacity: cv.touch_opacity.number, scale: cv.touch_scale.number, fireLeft: cv.touch_fire_left.bool,
 });
@@ -2174,7 +2211,8 @@ function enterGame() {
   backdrop = false;
   // Where it settled last time on this window size (else full), judged after the first seconds.
   const settled = dynresMemory()[screenKey()];
-  dynres.reset(performance.now(), 2000, Array.isArray(settled) ? +settled[0] || 1 : 1, Array.isArray(settled) ? +settled[1] || 1 : 1);
+  dynres.reset(performance.now(), 2000, Array.isArray(settled) ? (+settled[0] || dynres.most) / dynres.most : 1,
+    Array.isArray(settled) ? +settled[1] || 1 : 1);
   dynresSaved = true;
   menu.online = net !== null && !localWorker; // Disconnect, or Quit practice
   menu.server = net !== null; // spectating needs server rules

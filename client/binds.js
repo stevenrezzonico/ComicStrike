@@ -35,10 +35,24 @@ export function keyName(code, key = '') {
 // Mouse buttons (MouseEvent.button) -> Source names.
 export const MOUSE_NAMES = ['mouse1', 'mouse3', 'mouse2', 'mouse4', 'mouse5'];
 
+// Gamepad buttons (the Gamepad API's standard mapping, by index) -> Source's names
+// (client/gamepad.js polls them).
+export const PAD_NAMES = ['a_button', 'b_button', 'x_button', 'y_button', 'l_shoulder', 'r_shoulder', 'l_trigger',
+  'r_trigger', 'back', 'start', 'stick1', 'stick2', 'up', 'down', 'left', 'right'];
+// Their default binds (after CS:GO's controller layout where it is known): the right
+// trigger fires, the left one is the right mouse button, A jumps, B crouches, X reloads,
+// Y the next weapon, LB uses, RB the last weapon, L3 walks, R3 the knife, the D-pad buys,
+// drops, grenades and the bomb, Back the scoreboard, Start the pause menu.
+export const PAD_BINDS = {
+  r_trigger: '+attack', l_trigger: '+attack2', a_button: '+jump', b_button: '+duck', x_button: '+reload',
+  y_button: 'invnext', l_shoulder: '+use', r_shoulder: 'lastinv', stick1: '+speed', stick2: 'slot3',
+  up: 'buymenu', down: 'drop', left: 'slot4', right: 'slot5', back: '+showscores', start: 'togglemenu',
+};
+
 // Every key name bind takes, for the console's suggestions.
 export const KEY_LIST = [...new Set([
   ...'abcdefghijklmnopqrstuvwxyz0123456789'.split(''), ...Array.from({ length: 12 }, (_, i) => `f${i + 1}`),
-  ...Object.values(CODE_NAMES), ...MOUSE_NAMES, 'mwheelup', 'mwheeldown',
+  ...Object.values(CODE_NAMES), ...MOUSE_NAMES, 'mwheelup', 'mwheeldown', ...PAD_NAMES,
 ])];
 
 // CS:GO's default binds (config_default.cfg), the wheel cycling weapons as there (a saved
@@ -49,6 +63,7 @@ export const DEFAULT_BINDS = {
   y: 'messagemode', u: 'messagemode2',
   '`': 'toggleconsole', mouse1: '+attack', mouse2: '+attack2', mwheelup: 'invprev', mwheeldown: 'invnext',
   1: 'slot1', 2: 'slot2', 3: 'slot3', 4: 'slot4', 5: 'slot5',
+  ...PAD_BINDS,
 };
 
 export class Binds {
@@ -111,6 +126,18 @@ export class Binds {
     for (const [key, cmd] of Object.entries(DEFAULT_BINDS)) {
       if (!commands.includes(cmd) || bound.has(cmd) || this.map.has(key)) continue;
       this.map.set(key, cmd);
+      changed = true;
+    }
+    return changed;
+  }
+
+  // Keys added after a config was saved (the gamepad's): each of `keys` gets its default
+  // where the config leaves it free. Returns whether anything was bound.
+  adoptKeys(keys) {
+    let changed = false;
+    for (const key of keys) {
+      if (this.map.has(key) || !DEFAULT_BINDS[key]) continue;
+      this.map.set(key, DEFAULT_BINDS[key]);
       changed = true;
     }
     return changed;
