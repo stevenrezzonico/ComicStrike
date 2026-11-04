@@ -407,6 +407,14 @@ export class Sounds {
     this.tone(v.out, v.t, 420, 300, 0.25, 0.06, 0, 'sine', 0.007); // "tok"
   }
 
+  // A spent casing landing: a small high "tink".
+  tink(x, y, z) {
+    const v = this.voice(x, y, z, 0.12, 100, 500);
+    if (!v) return;
+    const f = 2400 + Math.random() * 500;
+    this.tone(v.out, v.t, f, f * 0.96, 0.2, 0.05);
+  }
+
   // A grenade bouncing.
   bounce(x, y, z) {
     const v = this.voice(x, y, z, 0.45, 200, 1200);

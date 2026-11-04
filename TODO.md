@@ -5,7 +5,7 @@ was when the plan was written; check the files named before starting one. Done s
 these lists: text chat (14g), movers and breakables (14h), weapon leftovers (14i), bots'
 grenades, AWP and buttons (14j), radar levels (14k), point lights (14l), the round-end
 panel and damage report (14m), sun shadows for players (14n), gun looks, comic jingles,
-the demo's practice tools, demo recording, the hurt indicator and the killer's health, characters culled by the PVS, bots' smokes and molotovs.
+the demo's practice tools, demo recording, the hurt indicator and the killer's health, characters culled by the PVS, bots' smokes and molotovs, tracers and casings.
 
 ## Server QoL (first list, item 9; on hold)
 
@@ -18,13 +18,7 @@ the demo's practice tools, demo recording, the hurt indicator and the killer's h
 
 ## Second list (proposed 2026-11-04, in the order to build)
 
-1. **Tracers and brass casings.** Every few shots (CS:GO's tracer frequency per gun) a
-   yellow inked streak from the muzzle to the impact for 0.1 s, everyone's shots (ours from
-   the predicted shot, others' from the snapshot shot counter and impact events); casings
-   out of the ejection port as instanced debris (`client/gl/debris.js`), landing with a soft
-   tink (`client/audio.js`). Needs an ejection point on each gun model
-   (`client/models/guns.js`) and a new `client/gl/tracers.js`.
-2. **Visibility data for our own maps.** `shared/bspwriter.js` writes no visibility lump and
+1. **Visibility data for our own maps.** `shared/bspwriter.js` writes no visibility lump and
    no marksurfaces (lines ~901 and ~964), so de_playground, de_inkwell, cs_polaris and every
    editor map draw every face every frame, where `WorldVis` skips 93-95 % of Valve's maps (and culls the characters behind walls with the same marks).
    Build the portals between the hull 0 tree's empty leaves, flood a conservative PVS
@@ -32,26 +26,26 @@ the demo's practice tools, demo recording, the hurt indicator and the killer's h
    compressed rows. Mind the compile time (cs_polaris ~34 s): a time cap, a fast pass in
    draft light. Measure the world pass on cs_polaris before and after (`r_drawrepeat 20`);
    test that every leaf a ray reaches is in the PVS.
-3. **Radio commands and pings.** CS:GO's Z / X / C radio menus: the line as a comic speech
+2. **Radio commands and pings.** CS:GO's Z / X / C radio menus: the line as a comic speech
    balloon over the speaker for 2 s and in team chat (`client/chat.js`, a new
    `client/radio.js`). Middle mouse pings: a comic "!" at the point looked at, in the world
    and on the radar (`client/radar.js`), teammates only, 3 s, rate-limited. Bots obey
    "Follow me" and "Hold this position" and call "Enemy spotted" and "Bomb planted". New
    server messages (a protocol bump; the hurt indicator took v18).
-4. **Retakes mode.** Each round the bomb is already planted on a random site, the Ts start
+3. **Retakes mode.** Each round the bomb is already planted on a random site, the Ts start
    round it defending and the CTs at the entrances; no money, fixed loadouts per round type
    (pistol, light, full). Spawns from `Nav.open` nodes in and around the site's zone, so maps
    need no extra data. `cfg/gamemode_retakes.cfg`, a `GAME_MODES` entry, the round start in
    `server/game.js`, the Practice menu; the bots' planted-bomb goals already fit.
-5. **Ink hatching in corners.** Screen-space ambient occlusion from the depth target in the
+4. **Ink hatching in corners.** Screen-space ambient occlusion from the depth target in the
    ink pass (`INK_FS`, G-buffer resolution, ~8 samples), printed as diagonal hatch lines on a
    fixed screen grid (like the dots, so it never crawls) where corners and contacts darken.
    `r_hatching` (Video), dropped first by r_dynres; budget under 0.15 ms at full clock.
-6. **Comic skies with a backdrop.** The sun as an inked disc with rays where `sunOf` puts it,
+5. **Comic skies with a backdrop.** The sun as an inked disc with rays where `sunOf` puts it,
    and a distant silhouette ring by map name (dunes for dust, a skyline for office and
    polaris, mountains for snow), procedural, printed flat in the sky pass (`SKY_FS`), one
    draw.
-7. **Map load time.** Measure click to first frame on de_dust2 and cs_polaris, step by step
+6. **Map load time.** Measure click to first frame on de_dust2 and cs_polaris, step by step
     (download, parse, mesh, lightmap atlas, overview, floor grid, warm-up draws, the practice
     worker's nav). Then likely: the overview built in a worker, the overview and nav cached
     per map in IndexedDB, a progress bar in the menu. Target: half.

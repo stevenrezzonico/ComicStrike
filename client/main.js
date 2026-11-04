@@ -47,7 +47,7 @@ import {
   MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, OWN_HURT, E_ACTIVE, E_X,
   CHAT_CONSOLE, CHAT_TEAM, CHAT_MAX,
   E_Y, E_Z, E_PITCH, E_YAW,
-  E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw, PROTOCOL_VERSION,
+  E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw, dequantizePitch, PROTOCOL_VERSION,
 } from '../shared/protocol.js';
 import { DemoRecorder, DemoPlayer, decodeDemo, fillRecorderRow, restoreRing, demoName } from './demo.js';
 import { saveDemo, loadDemo, listDemos, deleteDemo, downloadDemo } from './demostore.js';
@@ -68,6 +68,7 @@ import { modelLight } from './gl/skinned.js';
 import { crosshairLayout } from './gl/crosshair.js';
 import { perspective, viewFromAngles, multiply, invert, CLIP_ALL } from './gl/mat4.js';
 import { PracticeMarks } from './gl/practice.js';
+import { Tracers } from './gl/tracers.js';
 import { Input, SELECT_LAST } from './input.js';
 import { keyName } from './binds.js';
 import { WeaponView } from './weaponview.js';
@@ -177,7 +178,12 @@ const scape = new SoundScape(sounds, (x, y, z) => {
 function muzzleLight(x, y, z, quiet) {
   renderer.flashes.add(x, y, z, quiet ? 140 : 260, quiet ? 0.4 : 1, 0.08, performance.now() / 1000);
 }
-scape.onShot = muzzleLight;
+scape.onShot = (x, y, z, quiet, id, shots, weapon) => {
+  muzzleLight(x, y, z, quiet);
+  const r = id * E_FIELDS;
+  gunShot(x, y, z, dequantizePitch(interp[r + E_PITCH]), dequantizeYaw(interp[r + E_YAW]), quiet, shots, WEAPONS[weapon],
+    NaN, 0, 0);
+};
 const OFFLINE_MONEY = 16000;
 
 const player = new Player();
@@ -378,6 +384,34 @@ const proj = new Float32Array(16);
 const view = new Float32Array(16);
 const blasts = new Blasts(renderer.gl, view); // explosions: the fire faces this camera
 overlays.push(blasts);
+// Bullet tracers, behind what is nearer; casings tink where they land.
+const tracers = new Tracers(renderer.gl);
+overlays.push(tracers);
+debris.onLand = (x, y, z) => sounds.tink(x, y, z);
+const tracerTrace = new Trace();
+let ownShots = 0;
+// A shot fired from the eye at (ex, ey, ez) along (pitch, yaw): its casing out of the right
+// side (not the revolver's), and a tracer to (bx, by, bz) (NaN: the first wall along the
+// view) on every third shot of an automatic gun and every shot of the others, none
+// silenced (CS:GO's tracer frequencies, approx.).
+function gunShot(ex, ey, ez, pitch, yaw, quiet, count, w, bx, by, bz) {
+  if (!w || !w.gun || !world) return;
+  const p = pitch * DEG, yw = yaw * DEG, cp = Math.cos(p);
+  const fx = Math.cos(yw) * cp, fy = Math.sin(yw) * cp, fz = -Math.sin(p), rx = Math.sin(yw), ry = -Math.cos(yw);
+  if (w.name !== 'revolver') {
+    const out = 90 + Math.random() * 50, up = 80 + Math.random() * 60;
+    debris.casing(ex + fx * 14 + rx * 6, ey + fy * 14 + ry * 6, ez + fz * 14 - 7, rx * out - fx * 20, ry * out - fy * 20, up);
+  }
+  if (quiet || (w.auto && count % 3)) return;
+  if (Number.isNaN(bx)) {
+    traceHull(world, HULL_POINT, ex, ey, ez, ex + fx * 8192, ey + fy * 8192, ez + fz * 8192, tracerTrace);
+    bx = tracerTrace.endx;
+    by = tracerTrace.endy;
+    bz = tracerTrace.endz;
+  }
+  tracers.add(ex + fx * 24 + rx * 4, ey + fy * 24 + ry * 4, ez + fz * 24 - 4, bx, by, bz);
+}
+
 // The demo's and the sandbox's practice marks (grenade arcs, impact boxes), on top of the rest.
 const practice = new PracticeMarks(renderer.gl);
 overlays.push(practice);
@@ -424,6 +458,9 @@ async function loadMap(name) {
   models.warm(renderer.gbuf);
   practice.warm(CLIP_ALL);
   practice.clear();
+  tracers.screen[0] = canvas.width;
+  tracers.screen[1] = canvas.height;
+  tracers.warm(CLIP_ALL);
   world = CollisionWorld.fromBSP(bsp);
   world.surfaces = new SurfaceMap(bsp);
   world.bombSites = new BombSites(bsp);
@@ -1210,6 +1247,9 @@ function tick() {
       const p = angles[0] * DEG, yw = angles[1] * DEG, c = Math.cos(p) * 24;
       muzzleLight(eye[0] + Math.cos(yw) * c, eye[1] + Math.sin(yw) * c, eye[2] - Math.sin(p) * 24,
         silenced(ws, ws.f[WS_ACTIVE]));
+      const ip = impacts.pos, hit = impacts.count > 0; // the first bullet's first hit
+      gunShot(eye[0], eye[1], eye[2], angles[0], angles[1], silenced(ws, ws.f[WS_ACTIVE]), ++ownShots, w,
+        hit ? ip[0] : NaN, hit ? ip[1] : 0, hit ? ip[2] : 0);
     }
     scape.ownMove(ps, buttons & IN_SPEED, ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1],
       ps.f[PS_ORIGIN + 2] - feetOffset(ps.i[PS_FLAGS]));
@@ -1591,6 +1631,9 @@ function draw(now, alpha, dt) {
   practice.showTrails = practicing && cv.sv_grenade_trajectory.bool;
   practice.showImpacts = practicing && cv.sv_showimpacts.bool;
   practice.now = now / 1000;
+  tracers.now = now / 1000;
+  tracers.screen[0] = canvas.width;
+  tracers.screen[1] = canvas.height;
   practice.screen[0] = canvas.width;
   practice.screen[1] = canvas.height;
   renderer.render(viewProj, invViewProj, eye, now / 1000, overlays);
@@ -2577,6 +2620,8 @@ globalThis.comicstrike = {
   ps,
   ws,
   decals,
+  debris,
+  tracers,
   angles,
   input,
   tick,
@@ -2587,7 +2632,6 @@ globalThis.comicstrike = {
   netStats,
   interp,
   targets,
-  models,
   hud,
   menu,
   weaponView,

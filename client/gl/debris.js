@@ -43,6 +43,8 @@ export class Debris {
     this.capacity = capacity;
     this.count = 0;
     this.sim = new Float32Array(capacity * S);
+    this.kind = new Uint8Array(capacity); // 1: a casing not yet landed, 2: landed
+    this.onLand = null; // (x, y, z): a casing's first touch (its tink)
     this.inst = new Float32Array(capacity * I);
     this.trace = new Trace();
     this.prog = program(gl, DEBRIS_VS, DEBRIS_FS, ['u_viewProj']);
@@ -83,6 +85,7 @@ export class Debris {
     const tint = glassy ? 0.5 : 0;
     for (let k = 0; k < n && this.count < this.capacity; k++) {
       const s = this.sim;
+      this.kind[this.count] = 0;
       const o2 = this.count++ * S;
       s[o2] = cx + rand(-0.4, 0.4) * sx;
       s[o2 + 1] = cy + rand(-0.4, 0.4) * sy;
@@ -112,6 +115,7 @@ export class Debris {
   puff(x, y, z, r, g, b, n) {
     for (let k = 0; k < n && this.count < this.capacity; k++) {
       const s = this.sim;
+      this.kind[this.count] = 0;
       const o = this.count++ * S;
       s[o] = x;
       s[o + 1] = y;
@@ -133,6 +137,32 @@ export class Debris {
     }
   }
 
+  // A spent casing thrown out of a gun at (x, y, z) with velocity (vx, vy, vz): small,
+  // brass, spinning; its first touch calls onLand.
+  casing(x, y, z, vx, vy, vz) {
+    if (this.count >= this.capacity) return;
+    const s = this.sim;
+    this.kind[this.count] = 1;
+    const o = this.count++ * S;
+    s[o] = x;
+    s[o + 1] = y;
+    s[o + 2] = z;
+    s[o + 3] = vx;
+    s[o + 4] = vy;
+    s[o + 5] = vz;
+    for (let a = 0; a < 3; a++) {
+      s[o + 6 + a] = rand(0, 6.283);
+      s[o + 9 + a] = rand(-20, 20);
+    }
+    s[o + 12] = s[o + 13] = 0.5;
+    s[o + 14] = 1.4;
+    s[o + 15] = 0.86;
+    s[o + 16] = 0.64;
+    s[o + 17] = 0.24;
+    s[o + 18] = 1.6;
+    s[o + 19] = 0;
+  }
+
   update(dt, world) {
     const s = this.sim, t = this.trace;
     for (let i = 0; i < this.count; i++) {
@@ -141,6 +171,7 @@ export class Debris {
       if (s[o + 18] <= 0) { // dead: move the last chunk into this slot
         this.count--;
         s.copyWithin(o, this.count * S, this.count * S + S);
+        this.kind[i] = this.kind[this.count];
         i--;
         continue;
       }
@@ -153,6 +184,10 @@ export class Debris {
         s[o] = t.endx + t.nx * 0.5;
         s[o + 1] = t.endy + t.ny * 0.5;
         s[o + 2] = t.endz + t.nz * 0.5;
+        if (this.kind[i] === 1) {
+          this.kind[i] = 2;
+          if (this.onLand) this.onLand(s[o], s[o + 1], s[o + 2]);
+        }
         const vn = s[o + 3] * t.nx + s[o + 4] * t.ny + s[o + 5] * t.nz;
         for (let a = 0; a < 3; a++) {
           const n = a === 0 ? t.nx : a === 1 ? t.ny : t.nz;
