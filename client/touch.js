@@ -3,7 +3,8 @@
 // lay theirs out: the left thumb moves on a floating stick, the right thumb looks by
 // dragging anywhere else, buttons included, and presses the buttons laid out round where
 // it rests: a big FIRE where the thumb lands (held, a drag still turns the view, so a
-// target can be tracked while firing), AIM beside it, JUMP on the edge above, DUCK under
+// target can be tracked while firing), the right mouse button beside it, named by what it
+// does with the weapon in hand (SCOPE, BURST, SILENCER, FAN, STAB, LOB; gone otherwise), JUMP on the edge above, DUCK under
 // that in the corner, RELOAD and NEXT either side of the ammo at the bottom (tapping the
 // ammo itself is NEXT too), USE and BUY small along the top, and a second FIRE on the left
 // above the stick for the left thumb while the right one tracks. The buttons are
@@ -43,6 +44,20 @@ export function stickButtons(dx, dy, radius = STICK_RADIUS) {
   return SECTORS[k] | (d < STICK_WALK ? IN_SPEED : 0);
 }
 
+// What the right mouse button does with weapon `w` in hand, as the AIM button's label:
+// the scope, a burst, the silencer, the revolver's fan, the knife's stab, a grenade's lob;
+// null where it does nothing (the AK, the Deagle, the C4: the button is hidden then).
+export function altLabel(w) {
+  if (!w) return null;
+  if (w.altKind === 'scope') return 'SCOPE';
+  if (w.altKind === 'burst') return 'BURST';
+  if (w.altKind === 'silencer') return 'SILENCER';
+  if (w.altKind === 'revolver') return 'FAN';
+  if (w.melee) return 'STAB';
+  if (w.grenade) return 'LOB';
+  return null;
+}
+
 // The buttons: where each sits (its center from an edge or the middle, in pixels at scale
 // 1: a thumb's reach is the same on any screen), its diameter, what it runs. `look`: a
 // finger on it also turns the view (the right thumb's buttons); `toggle`: stays pressed
@@ -51,7 +66,7 @@ export function stickButtons(dx, dy, radius = STICK_RADIUS) {
 // ones small and out of the way.
 export const BUTTONS = [
   { name: 'fire', label: 'FIRE', cmd: '+attack', cls: 'fire', d: 88, right: 146, bottom: 97, look: true },
-  { name: 'aim', label: 'AIM', cmd: '+attack2', cls: 'aim', d: 60, right: 216, bottom: 157, look: true },
+  { name: 'aim', label: 'AIM', cmd: '+attack2', cls: 'aim small', d: 60, right: 216, bottom: 157, look: true },
   { name: 'jump', label: 'JUMP', cmd: '+jump', cls: '', d: 64, right: 46, bottom: 179, look: true },
   { name: 'duck', label: 'DUCK', cmd: '+duck', cls: '', d: 56, right: 46, bottom: 85, look: true, toggle: true },
   { name: 'reload', label: 'RELOAD', cmd: '+reload', cls: 'small', d: 52, mid: 100, bottom: 36, look: true },
@@ -94,6 +109,7 @@ export class TouchButtons {
     this.rects = [];
     this.held = new Map(); // touch id -> button
     this.toggled = new Set(); // the toggle buttons on
+    this.hidden = new Set(); // button names out of use now (AIM with a weapon that has no right click)
   }
 
   layout(w, h, scale, options) {
@@ -104,6 +120,7 @@ export class TouchButtons {
   // The button under (x, y), with a little slack round the discs.
   at(x, y) {
     for (const b of this.rects) {
+      if (this.hidden.has(b.name)) continue;
       if (b.zone) {
         if (Math.abs(x - b.cx) <= b.w / 2 && Math.abs(y - b.cy) <= b.h / 2) return b;
       } else {
@@ -167,6 +184,7 @@ export class TouchControls {
     this.options = { fireLeft: true };
     this.left = 0; // the layer's place on the page (the fingers come in page coordinates)
     this.top = 0;
+    this.alt = undefined; // the AIM button's label now (setAlt)
     this.els = new Map(); // button name -> element
     for (const b of BUTTONS) {
       if (b.zone) continue;
@@ -198,6 +216,19 @@ export class TouchControls {
     }
     if (fireLeft !== undefined) this.options.fireLeft = fireLeft;
     this.layout();
+  }
+
+  // The AIM button says what the right mouse button does with the weapon in hand
+  // (`altLabel`), and goes when it does nothing.
+  setAlt(label) {
+    if (label === this.alt) return;
+    this.alt = label;
+    const el = this.els.get('aim');
+    el.textContent = label || '';
+    el.classList.toggle('gone', !label);
+    el.classList.toggle('long', !!label && label.length > 5);
+    if (label) this.buttons.hidden.delete('aim');
+    else this.buttons.hidden.add('aim');
   }
 
   layout() {

@@ -74,7 +74,7 @@ import { Spectator, SPEC_EYES, SPEC_ROAM, SPEC_DELAY } from './spectate.js';
 import { DeathPanel } from './deathpanel.js';
 import { ConsoleWindow } from './console.js';
 import { Chat } from './chat.js';
-import { TouchControls } from './touch.js';
+import { TouchControls, altLabel } from './touch.js';
 import { takeHandoff } from './handoff.js';
 import { PreviewEditor } from './previewedit.js';
 import { Menu } from './menu.js';
@@ -1317,6 +1317,7 @@ function frame(now) {
 
   // Scopes: CS:GO fovs per zoom level; sensitivity scales with zoom_sensitivity_ratio_mouse.
   const held = activeWeapon(ws);
+  touch.setAlt(altLabel(held));
   const zoom = held && held.altKind === 'scope' && player.health > 0 ? ws.f[WS_ZOOM] : 0;
   const fovTarget = zoom ? held.zoomFov[zoom] : 90;
   fov += (fovTarget - fov) * (1 - Math.exp(-Math.min(elapsed, 0.1) * ZOOM_RATE));

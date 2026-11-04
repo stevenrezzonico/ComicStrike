@@ -4,8 +4,9 @@
 import assert from 'node:assert/strict';
 import { IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_SPEED } from '../shared/constants.js';
 import { releaseOf } from '../shared/cvars.js';
+import { WEAPON_ID, WEAPONS } from '../shared/weapons.js';
 import {
-  stickButtons, layoutRects, TouchButtons, BUTTONS, STICK_RADIUS, STICK_DEAD, STICK_WALK, STICK_ZONE, MIN_BUTTON,
+  stickButtons, layoutRects, TouchButtons, BUTTONS, altLabel, STICK_RADIUS, STICK_DEAD, STICK_WALK, STICK_ZONE, MIN_BUTTON,
 } from '../client/touch.js';
 
 Deno.test('touch stick: dead zone, eight sectors, walking on a small pull', () => {
@@ -118,4 +119,29 @@ Deno.test('touch buttons: presses and releases, a toggle, two fingers on one but
   assert.deepEqual(shown, ['jump:1', 'duck:1', 'jump:0', 'duck:0']);
   assert.equal(tb.held.size, 0);
   assert.equal(tb.toggled.size, 0);
+});
+
+Deno.test('touch AIM button: named by what the right click does, gone where it does nothing', () => {
+  const w = (name) => WEAPONS[WEAPON_ID[name]];
+  assert.equal(altLabel(w('awp')), 'SCOPE');
+  assert.equal(altLabel(w('aug')), 'SCOPE');
+  assert.equal(altLabel(w('glock')), 'BURST');
+  assert.equal(altLabel(w('famas')), 'BURST');
+  assert.equal(altLabel(w('usp_silencer')), 'SILENCER');
+  assert.equal(altLabel(w('m4a1_silencer')), 'SILENCER');
+  assert.equal(altLabel(w('revolver')), 'FAN');
+  assert.equal(altLabel(w('knife')), 'STAB');
+  assert.equal(altLabel(w('hegrenade')), 'LOB');
+  for (const name of ['ak47', 'm4a1', 'deagle', 'p250', 'nova', 'c4']) assert.equal(altLabel(w(name)), null, name);
+  assert.equal(altLabel(null), null);
+  // A hidden button is not pressed.
+  const ran = [];
+  const tb = new TouchButtons((cmd) => ran.push(cmd));
+  const rects = tb.layout(812, 375, 1, {});
+  const aim = rects.find((b) => b.name === 'aim');
+  tb.hidden.add('aim');
+  assert.equal(tb.press(1, aim.cx, aim.cy), null);
+  tb.hidden.delete('aim');
+  assert.equal(tb.press(1, aim.cx, aim.cy).name, 'aim');
+  assert.deepEqual(ran, ['+attack2']);
 });

@@ -7,8 +7,7 @@ import { stickButtons, STICK_ZONE, STICK_BITS, TOUCH_SLOP } from './touch.js';
 
 export const SELECT_LAST = -2; // switch to the previous weapon (lastinv)
 const TOUCH_COUNTS = 4; // mouse counts per pixel of a touch drag (a screen's width turns about half round)
-const LOCK_WAIT_MS = 400; // a pointer lock not on by then, on a touch-first device, is one the browser ignores
-const TOUCH_FIRST = matchMedia('(pointer: coarse)'); // a phone or tablet (iPadOS too, trackpad or not)
+const TOUCH_FIRST = matchMedia('(pointer: coarse)'); // a phone or tablet (iPadOS too, trackpad or not): always a soft lock
 
 export class Input {
   constructor(canvas) {
@@ -21,7 +20,6 @@ export class Input {
     this.mouseDY = 0;
     this.locked = false;
     this.soft = false; // locked without the Pointer Lock API (iOS, iPadOS: the cursor stays free)
-    this.noLock = false; // the browser ignores requestPointerLock (iOS, iPadOS Safari): soft locks from now on
     this.onLockChange = () => {}; // after a soft lock or unlock (the game's overlay)
     this.touchId = -1; // the finger that looks round, and where it was
     this.touchX = 0;
@@ -214,9 +212,12 @@ export class Input {
 
   async lock() {
     if (this.locked) return;
-    if (!this.canvas.requestPointerLock || this.noLock) {
-      // No Pointer Lock API (iOS and iPadOS Safari): the game plays with the cursor free, the
-      // view turned by the trackpad's movement and by touch, Escape or the pause button let go.
+    if (!this.canvas.requestPointerLock || TOUCH_FIRST.matches) {
+      // No Pointer Lock API, or a phone or tablet (iOS and iPadOS Safari define
+      // requestPointerLock but never lock; Android Chrome locks, and then showed no touch
+      // controls, a drag turning the view twice: by the lock's movement and by the touch):
+      // the game plays with the cursor free, the view turned by the trackpad's movement and
+      // by touch, Escape or the pause button let go.
       this.softLock();
       if (this.fullscreen) await this.enterFullscreen();
       return;
@@ -235,23 +236,9 @@ export class Input {
     try {
       await first;
     } catch {
-      try {
-        await this.canvas.requestPointerLock();
-      } catch (e) {
-        if (!TOUCH_FIRST.matches) throw e; // refused (a desktop: the caller lets the keys go); a tablet goes soft below
-      }
+      await this.canvas.requestPointerLock(); // refused: the caller lets the keys go
     }
     if (fullscreen) await fullscreen;
-    // iOS and iPadOS Safari define requestPointerLock but never lock (no error, no
-    // pointerlockchange): on a touch-first device a lock that has not come after a moment is
-    // taken as none at all, and from then on every lock is a soft one.
-    if (!this.locked && TOUCH_FIRST.matches) {
-      await new Promise((r) => setTimeout(r, LOCK_WAIT_MS));
-      if (!this.locked && !document.pointerLockElement) {
-        this.noLock = true;
-        this.softLock();
-      }
-    }
   }
 
   softLock() {

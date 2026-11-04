@@ -46,10 +46,17 @@
   #touch button.fire { border-width: 4px; background: var(--red); color: var(--paper); box-shadow: 4px 4px 0 var(--ink);
     font-size: calc(22px * var(--touch-scale)); letter-spacing: 0.08em; }
   #touch button.aim { background: var(--blue); color: var(--paper-hi); }
+  #touch button.aim.long { font-size: calc(10px * var(--touch-scale)); letter-spacing: 0.02em; }
+  #touch button.aim.gone { display: none !important; }
   /* The ammo moves to the middle of the bottom edge, between RELOAD and NEXT; the kill feed
      under the USE and BUY buttons. */
   body.softplay #hud-right { right: auto; left: 50%; transform: translateX(-50%); align-items: center; }
-  body.softplay #killfeed { top: 76px; }
+  body.softplay #killfeed { top: 76px; right: 90px; }
+  /* A phone (short): the kill feed keeps two lines, so it stays clear of the AIM button. */
+  @media (max-height: 560px) {
+    body.softplay #killfeed { font-size: 15px; }
+    body.softplay #killfeed div:nth-last-child(n+3) { display: none; }
+  }
   #status {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
     color: var(--yellow); font: 32px/1.4 var(--display); letter-spacing: 0.04em;
