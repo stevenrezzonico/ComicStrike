@@ -7,7 +7,7 @@ import { MapBuilder, box, NONE } from '../shared/bspwriter.js';
 import { parseUntrustedBSP } from '../shared/bsp.js';
 import { Trace, traceHull, hullFits, HULL_POINT, HULL_STAND, ENT_NONE, ENT_SOLID } from '../shared/trace.js';
 import { PS_ORIGIN, PS_VEL, PS_GROUNDENT } from '../shared/pmove.js';
-import { IN_USE, IN_ATTACK, TICK_RATE } from '../shared/constants.js';
+import { IN_USE, IN_ATTACK, IN_FORWARD, TICK_RATE } from '../shared/constants.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { WEAPON_ID, WS_ACTIVE, giveWeapon, SLOT_PRIMARY } from '../shared/weapons.js';
 import {
@@ -523,4 +523,31 @@ Deno.test('path_corner: teleport, wait for a trigger, fire once', () => {
   run(Math.ceil(300 / 160 * TICK_RATE) + 2);
   assert.equal(d.leg[0], 2);
   assert.equal(d.stopped[0], 1, 'waits at the third for a trigger');
+});
+
+// CBreakable::BreakTouch: de_survivor's ice breaks a moment after someone stands on it
+// (pressure), cs_assault's plate when run into fast enough (touch: speed / 100 >= health).
+Deno.test('breakables: pressure breaks when stood on, touch when run into fast enough', () => {
+  const bsp = yard((map) => {
+    map.brushEntity({ classname: 'func_breakable', spawnflags: '4', health: '25', delay: '0.25' }, [box(-200, -100, 0, -100, 0, 8, 'glass_med')]);
+    map.brushEntity({ classname: 'func_breakable', spawnflags: '2', material: '2', health: '3' }, [box(300, -64, 0, 316, 64, 96, 'steel')]);
+  });
+  const { game, c, run, put } = walker(bsp);
+  const b = game.breakables;
+  put(-150, -50, 8); // on the ice
+  run(4);
+  assert.equal(c.player.ps.i[PS_GROUNDENT], b.ent[1], 'standing on it');
+  assert.equal(b.broken[1], 0, 'not at once');
+  run(Math.round(0.25 * TICK_RATE));
+  assert.equal(b.broken[1], 1, 'broke after its delay');
+  // Walking into the plate (~250 u/s: 2.5 < 3) leaves it; a shove at 400 breaks it.
+  put(250, 0, 0);
+  run(TICK_RATE, IN_FORWARD);
+  assert.equal(b.broken[2], 0, 'walking speed does not break it');
+  put(280, 0, 0);
+  c.player.ps.f[PS_VEL] = 400;
+  run(4, IN_FORWARD);
+  assert.equal(b.broken[2], 1, 'run into at 400');
+  game.startRound(true);
+  assert.ok(!b.broken[1] && !b.broken[2] && game.pressed.size === 0, 'back at the round start');
 });

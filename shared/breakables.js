@@ -9,6 +9,8 @@ import { entityModelIndex } from './bsp.js';
 import { ENT_SOLID, ENT_NONE, HULL_POINT, Trace, traceHull } from './trace.js';
 
 export const SF_BREAK_TRIGGER_ONLY = 1; // only a trigger breaks it (CS bomb-site crates)
+export const SF_BREAK_TOUCH = 2; // running into it breaks it (by speed: CBreakable::BreakTouch)
+export const SF_BREAK_PRESSURE = 4; // standing on it breaks it, after its delay (de_survivor's ice)
 export const SF_BREAK_CROWBAR = 256; // one melee hit breaks it
 
 // "material" key values (HL SDK Materials enum). Missing key means glass.
@@ -109,6 +111,11 @@ export class Breakables {
     return true;
   }
 
+  // The breakable slot behind collision entity `ent`, or 0.
+  slotOf(ent) {
+    return ent > 0 && ent < this.slotOfEnt.length ? this.slotOfEnt[ent] : 0;
+  }
+
   canTakeDamage(slot) {
     return slot > 0 && !this.broken[slot] && this.ent[slot] >= 0 &&
       !(this.flags[slot] & SF_BREAK_TRIGGER_ONLY) && this.material[slot] !== MAT_UNBREAKABLE_GLASS;
@@ -117,7 +124,7 @@ export class Breakables {
   // Damages the breakable behind collision entity `ent`. Returns its slot if this
   // broke it, else 0. A broken breakable stops colliding at once.
   damage(world, ent, amount, melee = false) {
-    const slot = ent > 0 && ent < this.slotOfEnt.length ? this.slotOfEnt[ent] : 0;
+    const slot = this.slotOf(ent);
     if (!this.canTakeDamage(slot)) return 0;
     return this.hurt(world, slot, amount, melee);
   }

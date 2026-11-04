@@ -9,10 +9,14 @@ import { parseVec3 } from '../shared/bsp.js';
 import { TICK_RATE, TICK_DT } from '../shared/constants.js';
 import { ARMS_RACE, DEMOLITION, armLevel } from '../shared/progression.js';
 import { CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, HULL_STAND, HULL_POINT } from '../shared/trace.js';
-import { Breakables, EXPLODE_RANGE, blastDamage } from '../shared/breakables.js';
+import {
+  Breakables, EXPLODE_RANGE, blastDamage, SF_BREAK_TOUCH, SF_BREAK_PRESSURE, MAT_UNBREAKABLE_GLASS,
+} from '../shared/breakables.js';
 import { Doors, MapLogic, Killables, BLAST } from '../shared/doors.js';
 import { touched, touchedCount } from '../shared/pmove.js';
-import { PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, eyeOffset } from '../shared/pmove.js';
+import {
+  PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, PS_GROUNDENT, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, eyeOffset,
+} from '../shared/pmove.js';
 import {
   ShotList, WEAPONS, WEAPON_ID, giveWeapon, silenced, canCarryGrenade, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4,
   WEV_PLANTED, WEV_DEFUSED, WEV_DROP, WEV_FIRE, WEV_MELEE, WEV_THROW, WS_RELOAD_END, WS_ACTION, WS_THROWN, ACTION_PLANT,
@@ -264,6 +268,7 @@ export class Game {
     this.world = CollisionWorld.fromBSP(bsp);
     this.world.surfaces = new SurfaceMap(bsp);
     this.breakables = new Breakables(bsp, this.world);
+    this.pressed = new Map(); // breakable slot stood on -> the tick it breaks (SF_BREAK_PRESSURE)
     this.doors = new Doors(bsp, this.world, this.breakables.count);
     this.killables = new Killables(bsp, this.world, this.breakables.count + this.doors.count);
     this.logic = new MapLogic(bsp, this.doors, this.world, this.breakables, this.killables);
@@ -695,6 +700,7 @@ export class Game {
     if (this.tick % 16 === 0) this.bots.maintain(); // bot_quota
     this.bots.think(); // bots queue this tick's commands like clients do
     this.updateDoors();
+    if (this.pressed.size) this.breakPressed();
     this.packBodies();
 
     for (const c of this.clients) {
@@ -769,6 +775,7 @@ export class Game {
     const heldId = wf[held], heldClip = wf[held + 1], heldReserve = wf[held + 2]; // what G may drop
     this.world.bodySelf = c.id;
     this.world.bodyTeam = c.team;
+    const pf = p.ps.f, speed0 = Math.hypot(pf[PS_VEL], pf[PS_VEL + 1], pf[PS_VEL + 2]); // as it ran into things
     const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots, frozen, this.bomb,
       this.rules.demo);
     const events = p.ws.f[WS_EVENTS];
@@ -787,11 +794,13 @@ export class Game {
       else if (this.progression()) armLevel(p.ws, this.progression(), c.level, c.team === TEAM_CT, c.cmdTime); // earned, not dropped
       else this.spawnItem(c, heldId, heldClip, heldReserve, true);
     }
-    // Doors and buttons it ran into.
+    // Doors and buttons it ran into, breakables it ran into or stands on.
     for (let i = 0; i < touchedCount; i++) {
       const k = this.doors.ofEnt(touched[i]);
       if (k >= 0) this.doors.touch(k, this.tick, this.actOf(c));
+      else this.touchBreakable(c, touched[i], speed0);
     }
+    if (p.ps.i[PS_GROUNDENT] > 0) this.touchBreakable(c, p.ps.i[PS_GROUNDENT], -1);
     // E on a door or button, else on a weapon on the ground: swap it for the one in its
     // slot (not while defusing).
     if ((c.buttons & IN_USE) && !p.ws.f[WS_ACTION]) {
@@ -1023,6 +1032,7 @@ export class Game {
   // Everyone to a spawn point; survivors keep their gear unless `fresh`.
   startRound(fresh) {
     this.breakables.reset(this.world);
+    this.pressed.clear();
     this.doors.reset(this.world);
     this.killables.reset(this.world);
     this.logic.reset(this.tick);
@@ -1599,6 +1609,36 @@ export class Game {
     this.recordDamage(by && by.joined ? by : null, c, before);
     if (x !== undefined) this.hurtFrom(c, before, x, y, z); // an explosion's (a crush has no side)
     if (c.player.health <= 0) this.kill(by && by.joined ? by : c, c, weapon, false);
+  }
+
+  // CBreakable::BreakTouch: a breakable flagged to break on touch breaks when run into at
+  // a speed whose hundredth reaches its health (the runner takes a quarter of that), one
+  // flagged for pressure when stood on (`speed` -1), after its delay (0.1 s at least):
+  // de_survivor's ice. The speed is the one it ran in at (GoldSrc hands the touch the impact
+  // velocity; after the move it is clipped against the very thing it hit).
+  touchBreakable(c, ent, speed) {
+    const b = this.breakables, slot = b.slotOf(ent);
+    if (!slot || b.broken[slot] || b.material[slot] === MAT_UNBREAKABLE_GLASS) return;
+    if (speed < 0) {
+      if ((b.flags[slot] & SF_BREAK_PRESSURE) && !this.pressed.has(slot)) {
+        this.pressed.set(slot, this.tick + Math.max(1, Math.round((b.delay[slot] || 0.1) * TICK_RATE)));
+      }
+      return;
+    }
+    if (!(b.flags[slot] & SF_BREAK_TOUCH)) return;
+    const damage = speed * 0.01;
+    if (damage < b.health[slot] || !b.hurt(this.world, slot, damage)) return;
+    this.brokeSlot(slot, this.actOf(c), c);
+    if (damage >= 4) this.hurtBy(c, damage / 4, null, 0);
+  }
+
+  // Breakables stood on whose delay ran out break (touchBreakable).
+  breakPressed() {
+    for (const [slot, at] of this.pressed) {
+      if (this.tick < at) continue;
+      this.pressed.delete(slot);
+      this.breakSlot(slot, null);
+    }
   }
 
   // A breakable fired by name (a trigger, a button, the bomb site's target: CBreakable::Use).
