@@ -3,7 +3,7 @@
 // bitfield plus accumulated raw mouse deltas, consumed by the frame loop.
 
 import { keyName, MOUSE_NAMES } from './binds.js';
-import { stickButtons, STICK_ZONE, STICK_BITS } from './touch.js';
+import { stickButtons, STICK_ZONE, STICK_BITS, TOUCH_SLOP } from './touch.js';
 
 export const SELECT_LAST = -2; // switch to the previous weapon (lastinv)
 const TOUCH_COUNTS = 4; // mouse counts per pixel of a touch drag (a screen's width turns about half round)
@@ -31,6 +31,9 @@ export class Input {
     this.stickY = 0;
     this.stickBits = 0; // the movement bits the stick holds now
     this.onStick = () => {}; // (active, x, y, dx, dy): the stick's drawing (client/touch.js)
+    this.onTouchDown = () => null; // (id, x, y): the touch button under a finger landing there, pressed (client/touch.js)
+    this.onTouchUp = () => {}; // (id): that finger lifted
+    this.touchSlop = 0; // px the looking finger still has to travel before it turns the view (it landed on a button)
     this.sensitivity = 2.5; // the sensitivity / m_yaw / m_pitch / m_rawinput cvars
     this.mYaw = 0.022; // degrees per count
     this.mPitch = 0.022;
@@ -52,16 +55,20 @@ export class Input {
       this.soft = false;
       if (!this.locked && !this.keepKeys()) this.clear();
     });
-    // Touch (a tablet, a phone): a finger landing on the left STICK_ZONE of the canvas is
-    // the movement stick (client/touch.js), elsewhere the first finger drags the view round
-    // (the mouse buttons are the FIRE and AIM buttons; more fingers do nothing). Only while
-    // locked (a soft lock there: see lock()), so the menus' touches are their own.
+    // Touch (a tablet, a phone): a finger landing on a touch button (client/touch.js)
+    // presses it; one on the left STICK_ZONE of the canvas is the movement stick; the first
+    // finger elsewhere drags the view round, and so does one on a right-side button (held
+    // FIRE tracks a target), after a little slop so a tap never jolts the aim; more fingers
+    // press buttons only. Only while locked (a soft lock there: see lock()), so the menus'
+    // touches are their own.
     canvas.addEventListener('touchstart', (e) => {
       if (!this.locked) return;
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
       for (const t of e.changedTouches) {
-        if (this.stickId < 0 && t.clientX < rect.left + rect.width * STICK_ZONE) {
+        const b = this.onTouchDown(t.identifier, t.clientX, t.clientY);
+        if (b && !b.look) continue;
+        if (!b && this.stickId < 0 && t.clientX < rect.left + rect.width * STICK_ZONE) {
           this.stickId = t.identifier;
           this.stickX = t.clientX;
           this.stickY = t.clientY;
@@ -70,6 +77,7 @@ export class Input {
           this.touchId = t.identifier;
           this.touchX = t.clientX;
           this.touchY = t.clientY;
+          this.touchSlop = b ? TOUCH_SLOP : 0;
         }
       }
     }, { passive: false });
@@ -82,8 +90,13 @@ export class Input {
           this.setStick(stickButtons(dx, dy));
           this.onStick(true, this.stickX, this.stickY, dx, dy);
         } else if (t.identifier === this.touchId) {
-          this.mouseDX += (t.clientX - this.touchX) * TOUCH_COUNTS;
-          this.mouseDY += (t.clientY - this.touchY) * TOUCH_COUNTS;
+          const dx = t.clientX - this.touchX, dy = t.clientY - this.touchY;
+          if (this.touchSlop > 0) {
+            if (dx * dx + dy * dy < this.touchSlop * this.touchSlop) continue;
+            this.touchSlop = 0;
+          }
+          this.mouseDX += dx * TOUCH_COUNTS;
+          this.mouseDY += dy * TOUCH_COUNTS;
           this.touchX = t.clientX;
           this.touchY = t.clientY;
         }
@@ -91,6 +104,7 @@ export class Input {
     }, { passive: false });
     const touchEnd = (e) => {
       for (const t of e.changedTouches) {
+        this.onTouchUp(t.identifier);
         if (t.identifier === this.stickId) this.dropStick();
         if (t.identifier === this.touchId) this.touchId = -1;
       }

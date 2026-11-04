@@ -86,6 +86,10 @@ export function createConsole(print) {
   add('r_hidpi', 0, 'Sharp: render at the screen pixel density on high-DPI screens (up to 2x; costs up to 4x the pixels)', 0, 1);
   add('r_lowlatency', 1, 'Low-latency display: frames go to the screen without the browser compositor (a frame less of mouse lag where the browser allows it; 0 if it tears during fast turns; takes effect on reload)', 0, 1);
   add('fullscreen', 0, 'Fullscreen while playing: the page fills the screen when it takes the mouse; in Chrome and Edge the keyboard is locked too, so Ctrl+W, Ctrl+T and Alt+Tab stay in the game (hold Escape 2 s to leave)', 0, 1);
+  // Touch controls (client/touch.js).
+  add('touch_opacity', 0.45, 'Touch buttons: how opaque (a pressed one is always solid)', 0.1, 1);
+  add('touch_scale', 1, 'Touch buttons: size', 0.7, 1.4);
+  add('touch_fire_left', 1, 'Touch: a second FIRE button on the left, above the stick, for the left thumb', 0, 1);
   add('fps_max', 400, 'Frame rate cap (0: none); matters only where the browser runs with vsync off, else frames come at the display rate', 0, 1000);
   add('r_frames_ahead', 3, 'Frames the browser may hold in its GPU pipeline before the next is drawn (0: no limit); a browser with vsync off otherwise queues frames (mouse lag) and stalls once the queue is full', 0, 8);
   // View.

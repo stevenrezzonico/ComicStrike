@@ -106,6 +106,13 @@ const TABS = [
 const PRINT_CVARS = ['r_comic', 'r_inkwidth', 'r_halftone', 'r_halftone_style', 'r_crosshair_clearzone',
   'r_shadebands', 'r_shadowlift', 'mat_viewportscale', 'r_inkfast', 'r_inkaa'];
 
+// The Controls tab's touch settings (client/touch.js).
+const TOUCH_ROWS = [
+  ['section', null, 'Touch controls (phones and tablets)'],
+  ['slider', 'touch_opacity', 'Button opacity', 0.1, 1, 0.05],
+  ['slider', 'touch_scale', 'Button size', 0.7, 1.4, 0.05],
+  ['toggle', 'touch_fire_left', 'Second fire button on the left'],
+];
 // The controls tab: [label, command] per action, in groups.
 const ACTIONS = [
   ['Movement', [['Forward', '+forward'], ['Back', '+back'], ['Strafe left', '+moveleft'], ['Strafe right', '+moveright'],
@@ -635,10 +642,12 @@ export class Menu {
     body.append(list);
     if (!rows) {
       this.renderControls(list);
+      for (const row of TOUCH_ROWS) list.append(this.settingRow(row));
       body.append(button('Restore default keys', () => {
         this.con.exec('binddefaults');
         this.render();
       }, 'menu-reset'));
+      this.refresh();
       return;
     }
     for (const row of rows) if (row[0] !== 'window') list.append(this.settingRow(row));

@@ -1936,6 +1936,11 @@ input.onLockChange = updateOverlay;
 // Touch controls (client/touch.js) under the soft lock: the stick, and buttons that run
 // commands as a key named 'touch' would (held bits release with it).
 const touch = new TouchControls(document.getElementById('touch'), input, (cmd) => con.exec(cmd, { key: 'touch' }));
+const applyTouch = () => touch.setOptions({
+  opacity: cv.touch_opacity.number, scale: cv.touch_scale.number, fireLeft: cv.touch_fire_left.bool,
+});
+for (const c of [cv.touch_opacity, cv.touch_scale, cv.touch_fire_left]) watch(c, applyTouch);
+applyTouch();
 // A tablet with a keyboard (iPadOS: the lock is soft, trackpad or not): the touch controls
 // hide once a bound key plays, and come back at the next touch on the canvas.
 document.addEventListener('keydown', (e) => {
