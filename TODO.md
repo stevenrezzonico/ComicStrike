@@ -5,7 +5,7 @@ was when the plan was written; check the files named before starting one. Done s
 these lists: text chat (14g), movers and breakables (14h), weapon leftovers (14i), bots'
 grenades, AWP and buttons (14j), radar levels (14k), point lights (14l), the round-end
 panel and damage report (14m), sun shadows for players (14n), gun looks, comic jingles,
-the demo's practice tools, demo recording, the hurt indicator and the killer's health, characters culled by the PVS, bots' smokes and molotovs, tracers and casings, visibility for our own maps (opt-in: cs_polaris and editor exports), radio and pings, Retakes, hatching in corners, comic skies.
+the demo's practice tools, demo recording, the hurt indicator and the killer's health, characters culled by the PVS, bots' smokes and molotovs, tracers and casings, visibility for our own maps (opt-in: cs_polaris and editor exports), radio and pings, Retakes, hatching in corners, comic skies, map load time (the radar's overview off the page's thread).
 
 ## Server QoL (first list, item 9; on hold)
 
@@ -15,10 +15,3 @@ the demo's practice tools, demo recording, the hurt indicator and the killer's h
   bump); a client `#vote` panel with F1 / F2 binds.
 - `sv_password`: sent in HELLO, a field in the Play panel, a client cvar `password`.
 - `GET /rooms.json` listing public rooms, with a public checkbox on the upload.
-
-## Second list (proposed 2026-11-04, in the order to build)
-
-1. **Map load time.** Measure click to first frame on de_dust2 and cs_polaris, step by step
-    (download, parse, mesh, lightmap atlas, overview, floor grid, warm-up draws, the practice
-    worker's nav). Then likely: the overview built in a worker, the overview and nav cached
-    per map in IndexedDB, a progress bar in the menu. Target: half.

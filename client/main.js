@@ -439,6 +439,7 @@ let roomCode = (params.get('room') || '').toLowerCase().replace(/[^a-z0-9]/g, ''
 let roomRcon = '', roomNames = null;
 
 let currentMap = '';
+let overviewWorker = null, overviewJob = 0;
 async function loadMap(name) {
   if (!/^[\w-]+$/.test(name)) throw new Error(`bad map name: ${name}`);
   currentMap = name;
@@ -446,6 +447,7 @@ async function loadMap(name) {
   // Our own file, a room's map (from the server's memory) or the server's maps/; the first
   // two come from outside, so they are checked (parseUntrustedBSP).
   let buffer = ownMaps.get(name), untrusted = true;
+  const tf = performance.now();
   if (!buffer) {
     const room = net && net.room;
     const res = await fetch(room ? `/rooms/${room}/map.bsp` : `/maps/${name}.bsp`);
@@ -453,10 +455,14 @@ async function loadMap(name) {
     buffer = await res.arrayBuffer();
     untrusted = !!room;
   }
-  const t0 = performance.now();
+  const t0 = performance.now(), steps = [];
+  const step = (what) => steps.push(`${what} ${(performance.now() - (steps.t || t0)).toFixed(0)}`) && (steps.t = performance.now());
   const bsp = untrusted ? parseUntrustedBSP(buffer) : parseBSP(buffer);
+  step('parse');
   const mesh = buildMapMesh(bsp);
+  step('mesh');
   renderer.loadMap(mesh, bsp);
+  step('upload');
   models.vis = renderer.vis;
   models.setSun(sunOf(bsp.entities));
   renderer.setSky(sunOf(bsp.entities), name);
@@ -475,10 +481,23 @@ async function loadMap(name) {
   tracers.screen[0] = canvas.width;
   tracers.screen[1] = canvas.height;
   tracers.warm(CLIP_ALL);
+  step('warm');
   world = CollisionWorld.fromBSP(bsp);
   world.surfaces = new SurfaceMap(bsp);
   world.bombSites = new BombSites(bsp);
-  radar.setMap(new Overview(bsp, world), world.bombSites);
+  step('world');
+  // The radar's overview comes from a worker (it was most of the load: cs_polaris 2 of 2.4 s);
+  // the radar shows once it is there.
+  radar.setMap(null, world.bombSites);
+  const job = ++overviewJob, sites = world.bombSites;
+  overviewWorker ||= new Worker(new URL('./overviewworker.js', import.meta.url), { type: 'module' });
+  overviewWorker.onmessage = (e) => {
+    if (e.data.id !== overviewJob) return; // a map loaded since
+    if (e.data.error) console.warn(`overview: ${e.data.error}`);
+    else radar.setMap(Overview.from(e.data.data), sites);
+  };
+  const copy = buffer.slice(0);
+  overviewWorker.postMessage({ id: job, buffer: copy, untrusted }, [copy]);
   breakables = new Breakables(bsp, world);
   breakableColors = mesh.breakableColors;
   doors = new Doors(bsp, world, breakables.count);
@@ -493,7 +512,7 @@ async function loadMap(name) {
   const ms = (performance.now() - t0).toFixed(0);
   console.log(`${name}: ${mesh.numVerts} verts, ${(mesh.opaqueCount + mesh.cutoutCount + mesh.skyCount + mesh.transCount) / 3} tris, ` +
     `lightmap ${mesh.lightmap.width}x${mesh.lightmap.height}, ${world.ents.length} collision ents, ` +
-    `${breakables.count} breakables, ${doors.count} movers, built in ${ms} ms`);
+    `${breakables.count} breakables, ${doors.count} movers, built in ${ms} ms (${steps.join(', ')}; fetched in ${(t0 - tf).toFixed(0)})`);
 
   const o = new Float32Array(3);
   spawns[TEAM_T].length = spawns[TEAM_CT].length = 0;

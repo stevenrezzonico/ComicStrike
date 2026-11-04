@@ -95,6 +95,18 @@ export class Overview {
     return i < 0 ? -Infinity : level < 0 ? this.floor[i] : this.levels[level].floor[i];
   }
 
+  // What the radar draws from, as plain data (client/overviewworker.js sends it to the
+  // page): the levels' images and ranges, the scale and placement; not the floor grid.
+  data() {
+    const { scale, width, height, minX, maxY, minZ, maxZ, cuts } = this;
+    return { scale, width, height, minX, maxY, minZ, maxZ, cuts, levels: this.levels.map(({ zMin, zMax, rgba }) => ({ zMin, zMax, rgba })) };
+  }
+
+  // An overview from data(): px, py and levelOf work; floorAt needs the grid it left behind.
+  static from(data) {
+    return Object.assign(Object.create(Overview.prototype), data);
+  }
+
   // The level (index into `levels`) of a player whose feet are at altitude z.
   levelOf(z) {
     let l = 0;

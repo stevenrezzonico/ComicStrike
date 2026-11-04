@@ -48,6 +48,7 @@ export class Radar {
   // pings: [x, y, ...] of teammates' pings (client/callouts.js), set before draw.
   setMap(overview, bombSites) {
     this.overview = overview;
+    if (!overview) return; // none yet (it is being built: client/overviewworker.js)
     this.images = overview.levels.map((l) => {
       const img = document.createElement('canvas');
       img.width = overview.width;

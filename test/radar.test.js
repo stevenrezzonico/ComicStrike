@@ -177,3 +177,22 @@ Deno.test({ name: 'spotting: seen in the view cone, not behind, not through smok
   run(80);
   assert.ok(!(spotted(t) & ANIM_SPOTTED_CT), 'a second later: hidden again');
 } });
+
+Deno.test('overview: built in its worker, handed over as data that places and levels like the original', async () => {
+  const bytes = Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url));
+  const map = parseBSP(bytes.slice().buffer), original = new Overview(map, CollisionWorld.fromBSP(map));
+  const worker = new Worker(new URL('../client/overviewworker.js', import.meta.url), { type: 'module' });
+  const reply = await new Promise((resolve) => {
+    worker.onmessage = (e) => resolve(e.data);
+    const copy = bytes.slice().buffer;
+    worker.postMessage({ id: 7, buffer: copy, untrusted: false }, [copy]);
+  });
+  worker.terminate();
+  assert.equal(reply.id, 7);
+  const o = Overview.from(reply.data);
+  for (const k of ['scale', 'width', 'height', 'minX', 'maxY']) assert.equal(o[k], original[k], k);
+  assert.equal(o.levels.length, original.levels.length);
+  assert.deepEqual(o.levels[0].rgba, original.levels[0].rgba, 'the same pixels');
+  for (const z of [-100, 0, 200, 1000]) assert.equal(o.levelOf(z), original.levelOf(z));
+  assert.equal(o.px(123), original.px(123));
+});
