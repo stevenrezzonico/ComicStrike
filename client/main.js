@@ -20,7 +20,7 @@ import {
 } from '../shared/constants.js';
 import { CollisionWorld, Trace, traceHull, pointContents, setBody, clearBodies, HULL_POINT } from '../shared/trace.js';
 import {
-  eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_SIZE, FL_ONGROUND, FL_DUCKING, touched, touchedCount,
+  eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_SIZE, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, noclipMove, touched, touchedCount,
 } from '../shared/pmove.js';
 import {
   WEAPONS, WEAPON_ID, ShotList, giveWeapon, weaponTick, viewPunchPitch, viewPunchYaw, hash32, WS_LAST_SLOT,
@@ -64,7 +64,8 @@ import { PASS } from './gl/gputimer.js';
 import { DynamicResolution, SLOW_MS } from './dynres.js';
 import { modelLight } from './gl/skinned.js';
 import { crosshairLayout } from './gl/crosshair.js';
-import { perspective, viewFromAngles, multiply, invert } from './gl/mat4.js';
+import { perspective, viewFromAngles, multiply, invert, CLIP_ALL } from './gl/mat4.js';
+import { PracticeMarks } from './gl/practice.js';
 import { Input, SELECT_LAST } from './input.js';
 import { keyName } from './binds.js';
 import { WeaponView } from './weaponview.js';
@@ -99,7 +100,6 @@ const ZOOM_RATE = 30; // per second: how fast the view zooms in or out (approxim
 let fov = 90; // current CS:GO-style fov (horizontal at 4:3), eased toward the scope's
 const scopeEl = document.getElementById('scope');
 let scopeShown = '';
-const NOCLIP_SPEED = 800;
 const MAX_TICKS_PER_FRAME = 8;
 const HISTORY = 64; // commands / predicted states kept (power of two)
 const SMOOTH_RATE = 15; // 1/s: how fast a visible prediction correction is blended away
@@ -372,6 +372,9 @@ const proj = new Float32Array(16);
 const view = new Float32Array(16);
 const blasts = new Blasts(renderer.gl, view); // explosions: the fire faces this camera
 overlays.push(blasts);
+// The demo's and the sandbox's practice marks (grenade arcs, impact boxes), on top of the rest.
+const practice = new PracticeMarks(renderer.gl);
+overlays.push(practice);
 const viewProj = new Float32Array(16);
 const invViewProj = new Float32Array(16);
 
@@ -412,6 +415,8 @@ async function loadMap(name) {
   decals.warm(renderer.gbuf);
   debris.warm();
   models.warm(renderer.gbuf);
+  practice.warm(CLIP_ALL);
+  practice.clear();
   world = CollisionWorld.fromBSP(bsp);
   world.surfaces = new SurfaceMap(bsp);
   world.bombSites = new BombSites(bsp);
@@ -478,24 +483,21 @@ function offlineRespawn() {
   resetView(s[3]);
 }
 
+// The sandbox's noclip (also when dead): the shared noclip move (online it is the player's
+// FL_NOCLIP, run by runCommand on both sides).
 function noclipTick(buttons) {
-  const fwd = ((buttons & IN_FORWARD) ? 1 : 0) - ((buttons & IN_BACK) ? 1 : 0);
-  const side = ((buttons & IN_MOVERIGHT) ? 1 : 0) - ((buttons & IN_MOVELEFT) ? 1 : 0);
-  const up = ((buttons & IN_JUMP) ? 1 : 0) - ((buttons & IN_DUCK) ? 1 : 0);
-  const speed = NOCLIP_SPEED * ((buttons & IN_SPEED) ? 0.3 : 1) * TICK_DT;
-  const sp = Math.sin(angles[0] * DEG), cp = Math.cos(angles[0] * DEG);
-  const sy = Math.sin(angles[1] * DEG), cy = Math.cos(angles[1] * DEG);
-  const f = ps.f;
-  f[PS_ORIGIN] += (fwd * cp * cy + side * sy) * speed;
-  f[PS_ORIGIN + 1] += (fwd * cp * sy - side * cy) * speed;
-  f[PS_ORIGIN + 2] += (-fwd * sp + up) * speed;
-  f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
+  noclipMove(ps, buttons, angles[0], angles[1], TICK_DT);
+  ps.f[PS_VEL] = ps.f[PS_VEL + 1] = ps.f[PS_VEL + 2] = 0;
 }
 
 // Decals for this tick's world hits; debris for anything our shots broke. Player hits
 // show nothing until the server confirms them (blood events).
 function showImpacts() {
   const melee = WEAPONS[shots.weapon[0]]?.melee;
+  if (practice.showImpacts && !melee) {
+    const p = impacts.pos, at = performance.now() / 1000;
+    for (let i = 0; i < impacts.count; i++) practice.impacts.add(p[i * 3], p[i * 3 + 1], p[i * 3 + 2], at);
+  }
   for (let i = 0; i < impacts.count; i++) {
     if (impacts.player[i] >= 0) continue;
     if (impacts.broke[i]) {
@@ -617,7 +619,7 @@ function packBodies() {
   for (let id = 0; id < MAX_PLAYERS; id++) {
     if (id === selfId) continue;
     const a = ring.row(k1, id);
-    if (!E[a + E_ACTIVE] || E[a + E_HEALTH] <= 0) continue;
+    if (!E[a + E_ACTIVE] || E[a + E_HEALTH] <= 0 || (E[a + E_FLAGS] & FL_NOCLIP)) continue;
     let vx = 0, vy = 0, vz = 0;
     if (k0 >= 0) {
       const b = ring.row(k0, id);
@@ -1159,10 +1161,12 @@ function tick() {
     }
     localGrenades.update(world, selfTargets);
     fx.push(localGrenades, t);
+    if (practice.showTrails) practice.trails.record(localGrenades, performance.now() / 1000);
     flash.left = Math.max(0, flash.left - TICK_DT);
   } else if (net.grenadesVersion !== grenadesVersion) {
     grenadesVersion = net.grenadesVersion;
     fx.push(net.grenades, net.grenadeTick);
+    if (practice.showTrails) practice.trails.record(net.grenades, performance.now() / 1000);
   }
 
   if (net) {
@@ -1438,7 +1442,7 @@ function frame(now) {
       lines.push(`pos: ${f[0].toFixed(0)} ${f[1].toFixed(0)} ${f[2].toFixed(0)}`,
         `ang: ${angles[0].toFixed(1)} ${angles[1].toFixed(1)}`,
         `vel: ${Math.hypot(f[PS_VEL], f[PS_VEL + 1]).toFixed(1)}  z ${f[PS_VEL + 2].toFixed(0)}` +
-        `${fl & FL_ONGROUND ? '  ground' : ''}${fl & FL_DUCKING ? '  duck' : ''}${noclip ? '  NOCLIP' : ''}`);
+        `${fl & FL_ONGROUND ? '  ground' : ''}${fl & FL_DUCKING ? '  duck' : ''}${noclip || fl & FL_NOCLIP ? '  NOCLIP' : ''}`);
     }
     const text = lines.join('\n');
     if (debug.textContent !== text) debug.textContent = text;
@@ -1555,6 +1559,12 @@ function draw(now, alpha, dt) {
   if (net && synced) {
     scape.others(interp, selfId, dt, rowFeet);
   }
+  const practicing = !net || demo();
+  practice.showTrails = practicing && cv.sv_grenade_trajectory.bool;
+  practice.showImpacts = practicing && cv.sv_showimpacts.bool;
+  practice.now = now / 1000;
+  practice.screen[0] = canvas.width;
+  practice.screen[1] = canvas.height;
   renderer.render(viewProj, invViewProj, eye, now / 1000, overlays);
   lap(2);
 
@@ -1853,10 +1863,37 @@ con.command('hideradar', () => {
 }, 'Hides the radar');
 con.command('clear', () => conWin.clear(), 'Clears the console');
 con.command('noclip', (_a, ctx) => {
-  if (net) return con.out(ctx, 'noclip: offline only');
+  if (net) return net.command('noclip'); // the server's (the demo, or sv_cheats 1)
   noclip = !noclip;
   con.out(ctx, `noclip ${noclip ? 'ON' : 'OFF'}`);
-}, 'Fly through walls (offline)');
+}, 'Fly through walls (the sandbox; online the demo mode or sv_cheats 1)');
+// Practice positions (CS:GO players' configs): where we stand and look, per map and slot,
+// in localStorage; load_pos goes back there with setpos / setang (the demo, the sandbox,
+// sv_cheats).
+const posKey = (slot) => `comicstrike.pos.${currentMap}.${slot}`;
+const posSlot = (a) => Math.max(1, Math.min(9, Math.floor(+a[1]) || 1));
+con.command('save_pos', (a, ctx) => {
+  if (!world || player.health <= 0) return con.out(ctx, 'save_pos: in a game, alive');
+  const slot = posSlot(a), f = ps.f, r = (v) => Math.round(v * 100) / 100;
+  const pos = [r(f[PS_ORIGIN]), r(f[PS_ORIGIN + 1]), r(f[PS_ORIGIN + 2] - feetOffset(ps.i[PS_FLAGS]))];
+  try {
+    localStorage.setItem(posKey(slot), JSON.stringify({ pos, ang: [r(angles[0]), r(angles[1])] }));
+  } catch {
+    return con.out(ctx, 'save_pos: storage is blocked');
+  }
+  con.out(ctx, `position ${slot} saved: ${pos.join(' ')}`);
+  hud.flash(`Position ${slot} saved`, 1200, performance.now());
+}, 'save_pos [1-9]: keeps where you stand and look on this map (load_pos brings you back)');
+con.command('load_pos', (a, ctx) => {
+  const slot = posSlot(a);
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(posKey(slot)));
+  } catch { /* storage blocked or spoiled */ }
+  const ok = (v, n) => Array.isArray(v) && v.length === n && v.every(Number.isFinite);
+  if (!saved || !ok(saved.pos, 3) || !ok(saved.ang, 2)) return con.out(ctx, `load_pos: no position ${slot} saved on ${currentMap}`);
+  con.exec(`setpos ${saved.pos.join(' ')}; setang ${saved.ang.join(' ')}`, ctx);
+}, 'load_pos [1-9]: back to a position saved with save_pos (the demo, the sandbox, sv_cheats 1)');
 con.command('setpos', (a, ctx) => {
   const v = a.slice(1, 4).map(Number);
   if (v.length < 3 || !v.every(Number.isFinite)) return con.out(ctx, 'setpos <x> <y> <z>: moves your feet there (sv_cheats online)');
@@ -2072,6 +2109,7 @@ const NO_ITEMS = new Items(), NO_HOSTAGES = new Hostages();
 // Forgets everything from the last game (server state, other players, effects).
 function resetSession() {
   synced = false;
+  practice.clear();
   roundSerial = -1;
   jingleCues.reset();
   lastOwnTeam = 0;

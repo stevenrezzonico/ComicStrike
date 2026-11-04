@@ -61,6 +61,7 @@ export const DEFAULT_BINDS = {
   w: '+forward', s: '+back', a: '+moveleft', d: '+moveright', space: '+jump', ctrl: '+duck', shift: '+speed',
   e: '+use', r: '+reload', f: '+lookatweapon', g: 'drop', q: 'lastinv', b: 'buymenu', m: 'teammenu', tab: '+showscores',
   y: 'messagemode', u: 'messagemode2',
+  n: 'noclip', j: 'save_pos', k: 'load_pos', h: 'bot_place', // practice (the demo mode, the sandbox)
   '`': 'toggleconsole', mouse1: '+attack', mouse2: '+attack2', mwheelup: 'invprev', mwheeldown: 'invnext',
   1: 'slot1', 2: 'slot2', 3: 'slot3', 4: 'slot4', 5: 'slot5',
   ...PAD_BINDS,

@@ -157,6 +157,8 @@ const ACTIONS = [
     ['Primary', 'slot1'], ['Pistol', 'slot2'], ['Knife', 'slot3'], ['Grenades', 'slot4'], ['Bomb', 'slot5']]],
   ['Game', [['Use', '+use'], ['Buy menu', 'buymenu'], ['Scoreboard', '+showscores'], ['Team menu', 'teammenu'],
     ['Chat', 'messagemode'], ['Team chat', 'messagemode2'], ['Console', 'toggleconsole']]],
+  ['Practice (the demo mode)', [['Noclip', 'noclip'], ['Save position', 'save_pos'], ['Load position', 'load_pos'],
+    ['Place a bot where you look', 'bot_place']]],
 ];
 const KEY_COLUMNS = 3; // a keyboard key, a mouse button, a gamepad button
 

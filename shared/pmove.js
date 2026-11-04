@@ -77,10 +77,37 @@ const VELMOD_RECOVERY = 0.4; // per second back toward 1 (approximation of CS:GO
 export const FL_ONGROUND = 1;
 export const FL_DUCKING = 2; // using the duck hull
 export const FL_ONLADDER = 4;
+export const FL_NOCLIP = 8; // flying through walls (noclip: the demo, sv_cheats, the sandbox)
+export const NOCLIP_SPEED = 800; // units a second (walking: 0.3 of it)
 
 export const EV_JUMP = 1;
 export const EV_LAND = 2;
 export const EV_APEX = 4; // the top of a jump: still airborne, rising before this tick and not after
+
+// Noclip (FL_NOCLIP): along the view at NOCLIP_SPEED through everything, jump rising and
+// duck sinking, no gravity, ground or ladder. Shared, so a client predicts it exactly.
+export function noclipMove(ps, buttons, pitch, yaw, frametime) {
+  const f = ps.f, i = ps.i;
+  const fwd = ((buttons & IN_FORWARD) ? 1 : 0) - ((buttons & IN_BACK) ? 1 : 0);
+  const side = ((buttons & IN_MOVERIGHT) ? 1 : 0) - ((buttons & IN_MOVELEFT) ? 1 : 0);
+  const up = ((buttons & IN_JUMP) ? 1 : 0) - ((buttons & IN_DUCK) ? 1 : 0);
+  const speed = NOCLIP_SPEED * ((buttons & IN_SPEED) ? 0.3 : 1);
+  const sp = Math.sin(pitch * DEG), cp = Math.cos(pitch * DEG), sy = Math.sin(yaw * DEG), cy = Math.cos(yaw * DEG);
+  f[PS_VEL] = (fwd * cp * cy + side * sy) * speed;
+  f[PS_VEL + 1] = (fwd * cp * sy - side * cy) * speed;
+  f[PS_VEL + 2] = (-fwd * sp + up) * speed;
+  for (let k = 0; k < 3; k++) {
+    f[PS_ORIGIN + k] += f[PS_VEL + k] * frametime;
+    f[PS_BASEVEL + k] = 0;
+  }
+  f[PS_FALL_VEL] = 0;
+  f[PS_DUCK_AMOUNT] = 0;
+  i[PS_FLAGS] &= ~(FL_ONGROUND | FL_DUCKING | FL_ONLADDER);
+  i[PS_GROUNDENT] = -1;
+  i[PS_EVENTS] = 0;
+  i[PS_OLDBUTTONS] = buttons;
+  touchedCount = 0; // touches nothing (the doors read the list after every move)
+}
 
 export function createPlayerState() {
   const buf = new ArrayBuffer(PS_SIZE * 4);
@@ -640,6 +667,7 @@ function checkMovingGround() {
 
 // Runs one movement tick. pitch/yaw in degrees, maxSpeed = current weapon speed.
 export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) {
+  if (ps.i[PS_FLAGS] & FL_NOCLIP) return noclipMove(ps, buttons, pitch, yaw, frametime);
   W = world;
   dt = frametime;
   const f = ps.f, i = ps.i;

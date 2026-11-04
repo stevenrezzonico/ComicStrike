@@ -514,6 +514,48 @@ void main() {
   gbuffer(v_col, d > 0.2 ? 1.0 : d > -0.3 ? 0.6 : 0.35, n, v_id, v_w, 0u);
 }`;
 
+// Practice lines (client/gl/practice.js: grenade arcs, landing rings): a segment a
+// instance, a quad u_width canvas pixels wide around it with square ends, made in screen
+// space (the part behind the eye clipped off), printed flat in its color with an id of its
+// own, so the ink outlines it.
+export const TRAIL_VS = `#version 300 es
+layout(location=0) in vec3 a_a;
+layout(location=1) in vec3 a_b;
+layout(location=2) in vec3 a_col;
+uniform mat4 u_viewProj;
+uniform vec2 u_screen; // canvas pixels
+uniform float u_width; // canvas pixels
+out vec3 v_col;
+out float v_w;
+void main() {
+  vec4 ca = u_viewProj * vec4(a_a, 1.0), cb = u_viewProj * vec4(a_b, 1.0);
+  v_col = a_col;
+  v_w = 1.0;
+  if (ca.w < 1.0 && cb.w < 1.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  if (ca.w < 1.0) ca = mix(ca, cb, (1.0 - ca.w) / (cb.w - ca.w));
+  if (cb.w < 1.0) cb = mix(cb, ca, (1.0 - cb.w) / (ca.w - cb.w));
+  vec2 half_ = 0.5 * u_screen;
+  vec2 d = cb.xy / cb.w * half_ - ca.xy / ca.w * half_;
+  float len = length(d);
+  vec2 dir = len > 1e-3 ? d / len : vec2(1.0, 0.0), n = vec2(-dir.y, dir.x);
+  bool end = (gl_VertexID & 1) == 1;
+  float side = (gl_VertexID & 2) == 0 ? -1.0 : 1.0;
+  vec4 c = end ? cb : ca;
+  c.xy += (n * side + dir * (end ? 1.0 : -1.0)) * (0.5 * u_width) / half_ * c.w;
+  gl_Position = c;
+  v_w = c.w;
+}`;
+
+export const TRAIL_FS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec3 v_col;
+in float v_w;
+${GBUFFER}
+void main() {
+  gbuffer(v_col, 1.0, vec3(0.0, 0.0, 1.0), 125u, v_w, G_FLAT);
+}`;
+
 // Crosshair: four arms and a dot generated from gl_VertexID (6 vertices each), in
 // pixels. u_parts bits: 0 right, 1 left, 2 bottom, 3 top arm, 4 dot.
 export const CROSSHAIR_VS = `#version 300 es

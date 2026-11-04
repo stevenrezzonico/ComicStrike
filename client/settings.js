@@ -7,7 +7,8 @@ import { LOOK_GUNS, LOOKS, looksOf } from './models/looks.js';
 
 const CONFIG_KEY = 'comicstrike.config.cfg';
 const OLD_CONFIG_KEY = 'webcs.config.cfg'; // saved before the rename to ComicStrike: read once
-const NEW_BINDS = ['messagemode', 'messagemode2']; // defaults added after configs were already being saved
+// Defaults added after configs were already being saved.
+const NEW_BINDS = ['messagemode', 'messagemode2', 'noclip', 'save_pos', 'load_pos', 'bot_place'];
 const SAVE_DELAY_MS = 500;
 
 export function createConsole(print) {
@@ -68,6 +69,9 @@ export function createConsole(print) {
   add('r_playershadows', 1, 'Players and hostages cast shadows along the sun where they stand in sunlight', 0, 1);
   add('r_lod_dist', 520, 'Players farther than this (units) draw as their coarse models (0: always; the models pass is triangle-bound)', 0, 100000, 0);
   add('cl_showhitboxes', 0, 'Draw other players as their hit boxes instead of their models', 0, 1);
+  // Practice marks (client/gl/practice.js): the demo mode and the sandbox only.
+  add('sv_grenade_trajectory', 1, 'The demo and the sandbox: every grenade\'s arc as a line, kept 3 s after it lands', 0, 1);
+  add('sv_showimpacts', 1, 'The demo and the sandbox: your bullets\' impacts as small red boxes for 2 s', 0, 1);
   // Radar (client/radar.js).
   add('cl_radar_scale', 0.7, 'Radar zoom (smaller: more of the map)', 0.25, 1);
   add('cl_radar_rotate', 1, 'The radar turns with the view', 0, 1);

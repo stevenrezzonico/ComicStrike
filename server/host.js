@@ -141,6 +141,11 @@ export class Host {
       con.out(ctx, 'bots killed');
     }, 'bot_kill [name|all]: kills bots');
 
+    con.command('bot_place', (a, ctx) => {
+      const r = this.rules();
+      if (!r.cheats && !r.demo) return con.out(ctx, 'bot_place: needs sv_cheats 1 (or the demo mode)');
+      con.out(ctx, this.game.placeBots(ctx && ctx.client, (a[1] || '').toLowerCase() === 'all'));
+    }, 'bot_place [all]: puts the next bot (all: every bot, in a row) where you look, facing you (bot_stop 1 keeps them there)');
     con.command('map', (a, ctx) => this.changeLevel(a[1], ctx), 'map <name>: switches to another map');
     con.command('changelevel', (a, ctx) => this.changeLevel(a[1], ctx), 'changelevel <name>: same as map');
     con.command('maps', (_a, ctx) => con.out(ctx, opts.listMaps().join('\n')), 'Lists the maps on the server');
@@ -351,7 +356,7 @@ export class Host {
     this.rconGuard.delete(key);
     console.log(`rcon from player ${c.id} "${c.name}": ${command}`);
     const out = [];
-    this.con.exec(command, { print: (s) => out.push(s), source: 'rcon' });
+    this.con.exec(command, { print: (s) => out.push(s), source: 'rcon', client: c });
     return out.join('\n');
   }
 

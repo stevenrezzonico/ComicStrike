@@ -12,7 +12,7 @@ import { CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, HULL_
 import { Breakables, EXPLODE_RANGE, blastDamage } from '../shared/breakables.js';
 import { Doors, MapLogic, Killables, BLAST } from '../shared/doors.js';
 import { touched, touchedCount } from '../shared/pmove.js';
-import { PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, FL_ONGROUND, FL_DUCKING, eyeOffset } from '../shared/pmove.js';
+import { PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, eyeOffset } from '../shared/pmove.js';
 import {
   ShotList, WEAPONS, WEAPON_ID, giveWeapon, silenced, canCarryGrenade, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4,
   WEV_PLANTED, WEV_DEFUSED, WEV_DROP, WEV_FIRE, WEV_MELEE, WEV_THROW, WS_RELOAD_END, WS_ACTION, WS_THROWN, ACTION_PLANT,
@@ -71,6 +71,7 @@ const ARMOURY_ITEMS = [
 ];
 const DEMO_RESTOCK = 2; // the demo: seconds from a bomb going off or being defused to the next one
 const DEMO_HEAL = 2; // the demo: seconds from the last hurt to full health
+const BOT_PLACE_GAP = 40; // bot_place all: units between the bots in a row
 const CHAT_FLOOD_TICKS = Math.round(0.66 * TICK_RATE); // least gap between a player's chat lines (CS:GO's flood check: ~0.75 s)
 
 // Radar spotting (approx. of CS:GO's: how often, how wide a view, how long a shot shows).
@@ -240,6 +241,8 @@ export class Game {
     this.logic = new MapLogic(bsp, this.doors, this.world, this.breakables, this.killables);
     this.logic.onBreak = (slot, act) => this.breakSlot(slot, act);
     this.doorBodies = []; // living players' PlayerStates, refilled every tick
+    this.placeTrace = new Trace(); // bot_place
+    this.placeNext = -1;
     this.doorClients = []; // the clients they belong to (a blocking mover hurts them)
     this.doorActs = []; // and where they stand ({ x, y, z, yaw }: trigger activators)
     this.fireTarget = (name, act, kill = '', src = -1) => this.logic.fireAt(this.tick, name, act, 0, src, kill);
@@ -1184,8 +1187,16 @@ export class Game {
     } else if (name === 'takeover') { // E while watching a teammate bot
       const err = this.takeOver(c, +args[1]);
       if (err) this.print(c, `takeover: ${err}`);
-    } else if (name === 'setpos') { // CS:GO: setpos x y z puts the feet there (sv_cheats)
-      if (!this.rules.cheats) {
+    } else if (name === 'noclip') { // CS:GO: fly through walls (sv_cheats; the demo allows it)
+      if (!this.rules.cheats && !this.rules.demo) {
+        this.print(c, `Can't use cheat command noclip in multiplayer, unless the server has sv_cheats set to 1.`);
+      } else if (c.alive) {
+        const i = c.player.ps.i;
+        i[PS_FLAGS] ^= FL_NOCLIP;
+        this.print(c, `noclip ${i[PS_FLAGS] & FL_NOCLIP ? 'ON' : 'OFF'}`);
+      }
+    } else if (name === 'setpos') { // CS:GO: setpos x y z puts the feet there (sv_cheats; the demo allows it)
+      if (!this.rules.cheats && !this.rules.demo) {
         this.print(c, `Can't use cheat command setpos in multiplayer, unless the server has sv_cheats set to 1.`);
       } else if (c.alive && args.length >= 4 && args.slice(1, 4).every((v) => Number.isFinite(+v))) {
         const f = c.player.ps.f;
@@ -1466,11 +1477,48 @@ export class Game {
     clearBodies(w);
     w.solidTeam = this.rules.solidTeammates || this.rules.teammatesAreEnemies;
     for (const c of this.clients) {
-      if (!c || !c.joined || !c.alive || c.controlled) continue;
+      if (!c || !c.joined || !c.alive || c.controlled || (c.player.ps.i[PS_FLAGS] & FL_NOCLIP)) continue;
       const f = c.player.ps.f, ducked = (c.player.ps.i[PS_FLAGS] & FL_DUCKING) !== 0;
       setBody(w, c.id, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2], ducked ? 18 : 36,
         f[PS_VEL], f[PS_VEL + 1], f[PS_VEL + 2], c.team);
     }
+  }
+
+  // CS:GO's bot_place: bots put where client c looks (the floor under the first thing the
+  // view meets, backed off a little), facing c; `all`: every bot, in a row across the view
+  // (BOT_PLACE_GAP apart), else the next one in turn. Returns how many, or an error.
+  placeBots(c, all) {
+    if (!c || !c.joined) return 'bot_place: run it as a player (the practice console, or rcon)';
+    const bots = this.bots.list.filter((b) => b.c.alive && !b.c.controlled);
+    if (!bots.length) return 'bot_place: no living bots';
+    const f = c.player.ps.f, eye = f[PS_ORIGIN + 2] + eyeOffset(c.player.ps);
+    const p = c.pitch * Math.PI / 180, y = c.yaw * Math.PI / 180;
+    const dx = Math.cos(p) * Math.cos(y), dy = Math.cos(p) * Math.sin(y), dz = -Math.sin(p);
+    const tr = this.placeTrace;
+    traceHull(this.world, HULL_POINT, f[PS_ORIGIN], f[PS_ORIGIN + 1], eye, f[PS_ORIGIN] + dx * 8192,
+      f[PS_ORIGIN + 1] + dy * 8192, eye + dz * 8192, tr);
+    const back = Math.min(24, tr.fraction * 8192);
+    const hx = tr.endx - dx * back, hy = tr.endy - dy * back, hz = tr.endz - dz * back;
+    const which = all ? bots : [bots[(this.placeNext = (this.placeNext + 1) % bots.length)]];
+    const rx = Math.sin(y), ry = -Math.cos(y); // to the right of the view
+    let placed = 0;
+    which.forEach((b, k) => {
+      const off = (k - (which.length - 1) / 2) * BOT_PLACE_GAP;
+      const x = hx + rx * off, yy = hy + ry * off;
+      // Down onto the floor, standing (the hull's center 36 over the feet).
+      traceHull(this.world, HULL_STAND, x, yy, hz + 36, x, yy, hz - 2048, tr);
+      if (tr.startsolid || tr.fraction === 1) return;
+      const bf = b.c.player.ps.f;
+      bf[PS_ORIGIN] = tr.endx;
+      bf[PS_ORIGIN + 1] = tr.endy;
+      bf[PS_ORIGIN + 2] = tr.endz;
+      bf[PS_VEL] = bf[PS_VEL + 1] = bf[PS_VEL + 2] = 0;
+      b.c.player.ps.i[PS_FLAGS] &= ~FL_DUCKING;
+      b.yaw = Math.atan2(f[PS_ORIGIN + 1] - tr.endy, f[PS_ORIGIN] - tr.endx) * 180 / Math.PI;
+      b.pitch = 0;
+      placed++;
+    });
+    return placed ? `placed ${placed} bot(s)` : 'bot_place: no room there';
   }
 
   // Where client c stands and looks (door swing side, trigger activator).
