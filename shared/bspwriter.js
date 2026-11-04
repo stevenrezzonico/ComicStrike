@@ -6,7 +6,8 @@
 //    cell (a convex polyhedron) is inside a brush (solid) or outside all of them (empty);
 //    hulls 1-3 use the brushes grown by the player hulls (every plane moved out by the
 //    hull's reach along its normal, plus axial bevel planes, as GoldSrc's compilers do),
-//    so collision is GoldSrc's own;
+//    so collision is GoldSrc's own; hull 2 (GoldSrc's large monsters: nothing here or in
+//    CS uses it) points at hull 1's tree instead of a third tree of clipnodes of its own;
 //  * faces are the brushes' sides pushed down the hull 0 tree: the parts that end in open
 //    space are kept, hung on the node whose plane they lie on (GoldSrc's light point
 //    lookup expects that), merged back where neighbors make a convex polygon, wound
@@ -513,11 +514,13 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
   }
 
   // Brushes that cast shadows (world coordinates, with bounds): solid ones but the sky,
-  // glass, water, triggers and ladders.
+  // glass, water, triggers and ladders, and brush entities drawn see-through (a rendermode
+  // with renderamt under 255: glass walls).
   const occluders = [];
   models.forEach((m, i) => {
     const e = i === 0 ? ents[0] : ents.find((x) => x.model === `*${i}`);
     if (SHADOWLESS.has(e.classname) || (e.classname === 'func_breakable' && e.material === '0')) return;
+    if (i && ['1', '2', '3', '5'].includes(String(e.rendermode)) && +(e.renderamt ?? 255) < 255) return;
     for (const br of m.brushes) {
       if (br.sky) continue;
       const ps = brushPlanes(br), verts = brushPolygons(ps).flat();
@@ -808,6 +811,10 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
     const contents = model.contents ?? CONTENTS_SOLID;
     let bounds0 = null;
     for (let h = 0; h < 4; h++) {
+      if (h === 2) { // the large hull: the standing one's tree (a third of the clipnodes saved)
+        heads.push(heads[1]);
+        continue;
+      }
       const brushes = model.brushes.map((br, i) => hullBrush(brushPlanes(br), h, model.origin, contents, i)).filter(Boolean);
       if (!brushes.length) throw new Error(`model *${mi} has no volume`);
       const root = boundsOf(brushes.flatMap((b) => b.verts));

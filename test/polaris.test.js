@@ -4,7 +4,8 @@ import { CollisionWorld, hullFits, HULL_STAND } from '../shared/trace.js';
 import { Nav } from '../shared/nav.js';
 import { readProject, checkProject, projectIn } from '../client/editor/project.js';
 
-// cs_polaris is a hostage map made from an office floor plan (a script kept out of the
+// cs_polaris is a hostage map made from an office building's floor plans, its ground and
+// first floors 192 apart, joined by two stairwells and two lifts (a script kept out of the
 // repository wrote its editor project and compiled it), so here are the project and the
 // map, the project appended to the map like the editor's exports.
 const projectText = Deno.readTextFileSync(new URL('../maps/cs_polaris.cmap.json', import.meta.url));
@@ -20,10 +21,14 @@ Deno.test('cs_polaris: the project reads clean, and the map carries it', async (
   assert.deepEqual(await projectIn(bytes), JSON.parse(projectText), 'the editor opens the map as its project');
 });
 
+const FH = 192;
+
 Deno.test('cs_polaris: spawns, hostages and the rescue zone; spawns stand free on the floor', () => {
   const t = at('info_player_deathmatch'), ct = at('info_player_start'), hostages = at('hostage_entity');
   assert.equal(t.length, 10);
   assert.equal(ct.length, 10);
+  assert.ok(ct.every(([, , z]) => z === 37) && t.every(([, , z]) => z === FH + 37), 'CTs downstairs, Ts upstairs');
+  assert.ok(hostages.some(([, , z]) => z === 0) && hostages.some(([, , z]) => z === FH), 'hostages on both floors');
   assert.ok(hostages.length >= 4);
   assert.equal(bsp.entities.filter((e) => e.classname === 'func_hostage_rescue').length, 1);
   for (const [x, y, z] of [...t, ...ct]) {
@@ -32,7 +37,18 @@ Deno.test('cs_polaris: spawns, hostages and the rescue zone; spawns stand free o
   }
 });
 
-Deno.test('cs_polaris: the bots find a way from either spawn to every hostage', () => {
+Deno.test('cs_polaris: two lifts between the floors, each sent by a button on either floor', () => {
+  const plats = bsp.entities.filter((e) => e.classname === 'func_plat');
+  assert.equal(plats.length, 2);
+  for (const p of plats) {
+    assert.equal(p.spawnflags, '1', 'a toggle plat');
+    assert.equal(+p.height, FH);
+    const buttons = bsp.entities.filter((e) => e.classname === 'func_button' && e.target === p.targetname);
+    assert.equal(buttons.length, 2, p.targetname);
+  }
+});
+
+Deno.test('cs_polaris: the bots find a way from the CT spawn up to the T spawn and every hostage', () => {
   const nav = new Nav(bsp, world);
   const from = nav.nodeAt(...at('info_player_start')[0].map((v, k) => (k === 2 ? v - 36 : v)));
   assert.ok(from >= 0);

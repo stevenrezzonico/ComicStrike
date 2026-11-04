@@ -92,6 +92,8 @@ export const KINDS = {
   func_bomb_target: { label: 'Bomb site', trigger: true, help: 'the first is site A, the second B' },
   func_hostage_rescue: { label: 'Rescue zone', trigger: true },
   func_illusionary: { label: 'Decoration', help: 'drawn but not solid: players and bullets pass through it' },
+  func_wall: { label: 'Solid entity', keys: { rendermode: '2', renderamt: '90' },
+    help: 'solid like a wall but an entity of its own: with rendermode 2 and renderamt under 255 it is drawn see-through (glass) and lets the light through' },
 };
 
 // Point kinds: label, short mark and color for the 2D views; lamps (`lamp`: a light baked

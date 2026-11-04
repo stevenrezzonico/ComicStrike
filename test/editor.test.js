@@ -67,7 +67,7 @@ Deno.test('a game with bots runs on an editor map', () => {
   for (const c of host.game.clients) if (c && c.alive) assert.ok(c.player.ps.f[2] > 30 && c.player.ps.f[2] < 60, 'bots on the floor');
 });
 
-Deno.test('every kind compiles into its entity: doors, button, breakable, water, ladder, zones, decoration', () => {
+Deno.test('every kind compiles into its entity: doors, button, breakable, water, ladder, zones, decoration, glass wall', () => {
   const p = newProject();
   let id = 1000;
   const add = (kind, b, tex = { top: 'crate08', bottom: 'crate08', side: 'crate08' }, keys = {}) =>
@@ -82,6 +82,7 @@ Deno.test('every kind compiles into its entity: doors, button, breakable, water,
   add('func_conveyor', [0, 500, 0, 300, 560, 8], { top: 'scroll_conv', bottom: null, side: 'steel' });
   add('func_hostage_rescue', [700, -700, 0, 960, -500, 128], { top: null, bottom: null, side: null });
   add('func_illusionary', [-700, -700, 120, -600, -600, 136]);
+  add('func_wall', [600, 0, 0, 604, 128, 128], { top: 'glass_med', bottom: 'glass_med', side: 'glass_med' });
   add('func_rot_button', [-260, 340, 36, -256, 364, 60], undefined, { target: 'gate' });
   add('func_plat', [100, -200, 112, 180, -120, 128]);
   add('momentary_door', [-200, 500, 0, -184, 628, 128], undefined, { targetname: 'hatch' });
@@ -94,6 +95,8 @@ Deno.test('every kind compiles into its entity: doors, button, breakable, water,
   const rot = bsp.entities.find((e) => e.classname === 'func_door_rotating');
   assert.equal(rot.origin, hingeOf(p.brushes.find((b) => b.kind === 'func_door_rotating')).join(' '), 'hinged at its end');
   assert.equal(rot.hinge, undefined, 'the editor\'s own key stays out');
+  const glass = bsp.entities.find((e) => e.classname === 'func_wall');
+  assert.equal(`${glass.rendermode} ${glass.renderamt}`, '2 90', 'a glass wall, see-through');
   const valve = bsp.entities.find((e) => e.classname === 'func_rot_button');
   assert.equal(valve.origin, '-258 352 48', 'a valve turns about its middle');
   const game = quiet(() => new Game('my_map', bsp, { rounds: false }));
