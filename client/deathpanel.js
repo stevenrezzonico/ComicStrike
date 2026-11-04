@@ -43,13 +43,16 @@ export class DeathPanel {
   }
 
   // Who killed us: their name (null: the world or ourselves), the weapon (WEAPONS entry
-  // or null), a headshot; self: our own doing.
-  killed(name, weapon, headshot, self) {
+  // or null), a headshot; self: our own doing; hp: the health the killer had left (CS:GO's
+  // freeze cam), -1 unknown.
+  killed(name, weapon, headshot, self, hp = -1) {
     this.word.textContent = wordFor(weapon, headshot, self);
     this.sub.textContent = headshot && weapon && !weapon.c4 ? 'HEADSHOT' : '';
     this.caption.textContent = weapon?.c4 ? 'The bomb went off.' : self || !name ? 'You took yourself out.'
       : `Taken down by ${name}`;
-    this.how.textContent = weapon && !weapon.c4 && !self ? `${weapon.label}${headshot ? ', one to the head' : ''}` : '';
+    const left = !self && name && hp > 0 ? `${weapon && !weapon.c4 ? ' · ' : ''}${hp} HP left` : '';
+    this.how.textContent = (weapon && !weapon.c4 && !self ? `${weapon.label}${headshot ? ', one to the head' : ''}` : '') +
+      left;
   }
 
   // Every frame: the panel shows while `on` (dead, before spectating).

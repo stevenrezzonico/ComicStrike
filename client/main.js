@@ -44,7 +44,7 @@ import {
 import { Grenades, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE, FX_BLAST } from '../shared/grenades.js';
 import { HITGROUP_CHEST, HITGROUP_LEGS } from '../shared/hitgroups.js';
 import {
-  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, E_ACTIVE, E_X,
+  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, OWN_HURT, E_ACTIVE, E_X,
   CHAT_CONSOLE, CHAT_TEAM, CHAT_MAX,
   E_Y, E_Z, E_PITCH, E_YAW,
   E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw, PROTOCOL_VERSION,
@@ -78,6 +78,7 @@ import { SoundScape, gunProfile } from './soundscape.js';
 import { InkWords } from './inkwords.js';
 import { Spectator, SPEC_EYES, SPEC_ROAM, SPEC_DELAY } from './spectate.js';
 import { DeathPanel } from './deathpanel.js';
+import { HurtIndicator } from './hurtdir.js';
 import { ConsoleWindow } from './console.js';
 import { Chat } from './chat.js';
 import { TouchControls, altLabel } from './touch.js';
@@ -138,6 +139,8 @@ models.pass = PASS.MODELS; // its GPU time apart from the effects' (cl_showfps 3
 const overlays = [decals, debris, players, models, fx];
 const words = new InkWords(document.getElementById('fx'));
 const deathPanel = new DeathPanel(document.getElementById('deathpanel'));
+const hurtDir = new HurtIndicator(document.getElementById('hurtdir'));
+let hurtSerial = -1; // the own block's last hit seen (OWN_HURT)
 const weaponView = new WeaponView(renderer.gl, FOV_Y, cv, guns);
 const input = new Input(canvas);
 const hud = new Hud((item) => { // a buy from the menu closes it
@@ -201,9 +204,10 @@ const selfTargets = {
   feet: (_i, out) => selfPoint(out, -feetOffset(ps.i[PS_FLAGS])),
   pitch: () => angles[0],
   yaw: () => angles[1],
-  hurt: (_i, damage, weapon) => {
+  hurt: (_i, damage, weapon, _owner, _team, x, y) => {
     const w = WEAPONS[weapon];
     applyDamage(player, damage, w, w.grenade === 'fire' ? HITGROUP_LEGS : HITGROUP_CHEST);
+    hurtDir.add(x, y, performance.now() / 1000);
     if (player.health <= 0) offlineRespawn();
   },
   blast: (x, y, z, damage, radius) => sandboxBlastBreakables(x, y, z, damage, radius),
@@ -755,6 +759,10 @@ function applySnapshot() {
   player.defuser = (own.flags & OWN_DEFUSER) !== 0; // before any replay: it sets the defuse time
   player.carrying = (own.flags & OWN_CARRYING) !== 0; // and this the speed
   if (own.flags & OWN_IMMUNE && !net.playback) hud.flash('Spawn protection', 250, performance.now()); // until we shoot
+  if (own.flags & OWN_HURT && own.hurtSerial !== hurtSerial) { // a hit from somewhere: an arc toward it
+    hurtSerial = own.hurtSerial;
+    if (!net.playback) hurtDir.add(own.hurtFrom[0], own.hurtFrom[1], performance.now() / 1000);
+  }
 
   if (net.playback) { // a demo: we watch, the recorder is a row of their own (client/demo.js)
     player.spawnCount = own.spawnCount;
@@ -1039,7 +1047,10 @@ function addKill(killer, victim, weapon, headshot) {
   while (killfeed.children.length > 5) killfeed.firstChild.remove();
   setTimeout(() => row.remove(), KILLFEED_MS);
   if (victim === selfId) {
-    deathPanel.killed(killer === victim ? null : name(killer), WEAPONS[weapon] || null, headshot, killer === victim);
+    // CS:GO's freeze cam shows what the killer had left: their row in the newest snapshot
+    const hp = killer !== victim && killer < MAX_PLAYERS && net.latest >= 0
+      ? net.ring.ents[net.ring.row(net.latest, killer) + E_HEALTH] : -1;
+    deathPanel.killed(killer === victim ? null : name(killer), WEAPONS[weapon] || null, headshot, killer === victim, hp);
     deathNotice.textContent = WEAPONS[weapon]?.c4 ? 'Killed by the bomb'
       : killer === victim ? 'You died' : `Killed by ${name(killer)}${headshot ? ' (headshot)' : ''}`;
   }
@@ -1659,6 +1670,7 @@ function draw(now, alpha, dt) {
   renderer.composite();
   words.enabled = cv.cl_comicwords.bool && cv.cl_drawhud.bool;
   words.update(now);
+  hurtDir.update(now / 1000, eye[0], eye[1], angles[1], !dead && !spectating && !preview);
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
   else showFlash(flash.left, flash.total);
   renderer.timer.mark(PASS.OVER);
@@ -2245,6 +2257,7 @@ function resetSession() {
   jingleCues.reset();
   lastOwnTeam = 0;
   words.clear();
+  hurtDir.clear();
   blasts.clear();
   chat.clear();
   deathPanel.show(false);

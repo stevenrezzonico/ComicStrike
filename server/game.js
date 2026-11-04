@@ -45,7 +45,7 @@ import {
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
   SHOT_BLOOD, writePrint, printChunks, writeChat, cleanChat, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC, writeReport, NO_MVP,
-  KILL_HEADSHOT, KILL_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
+  KILL_HEADSHOT, KILL_REPEAT_TICKS, HURT_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
   writeWelcome, writeReject, writeInfo, writeItems, writeGrenades, writeHostages, readCmds, writeSnapshot, quantizePitch,
   quantizeYaw,
   E_ACTIVE, E_X, E_Y, E_Z,
@@ -133,6 +133,13 @@ class Client {
     this.picking = -1; // hostage being picked up (use held), or -1
     this.pickEnd = 0; // server tick it is done
     this.useProgress = 0; // 0..1, sent in the own block
+    // The last damage taken from somewhere (a shooter's eye, a blast, the bomb), sent in the
+    // own block for a while after it for the hurt indicator: a count that changes with each
+    // hit, and the place it came from.
+    this.hurtSerial = 0;
+    this.hurtTick = -1e9;
+    this.hurtFrom = new Float32Array(3);
+    this.hurtRecent = false;
     // Last command run, repeated when one is lost.
     this.buttons = 0;
     this.pitch = 0;
@@ -345,7 +352,7 @@ export class Game {
       feet: (i, out) => origin(i, out, (p) => -feetOffset(p.ps.i[PS_FLAGS])),
       pitch: (i) => this.clients[i].pitch,
       yaw: (i) => this.clients[i].yaw,
-      hurt: (i, damage, weapon, owner, team) => this.grenadeHurt(this.clients[i], damage, weapon, owner, team),
+      hurt: (i, damage, weapon, owner, team, x, y, z) => this.grenadeHurt(this.clients[i], damage, weapon, owner, team, x, y, z),
       blast: (x, y, z, damage, radius, _weapon, owner) => this.blastBreakables(x, y, z, damage, radius, this.clients[owner] || null),
       flash: (i, seconds) => {
         const c = this.clients[i];
@@ -359,7 +366,7 @@ export class Game {
 
   // HE blasts and fires: friendly fire off (the thrower still hurts himself); HE as a
   // chest hit (armor helps), fire ignores armor.
-  grenadeHurt(victim, damage, weapon, ownerId, ownerTeam) {
+  grenadeHurt(victim, damage, weapon, ownerId, ownerTeam, x, y, z) {
     const owner = this.clients[ownerId];
     if (victim.team === ownerTeam && victim.id !== ownerId && !this.rules.teammatesAreEnemies) return;
     if (this.tick < victim.immuneUntil) return;
@@ -367,6 +374,7 @@ export class Game {
     const before = victim.player.health;
     applyDamage(victim.player, damage, w, w.grenade === 'fire' ? HITGROUP_LEGS : HITGROUP_CHEST);
     this.recordDamage(owner && owner.joined ? owner : null, victim, before);
+    if (x !== undefined) this.hurtFrom(victim, before, x, y, z);
     if (victim.player.health <= 0) this.kill(owner && owner.joined ? owner : victim, victim, weapon, false);
   }
 
@@ -379,6 +387,17 @@ export class Game {
     attacker.givenHits[victim.id] = Math.min(255, attacker.givenHits[victim.id] + 1);
     victim.taken[attacker.id] = Math.min(65535, victim.taken[attacker.id] + lost);
     victim.takenHits[attacker.id] = Math.min(255, victim.takenHits[attacker.id] + 1);
+  }
+
+  // Where the damage `victim` just took (health `before` it) came from, for its hurt
+  // indicator (CS:GO's red arcs round the crosshair).
+  hurtFrom(victim, before, x, y, z) {
+    if (victim.player.health >= before) return;
+    victim.hurtSerial = (victim.hurtSerial + 1) & 255;
+    victim.hurtTick = this.tick;
+    victim.hurtFrom[0] = x;
+    victim.hurtFrom[1] = y;
+    victim.hurtFrom[2] = z;
   }
 
   get playerCount() {
@@ -779,6 +798,8 @@ export class Game {
       const before = victim.player.health;
       applyDamage(victim.player, im.damage[i], w, im.group[i]);
       this.recordDamage(shooter, victim, before);
+      const sf = shooter.player.ps.f;
+      this.hurtFrom(victim, before, sf[PS_ORIGIN], sf[PS_ORIGIN + 1], sf[PS_ORIGIN + 2] + eyeOffset(shooter.player.ps));
       if (victim.player.health <= 0) this.kill(shooter, victim, weapon, im.group[i] === HITGROUP_HEAD);
     }
   }
@@ -1420,11 +1441,12 @@ export class Game {
   // Damage from the map itself (a crushing mover, an exploding breakable): armor as a
   // chest hit. `by`: the client whose shot set it off (the kill feed's killer), else the
   // victim's own doing.
-  hurtBy(c, damage, by, weapon) {
+  hurtBy(c, damage, by, weapon, x, y, z) {
     if (!c || !c.alive || this.tick < c.immuneUntil) return;
     const before = c.player.health;
     applyDamage(c.player, damage, BLAST, HITGROUP_CHEST);
     this.recordDamage(by && by.joined ? by : null, c, before);
+    if (x !== undefined) this.hurtFrom(c, before, x, y, z); // an explosion's (a crush has no side)
     if (c.player.health <= 0) this.kill(by && by.joined ? by : c, c, weapon, false);
   }
 
@@ -1457,7 +1479,7 @@ export class Game {
       if (d <= 0) continue;
       traceHull(this.world, HULL_POINT, x, y, z, px, py, pz, this.bombTrace);
       if (this.bombTrace.fraction < 1) continue;
-      this.hurtBy(c, d, by, 0);
+      this.hurtBy(c, d, by, 0, x, y, z);
     }
     this.blastBreakables(x, y, z, damage, radius, by);
   }
@@ -1735,6 +1757,7 @@ export class Game {
       const before = c.player.health;
       applyDamage(c.player, damage, c4, HITGROUP_CHEST);
       this.recordDamage(this.lastPlanter && this.lastPlanter.joined ? this.lastPlanter : null, c, before);
+      this.hurtFrom(c, before, b.x, b.y, b.z);
       if (c.player.health <= 0) this.kill(c, c, WEAPON_ID.c4, false);
     }
     // Breakables in reach shatter (approx.: the players' falloff is a gaussian over 3.5
@@ -1911,6 +1934,7 @@ export class Game {
     for (const c of this.clients) {
       if (!c || !c.joined || c.bot) continue;
       const base = c.ackSeq ? ring.find(c.ackSeq) : -1;
+      c.hurtRecent = this.tick - c.hurtTick < HURT_REPEAT_TICKS;
       c.session.send(writeSnapshot(c.writer(), ring, k, base, c.id, c, this.events, this.round, this.bomb, this.doors));
     }
   }

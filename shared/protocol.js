@@ -37,9 +37,11 @@
 //                        u8 bits (dir + 1 | sign < 0 << 2 | more << 3), f32 from, u32 t0,
 //                        [u8 leg, f32 goal if more: a train's leg, a momentary door's goal] },
 //            own player: u8 health, u8 armor (bit 7: helmet), u8 spawnCount, u8 team, f32 spawnYaw,
-//                        u16 money, u8 ownFlags (OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE),
-//                        u8 flash left, u8 flash length (1/32 s: flashbang blindness),
+//                        u16 money, u8 ownFlags (OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE,
+//                        OWN_HURT), u8 flash left, u8 flash length (1/32 s: flashbang blindness),
 //                        u8 use progress (0..255: picking up a hostage),
+//                        [u8 hurt serial, i16 x, y, z if OWN_HURT: where the last damage came
+//                        from, repeated for HURT_REPEAT_TICKS after it],
 //                        PlayerState bytes, WeaponState (full every time, for prediction:
 //                        a bitmask of the fields that are not +0, then those f64 values),
 //            u8 n, n x { u8 id, u8 fieldMask, changed fields } (other players, delta vs base),
@@ -58,7 +60,7 @@ import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 import { MAX_MOVERS } from './doors.js';
 
-export const PROTOCOL_VERSION = 17;
+export const PROTOCOL_VERSION = 18;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -99,6 +101,8 @@ export const OWN_CAN_BUY = 1;
 export const OWN_DEFUSER = 2;
 export const OWN_CARRYING = 4; // carrying a hostage (slower: the client predicts it)
 export const OWN_IMMUNE = 8; // our spawn protection is on (deathmatch)
+export const OWN_HURT = 16; // we took damage from somewhere lately: its place follows
+export const HURT_REPEAT_TICKS = 16; // how long the place is repeated (a lost snapshot loses nothing)
 const BROKEN_WORDS = 8; // 256-bit mask, one bit per breakable slot
 
 // --- Byte buffers ------------------------------------------------------------
@@ -844,10 +848,14 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
   w.f32v(own.spawnYaw);
   w.u16v(Math.min(Math.max(p.money, 0), 65535));
   w.u8v((own.canBuy ? OWN_CAN_BUY : 0) | (p.defuser ? OWN_DEFUSER : 0) | (p.carrying ? OWN_CARRYING : 0) |
-    (own.immune ? OWN_IMMUNE : 0));
+    (own.immune ? OWN_IMMUNE : 0) | (own.hurtRecent ? OWN_HURT : 0));
   w.u8v(Math.min(Math.max(Math.round((own.flashLeft || 0) * 32), 0), 255));
   w.u8v(Math.min(Math.max(Math.round((own.flashTotal || 0) * 32), 0), 255));
   w.u8v(Math.min(Math.max(Math.round((own.useProgress || 0) * 255), 0), 255));
+  if (own.hurtRecent) {
+    w.u8v(own.hurtSerial);
+    for (let i = 0; i < 3; i++) w.dv.setInt16((w.pos += 2) - 2, Math.min(Math.max(Math.round(own.hurtFrom[i]), -32768), 32767), true);
+  }
   w.bytes(p.psBytes);
   writeWeaponState(w, p.ws.f);
 
@@ -946,6 +954,8 @@ export class OwnState {
     this.flashLeft = 0; // seconds of flashbang blindness left
     this.flashTotal = 0; // and how long it lasts in all
     this.useProgress = 0; // 0..1: picking up a hostage
+    this.hurtSerial = -1; // with OWN_HURT: changes with each hit taken from somewhere
+    this.hurtFrom = new Float32Array(3); // and that place
     this.round = new RoundState();
     this.bomb = new BombState();
     this.movers = new MoverStates();
@@ -1021,6 +1031,13 @@ export function readSnapshot(r, ring, own, ev = null) {
   own.flashLeft = r.u8v() / 32;
   own.flashTotal = r.u8v() / 32;
   own.useProgress = r.u8v() / 255;
+  if (own.flags & OWN_HURT) {
+    own.hurtSerial = r.u8v();
+    for (let i = 0; i < 3; i++) {
+      own.hurtFrom[i] = r.dv.getInt16(r.pos, true);
+      r.pos += 2;
+    }
+  }
   r.bytesInto(own.ps);
   readWeaponState(r, own.wsF);
 

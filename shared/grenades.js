@@ -285,7 +285,7 @@ export class Grenades {
         if (d <= 0) continue;
         targets.center(i, v3);
         if (!this.visible(world, x, y, z + 1, v3)) continue;
-        targets.hurt(i, d, weapon, owner, team);
+        targets.hurt(i, d, weapon, owner, team, x, y, z);
       }
     } else if (kind === 'flash') {
       this.addEffect(FX_FLASH, weapon, owner, team, x, y, z);
@@ -339,7 +339,7 @@ export class Grenades {
       if (!targets.alive(i)) continue;
       targets.feet(i, v3);
       if (Math.hypot(v3[0] - x, v3[1] - y) > r || v3[2] < z - 24 || v3[2] > z + 48) continue;
-      targets.hurt(i, FIRE_DPS * BURN_TICKS * TICK_DT, this.fxWeapon[k], this.fxOwner[k], this.fxTeam[k]);
+      targets.hurt(i, FIRE_DPS * BURN_TICKS * TICK_DT, this.fxWeapon[k], this.fxOwner[k], this.fxTeam[k], x, y, z);
     }
   }
 }

@@ -1,12 +1,13 @@
 // The round's end (server/game.js): the MVP, the damage report (S2C_REPORT and CS:GO's
-// console lines) and the MVP counts in INFO. On de_playground, so no Valve map is needed.
+// console lines) and the MVP counts in INFO; and where damage came from, sent in the own
+// block for the hurt indicator. On de_playground, so no Valve map is needed.
 import assert from 'node:assert/strict';
 import { parseBSP } from '../shared/bsp.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { PHASE_LIVE, PHASE_OVER, END_ELIMINATION } from '../shared/economy.js';
 import {
   Writer, Reader, CmdRing, writeHello, writeCmds, S2C_PRINT, S2C_REPORT, S2C_INFO, S2C_SNAPSHOT, readReport, readInfo,
-  readSnapshot, SnapshotRing, OwnState, MAX_PLAYERS, NO_MVP,
+  readSnapshot, SnapshotRing, OwnState, MAX_PLAYERS, NO_MVP, OWN_HURT, HURT_REPEAT_TICKS,
 } from '../shared/protocol.js';
 import { WEAPON_ID } from '../shared/weapons.js';
 import { Host } from '../server/host.js';
@@ -40,11 +41,12 @@ function setup() {
       readInfo(rs[rs.length - 1], names, teams, kills, deaths, scores, mvps);
       return { names, mvps };
     };
-    c.lastRound = () => {
+    c.lastOwn = () => {
       const rs = of(S2C_SNAPSHOT), ring = new SnapshotRing(), own = new OwnState();
       readSnapshot(rs[rs.length - 1], ring, own);
-      return own.round;
+      return own;
     };
+    c.lastRound = () => c.lastOwn().round;
     return c;
   };
   const run = (ticks, players) => {
@@ -101,4 +103,31 @@ Deno.test('round end: the planter is MVP over a teammate with kills; a draw has 
   assert.equal(game.round.mvp, NO_MVP, 'the winners killed nobody');
   game.roundMvp(0, null);
   assert.equal(game.round.mvp, NO_MVP, 'a draw');
+});
+
+Deno.test('hurt indicator: the own block carries where the last damage came from, for a while', () => {
+  const { game, join, run } = setup();
+  const a = join('alice', TEAM_T), b = join('bob', TEAM_CT);
+  run(90, [a, b]);
+  assert.equal(b.lastOwn().flags & OWN_HURT, 0, 'nothing yet');
+  game.hurtBy(b, 20, a, 0, 100, 200, 50); // a map explosion at (100, 200, 50)
+  run(1, [a, b]);
+  let own = b.lastOwn();
+  assert.ok(own.flags & OWN_HURT);
+  assert.equal(own.hurtSerial, 1);
+  assert.deepEqual([...own.hurtFrom], [100, 200, 50]);
+  assert.equal(a.lastOwn().flags & OWN_HURT, 0, 'only the one hurt');
+  game.grenadeHurt(b, 12, WEAPON_ID.hegrenade, a.id, TEAM_T, -300.4, 40, 8); // an HE
+  game.hurtBy(b, 5, null, 0); // a crushing door: no side to show
+  run(1, [a, b]);
+  own = b.lastOwn();
+  assert.equal(own.hurtSerial, 2, 'the crush counts no hit');
+  assert.deepEqual([...own.hurtFrom], [-300, 40, 8]);
+  run(HURT_REPEAT_TICKS, [a, b]);
+  assert.equal(b.lastOwn().flags & OWN_HURT, 0, 'repeated for a while only');
+  const before = b.player.health;
+  game.grenadeHurt(b, 12, WEAPON_ID.hegrenade, b.id === 0 ? 1 : 0, TEAM_CT, 0, 0, 0); // a teammate's: no damage
+  assert.equal(b.player.health, before);
+  run(1, [a, b]);
+  assert.equal(b.lastOwn().flags & OWN_HURT, 0, 'no damage, no arc');
 });
