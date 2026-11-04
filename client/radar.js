@@ -26,6 +26,7 @@ const COLOR = {
 
 export class Radar {
   constructor(canvas, cv) {
+    this.pings = [];
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.cv = cv;
@@ -44,6 +45,7 @@ export class Radar {
 
   // A new map: its overview (an image per level) and bomb sites (A, B in entity order,
   // approx.).
+  // pings: [x, y, ...] of teammates' pings (client/callouts.js), set before draw.
   setMap(overview, bombSites) {
     this.overview = overview;
     this.images = overview.levels.map((l) => {
@@ -193,6 +195,20 @@ export class Radar {
       }
     }
     ctx.globalAlpha = 1;
+    // Teammates' pings: a yellow "!" in an ink ring.
+    for (let i = 0; i < this.pings.length; i += 2) {
+      if (!this.place(this.pings[i], this.pings[i + 1], true)) continue;
+      ctx.beginPath();
+      ctx.arc(this.sx, this.sy, r * 1.6, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffd23a';
+      ctx.fill();
+      ctx.lineWidth = r * 0.45;
+      ctx.strokeStyle = '#17130f';
+      ctx.stroke();
+      ctx.fillStyle = '#17130f';
+      ctx.fillRect(this.sx - r * 0.22, this.sy - r * 1.05, r * 0.44, r * 1.2);
+      ctx.fillRect(this.sx - r * 0.22, this.sy + r * 0.4, r * 0.44, r * 0.44);
+    }
     // Us (or whoever we watch): an arrow along the view (straight up when the radar turns).
     if (this.place(selfX, selfY, true)) {
       this.arrow(r * 1.5, yaw, team === TEAM_CT ? COLOR[TEAM_CT] : team === TEAM_T ? COLOR[TEAM_T] : '#f2ecd8');

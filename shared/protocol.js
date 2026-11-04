@@ -19,8 +19,10 @@
 //   REJECT   u8 type, str reason
 //   PRINT    u8 type, lstr text (console output: rcon replies, server messages)
 //   CHAT     u8 type, u8 sender (a player id, CHAT_CONSOLE for the server console), u8 flags
-//            (CHAT_TEAM: team chat, CHAT_DEAD: the sender was dead, CHAT_SPEC: a spectator),
-//            lstr text (a say / say_team line the server chose to deliver to this client)
+//            (CHAT_TEAM: team chat, CHAT_DEAD: the sender was dead, CHAT_SPEC: a spectator,
+//            CHAT_RADIO: a radio command's line, RADIO), lstr text (a say / say_team line or a
+//            radio line the server chose to deliver to this client)
+//   PING     u8 type, u8 sender, i16 x, y, z (a teammate marked that place: player_ping)
 //   CHANGELEVEL u8 type, str map (the server is switching maps: reconnect)
 //   INFO     u8 type, u8 n, n x { u8 id, u8 team, u16 kills, u16 deaths, u16 score, u8 mvps, str name }
 //            (every player, resent periodically and on changes)
@@ -60,7 +62,7 @@ import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 import { MAX_MOVERS } from './doors.js';
 
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 19;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -82,6 +84,7 @@ export const S2C_GRENADES = 17;
 export const S2C_HOSTAGES = 18;
 export const S2C_CHAT = 19;
 export const S2C_REPORT = 20; // the round's damage report
+export const S2C_PING = 21; // a teammate's ping
 export const NO_MVP = 255;
 export const MAX_TEXT = 900; // bytes of console text per datagram
 export const CHAT_MAX = 127; // characters of one chat line (CS:GO's)
@@ -89,6 +92,20 @@ export const CHAT_CONSOLE = 255; // CHAT sender: the server console's say
 export const CHAT_TEAM = 1;
 export const CHAT_DEAD = 2;
 export const CHAT_SPEC = 4;
+export const CHAT_RADIO = 8;
+// CS:GO's radio commands (the console command, the line), menu by menu: radio1 (Z) the
+// first six, radio2 (X) the next six, radio3 (C) the rest.
+export const RADIO = [
+  ['coverme', 'Cover me!'], ['takepoint', 'You take the point.'], ['holdpos', 'Hold this position.'],
+  ['regroup', 'Regroup, team!'], ['followme', 'Follow me.'], ['takingfire', 'Taking fire, need assistance!'],
+  ['go', 'Go, go, go!'], ['fallback', 'Fall back!'], ['sticktog', 'Stick together, team.'],
+  ['getinpos', 'Get in position and wait for my go.'], ['stormfront', 'Storm the front!'], ['report', 'Report in, team.'],
+  ['roger', 'Roger that.'], ['enemyspot', 'Enemy spotted.'], ['needbackup', 'Need backup.'], ['sectorclear', 'Sector clear.'],
+  ['inposition', "I'm in position."], ['reportingin', 'Reporting in.'], ['getout', "She's gonna blow!"],
+  ['negative', 'Negative.'], ['enemydown', 'Enemy down.'],
+];
+export const RADIO_MENUS = [[0, 6], [6, 12], [12, 21]];
+export const radioIndex = (cmd) => RADIO.findIndex((r) => r[0] === cmd);
 
 export const SHOT_IMPACT = 0; // bullet hit the world
 export const SHOT_BLOOD = 1; // bullet hit a player
@@ -474,6 +491,27 @@ export function writeChat(w, sender, flags, text) {
   w.u8v(flags);
   w.lstr(text);
   return w.view();
+}
+
+export function writePing(w, sender, x, y, z) {
+  w.reset();
+  w.u8v(S2C_PING);
+  w.u8v(sender);
+  for (const v of [x, y, z]) {
+    w.dv.setInt16(w.pos, Math.min(Math.max(Math.round(v), -32768), 32767), true);
+    w.pos += 2;
+  }
+  return w.view();
+}
+
+// After the type byte.
+export function readPing(r) {
+  const sender = r.u8v(), p = [0, 0, 0];
+  for (let i = 0; i < 3; i++) {
+    p[i] = r.dv.getInt16(r.pos, true);
+    r.pos += 2;
+  }
+  return { sender, x: p[0], y: p[1], z: p[2] };
 }
 
 // After the type byte.

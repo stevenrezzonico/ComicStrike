@@ -128,6 +128,20 @@
   #killfeed .ct { color: var(--ct); }
   #killfeed .hs { background: var(--yellow); color: var(--ink); padding: 1px 5px 0; font-weight: 400; }
   /* Chat: paper strips above the HP, the newest at the bottom; the typing line under them. */
+  /* Radio balloons and pings (client/callouts.js), the radio menu (Z / X / C). */
+  #callouts { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  #callouts .balloon { position: absolute; left: 0; top: 0; max-width: 220px; padding: 4px 9px; white-space: nowrap;
+    background: var(--paper-hi); border: 2px solid var(--ink); border-radius: 12px; font: 700 14px/1.2 var(--body);
+    color: var(--ink); margin: -46px 0 0 -40px; box-shadow: 2px 2px 0 var(--ink); }
+  #callouts .balloon::after { content: ''; position: absolute; left: 30px; bottom: -9px; width: 12px; height: 12px;
+    background: var(--paper-hi); border: solid var(--ink); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+  #callouts .pingmark { position: absolute; left: 0; top: 0; width: 30px; height: 30px; margin: -15px 0 0 -15px;
+    border-radius: 50%; background: var(--yellow); border: 3px solid var(--ink); color: var(--ink); text-align: center;
+    font: 900 22px/24px var(--display); box-shadow: 2px 2px 0 var(--ink); }
+  #radiomenu { position: fixed; left: 20px; top: 40%; display: none; padding: 8px 12px; background: var(--paper);
+    border: 3px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); font: 700 15px/1.6 var(--body); color: var(--ink);
+    pointer-events: none; }
+  body.dying #callouts, body.dying #radiomenu { display: none !important; }
   #chat { position: fixed; left: 20px; bottom: 108px; display: flex; flex-direction: column; align-items: flex-start;
     gap: 4px; max-width: min(560px, 60vw); font: 16px/1.3 var(--body); pointer-events: none; }
   #chat div { padding: 3px 9px 2px; background: var(--paper); color: var(--ink); border: 2px solid var(--ink);
@@ -269,7 +283,7 @@
   body.spectator #hud-money, body.spectator #hud-bomb, body.nostats .hud, body.dm #hud-money { display: none; }
   #menu .menu-teams button.spec { color: #6d665c; }
   body.nohud .hud, body.nohud #hud-money, body.nohud #hud-bomb, body.nohud #roundbar, body.nohud #killfeed,
-  body.nohud #fx, body.nohud #chat { display: none; }
+  body.nohud #fx, body.nohud #chat, body.nohud #callouts, body.nohud #radiomenu { display: none; }
   /* Death and spectator notice: a caption box. */
   #death {
     position: fixed; left: 50%; top: 30%; transform: translateX(-50%) rotate(-1deg); display: none; max-width: 80vw;
@@ -513,6 +527,8 @@
 <canvas id="radar"></canvas>
 <pre id="debug"></pre>
 <div id="killfeed"></div>
+<div id="callouts"></div>
+<div id="radiomenu"></div>
 <div id="chat"></div>
 <div id="chatline"></div>
 <div id="roundbar"></div>

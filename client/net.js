@@ -4,7 +4,7 @@
 
 import {
   MAX_PLAYERS, Writer, Reader, SnapshotRing, OwnState, EventList, writeHello, writeCmds, readWelcome, readSnapshot,
-  readInfo, readItems, readGrenades, readHostages, readChat, readReport, writeBuy, writeCommand, S2C_WELCOME, S2C_SNAPSHOT,
+  readInfo, readItems, readGrenades, readHostages, readChat, readReport, readPing, S2C_PING, writeBuy, writeCommand, S2C_WELCOME, S2C_SNAPSHOT,
   S2C_REJECT, S2C_INFO, S2C_PRINT, S2C_CHANGELEVEL, S2C_ITEMS, S2C_GRENADES, S2C_HOSTAGES, S2C_CHAT, S2C_REPORT, C2S_CMDS,
   C2S_BYE,
 } from '../shared/protocol.js';
@@ -59,6 +59,7 @@ export class NetClient {
     this.cmdId = 0;
     this.prints = []; // console text from the server, taken by the game loop
     this.chats = []; // chat lines { sender, flags, text } (S2C_CHAT), taken the same way
+    this.pings = []; // teammates' pings { sender, x, y, z } (S2C_PING), likewise
     this.items = new Items(); // weapons on the ground (S2C_ITEMS)
     this.itemsVersion = 0; // bumps on every items message
     this.grenades = new Grenades(); // newest grenade lists (S2C_GRENADES)
@@ -322,6 +323,8 @@ export class NetClient {
         this.prints.push(r.lstr());
       } else if (type === S2C_CHAT) {
         this.chats.push(readChat(r));
+      } else if (type === S2C_PING) {
+        this.pings.push(readPing(r));
       } else if (type === S2C_CHANGELEVEL) {
         this.changelevel = r.str();
       } else if (type === S2C_HOSTAGES) {

@@ -45,7 +45,7 @@ import { Grenades, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE, FX_BLAST } fro
 import { HITGROUP_CHEST, HITGROUP_LEGS } from '../shared/hitgroups.js';
 import {
   MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, OWN_HURT, E_ACTIVE, E_X,
-  CHAT_CONSOLE, CHAT_TEAM, CHAT_MAX,
+  CHAT_CONSOLE, CHAT_TEAM, CHAT_MAX, CHAT_RADIO, RADIO,
   E_Y, E_Z, E_PITCH, E_YAW,
   E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw, dequantizePitch, PROTOCOL_VERSION,
 } from '../shared/protocol.js';
@@ -80,6 +80,7 @@ import { InkWords } from './inkwords.js';
 import { Spectator, SPEC_EYES, SPEC_ROAM, SPEC_DELAY } from './spectate.js';
 import { DeathPanel } from './deathpanel.js';
 import { HurtIndicator } from './hurtdir.js';
+import { Callouts } from './callouts.js';
 import { ConsoleWindow } from './console.js';
 import { Chat } from './chat.js';
 import { TouchControls, altLabel } from './touch.js';
@@ -141,6 +142,18 @@ const overlays = [decals, debris, players, models, fx];
 const words = new InkWords(document.getElementById('fx'));
 const deathPanel = new DeathPanel(document.getElementById('deathpanel'));
 const hurtDir = new HurtIndicator(document.getElementById('hurtdir'));
+const callouts = new Callouts(document.getElementById('callouts'), document.getElementById('radiomenu'));
+const radarPings = [];
+// Where a balloon goes over player id: above the head (not ours, not the dead).
+const headOf = (id, out) => {
+  if (id === selfId || id < 0) return false;
+  const r = id * E_FIELDS;
+  if (!interp[r + E_ACTIVE] || interp[r + E_HEALTH] <= 0) return false;
+  out.x = interp[r + E_X];
+  out.y = interp[r + E_Y];
+  out.z = interp[r + E_Z] + 54;
+  return true;
+};
 let hurtSerial = -1; // the own block's last hit seen (OWN_HURT)
 const weaponView = new WeaponView(renderer.gl, FOV_Y, cv, guns);
 const input = new Input(canvas);
@@ -1166,6 +1179,11 @@ function tick() {
     if (net.poll()) applySnapshot();
     while (net.prints.length) conWin.print(net.prints.shift());
     while (net.chats.length) addChat(net.chats.shift());
+    while (net.pings.length) {
+      const p = net.pings.shift();
+      callouts.ping(p.x, p.y, p.z, performance.now());
+      sounds.ping();
+    }
     if (net.playback && (net.changelevel || net.closed)) return leaveGame(`Demo ${demoTitle} ended`);
     if (net.changelevel || (net.closed && net.closeReason === 'changelevel')) {
       reconnect();
@@ -1641,6 +1659,7 @@ function draw(now, alpha, dt) {
 
   // The radar centers on whoever we see the game through.
   const watched = spectating && !roaming ? spectator.target : -1, w = watched * E_FIELDS;
+  radar.pings = callouts.live(now, radarPings);
   radar.draw(playing, watched >= 0 ? interp[w + E_X] : eye[0], watched >= 0 ? interp[w + E_Y] : eye[1],
     watched >= 0 ? interp[w + E_Z] - 36 : eye[2] - eyeOffset(ps), yaw, interpolated ? interp : null, selfId, watched, player.team,
     (gameMode() & GAME_FFA) !== 0, net ? net.own.bomb : null, net ? net.hostages : null, now);
@@ -1715,6 +1734,7 @@ function draw(now, alpha, dt) {
   words.enabled = cv.cl_comicwords.bool && cv.cl_drawhud.bool;
   words.update(now);
   hurtDir.update(now / 1000, eye[0], eye[1], angles[1], !dead && !spectating && !preview);
+  callouts.update(now, viewProj, headOf, playing && !preview);
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
   else showFlash(flash.left, flash.total);
   renderer.timer.mark(PASS.OVER);
@@ -1828,6 +1848,11 @@ const MENU_HELD = new Set(['+attack', '+attack2']);
 input.keepKeys = () => hud.menuOpen;
 input.onKey = (key, down) => {
   if (conWin.isOpen || chat.isOpen) return false;
+  if (callouts.menu >= 0 && down && (key === 'escape' || /^[0-9]$/.test(key))) { // the radio menu takes them
+    const cmd = key === 'escape' ? callouts.close() : callouts.pick(+key);
+    if (cmd) con.exec(cmd);
+    return true;
+  }
   if (hud.menuOpen && down && (key === 'escape' || /^[0-9]$/.test(key))) {
     if (key === 'escape') closeBuyMenu();
     else hud.menuKey(+key || 10);
@@ -1911,8 +1936,9 @@ chat.onToggle = (open) => {
 };
 function addChat(m) {
   chat.add(m.sender, m.flags, m.text);
+  if (m.flags & CHAT_RADIO) callouts.say(m.sender, m.text, performance.now());
   const name = m.sender === CHAT_CONSOLE ? 'Console' : (net ? net.names[m.sender] : cv.name.value) || `player${m.sender}`;
-  conWin.print(`${(m.flags & CHAT_TEAM) ? '(team) ' : ''}${name} : ${m.text}`);
+  conWin.print(`${(m.flags & CHAT_RADIO) ? '(radio) ' : (m.flags & CHAT_TEAM) ? '(team) ' : ''}${name} : ${m.text}`);
 }
 const sayCommand = (a, ctx, team) => {
   const text = a.slice(1).join(' ').trim();
@@ -1927,6 +1953,20 @@ con.command('messagemode', () => {
 con.command('messagemode2', () => {
   if (playing && !menu.visible) chat.open(true);
 }, 'Types a chat line to your team (U)');
+// Radio (CS:GO's): each line's own command, the three menus (Z / X / C), and the ping.
+for (const [cmd, text] of RADIO) {
+  con.command(cmd, () => {
+    if (net) net.command(cmd);
+  }, `Radio: "${text}"`);
+}
+for (let k = 0; k < 3; k++) {
+  con.command(`radio${k + 1}`, () => {
+    if (playing && !menu.visible) callouts.open(k);
+  }, `Opens radio menu ${k + 1} (${'ZXC'[k]}): a number key sends a line`);
+}
+con.command('player_ping', () => {
+  if (net) net.command('player_ping');
+}, 'Marks the place you look at for your team (middle mouse)');
 con.command('drawradar', () => {
   radar.hidden = false;
 }, 'Shows the radar');
@@ -2302,6 +2342,7 @@ function resetSession() {
   lastOwnTeam = 0;
   words.clear();
   hurtDir.clear();
+  callouts.clear();
   blasts.clear();
   chat.clear();
   deathPanel.show(false);

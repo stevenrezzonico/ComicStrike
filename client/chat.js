@@ -4,7 +4,7 @@
 // *SPEC* for a spectator, (Terrorist) / (Counter-Terrorist) on team chat. Every piece of
 // text goes in as textContent: names and lines never become markup.
 
-import { CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC, CHAT_MAX } from '../shared/protocol.js';
+import { CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC, CHAT_RADIO, CHAT_MAX } from '../shared/protocol.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 
 const CHAT_LINES = 8; // lines kept in the box
@@ -43,7 +43,8 @@ export class Chat {
       let prefix = '';
       if (flags & CHAT_SPEC) prefix = '*SPEC* ';
       else if (flags & CHAT_DEAD) prefix = '*DEAD* ';
-      if (flags & CHAT_TEAM) prefix += `${(flags & CHAT_SPEC) ? '(Spectator)' : TEAM_LABEL[team] || ''} `;
+      if (flags & CHAT_RADIO) prefix += '(Radio) ';
+      else if (flags & CHAT_TEAM) prefix += `${(flags & CHAT_SPEC) ? '(Spectator)' : TEAM_LABEL[team] || ''} `;
       name.textContent = prefix + (this.names(sender) || `player${sender}`);
       name.className = (flags & CHAT_SPEC) ? 'spec' : team === TEAM_CT ? 'ct' : team === TEAM_T ? 't' : 'spec';
     }

@@ -615,6 +615,14 @@ export class Sounds {
   }
 
   // The C4's beep: a short triangle-wave chirp.
+  // A teammate's ping: two soft rising notes.
+  ping() {
+    const v = this.voice(null, 0, 0, 0.3);
+    if (!v) return;
+    this.tone(v.out, v.t, 880, 880, 0.18, 0.08);
+    this.tone(v.out, v.t, 1320, 1320, 0.16, 0.12, 0.07);
+  }
+
   beep(volume = 1) {
     if (!this.ready) return;
     const t = this.ctx.currentTime;

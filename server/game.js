@@ -45,6 +45,7 @@ import {
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
   SHOT_BLOOD, writePrint, printChunks, writeChat, cleanChat, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC, writeReport, NO_MVP,
+  CHAT_RADIO, RADIO, radioIndex, writePing,
   KILL_HEADSHOT, KILL_REPEAT_TICKS, HURT_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
   writeWelcome, writeReject, writeInfo, writeItems, writeGrenades, writeHostages, readCmds, writeSnapshot, quantizePitch,
   quantizeYaw,
@@ -73,6 +74,8 @@ const DEMO_RESTOCK = 2; // the demo: seconds from a bomb going off or being defu
 const DEMO_HEAL = 2; // the demo: seconds from the last hurt to full health
 const BOT_PLACE_GAP = 40; // bot_place all: units between the bots in a row
 const CHAT_FLOOD_TICKS = Math.round(0.66 * TICK_RATE); // least gap between a player's chat lines (CS:GO's flood check: ~0.75 s)
+const PING_TICKS = TICK_RATE; // least gap between a player's pings (approx.)
+const PING_REACH = 4096; // a ping marks the first thing the view meets within this
 
 // Radar spotting (approx. of CS:GO's: how often, how wide a view, how long a shot shows).
 const SPOT_TICKS = 4;
@@ -114,6 +117,7 @@ class Client {
     this.lastBuy = -1; // newest BUY id handled
     this.lastCommand = -1; // newest COMMAND id handled
     this.lastChat = -Infinity; // server tick of the last chat line delivered (the flood check)
+    this.lastPing = -Infinity;
     this.shots = 0; // shots fired mod 256 (E_SHOTS: third-person fire kicks)
     this.useHeld = false; // +use was down last command (E picks up on the press)
     this.controlled = false; // a bot a dead teammate took control of: out of play until it respawns
@@ -833,6 +837,7 @@ export class Game {
           killer.roundKills++;
           if (this.rules.armsRace) this.armsRaceKill(killer, victim, weapon);
         }
+        if (killer.bot && !dm) this.bots.killed(killer); // now and then: "Enemy down."
       }
     }
     if (this.phase === PHASE_WARMUP) victim.respawnTick = this.tick + WARMUP_RESPAWN * TICK_RATE;
@@ -1187,12 +1192,42 @@ export class Game {
     }
   }
 
+  // A radio command (RADIO index) from a living player: its line to the team, heard by
+  // the team's bots too (bots.js: follow me, hold this position). The chat's flood check.
+  radio(from, k) {
+    if (!from.playing || !from.alive || !RADIO[k] || this.tick - from.lastChat < CHAT_FLOOD_TICKS) return;
+    from.lastChat = this.tick;
+    for (const c of this.clients) {
+      if (!c || !c.joined || c.bot || c.team !== from.team) continue;
+      c.session.send(writeChat(c.writer(), from.id, CHAT_RADIO | CHAT_TEAM, RADIO[k][1]));
+    }
+    this.bots.radio(from, RADIO[k][0]);
+  }
+
+  // player_ping: the first thing a living player's view meets, marked for the team.
+  ping(from) {
+    if (!from.playing || !from.alive || this.tick - from.lastPing < PING_TICKS) return;
+    from.lastPing = this.tick;
+    const f = from.player.ps.f, ez = f[PS_ORIGIN + 2] + eyeOffset(from.player.ps);
+    const p = from.pitch * Math.PI / 180, y = from.yaw * Math.PI / 180;
+    const dx = Math.cos(p) * Math.cos(y), dy = Math.cos(p) * Math.sin(y), dz = -Math.sin(p);
+    traceHull(this.world, HULL_POINT, f[PS_ORIGIN], f[PS_ORIGIN + 1], ez,
+      f[PS_ORIGIN] + dx * PING_REACH, f[PS_ORIGIN + 1] + dy * PING_REACH, ez + dz * PING_REACH, this.bombTrace);
+    const t = this.bombTrace, k = Math.max(0, t.fraction * PING_REACH - 2); // just short of the wall
+    for (const c of this.clients) {
+      if (!c || !c.joined || c.bot || c.team !== from.team) continue;
+      c.session.send(writePing(c.writer(), from.id, f[PS_ORIGIN] + dx * k, f[PS_ORIGIN + 1] + dy * k, ez + dz * k));
+    }
+  }
+
   // Commands a client's console sends to the server (Source "client commands").
   clientCommand(c, text) {
     const args = parse(text)[0];
     if (!args) return;
     const name = args[0].toLowerCase();
-    if (name === 'say' || name === 'say_team') {
+    if (radioIndex(name) >= 0) this.radio(c, radioIndex(name));
+    else if (name === 'player_ping') this.ping(c);
+    else if (name === 'say' || name === 'say_team') {
       // The rest of the line as typed (quotes and ; included: it is text, not commands).
       this.chat(c, text.replace(/^\s*\S+\s?/, ''), name === 'say_team');
     } else if (name === 'name') {

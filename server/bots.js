@@ -30,7 +30,7 @@ import { BOMB_DROPPED, BOMB_PLANTED } from '../shared/bomb.js';
 import { HS_IDLE } from '../shared/hostages.js';
 import { PHASE_LIVE, PHASE_WARMUP, ITEM_ASSAULTSUIT, ITEM_KEVLAR, ITEM_DEFUSER, itemPrice } from '../shared/economy.js';
 import { Nav, NAV_CELL, NODE_CROUCH, EDGE_WALK, EDGE_JUMP, EDGE_LADDER } from '../shared/nav.js';
-import { Writer, writeHello } from '../shared/protocol.js';
+import { Writer, writeHello, radioIndex } from '../shared/protocol.js';
 
 const DEG = Math.PI / 180;
 const RECOIL_SCALE = 2; // weapon_recoil_scale: shots fly along the view plus twice the aim punch
@@ -112,6 +112,14 @@ const BLIND = 0.3;
 const MOLLY_RANGE = [250, 900], SMOKE_RANGE = [400, 1400], MOLLY_BOMB = 1100;
 const SMOKE_EXEC = [300, 1500], SMOKE_AHEAD = 400;
 const SMOKE_ROLL = 220; // a smoke bounces and rolls on before it pops: aimed this much short
+// Radio (approx. of CS:GO's bots): a human's "Follow me." / "Regroup, team!" sends the
+// team's bots within ORDER_REACH after him for ORDER_SECONDS (stopping FOLLOW_NEAR away),
+// "Hold this position." keeps them where they stand; a bot calls "Enemy spotted." on a new
+// enemy, at most once a team every CALL_GAP seconds, and "Enemy down." after a kill now and
+// then (DOWN_CHANCE).
+const ORDER_REACH = 1500, ORDER_SECONDS = 20, FOLLOW_NEAR = 120;
+const CALL_GAP = 12, DOWN_CHANCE = 0.3;
+const ENEMY_SPOTTED = radioIndex('enemyspot'), ENEMY_DOWN = radioIndex('enemydown');
 // A closed door a button opens within BUTTON_LOOKAHEAD waypoints and BUTTON_RANGE units
 // along the path sends the bot to the button first (given up after BUTTON_TIMEOUT).
 const BUTTON_LOOKAHEAD = 8;
@@ -130,6 +138,25 @@ export class Bots {
     this.siteRound = -1;
     this.smokeSpots = []; // per bomb site: smokeSpot()'s place, null for none
     this.smokedRound = -1; // the round (RoundState.serial) the Ts smoked their site's CT side
+    this.calledAt = { [TEAM_T]: -1e9, [TEAM_CT]: -1e9 }; // tick a bot of the team last called an enemy
+  }
+
+  // A radio line from `from` (a human, Game.radio): orders for the team's bots near him.
+  radio(from, cmd) {
+    if (from.bot) return;
+    const kind = cmd === 'followme' || cmd === 'regroup' ? 'follow' : cmd === 'holdpos' ? 'hold' : null;
+    if (!kind) return;
+    const g = this.game, ff = from.player.ps.f;
+    for (const b of this.list) {
+      const c = b.c, f = c.player.ps.f;
+      if (!c.alive || c.team !== from.team || Math.hypot(f[PS_ORIGIN] - ff[PS_ORIGIN], f[PS_ORIGIN + 1] - ff[PS_ORIGIN + 1]) > ORDER_REACH) continue;
+      b.order = { kind, who: from, until: g.tick + ORDER_SECONDS * TICK_RATE, x: f[PS_ORIGIN], y: f[PS_ORIGIN + 1], z: f[PS_ORIGIN + 2] - 36 };
+    }
+  }
+
+  // A bot of ours killed someone: "Enemy down." now and then.
+  killed(c) {
+    if (this.random() < DOWN_CHANCE) this.game.radio(c, ENEMY_DOWN);
   }
 
   ensureNav() {
@@ -319,6 +346,7 @@ class Bot {
     this.nadeFor = -1; // the seenAt a throw was considered for (one per loss)
     this.avertUntil = 0; // looking away from our flashbang until then
     this.playAt = 0; // tick considerPlay() may try a smoke at the site again
+    this.order = null; // a teammate's radio order: { kind: 'follow' | 'hold', who, until, x, y, z }
     this.avertYaw = 0;
     this.pressButton = -1; // the button to press for a door on our way, its door, the node by it
     this.pressDoor = -1;
@@ -523,6 +551,11 @@ class Bot {
       const again = best === this.lastEnemy && g.tick - this.seenAt < 2 * TICK_RATE;
       this.enemy = this.lastEnemy = best;
       if (!again) this.acquiredAt = g.tick;
+      const called = this.bots.calledAt;
+      if (!again && !g.rules.deathmatch && g.tick - called[this.c.team] > CALL_GAP * TICK_RATE) {
+        called[this.c.team] = g.tick;
+        g.radio(this.c, ENEMY_SPOTTED);
+      }
       const react = (sk.reaction + sk.delay) * (again ? 0.5 : 1) * (0.8 + 0.4 * this.bots.random());
       this.reactAt = g.tick + Math.round(react * TICK_RATE);
       this.vYaw = this.vPitch = 0; // the look stops where it is, then swings to him (else a swing under way carried a weak spring past him)
@@ -768,6 +801,16 @@ class Bot {
       const due = this.goalWhy !== 'hunt' || g.tick >= this.repathAt;
       return { node: due ? nav.nodeAt(this.lastX, this.lastY, this.lastZ - 36) : this.goal, why: 'hunt', moving: true };
     }
+    // A teammate's radio order: after him (looked up once a second), or where we stood.
+    const o = this.order;
+    if (o && g.tick < o.until && o.who.alive && !carrier) {
+      const f = o.who.player.ps.f, follow = o.kind === 'follow';
+      const tx = follow ? f[PS_ORIGIN] : o.x, ty = follow ? f[PS_ORIGIN + 1] : o.y, tz = follow ? f[PS_ORIGIN + 2] - 36 : o.z;
+      if (Math.hypot(tx - x, ty - y) < (follow ? FOLLOW_NEAR : 32)) return { node: -1, why: 'order', stop: true };
+      const due = this.goalWhy !== 'order' || g.tick >= this.repathAt;
+      return { node: due ? nav.nodeAt(tx, ty, tz) : this.goal, why: 'order', moving: follow };
+    }
+    this.order = null;
     if (g.phase !== PHASE_LIVE && g.phase !== PHASE_WARMUP) return { node: -1, why: 'wait' };
     const bomb = g.bomb, f = c.player.ps.f;
     if (!g.rules.deathmatch && g.bombSites.count && g.rules.giveC4) {
