@@ -67,6 +67,7 @@ const TABS = [
     ['slider', 'r_crosshair_clearzone', 'No dots round the crosshair', 0, 3, 0.25],
     ['slider', 'r_shadebands', 'Shadow bands (0: smooth)', 0, 6, 1],
     ['slider', 'r_shadowlift', 'Shadow brightness', 0, 1, 0.05],
+    ['toggle', 'r_playershadows', 'Sun shadows of players'],
     ['section', null, 'Resolution'],
     ['toggle', 'r_dynres', 'Automatic resolution (keeps 60 fps)'],
     ['select', 'r_inkfast', 'Ink lines', ['Full', 'Fast']],

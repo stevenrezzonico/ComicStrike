@@ -4,43 +4,7 @@ Improvements proposed and kept, not yet built. Each has a plan grounded in the c
 was when the plan was written; check the files named before starting one. Done so far from
 these lists: text chat (14g), movers and breakables (14h), weapon leftovers (14i), bots'
 grenades, AWP and buttons (14j), radar levels (14k), point lights (14l), the round-end panel
-and damage report (14m).
-
-## Sun shadows for players (Phase 14n)
-
-Each living player and standing hostage casts a flat shadow on the floor along the map's
-sun, where the floor is sunlit; the contact disc stays (it grounds the figure). Gated by a
-Video setting; one cheap draw per visible figure.
-
-- **The sun** (`shared/sun.js`, `shared/bspwriter.js`): `sunOf(entities)` gives the
-  direction toward the sun from `light_environment` (`pitch` key, else the `angles` pitch;
-  yaw from `angles`, else `angle`; every Valve map has one, cs_office's `angles 90 0 0` and
-  the few odd pitches clamp to an elevation of 20-89°), or null (no sun shadows). Our
-  compiler writes a `light_environment` for its own sun (`SUN` -0.42 0.3 0.86 as pitch and
-  yaw, `_light` from `SUN_RGB`) unless the entities hold one, so de_playground, de_inkwell
-  and editor maps carry it; both maps regenerated (and their byte-for-byte tests). The
-  compiler never reads it. Check the sign of hlrad's yaw in the pane against a crate's baked
-  shadow on de_dust2.
-- **The draw** (`client/gl/playermodels.js`, `skinned.js`, `shaders.js`): a second skinned
-  program with `SHADOW` defined: the vertex path as it is (bones, `u_viewProj`), the
-  fragment writes only `o_albedo.a = SHADOW_LEVEL` (0.45; tune beside the baked shadows).
-  Per figure a planar projection matrix onto its floor plane (`floorZ`, 1 unit up) along the
-  sun, folded into the view-projection (`viewProj × P`), so no new shader input; drawn with
-  the coarse body (the LOD mesh, no gun) and the figure's bones, after the contact discs and
-  before the characters, depth test on, no depth write, color mask alpha only, blend `MIN`
-  on alpha, so the floor's light becomes `min(light, SHADOW_LEVEL)`: a sunlit floor darkens
-  to the shade level, a shaded one stays, overlapping limbs never double. Skipped for a
-  figure whose own light (the lightmap under it) is already under the level plus a margin
-  (it stands in shade or indoors) and beyond `SHADOW_FADE`'s height. `r_playershadows` (1;
-  Video: Sun shadows), saved.
-- Known approximations: the plane is the figure's floor, so a shadow off a crate's edge
-  hangs in the air; the elevation clamp keeps shadows under ~200 units.
-- Tests (`test/sun.test.js`): `sunOf` from the pitch and angles forms, the clamps, null
-  without; the compiled maps carry a `light_environment` matching `SUN`; the projection
-  matrix puts the head's shadow at the right offset. Pane: a 5v5 on de_dust2 at the fixed
-  view, a shadow along the crates' baked ones; GPU cost at full clock (`r_drawrepeat 20`,
-  the models pass before and after); `r_playershadows 0` removes them. CLAUDE.md: Models
-  (contact shadows), Test map, de_inkwell.
+and damage report (14m), sun shadows for players (14n).
 
 ## Procedural gun finishes
 

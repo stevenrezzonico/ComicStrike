@@ -445,7 +445,8 @@ export function decompileBSP(bsp, fileName) {
 
   for (const e of bsp.entities) {
     const cls = e.classname;
-    if (cls === 'worldspawn') continue;
+    // The sun: the compiler lights with its own and writes it back (shared/sun.js).
+    if (cls === 'worldspawn' || cls === 'light_environment') continue;
     const o = vec(e.origin);
     if (SPAWNS.has(cls) || cls === 'hostage_entity') {
       if (!o) continue;

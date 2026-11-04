@@ -84,6 +84,7 @@ export class SurfaceMap {
     this.bsp = bsp;
     // Per texture: its surface. Per face: texinfo s/t extents for the hit test.
     this.texSurface = bsp.textureNames.map((n) => SURF_BY_MAT[classify(n).mat] || SURF_DEFAULT);
+    this.texSky = bsp.textureNames.map((n) => /^sky/i.test(n));
     const n = bsp.numFaces;
     this.extents = new Float32Array(n * 4); // smin, smax, tmin, tmax
     const tf = bsp.texinfoF;
@@ -177,6 +178,14 @@ export class SurfaceMap {
     out[1] = b.lighting[p + 1];
     out[2] = b.lighting[p + 2];
     return true;
+  }
+
+  // Whether the world's first face from (x, y, z) along unit (dx, dy, dz), within 16384
+  // units, is sky (or there is none): a point the sun along that line reaches. Brush
+  // entities are not looked at. Client only (sun shadows).
+  skyward(x, y, z, dx, dy, dz) {
+    const f = this.findFace(0, x, y, z, x + dx * 16384, y + dy * 16384, z + dz * 16384);
+    return f < 0 || this.texSky[this.bsp.texinfoI[faceTexinfo(this.bsp, f) * 10 + 8]];
   }
 
   // Surface at world point (x, y, z) approached along unit (dx, dy, dz), on collision

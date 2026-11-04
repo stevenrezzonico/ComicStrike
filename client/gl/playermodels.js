@@ -3,7 +3,7 @@
 // draw calls per player), lit by the map's light under them. The dead stay where they
 // fell until they respawn or leave. Also draws the dropped bomb.
 
-import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN, modelLight, eyeOf } from './skinned.js';
+import { SkinnedRenderer, SkinnedMesh, SkinnedShadows, IDENTITY_SKIN, modelLight, printedLight, eyeOf } from './skinned.js';
 import { G_FLAGS } from './shaders.js';
 import { buildPlayer, HOLD_TIED } from '../models/players.js';
 import { MAX_HOSTAGES, HS_IDLE, HS_CARRIED, HS_DEAD } from '../../shared/hostages.js';
@@ -18,6 +18,7 @@ import { MAX_ITEMS } from '../../shared/items.js';
 import { TICK_RATE } from '../../shared/constants.js';
 import { FL_ONGROUND } from '../../shared/pmove.js';
 import { feetOffset } from '../../shared/hitgroups.js';
+import { shadowMatrix } from '../../shared/sun.js';
 import {
   MAX_PLAYERS, E_ACTIVE, E_X, E_Y, E_Z, E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS,
   E_FIELDS, ANIM_HELMET, ANIM_SILENCED, ANIM_IMMUNE, dequantizeYaw, dequantizePitch,
@@ -38,6 +39,11 @@ const SHADOW_R = 20, SHADOW_DARK = 0.75, SHADOW_FADE = 180;
 // third of the triangles), back to the full one nearer than FAR_LOD - LOD_BAND (so it
 // never flickers).
 const FAR_LOD = 520, LOD_BAND = 100;
+// Sun shadows (r_playershadows): a character in the sun (the first face from its chest toward
+// the sun is sky, looked up every SUN_EVERY frames) takes its floor's printed light down to
+// SUN_SHARE of it under its shadow, about what the baked shade of a wall prints (de_dust2:
+// sunlit ground ~0.6, shade ~0.4; our compiler's maps alike).
+const SUN_SHARE = 0.65, SUN_EVERY = 8, SUN_CHEST = 48;
 
 export class PlayerModels {
   // guns: GunMeshes (client/gl/gunmeshes.js).
@@ -91,6 +97,15 @@ export class PlayerModels {
     this.floorZ = new Float32Array(MAX_PLAYERS); // under each player (NaN: no shadow)
     this.hostageFloorZ = new Float32Array(MAX_HOSTAGES);
     this.shadows = new FloorShadows(gl);
+    this.sunShadows = new SkinnedShadows(gl);
+    this.sun = null; // toward the map's sun (shared/sun.js sunOf), null: no sun shadows
+    this.sunOn = true; // r_playershadows
+    this.floorLight = new Float32Array(MAX_PLAYERS).fill(1); // the print's light on the floor under each
+    this.hostageFloorLight = new Float32Array(MAX_HOSTAGES).fill(1);
+    this.sunlit = new Uint8Array(MAX_PLAYERS); // in the sun (see SUN_EVERY)
+    this.hostageSunlit = new Uint8Array(MAX_HOSTAGES);
+    this.flatM = new Float32Array(16);
+    this.shadowM = new Float32Array(16);
     this.body = new Array(MAX_PLAYERS).fill(null);
     this.model = new Float32Array(MAX_PLAYERS * 16);
     this.light = new Float32Array(MAX_PLAYERS * 3).fill(1);
@@ -133,8 +148,15 @@ export class PlayerModels {
         m.fill(0);
         m[0] = c; m[1] = s; m[4] = -s; m[5] = c; m[10] = 1;
         m[12] = h.x[k]; m[13] = h.y[k]; m[14] = h.z[k]; m[15] = 1;
-        if (surfaces && surfaces.lightAt(this.lm, h.x[k], h.y[k], h.z[k] + 36)) modelLight(this.hostageLight[k], this.lm);
+        this.hostageFloorLight[k] = 1;
+        if (surfaces && surfaces.lightAt(this.lm, h.x[k], h.y[k], h.z[k] + 36)) {
+          modelLight(this.hostageLight[k], this.lm);
+          this.hostageFloorLight[k] = printedLight(this.lm);
+        }
         this.hostageFloorZ[k] = state === HS_IDLE ? h.z[k] : NaN;
+        if (this.sun && surfaces && (this.frameNo + k) % SUN_EVERY === 0) {
+          this.hostageSunlit[k] = surfaces.skyward(h.x[k], h.y[k], h.z[k] + SUN_CHEST, this.sun[0], this.sun[1], this.sun[2]) ? 1 : 0;
+        }
         this.hostageShown[k] = 1;
       } else if (state === HS_CARRIED && h.carrier[k] >= 0 && this.visible[h.carrier[k]]) {
         // Lying across his shoulders, face down, head to his left.
@@ -208,13 +230,19 @@ export class PlayerModels {
       }
 
       // Light: the lightmap under the chest, eased so crossing faces does not pop.
+      this.floorLight[id] = 1;
       if (surfaces && surfaces.lightAt(this.lm, x, y, z + 36)) {
+        this.floorLight[id] = printedLight(this.lm);
         modelLight(this.tmpLight, this.lm);
         const k = 1 - Math.exp(-dt * 8);
         for (let ch = 0; ch < 3; ch++) this.light[id * 3 + ch] += (this.tmpLight[ch] - this.light[id * 3 + ch]) * k;
       }
       // The floor for its contact shadow: under the feet when standing, else the face below.
       this.floorZ[id] = !alive ? NaN : flags & FL_ONGROUND ? z : surfaces ? surfaces.hitZ : NaN;
+      // In the sun (after the floor: the lookup moves hitZ).
+      if (this.sun && surfaces && alive && (this.frameNo + id) % SUN_EVERY === 0) {
+        this.sunlit[id] = surfaces.skyward(x, y, z + SUN_CHEST, this.sun[0], this.sun[1], this.sun[2]) ? 1 : 0;
+      }
     }
   }
 
@@ -321,6 +349,43 @@ export class PlayerModels {
     this.shadows.add(m[12], m[13], floor, rad, SHADOW_DARK * (1 - Math.max(h, 0) / SHADOW_FADE));
   }
 
+  // The map's sun (shared/sun.js sunOf: toward it), or null: no sun shadows.
+  setSun(sun) {
+    this.sun = sun;
+    this.sunlit.fill(0);
+    this.hostageSunlit.fill(0);
+  }
+
+  // Sun shadows of the living players and standing hostages on their floors (the coarse
+  // body, flattened along the sun), after the contact discs and before the characters.
+  drawSunShadows(viewProj, gbuf) {
+    if (!this.sun || !this.sunOn) return;
+    let begun = false;
+    for (let slot = 0; slot < MAX_PLAYERS + MAX_HOSTAGES; slot++) {
+      const player = slot < MAX_PLAYERS, k = slot - MAX_PLAYERS;
+      if (player ? !this.visible[slot] : !this.hostageShown[k]) continue;
+      const m = player ? this.modelOf[slot] : this.hostageModel[k];
+      const floor = player ? this.floorZ[slot] : this.hostageFloorZ[k];
+      const h = m[14] - floor; // feet above the floor (NaN: dead or carried)
+      if (!(h > -2 && h < SHADOW_FADE)) continue;
+      if (!(player ? this.sunlit[slot] : this.hostageSunlit[k])) continue;
+      // Its bounds: from the feet to the head's shadow, away from the sun.
+      const ax = this.sun[0] / this.sun[2], ay = this.sun[1] / this.sun[2];
+      const reach = (BODY_MID + Math.max(h, 0)) * Math.sqrt(ax * ax + ay * ay);
+      if (!sphereInView(viewProj, m[12] - ax * BODY_MID, m[13] - ay * BODY_MID, floor, 40 + reach)) continue;
+      if (!begun) {
+        this.sunShadows.begin(viewProj, gbuf);
+        begun = true;
+      }
+      multiply(this.shadowM, shadowMatrix(this.flatM, this.sun, floor + 1), m);
+      const body = player ? this.body[slot] : this.bodyH;
+      const skin = player ? this.anim[slot].pose.skin : this.hostageAnim[k].pose.skin;
+      const level = SUN_SHARE * (player ? this.floorLight[slot] : this.hostageFloorLight[k]);
+      this.sunShadows.draw(this.farOf.get(body), this.shadowM, skin, level);
+    }
+    if (begun) this.sunShadows.end(gbuf);
+  }
+
   // The bomb lying at (x, y, z = floor), turned by yaw (radians); show = false hides it.
   setBomb(show, x = 0, y = 0, z = 0, yaw = 0, led = false, surfaces = null) {
     const b = this.bomb;
@@ -348,6 +413,9 @@ export class PlayerModels {
   // CLIP_ALL); the program is shared with the view, the grenade effects and the blasts.
   warm(gbuf) {
     this.shadows.warm(gbuf);
+    this.sunShadows.begin(CLIP_ALL, gbuf);
+    this.sunShadows.draw(this.farOf.get(this.bodyH), IDENTITY_SKIN, IDENTITY_SKIN, 1);
+    this.sunShadows.end(gbuf);
     const r = this.renderer;
     r.begin(CLIP_ALL);
     r.draw(this.guns.c4Off, IDENTITY_SKIN, IDENTITY_SKIN, this.hostageLight[0]);
@@ -358,6 +426,7 @@ export class PlayerModels {
     this.lastViewProj.set(viewProj);
     this.haveView = true;
     this.drawShadows(viewProj, gbuf);
+    this.drawSunShadows(viewProj, gbuf);
     const r = this.renderer;
     let begun = false;
     eyeOf(this.eye, viewProj);

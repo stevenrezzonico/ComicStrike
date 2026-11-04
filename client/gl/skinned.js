@@ -5,7 +5,7 @@
 // flips around the draws.
 
 import { program } from './program.js';
-import { SKINNED_VS, SKINNED_FS } from './shaders.js';
+import { SKINNED_VS, SKINNED_FS, SKINNED_SHADOW_FS } from './shaders.js';
 import { MESH_STRIDE, indexMesh } from './meshkit.js';
 import { MAX_BONES } from '../anim/skeleton.js';
 
@@ -84,6 +84,22 @@ function skinnedProgram(gl) {
   return p;
 }
 
+// The bones go up already in world space (model x skin): a mat4 product per bone here
+// instead of one per vertex (the models pass is vertex-bound: 9 players are ~40,000
+// vertices a frame).
+function foldBones(b, model, skin, n) {
+  for (let i = 0; i < n; i++) {
+    const o = i * 16;
+    for (let c = 0; c < 4; c++) {
+      const s0 = skin[o + c * 4], s1 = skin[o + c * 4 + 1], s2 = skin[o + c * 4 + 2], s3 = skin[o + c * 4 + 3];
+      for (let r = 0; r < 4; r++) {
+        b[o + c * 4 + r] = model[r] * s0 + model[4 + r] * s1 + model[8 + r] * s2 + model[12 + r] * s3;
+      }
+    }
+  }
+  return b;
+}
+
 export class SkinnedRenderer {
   constructor(gl) {
     this.gl = gl;
@@ -120,20 +136,7 @@ export class SkinnedRenderer {
     if (emissive !== this.emissive) gl.uniform1f(this.prog.loc.u_emissive, (this.emissive = emissive));
     if (white !== this.white) gl.uniform1f(this.prog.loc.u_white, (this.white = white));
     gl.uniform1ui(this.prog.loc.u_id, (nextId = (nextId + 1) & 1023));
-    // The bones go up already in world space (model x skin): a mat4 product per bone here
-    // instead of one per vertex (the models pass is vertex-bound: 9 players are ~40,000
-    // vertices a frame).
-    const b = this.bones;
-    for (let i = 0; i < mesh.bones; i++) {
-      const o = i * 16;
-      for (let c = 0; c < 4; c++) {
-        const s0 = skin[o + c * 4], s1 = skin[o + c * 4 + 1], s2 = skin[o + c * 4 + 2], s3 = skin[o + c * 4 + 3];
-        for (let r = 0; r < 4; r++) {
-          b[o + c * 4 + r] = model[r] * s0 + model[4 + r] * s1 + model[8 + r] * s2 + model[12 + r] * s3;
-        }
-      }
-    }
-    gl.uniformMatrix4fv(this.prog.loc.u_bones, false, b, 0, mesh.bones * 16);
+    gl.uniformMatrix4fv(this.prog.loc.u_bones, false, foldBones(this.bones, model, skin, mesh.bones), 0, mesh.bones * 16);
     gl.uniform3fv(this.prog.loc.u_light, light);
     gl.bindVertexArray(mesh.vao);
     gl.drawElements(gl.TRIANGLES, mesh.count, mesh.indexType, 0);
@@ -144,6 +147,64 @@ export class SkinnedRenderer {
     gl.bindVertexArray(null);
     gl.frontFace(gl.CW);
   }
+}
+
+const shadowPrograms = new WeakMap();
+
+// Sun shadows of characters (client/gl/playermodels.js): a body drawn flattened onto its
+// floor along the sun (the flattening folded into its model matrix, shared/sun.js
+// shadowMatrix), writing only the albedo target's light, blended by MIN to `level`: a
+// sunlit floor darkens to the shade level, a floor already darker stays, and limbs over
+// each other never darken it twice. Printed as shade dots like the map's own shadows.
+export class SkinnedShadows {
+  constructor(gl) {
+    this.gl = gl;
+    let p = shadowPrograms.get(gl);
+    if (!p) shadowPrograms.set(gl, (p = program(gl, SKINNED_VS, SKINNED_SHADOW_FS, ['u_viewProj', 'u_bones', 'u_level'])));
+    this.prog = p;
+    this.bones = new Float32Array(MAX_BONES * 16);
+    this.level = -1;
+  }
+
+  begin(viewProj, gbuf) {
+    const gl = this.gl;
+    gl.useProgram(this.prog.p);
+    gl.uniformMatrix4fv(this.prog.loc.u_viewProj, false, viewProj);
+    this.level = -1;
+    gbuf.albedo(true);
+    gl.colorMask(false, false, false, true); // the light only
+    gl.enable(gl.BLEND);
+    gl.blendEquationSeparate(gl.FUNC_ADD, gl.MIN);
+    gl.depthMask(false);
+    gl.disable(gl.CULL_FACE); // flattened, half the triangles face down
+  }
+
+  // mesh: a SkinnedMesh; model: its model matrix with the flattening folded in; level: the
+  // light (0..1) the floor takes under it at most.
+  draw(mesh, model, skin, level) {
+    const gl = this.gl;
+    if (level !== this.level) gl.uniform1f(this.prog.loc.u_level, (this.level = level));
+    gl.uniformMatrix4fv(this.prog.loc.u_bones, false, foldBones(this.bones, model, skin, mesh.bones), 0, mesh.bones * 16);
+    gl.bindVertexArray(mesh.vao);
+    gl.drawElements(gl.TRIANGLES, mesh.count, mesh.indexType, 0);
+  }
+
+  end(gbuf) {
+    const gl = this.gl;
+    gl.bindVertexArray(null);
+    gl.enable(gl.CULL_FACE);
+    gl.depthMask(true);
+    gl.blendEquation(gl.FUNC_ADD);
+    gl.disable(gl.BLEND);
+    gbuf.albedo(false);
+  }
+}
+
+// The light the world shader prints (WORLD_FS: the lifted lightmap's brightness over the
+// map's full level, to the 0.8) from a lightmap sample (0..255 rgb).
+export function printedLight(rgb) {
+  const lum = 1.45 * (0.3 * Math.pow(rgb[0] / 255, 0.6) + 0.59 * Math.pow(rgb[1] / 255, 0.6) + 0.11 * Math.pow(rgb[2] / 255, 0.6));
+  return Math.pow(Math.min(1, lum / mapLight.full), 0.8);
 }
 
 // Model brightness from a lightmap sample (0..255 rgb), lifted like the world shader's

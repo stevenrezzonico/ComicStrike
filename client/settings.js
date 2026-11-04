@@ -64,6 +64,7 @@ export function createConsole(print) {
   add('cl_autowepswitch', 1, 'Switch to a weapon you buy or pick up when it is better than the one in hand (CS:GO)', 0, 1);
   add('cl_comicwords', 1, 'Comic sound words: BAM! on hits, BLAM! on your shots, KA-BOOM! on explosions', 0, 1);
   add('sv_pausable', 1, '0: practice keeps running while the pause menu is up (for testing; online games never pause)', 0, 1, 0);
+  add('r_playershadows', 1, 'Players and hostages cast shadows along the sun where they stand in sunlight', 0, 1);
   add('r_lod_dist', 520, 'Players farther than this (units) draw as their coarse models (0: always; the models pass is triangle-bound)', 0, 100000, 0);
   add('cl_showhitboxes', 0, 'Draw other players as their hit boxes instead of their models', 0, 1);
   // Radar (client/radar.js).

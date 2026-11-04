@@ -13,6 +13,7 @@
 // Keys are CS:GO binds (client/binds.js); ` opens the console (client/settings.js).
 
 import { parseBSP, parseUntrustedBSP, parseVec3, mapNameOf } from '../shared/bsp.js';
+import { sunOf } from '../shared/sun.js';
 import {
   TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED, IN_SCORE,
   IN_ATTACK, IN_ATTACK2, IN_USE, IN_RELOAD, IN_DROP,
@@ -397,6 +398,7 @@ async function loadMap(name) {
   const bsp = untrusted ? parseUntrustedBSP(buffer) : parseBSP(buffer);
   const mesh = buildMapMesh(bsp);
   renderer.loadMap(mesh, bsp);
+  models.setSun(sunOf(bsp.entities));
   decals.clear();
   debris.clear();
   // Every effect's program draws once now, clipped away, not on its first use in a fight.
@@ -1648,6 +1650,7 @@ function applyVideoSettings() {
   style.calm = calmRadius(canvas.height) * cv.r_crosshair_clearzone.number;
   renderer.novis = cv.r_novis.bool;
   models.farLod = cv.r_lod_dist.number;
+  models.sunOn = cv.r_playershadows.bool;
   style.fast = cv.r_inkfast.bool;
   style.inkaa = cv.r_inkaa.bool;
   return aspect;

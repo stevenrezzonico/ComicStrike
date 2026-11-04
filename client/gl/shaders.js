@@ -666,6 +666,16 @@ void main() {
   gbuffer(mix(albedo, vec3(1.0), u_white), clamp(mix(light, 1.0, u_white), 0.0, 1.0), n, v_id, v_w, u_flags);
 }`;
 
+// A character's sun shadow (client/gl/skinned.js SkinnedShadows): the vertices as
+// SKINNED_VS places them (flattened onto the floor by the bones), only the light written.
+export const SKINNED_SHADOW_FS = `#version 300 es
+precision mediump float;
+uniform float u_level;
+layout(location = 0) out vec4 o_albedo;
+void main() {
+  o_albedo = vec4(0.0, 0.0, 0.0, u_level);
+}`;
+
 // The comic print, one fullscreen pass over the G-buffer.
 export const COMPOSITE_VS = `#version 300 es
 void main() {

@@ -19,6 +19,8 @@
 // Only the lumps the engine reads are filled (no visibility, no marksurfaces).
 // Deterministic: the same input gives the same bytes.
 
+import { sunEntity } from './sun.js';
+
 export const CONTENTS_EMPTY = -1, CONTENTS_SOLID = -2, CONTENTS_WATER = -3;
 
 const EPS = 0.01; // plane side tolerance (units)
@@ -395,8 +397,8 @@ function joinPolys(p, q, n) {
 
 // --- Lighting --------------------------------------------------------------------------
 
-const SUN = norm([-0.42, 0.3, 0.86]); // toward the sun
-const SUN_RGB = [190, 172, 148]; // open sunny ground ~235: under the clamp, so the tints stay
+export const SUN = norm([-0.42, 0.3, 0.86]); // toward the sun
+export const SUN_RGB = [190, 172, 148]; // open sunny ground ~235: under the clamp, so the tints stay
 const SKY_RGB = [52, 60, 80];
 const BASE_RGB = [20, 20, 24];
 const SKY_DIRS = [];
@@ -856,7 +858,11 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
     throw new Error(`the map is too big for BSP 30 (${vertices.length} corners, ${nodes.length} nodes, ${clipnodes.length} clipnodes, ${leaves.length} leaves, ${faces.length} faces, ${planes.length} planes)`);
   }
 
-  const entText = ents.map((e) => `{\n${Object.entries(e).map(([k, v]) => `"${k}" "${v}"`).join('\n')}\n}\n`).join('') +
+  // The sun as GoldSrc's `light_environment` (the players' sun shadows read it, shared/sun.js),
+  // unless the map has its own; the lighting above never reads it.
+  const written = ents.some((e) => e.classname === 'light_environment') ? ents
+    : [...ents, sunEntity(SUN, SUN_RGB)];
+  const entText = written.map((e) => `{\n${Object.entries(e).map(([k, v]) => `"${k}" "${v}"`).join('\n')}\n}\n`).join('') +
     '\0';
   const lumps = [];
   const buf = (n) => new DataView(new ArrayBuffer(n));
