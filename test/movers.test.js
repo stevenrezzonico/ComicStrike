@@ -487,7 +487,22 @@ Deno.test('looping map logic is bounded', () => {
   assert.ok(logic.queue.length > 100, 'the loop still runs, within the budget');
   assert.ok(worst < 50, `the slowest tick took ${worst.toFixed(1)} ms`);
   logic.fireAt(tick, 'self', null, 0);
-  assert.equal(logic.fires, MAX_FIRES + 1, 'the self relay stopped at the budget');
+  assert.equal(logic.fires, MAX_FIRES, 'the self relay stopped at the budget');
+});
+
+// Past the budget a fire returned at once, but each of the 256 that passed still walked its
+// whole relay list: a multi_manager naming itself 60,000 times was 15M calls a tick.
+Deno.test('a relay with many targets stops at the fire budget', () => {
+  const keys = {};
+  for (let i = 0; i < 5000; i++) keys[`fan#${i}`] = '0';
+  const bsp = yard((map) => map.point({ classname: 'multi_manager', targetname: 'fan', ...keys, origin: '0 0 64' }));
+  const logic = quiet(() => new Game('yard', bsp, { rounds: false })).logic;
+  logic.reset(0);
+  let calls = 0;
+  const fire = logic.fireAt.bind(logic);
+  logic.fireAt = (...a) => (calls++, fire(...a));
+  logic.fireAt(1, 'fan', null, 0);
+  assert.ok(calls <= MAX_FIRES + 1, `${calls} calls`);
 });
 
 // A map with no doors and no triggers skipped the map logic altogether, so a trigger_auto's

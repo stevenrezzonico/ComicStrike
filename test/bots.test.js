@@ -659,3 +659,33 @@ Deno.test('bots: keep out of fires', async () => {
   assert.ok(edge !== inside && !bots.burning[edge], 'the goal moves out of the fire');
   g.grenades.fxAge[k] = FIRE_TIME + 1;
 });
+
+// When the freeze ends every bot gets a goal in the same tick; each searched its path then
+// (0.6-1.4 ms each, 13-17 ms with 20 bots, every round). Two searches a tick, the rest next.
+Deno.test('bots: path searches are spread over the ticks after the freeze', () => {
+  const { host, g, run } = setup('de_playground');
+  host.con.exec('mp_freezetime 1; bot_quota 10');
+  run(TICK_RATE * 2);
+  host.con.exec('mp_restartgame 1');
+  const nav = g.bots.ensureNav(), path = nav.path.bind(nav);
+  let searches = 0, worst = 0;
+  nav.path = (from, to, ...a) => (to >= 0 && searches++, path(from, to, ...a)); // to -1: no search (the freeze)
+  for (let i = 0; i < TICK_RATE * 4; i++) {
+    searches = 0;
+    run(1);
+    worst = Math.max(worst, searches);
+  }
+  assert.ok(worst <= 2, `${worst} searches in one tick`);
+  assert.equal(g.phase, PHASE_LIVE);
+  assert.ok(g.bots.list.every((b) => b.pathLen > 0 || !b.c.alive), 'every bot has its path');
+});
+
+// de_train's bomb site B holds no navigation node (the floor flood never reaches it): the
+// bots sent there got no goal and stood at spawn all round. Such a zone gives the nearest.
+Deno.test('bots: a zone with no navigation inside gives the nearest node', () => {
+  const { g } = setup('de_playground');
+  const nav = g.bots.ensureNav(), rnd = seeded(3);
+  const k = nav.random(rnd, [-64, -64, 4000, 64, 64, 4100]); // high over the middle: no floor there
+  assert.ok(k >= 0);
+  for (let j = 0; j < nav.count; j++) assert.ok(Math.hypot(nav.x[j], nav.y[j], nav.z[j] - 4000) >= Math.hypot(nav.x[k], nav.y[k], nav.z[k] - 4000));
+});

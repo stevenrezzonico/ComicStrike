@@ -87,9 +87,15 @@ const rooms = new Rooms({ readCfg: (name) => readText(new URL(`cfg/${name}`, ROO
 // or a room's. Datagrams before it are dropped. At most SESSIONS_PER_ADDRESS players from one
 // address in all games (a household behind one IPv4 address fits).
 const SESSIONS_PER_ADDRESS = 5;
+const CONNECTIONS_PER_ADDRESS = 16; // QUIC connections, upgraded or not (transport.js)
+const HELLO_MS = 10000; // a session's first HELLO
 const sessionsByAddress = new AddressCounts(SESSIONS_PER_ADDRESS);
-listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key }, (session) => {
+const connections = new AddressCounts(CONNECTIONS_PER_ADDRESS);
+listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key, connections }, (session) => {
   let game = null, client = null, refused = false;
+  setTimeout(() => { // a session that never says HELLO is let go
+    if (!client) session.close('no hello');
+  }, HELLO_MS);
   const refuse = (reason) => {
     refused = true;
     session.send(writeReject(new Writer(), reason).slice());
@@ -155,9 +161,21 @@ loop();
 
 // Static files are revalidated on every visit (no-cache with an ETag from the file's size
 // and time: a 304 when unchanged, so a deploy shows at once and ~1 MB of scripts and a
-// multi-megabyte map are not downloaded again), and gzipped on the fly for the types that
-// shrink (scripts ~4x, maps ~3x; Deno.serve does not compress a file stream by itself).
+// multi-megabyte map are not downloaded again), and gzipped for the types that shrink
+// (scripts ~4x, maps ~3x; Deno.serve does not compress a file stream by itself), once per
+// version of a file: CompressionStream runs on this thread, and compressing on every
+// download stalled every game 0.2-0.6 s a map.
 const COMPRESSED = new Set(['html', 'js', 'json', 'css', 'bsp', 'cfg', 'svg']);
+const gzipCache = new Map(); // relative path -> { etag, bytes: Promise<Uint8Array> }
+function gzipped(rel, path, etag) {
+  let hit = gzipCache.get(rel);
+  if (!hit || hit.etag !== etag) {
+    hit = { etag, bytes: Deno.open(path).then((f) => new Response(f.readable.pipeThrough(new CompressionStream('gzip'))).bytes()) };
+    gzipCache.set(rel, hit);
+    hit.bytes.catch(() => gzipCache.get(rel) === hit && gzipCache.delete(rel));
+  }
+  return hit.bytes;
+}
 async function serveStatic(pathname, req) {
   const rel = staticPath(pathname, STATIC_DIRS, STATIC_FILES);
   if (!rel) return null;
@@ -174,11 +192,12 @@ async function serveStatic(pathname, req) {
       'vary': 'accept-encoding',
     };
     if (req.headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers });
-    const file = await Deno.open(path, { read: true });
-    const gzip = COMPRESSED.has(ext) && /\bgzip\b/.test(req.headers.get('accept-encoding') || '');
-    if (gzip) headers['content-encoding'] = 'gzip';
-    else headers['content-length'] = String(stat.size);
-    return new Response(gzip ? file.readable.pipeThrough(new CompressionStream('gzip')) : file.readable, { headers });
+    if (COMPRESSED.has(ext) && /\bgzip\b/.test(req.headers.get('accept-encoding') || '')) {
+      headers['content-encoding'] = 'gzip';
+      return new Response(await gzipped(rel, path, etag), { headers });
+    }
+    headers['content-length'] = String(stat.size);
+    return new Response((await Deno.open(path, { read: true })).readable, { headers });
   } catch {
     return null;
   }
@@ -257,7 +276,14 @@ Deno.serve({ hostname: BIND, port: HTTP_PORT, ...tls, onListen: () => {} }, asyn
     }
     return Response.json({ port: GAME_PORT, certHash, ...host.info() });
   }
-  if (pathname === '/rooms' && req.method === 'POST') return createRoom(req, url, info.remoteAddr.hostname);
+  if (pathname === '/rooms' && req.method === 'POST') {
+    // Our page sends the map as application/octet-stream, a type that needs a CORS preflight
+    // this server never answers: any other site's page could make its visitors upload rooms.
+    if (req.headers.get('content-type') !== 'application/octet-stream') {
+      return Response.json({ error: 'send the map as application/octet-stream' }, { status: 415 });
+    }
+    return createRoom(req, url, info.remoteAddr.hostname);
+  }
   const roomMap = /^\/rooms\/([a-z0-9]+)\/map\.bsp$/.exec(pathname);
   if (roomMap) {
     const room = rooms.get(roomMap[1]);

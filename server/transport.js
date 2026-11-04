@@ -23,8 +23,12 @@ export class Session {
   }
 }
 
+const UPGRADE_MS = 10000; // from the QUIC handshake to a ready WebTransport session
+
 // onSession(session) -> { onDatagram(bytes), onClose() }
-export function listen({ hostname = '0.0.0.0', port, cert, key }, onSession) {
+// connections: an AddressCounts (server/host.js) bounding the open connections per address,
+// sessions or not: 2,000 that never upgraded were held forever, 45 KB each.
+export function listen({ hostname = '0.0.0.0', port, cert, key, connections = null }, onSession) {
   const endpoint = new Deno.QuicEndpoint({ hostname, port });
   const listener = endpoint.listen({ alpnProtocols: ['h3'], cert, key });
   let nextId = 1;
@@ -35,10 +39,37 @@ export function listen({ hostname = '0.0.0.0', port, cert, key }, onSession) {
     }
   })();
 
+  // The address is read off the accepted connection: an incoming one's remoteAddr throws
+  // ("Invalid QuicIncoming resource"), and read in the loop above that ended the server.
   async function handle(incoming) {
     const conn = await incoming.accept();
-    const wt = await Deno.upgradeWebTransport(conn);
-    await wt.ready;
+    const address = conn.remoteAddr && conn.remoteAddr.hostname;
+    if (connections && !connections.add(address)) return conn.close({ closeCode: 0, reason: 'too many connections' });
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      if (connections) connections.remove(address);
+    };
+    try {
+      await serve(conn, release);
+    } finally {
+      release();
+    }
+  }
+
+  async function serve(conn, release) {
+    const timer = setTimeout(() => { // never upgraded: closed, and no longer counted even if the awaits hang
+      release();
+      try { conn.close({ closeCode: 0, reason: 'no upgrade' }); } catch { /* already closed */ }
+    }, UPGRADE_MS);
+    let wt;
+    try {
+      wt = await Deno.upgradeWebTransport(conn);
+      await wt.ready;
+    } finally {
+      clearTimeout(timer);
+    }
     const session = new Session(nextId++, wt, conn.remoteAddr && conn.remoteAddr.hostname);
     const handlers = onSession(session);
     const reader = wt.datagrams.readable.getReader();

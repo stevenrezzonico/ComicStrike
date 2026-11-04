@@ -295,6 +295,34 @@ Deno.test('long console output splits into datagram-sized prints', () => {
   assert.ok(chunks.length > 1);
   assert.equal(chunks.join(''), text);
   for (const c of chunks) assert.ok(new TextEncoder().encode(c).length <= MAX_TEXT);
+  for (const c of chunks.slice(0, -1)) assert.ok(c.endsWith('\n'), 'cut at line breaks');
+  // One rcon line's `find e` output was 479 KB: encoding all the rest again for every chunk
+  // took 0.5 s. Multi-byte characters, and a run with no line break at all.
+  const big = ('ünïcode ✓ '.repeat(40) + '\n').repeat(1200) + 'é'.repeat(3000);
+  const t0 = performance.now();
+  const parts = printChunks(big);
+  assert.ok(performance.now() - t0 < 100, `${(performance.now() - t0).toFixed(0)} ms`);
+  assert.equal(parts.join(''), big);
+  for (const c of parts) assert.ok(new TextEncoder().encode(c).length <= MAX_TEXT);
+});
+
+// One rcon line runs at most 256 commands, aliases included: `alias x "x;x"; x` ran 2^33 and
+// froze the server (a room's uploader holds its rcon password). Maps change by rcon at most
+// once a second: each builds a new game.
+Deno.test('rcon: one line runs a bounded number of commands, maps change at most once a second', async (t) => {
+  const s = await setup(t);
+  if (!s) return;
+  const { host, clock } = s;
+  host.con.exec('rcon_password hunter2');
+  const who = { id: 0, name: 'uploader', session: { address: '203.0.113.7' } };
+  const t0 = performance.now();
+  const out = host.rcon(who, 'hunter2', 'alias x "x;x"; x');
+  assert.ok(performance.now() - t0 < 1000);
+  assert.match(out, /too many commands in one line/);
+  assert.ok(out.split('\n').length < 300);
+  assert.match(host.rcon(who, 'hunter2', 'map de_dust2; map de_dust2'), /changelevel to de_dust2\nmap: too soon/);
+  clock.ms += 1000;
+  assert.match(host.rcon(who, 'hunter2', 'map de_dust2'), /changelevel to de_dust2/);
 });
 
 // A client's console commands: at most 32 a second (each name or team change resent the

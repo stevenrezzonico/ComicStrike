@@ -215,7 +215,8 @@ export function parseBSP(buffer, limits = null) {
 // sees it. Real maps stay far inside these (GoldSrc's own limits are lower).
 export const BSP_LIMITS = {
   coord: 16384, // |x|, |y|, |z| of every vertex and model bound (the floor grids cover the map)
-  depth: 512, // BSP tree depth (the traces recurse)
+  depth: 256, // BSP tree depth (the traces recurse; Valve's deepest is 82, our compiler's 72)
+  models: 512, // GoldSrc's own limit: every trace and floor grid walks every brush entity
   faceEdges: 256, // corners of one face
   lightmap: 256, // lightmap texels along a face's side
   entities: 8192,
@@ -276,7 +277,10 @@ export function validateBSP(b, L = BSP_LIMITS) {
   }
   // Model 0's leaf count sizes a visibility row (client/gl/worldvis.js).
   if (!(b.modelsI[13] >= 0 && b.modelsI[13] < b.numLeaves)) fail('model 0 leaf count');
-  // Trees: nodes (hull 0) end in leaves, clipnodes (hulls 1-3) in contents.
+  // Trees: nodes (hull 0) end in leaves, clipnodes (hulls 1-3) in contents. A node has one
+  // parent (the client walks every child of a visible node each frame, so a node shared by
+  // two stacked 24 deep was 2^24 visits a frame); compilers do share clipnodes.
+  const parents = new Uint8Array(b.numNodes);
   for (let i = 0; i < b.numNodes; i++) {
     if (b.nodesI32[i * 6] < 0 || b.nodesI32[i * 6] >= b.numPlanes) fail(`node ${i} plane`);
     const ff = b.nodesI16[i * 12 + 10] & 0xffff, nf = b.nodesI16[i * 12 + 11] & 0xffff;
@@ -284,6 +288,7 @@ export function validateBSP(b, L = BSP_LIMITS) {
     for (let k = 0; k < 2; k++) {
       const c = b.nodesI16[i * 12 + 2 + k];
       if (c >= b.numNodes || (c < 0 && -c - 1 >= b.numLeaves)) fail(`node ${i} child`);
+      if (c >= 0 && parents[c]++) fail(`node ${c} shared`);
     }
   }
   checkTree(b.numNodes, (i, k) => b.nodesI16[i * 12 + 2 + k], L.depth, fail, 'node');
@@ -295,6 +300,8 @@ export function validateBSP(b, L = BSP_LIMITS) {
     }
   }
   checkTree(b.numClipnodes, (i, k) => b.clipnodesI16[i * 4 + 2 + k], L.depth, fail, 'clipnode');
+  if (b.numModels > L.models) fail('too many models');
+  let modelFaces = 0;
   for (let m = 0; m < b.numModels; m++) {
     for (let k = 0; k < 9; k++) if (!finite(b.modelsF[m * 16 + k], L.coord * 2)) fail(`model ${m} bounds`);
     const h0 = modelHeadnode(b, m, 0);
@@ -306,16 +313,20 @@ export function validateBSP(b, L = BSP_LIMITS) {
     if (modelFirstFace(b, m) < 0 || modelNumFaces(b, m) < 0 || modelFirstFace(b, m) + modelNumFaces(b, m) > b.numFaces) {
       fail(`model ${m} faces`);
     }
+    modelFaces += modelNumFaces(b, m); // overlapping models would each be meshed again
   }
+  if (modelFaces > b.numFaces) fail('model faces overlap');
   if (b.entities.length > L.entities) fail('too many entities');
+  const named = new Uint8Array(b.numModels); // one entity a model: 8,000 naming one were 8,000 to trace
   for (const e of b.entities) {
     const m = entityModelIndex(e);
     if (m !== -1 && !(m >= 0 && m < b.numModels)) fail(`entity model ${e.model}`);
+    if (m > 0 && named[m]++) fail(`model ${m} named twice`);
     // Numbers in keys (speeds, damage, delays, vectors) within what a 32-bit float holds:
     // `explodemagnitude 1e39` became Infinity and NaN damage, `speed 1e999` a NaN door
     // position. Mappers write `health 99999999999999999999999` for unbreakable. Words pass.
     for (const k in e) {
-      for (const tok of e[k].split(' ')) {
+      for (const tok of e[k].split(/\s+/)) { // as parseVec3 reads them: a tab split no number
         const v = Number(tok);
         if (!Number.isNaN(v) && !(Math.abs(v) <= 1e38)) fail(`entity key ${k}`);
       }
@@ -340,7 +351,11 @@ function checkTree(n, child, maxDepth, fail, what) {
       const i = stack[sp];
       if (side[sp] < 2) {
         const c = child(i, side[sp]++);
-        if (c < 0 || height[c] >= 0) continue;
+        if (c < 0) continue;
+        if (height[c] >= 0) { // walked before (shared, or written before its parent): its levels count here too
+          if (sp + height[c] > maxDepth) fail(`${what} tree too deep`);
+          continue;
+        }
         if (height[c] === -2) fail(`${what} ${i}: cycle`);
         if (sp + 1 > maxDepth) fail(`${what} tree too deep`);
         stack[++sp] = c;

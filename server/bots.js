@@ -82,6 +82,9 @@ const ARRIVE = 20; // units from a waypoint that count as there
 const PATH_MAX = 1024;
 const HOLD_MIN = 8, HOLD_MAX = 16; // seconds at a spot before picking another in the same area (approx.)
 const REPATH_FAIL = 2; // seconds before a failed path search is tried again
+// Path searches all bots may start in one tick (0.6-1.4 ms each): at the end of the freeze
+// every bot searched at once, 13-17 ms with 20 bots. The rest search over the next ticks.
+const PATH_SEARCHES = 2;
 // Sniper rifles (AWP, SSG 08, SCAR-20, G3SG1: two scope levels): scoped for an enemy
 // farther than SCOPE_DIST, firing SCOPE_SETTLE after scoping (a quick scope is still
 // inaccurate), unscoped out of a fight. Hard and expert bots on a team with no sniper yet:
@@ -261,6 +264,19 @@ export class Bots {
       }
       this.nav = new Nav(this.game.bsp, this.game.world, NAV_CELL, (bi) => open.has(bi));
       console.log(`bot navigation: ${this.nav.count} nodes in ${(performance.now() - t).toFixed(0)} ms`);
+      // The bomb sites with navigation inside, where bots go (all of them when none has):
+      // de_train's B has none, and the Ts sent there stood at spawn all round.
+      const sites = this.game.bombSites, nav = this.nav;
+      this.sites = [];
+      for (let i = 0; i < sites.count; i++) {
+        for (let k = 0; k < nav.count; k++) {
+          if (nav.inBox(k, sites.boxes[i])) {
+            this.sites.push(i);
+            break;
+          }
+        }
+      }
+      if (!this.sites.length) for (let i = 0; i < sites.count; i++) this.sites.push(i);
     }
     return this.nav;
   }
@@ -365,13 +381,15 @@ export class Bots {
     if (!n) return 0;
     if (this.siteRound !== g.round.serial) {
       this.siteRound = g.round.serial;
-      this.tSite = Math.floor(this.random() * n);
+      const sites = this.ensureNav() && this.sites;
+      this.tSite = sites[Math.floor(this.random() * sites.length)];
     }
     return this.tSite;
   }
 
   // Each tick, before the server runs commands: every bot decides its command.
   think() {
+    this.searches = PATH_SEARCHES;
     if (this.nav && this.game.tick % FIRE_MARK_TICKS === 0) this.markFires();
     for (const b of this.list) b.think();
   }
@@ -560,6 +578,10 @@ class Bot {
       let repath = goal.node !== this.goal || goal.why !== this.goalWhy || this.fireMatters();
       if (this.pathFailed && g.tick < this.repathAt) repath = false; // no way found: not searched again for a while
       else if (!repath && goal.moving && g.tick >= this.repathAt) repath = true;
+      if (repath && goal.node >= 0 && this.bots.searches-- <= 0) { // over this tick's searches: next tick
+        repath = false;
+        this.goalWhy = '';
+      }
       if (repath) {
         this.goal = goal.node;
         this.goalWhy = goal.why;
@@ -989,12 +1011,12 @@ class Bot {
         if (this.nearestTo(bomb.x, bomb.y, TEAM_CT) !== c) {
           return { node: keep('cover') >= 0 ? this.goal : this.near(bomb.x, bomb.y, bomb.z, 400), why: 'cover' };
         }
-        if (Math.hypot(bomb.x - x, bomb.y - y) < 48) {
+        if (Math.hypot(bomb.x - x, bomb.y - y) < 48 && Math.abs(bomb.z - feet) < 64) { // not from the floor above
           return { node: -1, why: 'defuse', action: IN_USE, look: [bomb.x, bomb.y, bomb.z + 2] };
         }
         return { node: nav.nodeAt(bomb.x, bomb.y, bomb.z), why: 'bomb' };
       }
-      const held = g.bombSites.boxes[c.id % g.bombSites.count]; // CTs spread over the sites
+      const sites = this.bots.sites, held = g.bombSites.boxes[sites[c.id % sites.length]]; // CTs spread over the sites
       return { node: keep('hold') >= 0 ? this.goal : nav.random(rnd, held), why: 'hold' };
     }
     const h = g.hostages;
@@ -1006,7 +1028,7 @@ class Bot {
         }
         let k = -1, bestD = Infinity;
         for (let i = 0; i < h.count; i++) {
-          const d = Math.hypot(h.x[i] - x, h.y[i] - y);
+          const d = Math.hypot(h.x[i] - x, h.y[i] - y, h.z[i] - feet); // 3D: one upstairs is no nearer
           if (h.state[i] === HS_IDLE && d < bestD) [k, bestD] = [i, d];
         }
         if (k >= 0) {

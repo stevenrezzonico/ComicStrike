@@ -5,7 +5,7 @@
 // kill events) every tick. Transport-agnostic: sessions only need send(bytes) and
 // close(reason).
 
-import { parseVec3 } from '../shared/bsp.js';
+import { parseVec3, BSP_LIMITS } from '../shared/bsp.js';
 import { TICK_RATE, TICK_DT } from '../shared/constants.js';
 import { ARMS_RACE, DEMOLITION, armLevel } from '../shared/progression.js';
 import { CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, HULL_STAND, HULL_POINT } from '../shared/trace.js';
@@ -471,6 +471,7 @@ export class Game {
 
   disconnect(c) {
     if (this.clients[c.id] !== c) return;
+    c.joined = false; // gone: the planter's credit, the demo's next bomb and the like check it
     if (c.bot) this.bots.list = this.bots.list.filter((b) => b !== c.bot);
     if (this.bombCarrier === c) this.dropBomb(c, false);
     this.dropHostage(c);
@@ -945,6 +946,8 @@ export class Game {
       this.setPhase(PHASE_WARMUP, 0);
       this.warmupReady = -1;
       this.resetBomb();
+      // Warmup respawns the dead (killed in the live round they waited for the next round).
+      for (const c of this.clients) if (c && c.joined && c.playing && !c.alive) c.respawnTick = this.tick + WARMUP_RESPAWN * TICK_RATE;
       console.log('waiting for players');
     } else if (rs.phase === PHASE_FREEZE && this.tick >= this.phaseEnd) {
       // Rounds that never end run on the match clock (mp_timelimit; none: no clock).
@@ -961,8 +964,8 @@ export class Game {
         this.endRound(this.timeWinner, this.timeWinner ? END_TIME : END_DRAW);
       }
     } else if (rs.phase === PHASE_OVER && this.tick >= this.phaseEnd) {
-      // Regulation: first past half the rounds wins, a tie after all of them goes to
-      // overtime (CS:GO's MR3: periods of 6 rounds, swap after 3, first to 4 of them;
+      // Regulation: first past half the rounds wins (or the lead after all of them), a tie
+      // goes to overtime (CS:GO's MR3: periods of 6 rounds, swap after 3, first to 4 of them;
       // 3-3 plays another period). Without overtime a tie restarts the match.
       const max = this.rules.maxRounds, ot = this.overtime > 0, otMax = this.rules.overtimeRounds;
       const played = ot ? this.roundsPlayed - max - (this.overtime - 1) * otMax : this.roundsPlayed;
@@ -1157,10 +1160,14 @@ export class Game {
 
   // `hero`: the client whose plant, defuse or rescue ended it (the MVP).
   // A side has won more than half the rounds of regulation (or of this overtime period).
+  // Past half the rounds of the regulation or overtime period, or a lead once all of them are
+  // played (rounds can end in a draw: 15-14 with a draw went to overtime).
   matchWon() {
-    const rs = this.round, ot = this.overtime > 0;
-    const need = Math.floor((ot ? this.rules.overtimeRounds : this.rules.maxRounds) / 2);
-    return (ot ? rs.scoreT - this.otScoreT : rs.scoreT) > need || (ot ? rs.scoreCT - this.otScoreCT : rs.scoreCT) > need;
+    const rs = this.round, ot = this.overtime > 0, max = this.rules.maxRounds, otMax = this.rules.overtimeRounds;
+    const limit = ot ? otMax : max, need = Math.floor(limit / 2);
+    const played = ot ? this.roundsPlayed - max - (this.overtime - 1) * otMax : this.roundsPlayed;
+    const t = ot ? rs.scoreT - this.otScoreT : rs.scoreT, ct = ot ? rs.scoreCT - this.otScoreCT : rs.scoreCT;
+    return t > need || ct > need || (played >= limit && t !== ct);
   }
 
   endRound(winner, reason, hero = null) {
@@ -1376,7 +1383,7 @@ export class Game {
     } else if (name === 'setpos') { // CS:GO: setpos x y z puts the feet there (sv_cheats; the demo allows it)
       if (!this.rules.cheats && !this.rules.demo) {
         this.print(c, `Can't use cheat command setpos in multiplayer, unless the server has sv_cheats set to 1.`);
-      } else if (c.alive && args.length >= 4 && args.slice(1, 4).every((v) => Number.isFinite(+v))) {
+      } else if (c.alive && args.length >= 4 && args.slice(1, 4).every((v) => Math.abs(+v) <= 2 * BSP_LIMITS.coord)) { // 1e39 was Infinity as a float32
         const f = c.player.ps.f;
         f[PS_ORIGIN] = +args[1];
         f[PS_ORIGIN + 1] = +args[2];
@@ -1516,19 +1523,16 @@ export class Game {
   }
 
   // Gives item i to c (into its slot, which must be free; a grenade joins the others)
-  // and takes it off the ground.
+  // and takes it off the ground. Given like a bought one (a silencer on, and in hand the old
+  // gun's reload or scope ended: an E swap mid-reload filled the new gun), with its own ammo.
   takeItem(c, i) {
     const it = this.items, w = WEAPONS[it.weapon[i]];
-    const f = c.player.ws.f, o = WS_SLOTS + w.slot * 3;
-    if (w.grenade) {
-      giveWeapon(c.player.ws, it.weapon[i]);
-      it.remove(i);
-      this.itemsDirty = true;
-      return;
+    giveWeapon(c.player.ws, it.weapon[i]);
+    if (!w.grenade) {
+      const f = c.player.ws.f, o = WS_SLOTS + w.slot * 3;
+      f[o + 1] = it.clip[i];
+      f[o + 2] = it.reserve[i];
     }
-    f[o] = it.weapon[i];
-    f[o + 1] = it.clip[i];
-    f[o + 2] = it.reserve[i];
     it.remove(i);
     this.itemsDirty = true;
   }

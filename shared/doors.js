@@ -1030,7 +1030,12 @@ export class MapLogic {
     const slots = this.breakableByName.get(name);
     if (slots && this.onBreak) for (const s of slots) if (!this.breakables.broken[s]) this.onBreak(s, act);
     const r = this.relays.get(name);
-    if (r) for (const q of r) if (!this.dead.has(q.src)) this.fireAt(tick, q.target, act, q.delay, q.src, q.kill);
+    if (r) {
+      for (const q of r) {
+        if (this.fires >= MAX_FIRES) break; // a multi_manager naming itself 60,000 times was 15M calls a tick
+        if (!this.dead.has(q.src)) this.fireAt(tick, q.target, act, q.delay, q.src, q.kill);
+      }
+    }
     const ms = this.masters.get(name);
     if (ms && !ms.on) {
       const i = ms.sources.indexOf(src);

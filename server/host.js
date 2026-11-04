@@ -16,6 +16,10 @@ const RCON_BLOCK_MS = 60000;
 // terminal still works): an IPv6 /48, free from tunnel brokers, is 65,536 addresses of 5
 // guesses a minute each, ~327k guesses a minute against the per-address count alone.
 const RCON_FAILS_PER_MINUTE = 60;
+// Commands one rcon line may run, aliases and cfgs included: `alias x "x;x"; x` ran 2^33
+// and froze the server. A room's uploader holds its rcon password.
+const RCON_BUDGET = 256;
+const RCON_MAP_GAP_MS = 1000; // rcon map changes: each builds a new game (40 in a line were 70 ms)
 
 // CS:GO game modes by game_type / game_mode. A mode is a cfg of mode convars run when a
 // map loads (cfg/gamemode_<name>.cfg, then cfg/gamemode_<name>_server.cfg for the
@@ -86,6 +90,7 @@ export class Host {
     this.rconFails = 0;
     this.failedTicks = 0; // ticks that threw since the last report
     this.failReportAt = -Infinity;
+    this.mapChangedAt = -Infinity; // the last map change by rcon
     const con = this.con = new Console(opts.print || ((s) => console.log(s)));
     const apply = () => this.applyRules();
     const num = (name, value, help, min, max) => con.cvar(name, value, { help, min, max, onChange: apply });
@@ -323,6 +328,11 @@ export class Host {
   // Switches maps: every client is told to reconnect, then a new game starts there.
   changeLevel(name, ctx) {
     if (!name || !/^[\w-]+$/.test(name)) return this.con.out(ctx, 'map <name>');
+    if (ctx && ctx.source === 'rcon') {
+      const now = this.opts.now ? this.opts.now() : performance.now();
+      if (now - this.mapChangedAt < RCON_MAP_GAP_MS) return this.con.out(ctx, 'map: too soon after the last change');
+      this.mapChangedAt = now;
+    }
     let bsp;
     try {
       bsp = this.opts.loadMap(name);
@@ -402,7 +412,7 @@ export class Host {
     this.rconGuard.delete(key);
     console.log(`rcon from player ${c.id} "${c.name}": ${command}`);
     const out = [];
-    this.con.exec(command, { print: (s) => out.push(s), source: 'rcon', client: c });
+    this.con.exec(command, { print: (s) => out.push(s), source: 'rcon', client: c, budget: RCON_BUDGET });
     return out.join('\n');
   }
 

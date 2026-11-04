@@ -286,7 +286,9 @@ function surfaceOf(world, breakables, ent, x, y, z, dx, dy, dz) {
 // ignores (client prediction). Every entry and exit point lands in `impacts`.
 export function resolveShots(world, breakables, ws, shots, impacts, targets = null, selfId = -1, selfTeam = 0) {
   impacts.count = 0;
-  const w = activeWeapon(ws);
+  // The gun that fired: E to plant in the same tick puts the C4 in hand after the shot, and
+  // its stats made the damage NaN (a dead victim with no kill).
+  const w = WEAPONS[shots.weapon[0]] || activeWeapon(ws);
   for (let i = 0; i < shots.count; i++) {
     const dx = shots.dir[i * 3], dy = shots.dir[i * 3 + 1], dz = shots.dir[i * 3 + 2];
     const range = shots.range[i];

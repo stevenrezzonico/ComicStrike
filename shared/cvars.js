@@ -289,6 +289,10 @@ export class Console {
   }
 
   run(args, ctx = {}) {
+    if (ctx.budget !== undefined && --ctx.budget < 0) { // ctx.budget: commands left for this line (rcon)
+      if (ctx.budget === -1) this.out(ctx, 'too many commands in one line');
+      return;
+    }
     const name = args[0].toLowerCase();
     const alias = this.aliases.get(name);
     if (alias !== undefined) {

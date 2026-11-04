@@ -540,16 +540,16 @@ export function cleanName(text) {
 }
 
 // Console output split into datagram-sized PRINT messages (at line breaks when it can).
+// Each chunk is what fits the buffer, backed up to its last line break: encoding all the
+// rest again for every chunk took 0.5 s for one rcon line's 479 KB.
+const chunkBuf = new Uint8Array(MAX_TEXT);
 export function printChunks(text) {
   const chunks = [];
-  const enc = new TextEncoder();
   let rest = text;
   while (rest.length) {
-    let n = rest.length;
-    while (enc.encode(rest.slice(0, n)).length > MAX_TEXT) {
-      const nl = rest.lastIndexOf('\n', Math.floor(n * 0.9));
-      n = nl > 0 ? nl + 1 : Math.floor(n * 0.9);
-    }
+    let n = utf8Encoder.encodeInto(rest, chunkBuf).read;
+    const nl = n < rest.length ? rest.lastIndexOf('\n', n - 1) : -1;
+    if (nl > 0) n = nl + 1;
     chunks.push(rest.slice(0, n));
     rest = rest.slice(n);
   }

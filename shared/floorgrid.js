@@ -18,6 +18,9 @@ export const LAYERS = 6; // floor heights kept per cell (the highest go first wh
 // 66,700). An uploaded map can span the whole ±16384 world: its navigation at 24 units
 // held 1.7 GB and blocked every game on the server for seconds (server/rooms.js).
 export const MAX_CELLS = 1 << 19;
+// Floor faces covering one cell, on average: real maps reach 2.35. A map of many copies of
+// one big face (20 bytes each) traced every cell again for each copy before any other limit.
+const RASTER_VISITS = 8;
 export const STAIR = 18; // sv_stepsize: walked up without a jump
 export const CLIMB = 64; // a crouch jump reaches about this high (approx.)
 export const MOVE_WALK = 0; // walk, or fall
@@ -67,6 +70,7 @@ export class FloorGrid {
     this.world = world;
     this.strictFalls = strictFalls;
     try {
+      this.visits = 0;
       for (const f of faces) this.raster(f, world);
       this.ladder = this.ladders(world); // per cell: the top of a ladder there, or -Infinity
       this.reached = this.flood(bsp);
@@ -268,6 +272,7 @@ export class FloorGrid {
       }
       if (xa > xb) continue;
       for (let px = Math.max(0, Math.ceil(this.px(xa) - 0.5)); px <= Math.min(w - 1, Math.floor(this.px(xb) - 0.5)); px++) {
+        if (++this.visits > RASTER_VISITS * this.w * this.h) throw new Error('the map has too many floors for its floor grid');
         const wx = this.minX + (px + 0.5) * s;
         const z = (d - nx * wx - ny * wy) / nz;
         if (this.hasLayer(py * w + px, z)) continue;

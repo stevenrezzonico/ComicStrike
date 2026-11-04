@@ -315,10 +315,11 @@ function recursiveHullCheck(num, depth) {
     T.nx = -nx; T.ny = -ny; T.nz = -nz; T.dist = -dist;
   }
 
-  // Back off until the midpoint is outside the solid (rare float edge cases).
+  // Back off until the midpoint is outside the solid (rare float edge cases). NaN ends it too:
+  // a trace toward an infinite point never left the loop, which froze every game.
   while (hullPointContents(T.head, mx, my, mz) === CONTENTS_SOLID) {
     frac -= 0.1;
-    if (frac < 0) {
+    if (!(frac >= 0)) {
       T.fraction = midf;
       T.endx = mx; T.endy = my; T.endz = mz;
       return false;

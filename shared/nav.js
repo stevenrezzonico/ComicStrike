@@ -245,19 +245,29 @@ export class Nav {
     return Math.abs(z - z1) <= STAIR;
   }
 
-  // A random node (rand: () => 0..1), or one inside a box [x0, y0, z0, x1, y1, z1].
+  // Node k stands in box [x0, y0, z0, x1, y1, z1] (its floor up to 40 under the box).
+  inBox(k, box) {
+    return this.x[k] >= box[0] && this.x[k] <= box[3] && this.y[k] >= box[1] && this.y[k] <= box[4] &&
+      this.z[k] >= box[2] - 40 && this.z[k] <= box[5];
+  }
+
+  // A random node (rand: () => 0..1), or one inside a box; with none inside (a zone whose
+  // floor the flood never reached: de_train's bomb site B), the node nearest its middle.
   random(rand, box = null) {
     for (let tries = 0; tries < 64; tries++) {
       const k = Math.floor(rand() * this.count);
-      if (!box || (this.x[k] >= box[0] && this.x[k] <= box[3] && this.y[k] >= box[1] && this.y[k] <= box[4] &&
-        this.z[k] >= box[2] - 40 && this.z[k] <= box[5])) return k;
+      if (!box || this.inBox(k, box)) return k;
     }
     if (!box) return -1;
-    const inside = [];
+    const inside = [], cx = (box[0] + box[3]) / 2, cy = (box[1] + box[4]) / 2;
+    let near = -1, nearD = Infinity;
     for (let k = 0; k < this.count; k++) {
-      if (this.x[k] >= box[0] && this.x[k] <= box[3] && this.y[k] >= box[1] && this.y[k] <= box[4] &&
-        this.z[k] >= box[2] - 40 && this.z[k] <= box[5]) inside.push(k);
+      if (this.inBox(k, box)) inside.push(k);
+      else if (!inside.length) {
+        const d = Math.hypot(this.x[k] - cx, this.y[k] - cy, this.z[k] - box[2]);
+        if (d < nearD) [near, nearD] = [k, d];
+      }
     }
-    return inside.length ? inside[Math.floor(rand() * inside.length)] : -1;
+    return inside.length ? inside[Math.floor(rand() * inside.length)] : near;
   }
 }

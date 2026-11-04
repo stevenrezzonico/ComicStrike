@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Rooms, RoomError } from '../server/rooms.js';
 import { mapNameOf, parseBSP } from '../shared/bsp.js';
 import { CollisionWorld } from '../shared/trace.js';
-import { FloorGrid, MAX_CELLS } from '../shared/floorgrid.js';
+import { FloorGrid, MAX_CELLS, floorFaces } from '../shared/floorgrid.js';
 import { Writer, Reader, writeHello, readHello, helloRoom, C2S_HELLO, S2C_WELCOME, S2C_REJECT, readWelcome } from '../shared/protocol.js';
 import { TEAM_T } from '../shared/player.js';
 
@@ -159,7 +159,12 @@ Deno.test('a map too big for the navigation is refused before the work', () => {
   assert.ok(Math.ceil(32768 / 24) ** 2 > MAX_CELLS);
   assert.throws(() => new FloorGrid(bsp, world, 24, { maxReached: 100 }), /over 100 places/);
   assert.ok(new FloorGrid(bsp, world, 24).reached.some((r) => r), 'the playground itself is fine');
+  // Copies of one big floor face (20 bytes each, all on the same edges) each rasterized every
+  // cell again: 100 were a second of building, before any other limit. Real maps: 2.35 a cell.
+  const faces = floorFaces(bsp), big = faces.reduce((a, f) => (f.xs.length && area(f) > area(a) ? f : a));
+  assert.throws(() => new FloorGrid(bsp, world, 24, { faces: [...faces, ...Array(200).fill(big)] }), /too many floors/);
 });
+const area = (f) => (Math.max(...f.xs) - Math.min(...f.xs)) * (Math.max(...f.ys) - Math.min(...f.ys));
 
 // The limits are checked before an upload is read (reading 24 MB first let parallel uploads
 // fill the server's memory): one upload being read per address, `uploads` in all.

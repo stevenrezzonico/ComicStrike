@@ -2573,7 +2573,9 @@ function enterGame() {
 }
 
 // Back to the start menu (disconnect, quit practice, or the server went away).
+let gameSerial = 0; // counts leaveGame: a reconnect still retrying gives up when it changed
 function leaveGame(message = '') {
+  gameSerial++;
   stopRecording();
   if (demoPlayer) demoPlayer.stop();
   demoPlayer = null;
@@ -2596,8 +2598,9 @@ function leaveGame(message = '') {
 // current team; the WELCOME names the map.
 let reconnecting = false;
 async function reconnect() {
-  if (reconnecting || !net) return;
+  if (reconnecting || !net || net.playback) return;
   reconnecting = true;
+  const serial = gameSerial; // quitting meanwhile must not let a retry join the server
   stopRecording(); // a demo holds one map
   const team = player.team;
   if (net && !net.closed) net.close('reconnect');
@@ -2610,17 +2613,19 @@ async function reconnect() {
         await joinServer(team);
         break;
       } catch (err) {
-        if (attempt >= 4) throw err;
+        if (attempt >= 4 || serial !== gameSerial) throw err;
         await new Promise((r) => setTimeout(r, 500));
+        if (serial !== gameSerial) throw err;
       }
     }
+    if (serial !== gameSerial) throw new Error('left'); // quit while the map loaded
     status.style.display = 'none';
     menu.busy('');
     conWin.print(`connected: ${currentMap}`);
     reconnecting = false;
   } catch (err) {
     reconnecting = false;
-    leaveGame(`Disconnected: ${err.message}`);
+    if (serial === gameSerial) leaveGame(`Disconnected: ${err.message}`);
   }
 }
 

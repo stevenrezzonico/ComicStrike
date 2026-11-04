@@ -1,7 +1,8 @@
 // Maps from outside (a player's own file, a room on the server): validateBSP must turn away
 // every file the engine could not run safely, and a file it lets through must play.
 import assert from 'node:assert/strict';
-import { parseBSP, parseUntrustedBSP, validateBSP } from '../shared/bsp.js';
+import { parseBSP, parseUntrustedBSP, validateBSP, BSP_LIMITS } from '../shared/bsp.js';
+import { Trace, traceHull, HULL_POINT, HULL_STAND } from '../shared/trace.js';
 import { Host } from '../server/host.js';
 
 const MAPS = new URL('../maps/', import.meta.url);
@@ -34,6 +35,8 @@ Deno.test('broken indices, cycles, deep trees and far coordinates are turned awa
     'infinite key': (b) => { b.entities.push({ classname: 'func_breakable', explodemagnitude: '1e39' }); },
     'overflowing key': (b) => { b.entities.push({ classname: 'func_door', speed: '1e999' }); },
     'huge vector': (b) => { b.entities.push({ classname: 'light', origin: '0 1e40 0' }); },
+    'tabbed vector': (b) => { b.entities.push({ classname: 'info_player_start', origin: '0\t1e39\t0' }); },
+    'model named twice': (b) => { b.entities.push({ classname: 'func_wall', model: '*1' }); },
     'leaf faces': (b) => { b.leavesI16[1 * 14 + 11] = b.marksurfaces.length + 1; },
     'model 0 leaf count': (b) => { b.modelsI[13] = b.numLeaves; },
   };
@@ -47,11 +50,46 @@ Deno.test('broken indices, cycles, deep trees and far coordinates are turned awa
     assert.throws(() => validateBSP(b), /^Error: bsp: /, what);
   }
   const deep = fresh();
-  assert.throws(() => validateBSP(deep, { ...validateBSPLimits(), depth: 3 }), /too deep/);
+  assert.throws(() => validateBSP(deep, { ...BSP_LIMITS, depth: 3 }), /too deep/);
+  assert.throws(() => validateBSP(fresh(), { ...BSP_LIMITS, models: 2 }), /too many models/);
   assert.throws(() => parseUntrustedBSP(new Uint8Array(64).buffer), /bsp: /, 'not a map');
 });
 
-const validateBSPLimits = () => ({ coord: 16384, depth: 512, faceEdges: 256, lightmap: 256, entities: 8192, textures: 8192 });
+// Each node's levels count wherever it is met: a chain written children first (allowed:
+// compilers share subtrees) passed at any depth, and a trace across one past the limit hung.
+// A hull 0 node with two parents made the client's per-frame walk exponential.
+Deno.test('a tree written children first is held to the depth, and nodes are not shared', () => {
+  const fresh = () => parseBSP(PLAYGROUND.slice().buffer);
+  assert.doesNotThrow(() => validateBSP(fresh(), { ...BSP_LIMITS, depth: 30 }));
+  const chain = fresh();
+  for (let k = 0; k < 40; k++) { // clipnode k's child is k - 1
+    chain.clipnodesI16[k * 4 + 2] = k ? k - 1 : -1;
+    chain.clipnodesI16[k * 4 + 3] = -2;
+  }
+  assert.throws(() => validateBSP(chain, { ...BSP_LIMITS, depth: 30 }), /clipnode tree too deep/);
+  const shared = fresh();
+  let i = 0;
+  while (shared.nodesI16[i * 12 + 2] < 0 || shared.nodesI16[i * 12 + 3] < 0) i++; // a node over two nodes
+  shared.nodesI16[i * 12 + 3] = shared.nodesI16[i * 12 + 2];
+  assert.throws(() => validateBSP(shared), /node \d+ shared/);
+});
+
+// A trace toward an infinite point (setpos 1e39 is Infinity as a float32) gets NaN fractions;
+// backing out of the solid compared NaN < 0 and never ended, freezing every game.
+Deno.test('a trace toward an infinite or NaN point ends', () => {
+  const log = console.log;
+  console.log = () => {};
+  try {
+    const host = new Host({ loadMap: () => parseBSP(PLAYGROUND.slice().buffer), listMaps: () => ['x'], readCfg: () => null, print: () => {} });
+    host.start('x');
+    const tr = new Trace();
+    for (const hull of [HULL_POINT, HULL_STAND]) {
+      for (const end of [Infinity, -Infinity, NaN]) traceHull(host.game.world, hull, 0, 0, 64, 0, end, 64, tr);
+    }
+  } finally {
+    console.log = log;
+  }
+});
 
 // Random bytes changed in the playground: each file is turned away or plays 200 ticks with
 // bots, no tick failing (a tick that throws is caught by Host.step and reported).
