@@ -240,7 +240,9 @@ function hullPointContents(num, x, y, z) {
 // as call arguments would be boxed (a heap allocation) on every call. Depth only grows
 // where a trace crosses a plane, so the tree depth bounds it.
 const MAX_DEPTH = 512;
-const ARGS = new Float64Array(MAX_DEPTH * 8);
+// validateBSP's checkTree lets a path hold MAX_DEPTH + 1 nodes, and the deepest writes its
+// child's arguments one level further: a trace that deep read NaN past the end.
+const ARGS = new Float64Array((MAX_DEPTH + 2) * 8);
 
 function hullCheck(head, x1, y1, z1, x2, y2, z2) {
   ARGS[0] = 0;

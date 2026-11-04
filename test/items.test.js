@@ -5,7 +5,7 @@ import { IN_DROP, IN_USE } from '../shared/constants.js';
 import { WEAPONS, WEAPON_ID, WS_SLOTS, WS_ACTIVE, SLOT_PRIMARY, SLOT_SECONDARY } from '../shared/weapons.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
 import { Writer, Reader, CmdRing, writeHello, writeCmds, writeBuy, readItems, S2C_ITEMS } from '../shared/protocol.js';
-import { Items } from '../shared/items.js';
+import { Items, MAX_ITEMS } from '../shared/items.js';
 import { Game } from '../server/game.js';
 
 let bsp = null;
@@ -208,3 +208,12 @@ Deno.test({ name: "weapons on the ground: fy_buzzkill's armoury_entity weapons l
   game.startRound(true);
   assert.equal(game.items.count, 0, 'turned off');
 } });
+
+// The ground holds MAX_ITEMS: a crafted map's 8000 armoury_entity points of 32 weapons each
+// traced their floors for 244 ms at every round start. No more than that are laid out.
+Deno.test('armoury weapons: no more than the ground holds', () => {
+  const playground = parseBSP(Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url)).buffer);
+  const many = Array.from({ length: 8000 }, (_, i) => ({ classname: 'armoury_entity', item: '4', count: '32', origin: `${i % 50} 0 64` }));
+  const game = new Game('de_playground', { ...playground, entities: [...playground.entities, ...many] }, { rounds: false });
+  assert.equal(game.armoury.reduce((n, a) => n + a.count, 0), MAX_ITEMS);
+});

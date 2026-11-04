@@ -6,7 +6,7 @@
 
 import {
   faceTexinfo, faceNumEdges, facePlane, faceSide, faceLightOfs, faceStyle,
-  faceVertex, modelFirstFace, modelNumFaces, entityModelIndex, parseVec3,
+  faceVertex, modelFirstFace, modelNumFaces, entityModelIndex, parseVec3, BSP_LIMITS,
 } from '../shared/bsp.js';
 import { breakableEntities, MAX_BREAKABLES } from '../shared/breakables.js';
 import { moverEntities, killableEntities } from '../shared/doors.js';
@@ -26,6 +26,10 @@ const TEX_SPECIAL = 1; // texinfo flag: sky / water / no lightmap
 // spare byte, 1 / SCROLL_UNIT tiles a second a step (WORLD_VS).
 export const SCROLL_UNIT = 8;
 const ATLAS_W = 1024;
+// The atlas grows to this height at most (32 MB): a crafted map's faces can share one block
+// of light while each asks for a rectangle of its own, which grew the atlas to gigabytes.
+// Faces past it take the grey block. Real maps: up to 4096 (cs_polaris).
+export const ATLAS_MAX_H = 8192;
 
 // Brush entities that are never visible.
 const HIDDEN_CLASSES = new Set([
@@ -34,7 +38,7 @@ const HIDDEN_CLASSES = new Set([
 ]);
 
 // Shelf packer for lightmap rectangles.
-class Atlas {
+export class Atlas {
   constructor(width) {
     this.width = width;
     this.height = 64;
@@ -44,8 +48,11 @@ class Atlas {
     this.shelf = 0;
   }
 
+  // The rectangle's corner [x, y], or null when the atlas is full (ATLAS_MAX_H).
   alloc(w, h) {
-    if (this.x + w + 1 > this.width) {
+    const wrap = this.x + w + 1 > this.width;
+    if ((wrap ? this.y + this.shelf + 1 : this.y) + h + 1 > ATLAS_MAX_H) return null;
+    if (wrap) {
       this.y += this.shelf + 1;
       this.x = 0;
       this.shelf = 0;
@@ -143,8 +150,10 @@ export function buildMapMesh(bsp) {
   // Average albedo per breakable slot (rgb sum, face count), for debris colors.
   const slotColor = new Float32Array((MAX_BREAKABLES + 1) * 4);
 
-  const sArr = new Float32Array(64);
-  const tArr = new Float32Array(64);
+  // A face's corners in texture space, as many as validateBSP lets a face have (64 gave NaN
+  // texture coordinates past the 64th).
+  const sArr = new Float32Array(BSP_LIMITS.faceEdges);
+  const tArr = new Float32Array(BSP_LIMITS.faceEdges);
   let v = 0;
   // Where each world face's opaque triangles start in the index buffer (-1: none), and how
   // many indices they take: the visible world is drawn from these (client/gl/worldvis.js).
@@ -212,8 +221,9 @@ export function buildMapMesh(bsp) {
         lightOfs + lmW * lmH * 3 <= bsp.lighting.length && lmW <= 256 && lmH <= 256;
 
       let rx = gx, ry = gy;
-      if (hasLm) {
-        [rx, ry] = atlas.alloc(lmW, lmH);
+      const at = hasLm ? atlas.alloc(lmW, lmH) : null;
+      if (at) {
+        [rx, ry] = at;
         for (let y = 0; y < lmH; y++) {
           for (let x = 0; x < lmW; x++) {
             const src = lightOfs + (y * lmW + x) * 3;
@@ -246,7 +256,7 @@ export function buildMapMesh(bsp) {
         vf[o + 2] = bsp.vertices[vi + 2] + m.oz;
         vf[o + 3] = sArr[i] / tw;
         vf[o + 4] = tArr[i] / th;
-        if (hasLm) {
+        if (at) {
           vf[o + 5] = rx + 0.5 + (sArr[i] / 16 - lmMinS);
           vf[o + 6] = ry + 0.5 + (tArr[i] / 16 - lmMinT);
         } else {

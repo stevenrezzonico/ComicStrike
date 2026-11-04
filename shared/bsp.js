@@ -311,6 +311,15 @@ export function validateBSP(b, L = BSP_LIMITS) {
   for (const e of b.entities) {
     const m = entityModelIndex(e);
     if (m !== -1 && !(m >= 0 && m < b.numModels)) fail(`entity model ${e.model}`);
+    // Numbers in keys (speeds, damage, delays, vectors) within what a 32-bit float holds:
+    // `explodemagnitude 1e39` became Infinity and NaN damage, `speed 1e999` a NaN door
+    // position. Mappers write `health 99999999999999999999999` for unbreakable. Words pass.
+    for (const k in e) {
+      for (const tok of e[k].split(' ')) {
+        const v = Number(tok);
+        if (!Number.isNaN(v) && !(Math.abs(v) <= 1e38)) fail(`entity key ${k}`);
+      }
+    }
   }
   return b;
 }

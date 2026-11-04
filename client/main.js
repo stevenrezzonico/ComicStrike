@@ -1197,13 +1197,7 @@ function tick() {
   if (reconnecting) return;
   if (net) {
     if (net.poll()) applySnapshot();
-    while (net.prints.length) conWin.print(net.prints.shift());
-    while (net.chats.length) addChat(net.chats.shift());
-    while (net.pings.length) {
-      const p = net.pings.shift();
-      callouts.ping(p.x, p.y, p.z, performance.now());
-      sounds.ping();
-    }
+    drainMessages(false);
     if (net.playback && (net.changelevel || net.closed)) return leaveGame(`Demo ${demoTitle} ended`);
     if (net.changelevel || (net.closed && net.closeReason === 'changelevel')) {
       reconnect();
@@ -1857,7 +1851,22 @@ setInterval(() => {
   if (!document.hidden || !net || !synced) return;
   if (net.poll()) applySnapshot();
   applyEvents();
+  drainMessages(true);
 }, 250);
+
+// The console lines, chat lines and pings the net client queued. A hidden tab takes them as
+// they come (on return, minutes of them showed as new: old radio balloons, every ping's
+// notes at once), its pings dropped.
+function drainMessages(hidden) {
+  while (net.prints.length) conWin.print(net.prints.shift());
+  while (net.chats.length) addChat(net.chats.shift());
+  while (net.pings.length) {
+    const p = net.pings.shift();
+    if (hidden) continue;
+    callouts.ping(p.x, p.y, p.z, performance.now());
+    sounds.ping();
+  }
+}
 
 // --- Console commands and key binds ------------------------------------------------
 
@@ -2090,8 +2099,13 @@ menu.onDemoFile = (file) => {
   menu.demoError = '';
   file.arrayBuffer().then(async (buf) => {
     const bytes = new Uint8Array(buf), demo = decodeDemo(bytes); // a bad file goes no further
-    const name = demoName(demo.header.name) || demoName(file.name.replace(/\.csdemo$/i, '').replace(/[^\w-]/g, '_').slice(0, 40)) || 'demo';
-    await saveDemo({ name, map: demo.header.map, seconds: demo.header.seconds || 0 }, bytes).catch(() => {});
+    const base = demoName(demo.header.name) || demoName(file.name.replace(/\.csdemo$/i, '').replace(/[^\w-]/g, '_').slice(0, 40)) || 'demo';
+    // A name of its own: saveDemo replaces a demo of the same name (a file named after one
+    // of ours overwrote it), and the header's seconds as a number (a string broke `demos`).
+    const saved = new Set((await listDemos().catch(() => [])).map((d) => d.name));
+    let name = base;
+    for (let n = 2; saved.has(name); n++) name = `${base.slice(0, 36)}-${n}`;
+    await saveDemo({ name, map: demo.header.map, seconds: Math.max(0, +demo.header.seconds || 0) }, bytes).catch(() => {});
     if (!demoList.includes(name)) demoList.push(name);
     run(() => playDemo(name, bytes));
   }).catch((err) => {
@@ -2124,7 +2138,7 @@ con.command('playback', playback, 'playback <name>: plays a recorded demo (as a 
 con.command('playdemo', playback, 'playdemo <name>: same as playback (CS:GO)');
 con.command('demos', (_a, ctx) => {
   listDemos().then((list) => con.out(ctx, list.length ? list.map((d) =>
-    `${d.name}  ${d.map}  ${d.seconds.toFixed(1)} s  ${(d.size / 1024).toFixed(0)} KB  ${new Date(d.at).toLocaleString()}`).join('\n')
+    `${d.name}  ${d.map}  ${(+d.seconds || 0).toFixed(1)} s  ${(d.size / 1024).toFixed(0)} KB  ${new Date(d.at).toLocaleString()}`).join('\n')
     : 'no demos (record <name> in a game)'), (err) => con.out(ctx, `demos: ${err.message || err}`));
 }, 'Lists the recorded demos');
 con.command('demo_download', (a, ctx) => {

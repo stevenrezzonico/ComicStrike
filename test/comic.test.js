@@ -9,7 +9,7 @@ import {
 } from '../client/gl/shaders.js';
 import { FlashLights, MAX_FLASHES } from '../client/gl/flashes.js';
 import { fullLight, cloudNoise } from '../client/gl/renderer.js';
-import { buildMapMesh, VERTEX_STRIDE } from '../client/mapmesh.js';
+import { buildMapMesh, VERTEX_STRIDE, Atlas, ATLAS_MAX_H } from '../client/mapmesh.js';
 import { parseBSP } from '../shared/bsp.js';
 import { MAT, FLAG_ALPHATEST } from '../shared/materials.js';
 
@@ -184,4 +184,14 @@ Deno.test('comic: the sky cloud noise tiles and has the clouds and the gaps the 
   // Clouds where n > 0.66 (SKY_FS): some, not most.
   const cloud = n.filter((v) => v > 0.66 * 255).length / n.length;
   assert.ok(cloud > 0.05 && cloud < 0.4, `cloud share ${cloud}`);
+});
+
+// A crafted map's faces can each ask for a 256 x 256 lightmap rectangle out of one block of
+// light: the atlas grew to gigabytes. It stops at ATLAS_MAX_H (the rest take the grey block).
+Deno.test('the lightmap atlas stops growing at its limit', () => {
+  const atlas = new Atlas(1024);
+  let placed = 0;
+  for (let i = 0; i < 1000; i++) if (atlas.alloc(256, 256)) placed++;
+  assert.ok(placed > 0 && placed < 1000);
+  assert.ok(atlas.height <= ATLAS_MAX_H, `${atlas.height}`);
 });

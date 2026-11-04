@@ -31,10 +31,16 @@ Deno.test('broken indices, cycles, deep trees and far coordinates are turned awa
     'texinfo texture': (b) => { b.texinfoI[8] = b.numTextures; },
     'model head node': (b) => { b.modelsI[9] = b.numNodes; },
     'entity model': (b) => { b.entities.push({ classname: 'func_wall', model: `*${b.numModels}` }); },
+    'infinite key': (b) => { b.entities.push({ classname: 'func_breakable', explodemagnitude: '1e39' }); },
+    'overflowing key': (b) => { b.entities.push({ classname: 'func_door', speed: '1e999' }); },
+    'huge vector': (b) => { b.entities.push({ classname: 'light', origin: '0 1e40 0' }); },
     'leaf faces': (b) => { b.leavesI16[1 * 14 + 11] = b.marksurfaces.length + 1; },
     'model 0 leaf count': (b) => { b.modelsI[13] = b.numLeaves; },
   };
   assert.doesNotThrow(() => validateBSP(fresh()));
+  const words = fresh();
+  words.entities.push({ classname: 'trigger_relay', targetname: '1door', target: 'Infinity_room', delay: '0.5' });
+  assert.doesNotThrow(() => validateBSP(words), 'names that start with digits or spell numbers are words');
   for (const [what, spoil] of Object.entries(cases)) {
     const b = fresh();
     spoil(b);

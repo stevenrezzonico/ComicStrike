@@ -31,7 +31,7 @@ import {
   Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT, TEAM_SPECTATOR, TEAM_NAMES,
 } from '../shared/player.js';
 import { SurfaceMap } from '../shared/surfaces.js';
-import { Items, THROW_SPEED, LET_GO_SPEED } from '../shared/items.js';
+import { Items, THROW_SPEED, LET_GO_SPEED, MAX_ITEMS } from '../shared/items.js';
 import { IN_USE } from '../shared/constants.js';
 import { parse } from '../shared/cvars.js';
 import { Bots } from './bots.js';
@@ -286,15 +286,20 @@ export class Game {
       const yaw = e.angles ? +e.angles.trim().split(/\s+/)[1] || 0 : +(e.angle || 0);
       this.spawns[team].push([o[0], o[1], o[2], yaw]);
     }
-    // The map's weapons lying out (CS 1.6's armoury_entity: fy_ maps): placed at each round start.
+    // The map's weapons lying out (CS 1.6's armoury_entity: fy_ maps): placed at each round
+    // start, MAX_ITEMS in all (the ground holds no more; a crafted map's 8000 of them traced
+    // their floors for 244 ms at every round start, on the thread every game shares).
     this.armoury = [];
+    let laid = 0;
     for (const e of bsp.entities) {
-      if (e.classname !== 'armoury_entity') continue;
+      if (e.classname !== 'armoury_entity' || laid >= MAX_ITEMS) continue;
       const weapon = WEAPON_ID[ARMOURY_ITEMS[+(e.item || 0)] || ''];
       if (!weapon) continue; // kevlar, or a weapon we do not have
       parseVec3(e.origin, o);
       const yaw = e.angles ? +e.angles.trim().split(/\s+/)[1] || 0 : (this.armoury.length * 73) % 360;
-      this.armoury.push({ weapon, count: Math.max(1, Math.min(32, +(e.count || 1))), x: o[0], y: o[1], z: o[2], yaw });
+      const count = Math.max(1, Math.min(32, MAX_ITEMS - laid, +(e.count || 1) || 1));
+      laid += count;
+      this.armoury.push({ weapon, count, x: o[0], y: o[1], z: o[2], yaw });
     }
     // Who wins when the round clock runs out: CTs defend bomb sites, Ts hold hostages.
     this.bombSites = new BombSites(bsp);
