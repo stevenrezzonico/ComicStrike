@@ -13,6 +13,7 @@ import { FloorGrid, floorFaces, LAYERS, STAIR, MOVE_WALK, MOVE_JUMP, MOVE_LADDER
 import { hullFits, HULL_STAND } from './trace.js';
 
 export const NAV_CELL = 24; // world units per cell (approx.: the hull is 32 wide)
+export const AVOID_COST = 1000; // Nav.path: entering an avoided node (a fire) costs this much more
 // The most nodes: 7 times the most of any map here (de_cbble, 17,705). A bigger map is
 // refused (FloorGrid throws during its flood fill, before the nodes and edges are built).
 export const MAX_NODES = 1 << 17;
@@ -154,8 +155,9 @@ export class Nav {
   }
 
   // A* from node a to node b; writes the nodes (a .. b) into `out` and returns how many,
-  // or 0 if there is no way (or it does not fit).
-  path(a, b, out) {
+  // or 0 if there is no way (or it does not fit). `avoid`: per node, 1 where entering costs
+  // AVOID_COST more (a fire: the bots go round it when there is a way round).
+  path(a, b, out, avoid = null) {
     if (a < 0 || b < 0) return 0;
     const st = ++this.search, G = this.g, P = this.parent, S = this.stamp, C = this.closed;
     const heap = this.heap, prio = this.prio, X = this.x, Y = this.y, Z = this.z;
@@ -199,7 +201,7 @@ export class Nav {
       C[k] = st;
       if (k === b) break;
       for (let e = this.first[k]; e < this.first[k + 1]; e++) {
-        const k2 = this.to[e], g2 = G[k] + this.cost[e];
+        const k2 = this.to[e], g2 = G[k] + this.cost[e] + (avoid !== null && avoid[k2] ? AVOID_COST : 0);
         if (S[k2] === st && g2 >= G[k2]) continue;
         if (size >= heap.length) return 0;
         S[k2] = st;

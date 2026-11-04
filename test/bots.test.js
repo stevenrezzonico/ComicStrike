@@ -588,3 +588,33 @@ Deno.test('bots: throw decoys at the other site, and fall for the other team\'s'
   assert.equal(ct.decoyHeard, id, 'heard it');
   assert.equal(ct.lastX, x, 'and hunts there');
 });
+
+// Fires: a bot standing in one steps out of it, and paths go round one when there is a way.
+Deno.test('bots: keep out of fires', async () => {
+  const { FX_FIRE, FIRE_TIME } = await import('../shared/grenades.js');
+  const { g, host, join, run } = setup('de_playground', 'game_type 2; game_mode 0'); // the demo: no round end
+  host.con.exec('bot_dont_shoot 1; bot_add_ct');
+  join('human', TEAM_T);
+  run(TICK_RATE);
+  const bot = g.bots.list[0], f = bot.c.player.ps.f, bots = g.bots, nav = bots.nav;
+  // Its middle 70 units off (burning slows the bot: each hurt tags it, as any damage does).
+  const k = g.grenades.addEffect(FX_FIRE, WEAPON_ID.molotov, -1, TEAM_T, f[0] + 70, f[1], f[2] - 36);
+  g.grenades.fxAge[k] = 2; // grown to its full reach
+  assert.ok(bots.fireAt(f[0], f[1], f[2] - 36) >= 0, 'in it');
+  run(TICK_RATE * 2);
+  assert.ok(bots.fireAt(f[0], f[1], f[2] - 36) < 0, 'stepped out');
+  assert.ok(bot.c.alive);
+  // A path between two nodes either side of the fire avoids its nodes.
+  g.grenades.fxAge[k] = 2;
+  bots.markFires();
+  const fx = g.grenades.fxPos[k * 3], fy = g.grenades.fxPos[k * 3 + 1], fz = g.grenades.fxPos[k * 3 + 2];
+  const a = bots.nearestNode(fx - 300, fy, fz + 37, 120), b = bots.nearestNode(fx + 300, fy, fz + 37, 120);
+  assert.ok(a >= 0 && b >= 0 && !bots.burning[a] && !bots.burning[b]);
+  const path = new Int32Array(1024), plain = nav.path(a, b, path);
+  const through = [...path.subarray(0, plain)].filter((n) => bots.burning[n]).length;
+  const n = nav.path(a, b, path, bots.burning);
+  assert.ok(n > 0);
+  const burnt = [...path.subarray(0, n)].filter((m) => bots.burning[m]).length;
+  assert.ok(through > 0 && burnt < through, `straight: ${through} burning nodes, round: ${burnt}`);
+  g.grenades.fxAge[k] = FIRE_TIME + 1;
+});

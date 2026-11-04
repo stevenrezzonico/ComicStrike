@@ -24,7 +24,7 @@ import {
   WS_THROW, WS_THROW_TIME, WS_GRENADES, GRENADE_IDS, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_GRENADE, SLOT_C4, activeWeapon,
   ACTION_DEFUSE,
 } from '../shared/weapons.js';
-import { GRENADE_GRAVITY, FX_DECOY } from '../shared/grenades.js';
+import { GRENADE_GRAVITY, FX_DECOY, FX_FIRE, fireRadius } from '../shared/grenades.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { BOMB_DROPPED, BOMB_PLANTED } from '../shared/bomb.js';
 import { HS_IDLE } from '../shared/hostages.js';
@@ -123,6 +123,12 @@ const SMOKE_ROLL = 220; // a smoke bounces and rolls on before it pops: aimed th
 const DECOY_RANGE = [500, 1500];
 const DECOY_WINDOW = 30;
 const DECOY_HEAR_GAP = 2;
+// Fires (CS:GO's bots keep out of them): the nav nodes a fire covers (its radius plus a
+// hull's half width, 64 up or down) are marked every FIRE_MARK_TICKS while any burns; paths
+// pay Nav's AVOID_COST to enter one, a goal in a fire waits at the nearest node outside it,
+// and a bot standing in one steps out, away from its middle, fight or not.
+const FIRE_MARK_TICKS = 8;
+const FIRE_MARGIN = 16;
 // Radio (approx. of CS:GO's bots): a human's "Follow me." / "Regroup, team!" sends the
 // team's bots within ORDER_REACH after him for ORDER_SECONDS (stopping FOLLOW_NEAR away),
 // "Hold this position." keeps them where they stand; a bot calls "Enemy spotted." on a new
@@ -150,6 +156,61 @@ export class Bots {
     this.smokeSpots = []; // per bomb site: smokeSpot()'s place, null for none
     this.smokedRound = -1; // the round (RoundState.serial) the Ts smoked their site's CT side
     this.calledAt = { [TEAM_T]: -1e9, [TEAM_CT]: -1e9 }; // tick a bot of the team last called an enemy
+    this.burning = null; // per nav node, 1 inside a fire (null: none burns)
+    this.fireSerial = 0; // counts changes of the marks (bots search their paths again)
+  }
+
+  // Marks the nav nodes inside fires (every FIRE_MARK_TICKS while any burns).
+  markFires() {
+    const gr = this.game.grenades, nav = this.nav;
+    let any = false;
+    for (let f = 0; f < gr.fxCount && !any; f++) any = gr.fxKind[f] === FX_FIRE;
+    if (!any) {
+      if (this.burning) {
+        this.burning = null;
+        this.fireSerial++;
+      }
+      return;
+    }
+    if (!this.marks) this.marks = [new Uint8Array(nav.count), new Uint8Array(nav.count)]; // in turns
+    const was = this.burning, now = this.marks[was === this.marks[0] ? 1 : 0];
+    let changed = !was;
+    for (let k = 0; k < nav.count; k++) {
+      now[k] = this.fireAt(nav.x[k], nav.y[k], nav.z[k]) >= 0 ? 1 : 0;
+      if (was && was[k] !== now[k]) changed = true;
+    }
+    this.burning = now;
+    if (changed) this.fireSerial++;
+  }
+
+  // The fire (effect index) covering (x, y) with feet at z, or -1.
+  fireAt(x, y, z) {
+    const gr = this.game.grenades;
+    for (let f = 0; f < gr.fxCount; f++) {
+      if (gr.fxKind[f] !== FX_FIRE) continue;
+      const o = f * 3, r = fireRadius(gr.fxAge[f]) + FIRE_MARGIN;
+      const dx = x - gr.fxPos[o], dy = y - gr.fxPos[o + 1];
+      if (dx * dx + dy * dy < r * r && Math.abs(z - gr.fxPos[o + 2]) < 64) return f;
+    }
+    return -1;
+  }
+
+  // The nearest node to `k` (along the graph) outside every fire, or k when none is near.
+  safeNear(k) {
+    const nav = this.nav, burning = this.burning;
+    if (!burning || k < 0 || !burning[k]) return k;
+    const seen = new Set([k]), queue = [k];
+    for (let h = 0; h < queue.length && h < 4096; h++) {
+      const n = queue[h];
+      for (let e = nav.first[n]; e < nav.first[n + 1]; e++) {
+        const m = nav.to[e];
+        if (seen.has(m)) continue;
+        if (!burning[m]) return m;
+        seen.add(m);
+        queue.push(m);
+      }
+    }
+    return k;
   }
 
   // A radio line from `from` (a human, Game.radio): orders for the team's bots near him.
@@ -296,6 +357,7 @@ export class Bots {
 
   // Each tick, before the server runs commands: every bot decides its command.
   think() {
+    if (this.nav && this.game.tick % FIRE_MARK_TICKS === 0) this.markFires();
     for (const b of this.list) b.think();
   }
 }
@@ -360,6 +422,7 @@ class Bot {
     this.decoyRound = -1; // the round (RoundState.serial) this bot threw its decoy
     this.decoyHeard = -1; // the decoy (effect id) heard last, and when the next may be
     this.decoyHeardAt = 0;
+    this.fireSerial = 0; // Bots.fireSerial when the path was searched (fires changed: again)
     this.order = null; // a teammate's radio order: { kind: 'follow' | 'hold', who, until, x, y, z }
     this.avertYaw = 0;
     this.pressButton = -1; // the button to press for a door on our way, its door, the node by it
@@ -478,14 +541,15 @@ class Bot {
     // Where to go (bots told not to shoot keep to it, watching the enemy).
     if (!this.nade && (!fighting || g.rules.botDontShoot)) {
       const goal = this.pressButton >= 0 ? this.buttonGoal(x, y, feet) : this.objective(x, y, feet);
-      let repath = goal.node !== this.goal || goal.why !== this.goalWhy;
+      let repath = goal.node !== this.goal || goal.why !== this.goalWhy || this.fireSerial !== this.bots.fireSerial;
       if (this.pathFailed && g.tick < this.repathAt) repath = false; // no way found: not searched again for a while
       else if (!repath && goal.moving && g.tick >= this.repathAt) repath = true;
       if (repath) {
         this.goal = goal.node;
         this.goalWhy = goal.why;
-        const nav = this.bots.nav, from = nav.nodeAt(x, y, feet);
-        this.pathLen = nav.path(from, goal.node, this.path);
+        this.fireSerial = this.bots.fireSerial;
+        const nav = this.bots.nav, from = nav.nodeAt(x, y, feet), bots = this.bots;
+        this.pathLen = nav.path(from, bots.safeNear(goal.node), this.path, bots.burning); // round fires, never into one
         this.pathIdx = 1;
         this.arrivedAt = -1;
         this.pathFailed = goal.node >= 0 && this.pathLen === 0;
@@ -523,6 +587,14 @@ class Bot {
     const w = activeWeapon(p.ws), o = WS_SLOTS + p.ws.f[WS_ACTIVE] * 3;
     if (w && w.clip && !p.ws.f[WS_RELOAD_END] && (p.ws.f[o + 1] === 0 || (!fighting && p.ws.f[o + 1] < w.clip / 2))) {
       buttons |= IN_RELOAD;
+    }
+    // Standing in a fire: out of it, away from its middle, fight or not.
+    if (this.bots.burning && !this.nade) {
+      const fire = this.bots.fireAt(x, y, feet), at = g.grenades.fxPos;
+      if (fire >= 0) {
+        moveYaw = Math.atan2(y - at[fire * 3 + 1], x - at[fire * 3]) / DEG;
+        strafe = 0;
+      }
     }
     this.turn(wantP, wantY, fighting);
     // Movement keys relative to the view as it is now sent (forward is along the view).
