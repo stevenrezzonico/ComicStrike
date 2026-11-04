@@ -376,6 +376,32 @@ for (const [kind, [x, y, z], yaw] of SPAWNS) {
     project.points.push({ id: project.nextId++, kind, o: [x + (k % 5) * 128 + 64, y + Math.floor(k / 5) * 96, z], yaw });
   }
 }
+// Lamps under every roof (the roofs keep the sun out; the skylights let in only the sky):
+// bulbs on a grid of about LAMP_SPACING, 32 under the ceiling, warm; the press hall hangs
+// spot lamps over its presses instead.
+const LAMP_SPACING = 320;
+for (const r of ROOMS) {
+  const o = r[7] || {};
+  if (!o.roof) continue;
+  const [, x0, y0, x1, y1, z] = r;
+  const nx = Math.max(1, Math.round((x1 - x0) / LAMP_SPACING)), ny = Math.max(1, Math.round((y1 - y0) / LAMP_SPACING));
+  // A spot inside a detail shape (the tunnel's half walls reach the roof) moves along the
+  // room until it is clear.
+  const inside = (q) => project.brushes.some((b) => q.every((v, k) => v > b.b[k] && v < b.b[k + 3]));
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      let x = Math.round(x0 + (i + 0.5) * (x1 - x0) / nx), y = Math.round(y0 + (j + 0.5) * (y1 - y0) / ny);
+      const along = x1 - x0 > y1 - y0 ? 0 : 1;
+      for (let tries = 0; tries < 8 && inside([x, y, z + o.roof - 32]); tries++) {
+        if (along) y += 64;
+        else x += 64;
+      }
+      const spot = r[0] === 'press_hall';
+      project.points.push({ id: project.nextId++, kind: spot ? 'light_spot' : 'light', o: [x, y, z + o.roof - 32], yaw: 0,
+        keys: spot ? { _light: '255 235 190 300', pitch: '-90', _cone: '40', _cone2: '60' } : { _light: '255 235 190 200' } });
+    }
+  }
+}
 for (const [team, name] of BUY_ZONES) {
   const r = roomOf.get(name);
   add([r[1], r[2], r[5], r[3], r[4], r[5] + 128], { top: null, bottom: null, side: null }, 'func_buyzone', { team });
@@ -437,9 +463,9 @@ function planSVG() {
     out.push(`<text x="${px((x0 + x1) / 2)}" y="${py((y0 + y1) / 2) + 14}" font-size="40" font-weight="bold" ` +
       `fill="#e2402a" text-anchor="middle">${'AB'[i]}</text>`);
   });
-  for (const q of project.points) {
-    const t = q.kind === 'info_player_deathmatch';
-    out.push(`<circle cx="${px(q.o[0])}" cy="${py(q.o[1])}" r="3" fill="${t ? '#c0392b' : '#2f6fc4'}"/>`);
+  for (const q of project.points) { // spawns red and blue, lamps yellow
+    const color = q.kind === 'info_player_deathmatch' ? '#c0392b' : q.kind === 'info_player_start' ? '#2f6fc4' : '#f1c232';
+    out.push(`<circle cx="${px(q.o[0])}" cy="${py(q.o[1])}" r="3" fill="${color}"/>`);
   }
   for (const [name, label] of Object.entries(LABELS)) {
     if (name === 'a_site' || name === 'b_site') continue;
@@ -463,6 +489,7 @@ const light = Deno.args.includes('--draft') ? 'draft' : 'full';
 const t0 = performance.now();
 const { bytes, stats } = compileProject(project, light);
 Deno.writeFileSync(new URL(`${NAME}.bsp`, OUT), bytes);
-console.log(`${NAME}: ${project.brushes.length} shapes; ${(bytes.length / 1024).toFixed(0)} KB, ${stats.faces} faces, ` +
+console.log(`${NAME}: ${project.brushes.length} shapes, ${project.points.filter((q) => /^light/.test(q.kind)).length} lamps; ` +
+  `${(bytes.length / 1024).toFixed(0)} KB, ${stats.faces} faces, ` +
   `${stats.nodes} nodes, ${stats.clipnodes} clipnodes, ${stats.leaves} leaves, ${stats.texels} light texels ` +
   `(${light} light, ${((performance.now() - t0) / 1000).toFixed(1)} s)`);

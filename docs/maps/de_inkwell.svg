@@ -189,6 +189,24 @@
 <circle cx="308" cy="64" r="3" fill="#2f6fc4"/>
 <circle cx="324" cy="64" r="3" fill="#2f6fc4"/>
 <circle cx="340" cy="64" r="3" fill="#2f6fc4"/>
+<circle cx="389.375" cy="308" r="3" fill="#f1c232"/>
+<circle cx="424" cy="308" r="3" fill="#f1c232"/>
+<circle cx="458.625" cy="308" r="3" fill="#f1c232"/>
+<circle cx="48" cy="588" r="3" fill="#f1c232"/>
+<circle cx="88" cy="588" r="3" fill="#f1c232"/>
+<circle cx="128" cy="588" r="3" fill="#f1c232"/>
+<circle cx="168" cy="588" r="3" fill="#f1c232"/>
+<circle cx="208" cy="588" r="3" fill="#f1c232"/>
+<circle cx="48" cy="556" r="3" fill="#f1c232"/>
+<circle cx="88" cy="556" r="3" fill="#f1c232"/>
+<circle cx="128" cy="556" r="3" fill="#f1c232"/>
+<circle cx="168" cy="556" r="3" fill="#f1c232"/>
+<circle cx="208" cy="556" r="3" fill="#f1c232"/>
+<circle cx="56" cy="528" r="3" fill="#f1c232"/>
+<circle cx="56" cy="498.625" r="3" fill="#f1c232"/>
+<circle cx="56" cy="456" r="3" fill="#f1c232"/>
+<circle cx="56" cy="429.375" r="3" fill="#f1c232"/>
+<circle cx="56" cy="396" r="3" fill="#f1c232"/>
 <text x="308" y="580" font-size="12" font-weight="bold" fill="#17130f" text-anchor="middle">T spawn (docks)</text>
 <text x="440" y="562" font-size="12" font-weight="bold" fill="#17130f" text-anchor="middle">Quay</text>
 <text x="524" y="548" font-size="12" font-weight="bold" fill="#17130f" text-anchor="middle">Long corner</text>

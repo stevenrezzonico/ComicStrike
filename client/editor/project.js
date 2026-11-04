@@ -4,8 +4,8 @@
 //
 // A project (saved as JSON, format 'comicstrike-map' version 3):
 //   { name, brushes: [{ id, b: [x0, y0, z0, x1, y1, z1], tex: { top, bottom, side }, kind, keys,
-//       shape, yaw, up, sides, step, faces? }], points: [{ id, kind, o: [x, y, z] (the feet), yaw }],
-//     textures?: { name: [width, height] }, nextId }
+//       shape, yaw, up, sides, step, faces? }], points: [{ id, kind, o: [x, y, z] (the feet; a lamp
+//       itself), yaw, keys? }], textures?: { name: [width, height] }, nextId }
 // A brush's shape (SHAPES) fills its box b: a box (turned by `yaw` degrees about its
 // center: an angled wall), a ramp rising toward side `up`, a pillar of `sides` faces, stairs
 // of `step` high steps rising toward `up`, a ladder against side `up` (its board and the
@@ -94,11 +94,18 @@ export const KINDS = {
   func_illusionary: { label: 'Decoration', help: 'drawn but not solid: players and bullets pass through it' },
 };
 
-// Point kinds: label, short mark for the 2D views.
+// Point kinds: label, short mark and color for the 2D views; lamps (`lamp`: a light baked
+// into the lightmaps, not a thing standing on the floor) have keys like a brush entity and
+// `lift`: how high over the floor a click from the top puts one.
 export const POINTS = {
-  info_player_deathmatch: { label: 'T spawn', mark: 'T' },
-  info_player_start: { label: 'CT spawn', mark: 'CT' },
-  hostage_entity: { label: 'Hostage', mark: 'H' },
+  info_player_deathmatch: { label: 'T spawn', mark: 'T', color: '#e2402a' },
+  info_player_start: { label: 'CT spawn', mark: 'CT', color: '#2f6fc4' },
+  hostage_entity: { label: 'Hostage', mark: 'H', color: '#3c9a4a' },
+  light: { label: 'Lamp', mark: 'L', color: '#e8b625', lamp: true, lift: 112, keys: { _light: '255 235 190 200' },
+    help: '_light: red green blue brightness; a facing surface 128 units away gets the brightness, falling off by the square of the distance to nothing at 64 × √brightness units (200: 905)' },
+  light_spot: { label: 'Spot lamp', mark: 'S', color: '#e8b625', lamp: true, lift: 160,
+    keys: { _light: '255 235 190 250', pitch: '-90', _cone: '30', _cone2: '45' },
+    help: 'a cone of light: pitch -90 straight down, 0 level (Q / E turn it round); full within _cone degrees of its axis, fading to nothing at _cone2' },
 };
 
 export const LIMITS = { coord: 8192, brushes: 3000, points: 256 };
@@ -169,7 +176,12 @@ export function readProject(text) {
   }
   for (const q of Array.isArray(p.points) ? p.points : []) {
     if (!POINTS[q.kind]) continue;
-    out.points.push({ id: out.nextId++, kind: q.kind, o: (q.o || []).slice(0, 3).map(num), yaw: num(q.yaw) % 360 });
+    const pt = { id: out.nextId++, kind: q.kind, o: (q.o || []).slice(0, 3).map(num), yaw: num(q.yaw) % 360 };
+    if (POINTS[q.kind].keys) {
+      pt.keys = { ...POINTS[q.kind].keys };
+      for (const [k, v] of Object.entries(q.keys || {})) if (/^\w{1,32}$/.test(k)) pt.keys[k] = String(v).replace(/"/g, "'").slice(0, 128);
+    }
+    out.points.push(pt);
   }
   return out;
 }
@@ -307,6 +319,13 @@ function hullInside(s, c) {
   return true;
 }
 
+// Is point c inside the piece (solidOf), half a unit in from its sides?
+function pointInside(s, c) {
+  for (let k = 0; k < 3; k++) if (c[k] <= s.lo[k] + 0.5 || c[k] >= s.hi[k] - 0.5) return false;
+  for (const p of s.planes) if (p.n[0] * c[0] + p.n[1] * c[1] + p.n[2] * c[2] >= p.d - 0.5) return false;
+  return true;
+}
+
 // Problems that keep the map from compiling or playing: { errors, warnings } of
 // { text, id? } (id: the brush or point at fault).
 export function checkProject(p) {
@@ -343,6 +362,10 @@ export function checkProject(p) {
       errors.push({ text: `A ${POINTS[q.kind].label} is beyond ±${LIMITS.coord}.`, id: q.id });
       continue;
     }
+    if (POINTS[q.kind].lamp) { // a lamp inside a shape lights nothing
+      if (solids.some((pc) => pointInside(pc, q.o))) warnings.push({ text: `A ${POINTS[q.kind].label} is inside a shape: it lights nothing.`, id: q.id });
+      continue;
+    }
     if (q.kind === 'hostage_entity') continue;
     // The standing hull (center 37 over the feet) must be free, and a floor within 64 under it.
     if (solids.some((pc) => hullInside(pc, [x, y, z + 37]))) {
@@ -359,6 +382,13 @@ export function checkProject(p) {
     }
   }
   return { errors, warnings };
+}
+
+// A point's box: a player's standing on its feet, a lamp's 16 units round it.
+export function pointBounds(q) {
+  const [x, y, z] = q.o;
+  if (POINTS[q.kind].lamp) return [x - 16, y - 16, z - 16, x + 16, y + 16, z + 16];
+  return [x - 16, y - 16, z, x + 16, y + 16, z + 72];
 }
 
 // The bounds of everything in the project (turned shapes by their corners):
@@ -379,8 +409,9 @@ export function bounds(p) {
     if (b.yaw % 360 && SHAPES[b.shape]?.turns) for (const pc of piecesOf(b)) for (const v of cornersOf(pc)) grow(...v);
   }
   for (const q of p.points) {
-    grow(q.o[0] - 16, q.o[1] - 16, q.o[2]);
-    grow(q.o[0] + 16, q.o[1] + 16, q.o[2] + 72);
+    const [x0, y0, z0, x1, y1, z1] = pointBounds(q);
+    grow(x0, y0, z0);
+    grow(x1, y1, z1);
   }
   return c[0] === Infinity ? [0, 0, 0, 0, 0, 0] : c.map((v, k) => (k < 3 ? Math.floor(v) : Math.ceil(v)));
 }
@@ -429,9 +460,12 @@ export function projectToBuilder(p) {
   }
   for (const q of p.points) {
     const [x, y, z] = q.o;
-    // Spawns are hull centers a unit over the floor; hostages stand on their feet.
-    const oz = q.kind === 'hostage_entity' ? z : z + 37;
-    map.point({ classname: q.kind, origin: `${x} ${y} ${oz}`, angles: `0 ${q.yaw} 0` });
+    // Spawns are hull centers a unit over the floor; hostages stand on their feet; a lamp
+    // is where it is, with its keys.
+    const oz = q.kind === 'hostage_entity' || POINTS[q.kind].lamp ? z : z + 37;
+    const keys = { classname: q.kind, origin: `${x} ${y} ${oz}`, angles: `0 ${q.yaw} 0` };
+    for (const [k, v] of Object.entries(q.keys || {})) if (v !== '') keys[k] = v;
+    map.point(keys);
   }
   return map;
 }

@@ -364,14 +364,27 @@ export class View2D {
 
   drawPoint(q) {
     const ctx = this.ctx, { u, v } = this.ax;
+    const pk = POINTS[q.kind];
     const top = this.name === 'top';
-    const cu = q.o[u], cv = top ? q.o[v] : q.o[v] + 36;
+    const cu = q.o[u], cv = top || pk.lamp ? q.o[v] : q.o[v] + 36;
     const [x, y] = this.toScreen(cu, cv);
-    const color = q.kind === 'info_player_deathmatch' ? '#e2402a' : q.kind === 'info_player_start' ? '#2f6fc4' : '#3c9a4a';
-    ctx.fillStyle = color;
+    ctx.fillStyle = pk.color;
     ctx.strokeStyle = '#17130f';
     ctx.lineWidth = 1.5;
-    if (top) {
+    if (pk.lamp) { // a lamp: a disc where it hangs, in every view (a spot's aim line from the top)
+      const r = Math.max(6, 12 * this.scale);
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      if (top && q.kind === 'light_spot') {
+        const a = q.yaw * Math.PI / 180;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + Math.cos(a) * r * 1.8, y - Math.sin(a) * r * 1.8);
+        ctx.stroke();
+      }
+    } else if (top) {
       const r = Math.max(6, 16 * this.scale);
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);

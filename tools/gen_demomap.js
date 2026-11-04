@@ -193,6 +193,8 @@ world.push(
   box(720, -576, 2, 904, -560, 192, 'metal_wall05b'),
   box(720, -760, 192, 920, -560, 200, 'metal_wall05b'),
 );
+// A lamp under the shed's roof (a `light` point, baked into the lightmaps).
+point({ classname: 'light', origin: '820 -660 170', _light: '255 235 190 200' });
 
 const { bytes, stats } = map.compile();
 Deno.writeFileSync(OUT, bytes);

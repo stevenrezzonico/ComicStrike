@@ -20,6 +20,10 @@ Example button opens it) and compiled into `maps/de_inkwell.bsp`.
 - **Mid** has a round fountain and joins Market, CT mid, the press hall (a doorway beside a
   breakable window; inside, presses, ink drums and a conveyor under glass skylights) and
   the Fish alley.
+- **Lamps** (yellow on the plan) hang under every roof, where the sun never reaches: bulbs
+  on a 320-unit grid in the warehouse and the tunnel, three spot lamps over the press hall's
+  presses. Before them those floors were pitch dark (the roofs block the sun, the skylights
+  let in only the sky).
 
 ## Sightlines
 

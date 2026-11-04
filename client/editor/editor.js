@@ -9,7 +9,8 @@
 
 import {
   TEXTURES, KINDS, POINTS, SHAPES, UPS, UP_LABELS, SIDE_COUNTS, MAX_SLOPE, newProject, readProject, checkProject,
-  bounds, makeBrush, piecesOf, cornersOf, slopeOf, turnFaces, mirrorFaces, slotOf, withProject, projectIn, connectedTo,
+  bounds, pointBounds, makeBrush, piecesOf, cornersOf, slopeOf, turnFaces, mirrorFaces, slotOf, withProject, projectIn,
+  connectedTo,
 } from './project.js';
 import { box, brushPlanes, brushPolygons } from '../../shared/bspwriter.js';
 import { View2D } from './view2d.js';
@@ -59,6 +60,8 @@ export const CARDS = [
   { id: 'info_player_deathmatch', label: 'T spawn', point: 'info_player_deathmatch', icon: 'M12 12m-8 0a8 8 0 1 0 16 0a8 8 0 1 0-16 0 M8 9h8 M12 9v8' },
   { id: 'info_player_start', label: 'CT spawn', point: 'info_player_start', icon: 'M12 12m-8 0a8 8 0 1 0 16 0a8 8 0 1 0-16 0 M15 9h-4v6h4' },
   { id: 'hostage_entity', label: 'Hostage', point: 'hostage_entity', icon: 'M12 6m-3 0a3 3 0 1 0 6 0a3 3 0 1 0-6 0 M6 22v-6a6 6 0 0 1 12 0v6' },
+  { id: 'light', label: 'Lamp', point: 'light', icon: 'M9 21h6 M10 18h4v-3a6 6 0 1 0-4 0z M12 2v1 M4 9h1 M19 9h1 M6 4l1 1 M18 4l-1 1' },
+  { id: 'light_spot', label: 'Spot lamp', point: 'light_spot', icon: 'M9 3h6v5H9z M12 8l-7 13h14z M8 21h8' },
 ];
 const CARD = new Map(CARDS.map((c) => [c.id, c]));
 
@@ -155,12 +158,9 @@ class Editor {
     return o;
   }
 
-  // Bounds of an item: a point's player box, a shape's corners.
+  // Bounds of an item: a point's player box (a lamp's small one), a shape's corners.
   boundsOf(it) {
-    if (it.o) {
-      const [x, y, z] = it.o;
-      return [x - 16, y - 16, z, x + 16, y + 16, z + 72];
-    }
+    if (it.o) return pointBounds(it);
     if (!(SHAPES[it.shape]?.turns && it.yaw % 360)) return it.b;
     const b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
     for (const pc of this.outline(it)) {
@@ -297,15 +297,16 @@ class Editor {
   }
 
   // A point at (u, v) in a view: from the top, on the highest floor under it within the
-  // working height; from the side, its feet where clicked.
+  // working height (a lamp its `lift` over it); from the side, its feet where clicked.
   addPoint(kind, ax, u, v) {
     this.commit();
     const o = [0, 0, 0];
     o[ax.u] = u;
     o[ax.v] = v;
-    if (ax.w === 2) o[2] = this.floorUnder(u, v);
+    if (ax.w === 2) o[2] = this.floorUnder(u, v) + (POINTS[kind].lift || 0);
     else o[ax.w] = Math.round((this.range[ax.w][0] + this.range[ax.w][1]) / 2 / this.grid) * this.grid;
     const q = { id: this.project.nextId++, kind, o, yaw: kind === 'info_player_start' ? 180 : 0 };
+    if (POINTS[kind].keys) q.keys = { ...POINTS[kind].keys };
     this.project.points.push(q);
     this.select([q.id]);
     this.changed();
@@ -968,14 +969,25 @@ class Editor {
     }
     const it = sel[0];
     if (it.o) {
-      box.append(el('h3', '', POINTS[it.kind].label));
-      numbers('Feet (x y z)', it.o, (k, v) => {
+      const pk = POINTS[it.kind];
+      box.append(el('h3', '', pk.label));
+      numbers(pk.lamp ? 'Position (x y z)' : 'Feet (x y z)', it.o, (k, v) => {
         it.o[k] = v;
       });
       field('Facing', it.yaw, (v) => {
         it.yaw = ((Math.round(+v) || 0) % 360 + 360) % 360;
       }, 'number');
       box.append(el('p', 'help', 'Facing: degrees, 0 east, 90 north (Q / E turn it).'));
+      if (pk.keys) {
+        box.append(el('h3', '', 'Settings'));
+        it.keys = { ...pk.keys, ...it.keys };
+        for (const k of Object.keys(it.keys)) {
+          field(k, it.keys[k] ?? '', (v) => {
+            it.keys[k] = v.replace(/"/g, "'").slice(0, 128);
+          });
+        }
+        if (pk.help) box.append(el('p', 'help', pk.help));
+      }
       return;
     }
     const shape = SHAPES[it.shape];

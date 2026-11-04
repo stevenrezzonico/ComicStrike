@@ -3,6 +3,7 @@ import { parseUntrustedBSP } from '../shared/bsp.js';
 import { CollisionWorld, Trace, traceHull, hullFits, HULL_STAND } from '../shared/trace.js';
 import { Nav, NAV_CELL } from '../shared/nav.js';
 import { Overview } from '../shared/overview.js';
+import { SurfaceMap } from '../shared/surfaces.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
 import { BOMB_PLANTED } from '../shared/bomb.js';
 import { PHASE_LIVE } from '../shared/economy.js';
@@ -46,6 +47,14 @@ Deno.test('de_inkwell: spawns, zones, ladders, water, doors and breakables; spaw
   assert.equal(at('func_conveyor').length, 1);
   assert.equal(at('func_door_rotating').length, 2);
   assert.ok(at('func_breakable').length >= 10);
+  // Lamps under every roof: the press hall's spot lamps and the warehouse's bulbs light
+  // floors the sun never reaches (they were pitch dark: 20 20 24).
+  assert.equal(at('light_spot').length, 3);
+  assert.equal(at('light').length, 15);
+  const s = new SurfaceMap(bsp, world), out = new Float32Array(3);
+  assert.ok(s.lightAt(out, 928, 64, 20) && out[0] > 150 && out[0] > out[2] * 1.15, `under a press hall spot (${out.join(' ')})`);
+  assert.ok(s.lightAt(out, -1400, -2000, 20) && out[0] > 100, `between the warehouse's bulbs (${out.join(' ')})`);
+  assert.ok(s.lightAt(out, 0, -2100, 20) && out[0] > 200, `the docks in the sun (${out.join(' ')})`);
   const tr = new Trace();
   for (const e of [...at('info_player_deathmatch'), ...at('info_player_start')]) {
     const [x, y, z] = e.origin.split(' ').map(Number);

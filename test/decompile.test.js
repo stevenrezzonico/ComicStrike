@@ -113,7 +113,17 @@ for (const name of ['de_playground', 'de_inkwell']) {
     const kinds = (list) => list.reduce((m, e) => m.set(e, (m.get(e) || 0) + 1), new Map());
     // Spawns come back where they were (feet 36 under the hull center).
     const spawns = bsp.entities.filter((e) => /^info_player_(deathmatch|start)$/.test(e.classname));
-    assert.equal(p.points.filter((q) => q.kind !== 'hostage_entity').length, spawns.length);
+    assert.equal(p.points.filter((q) => /^info_player/.test(q.kind)).length, spawns.length);
+    // Lamps come back as lamp points with their keys.
+    const lamps = bsp.entities.filter((e) => e.classname === 'light' || e.classname === 'light_spot');
+    assert.ok(lamps.length > 0, 'our maps have lamps');
+    assert.equal(p.points.filter((q) => /^light/.test(q.kind)).length, lamps.length);
+    for (const e of lamps) {
+      const [x, y, z] = e.origin.split(' ').map(Number);
+      const q = p.points.find((q) => q.kind === e.classname && q.o[0] === x && q.o[1] === y && q.o[2] === z);
+      assert.ok(q, e.origin);
+      assert.equal(q.keys._light, e._light);
+    }
     for (const e of spawns) {
       const [x, y, z] = e.origin.split(' ').map(Number);
       assert.ok(p.points.some((q) => q.o[0] === Math.round(x) && q.o[1] === Math.round(y) && q.o[2] === Math.round(z - 36)), e.origin);

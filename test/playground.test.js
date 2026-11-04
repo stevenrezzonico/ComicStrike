@@ -107,6 +107,8 @@ Deno.test('de_playground: baked sun and shade; bots find their way everywhere', 
   const s = new SurfaceMap(bsp, game.world), out = new Float32Array(3);
   assert.ok(s.lightAt(out, -500, 400, 50) && out[0] > 200, `open ground in the sun (${out[0]})`);
   assert.ok(s.lightAt(out, 0, 150, 50) && out[0] < 120, `in the free-standing wall's shadow (${out[0]})`);
+  // The shed's lamp: its floor under the lamp is lit, warmer than the sky's blue.
+  assert.ok(s.lightAt(out, 820, -660, 20) && out[0] > 100 && out[0] > out[2] * 1.2, `under the shed's lamp (${out.join(' ')})`);
   game.bots.ensureNav();
   const nav = game.bots.nav, path = new Int32Array(4096);
   const from = nav.nodeAt(-1400, 0, 1);

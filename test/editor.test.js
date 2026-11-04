@@ -184,3 +184,30 @@ Deno.test('shapes: ramps, angled walls, pillars, stairs and ladders compile and 
   assert.equal(v1.brushes[0].shape, 'box');
   assert.equal(v1.brushes[0].yaw, 0);
 });
+
+Deno.test('lamps: a lamp point compiles to a light entity with its keys, reads back, and warns inside a shape', async () => {
+  const p = newProject();
+  p.points.push({ id: 700, kind: 'light', o: [0, 0, 112], yaw: 0, keys: { _light: '255 200 150 180' } });
+  p.points.push({ id: 701, kind: 'light_spot', o: [200, 0, 160], yaw: 90, keys: { _light: '255 255 255 250', pitch: '-60', _cone: '25', _cone2: '40' } });
+  assert.deepEqual(checkProject(p), { errors: [], warnings: [] });
+  const bsp = compileToBsp(p, 'full');
+  const bulb = bsp.entities.find((e) => e.classname === 'light'), spot = bsp.entities.find((e) => e.classname === 'light_spot');
+  assert.equal(bulb.origin, '0 0 112', 'a lamp is where it is (no hull offset)');
+  assert.equal(bulb._light, '255 200 150 180');
+  assert.equal(spot.angles, '0 90 0');
+  assert.equal(spot.pitch, '-60');
+  assert.equal(spot._cone2, '40');
+  // Through JSON and the map's trailer, the keys come back; a lamp with none gets the defaults.
+  const back = readProject(JSON.stringify(p));
+  assert.deepEqual(back.points.find((q) => q.kind === 'light_spot').keys, p.points[p.points.length - 1].keys);
+  const bare = readProject({ format: 'comicstrike-map', version: 3, name: 'x', brushes: [], points: [{ kind: 'light', o: [1, 2, 3] }] });
+  assert.equal(bare.points[0].keys._light, '255 235 190 200');
+  const { withProject, projectIn } = await import('../client/editor/project.js');
+  const again = await projectIn(await withProject(new Uint8Array(16), p));
+  assert.deepEqual(again.points.map((q) => q.keys), p.points.map((q) => q.keys));
+  // A lamp inside the west wall lights nothing: a warning, not an error.
+  p.points.push({ id: 702, kind: 'light', o: [-1040, 0, 100], yaw: 0, keys: {} });
+  const { errors, warnings } = checkProject(p);
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.id === 702 && /lights nothing/.test(w.text)));
+});

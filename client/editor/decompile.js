@@ -14,7 +14,7 @@ import {
   mapNameOf, faceFirstEdge, faceNumEdges, faceTexinfo, faceSide, facePlane, modelFirstFace, modelNumFaces,
 } from '../../shared/bsp.js';
 import { planeSquare, clip } from '../../shared/bspwriter.js';
-import { FORMAT, VERSION, TEXTURES, KINDS, makeBrush } from './project.js';
+import { FORMAT, VERSION, TEXTURES, KINDS, POINTS, makeBrush } from './project.js';
 
 const EPS = 0.01;
 const CONTENTS_EMPTY = -1, CONTENTS_SOLID = -2, CONTENTS_WATER = -3, CONTENTS_LAVA = -5, CONTENTS_SKY = -6;
@@ -451,6 +451,18 @@ export function decompileBSP(bsp, fileName) {
       if (!o) continue;
       // Spawn origins are hull centers (the feet 36 under them); hostages stand on theirs.
       p.points.push({ id: p.nextId++, kind: cls, o: [o[0], o[1], o[2] - (cls === 'hostage_entity' ? 0 : 36)].map(Math.round), yaw: yawOf(e) });
+      report.points++;
+      continue;
+    }
+    if (POINTS[cls] && POINTS[cls].lamp) { // lamps, with their keys (a pitch in `angles` becomes the pitch key)
+      if (!o) continue;
+      const keys = { ...POINTS[cls].keys };
+      for (const [k, v] of Object.entries(e)) if (!DROP_KEYS.has(k) && k !== 'angles' && /^\w{1,32}$/.test(k)) keys[k] = String(v).replace(/"/g, "'").slice(0, 128);
+      if (cls === 'light_spot' && e.pitch === undefined && e.angles) {
+        const pitch = +e.angles.split(' ')[0];
+        if (Number.isFinite(pitch)) keys.pitch = String(pitch);
+      }
+      p.points.push({ id: p.nextId++, kind: cls, o: o.map(Math.round), yaw: yawOf(e), keys });
       report.points++;
       continue;
     }

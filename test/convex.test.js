@@ -10,6 +10,7 @@ import { TEAM_T } from '../shared/player.js';
 import { Writer, CmdRing, writeHello, writeCmds } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
 import { Nav } from '../shared/nav.js';
+import { SurfaceMap } from '../shared/surfaces.js';
 
 const TEX = { sky: [256, 256], crete3_wall02: [128, 128], '-0sand': [128, 128] };
 const W = 'crete3_wall02';
@@ -163,4 +164,60 @@ Deno.test('fuzzed convex brushes compile into maps the game takes, or fail with 
     traceHull(world, HULL_STAND, -900, 0, 37, -900, 0, -100, t);
     assert.ok(t.fraction < 1, 'the floor holds');
   }
+});
+
+// --- Lamps -------------------------------------------------------------------------------
+
+// A closed room 1024 x 512 x 256 (its roof keeps the sun and sky out) with lamps and
+// `extra` shapes; the lightmap color of the floor under (x, y) through SurfaceMap.
+function room(lamps, extra = [], light = 'full') {
+  const map = new MapBuilder(TEX, { message: 'test' });
+  map.world.push(
+    box(-512, -256, -32, 512, 256, 0, '-0sand'),
+    box(-544, -288, -32, -512, 288, 288, W), box(512, -288, -32, 544, 288, 288, W),
+    box(-512, -288, -32, 512, -256, 288, W), box(-512, 256, -32, 512, 288, 288, W),
+    box(-544, -288, 256, 544, 288, 288, W),
+    ...extra,
+  );
+  for (const l of lamps) map.point({ classname: 'light', ...l });
+  map.point({ classname: 'info_player_deathmatch', origin: '-400 0 37', angles: '0 0 0' });
+  map.point({ classname: 'info_player_start', origin: '400 0 37', angles: '0 180 0' });
+  const bsp = parseUntrustedBSP(map.compile({ light }).bytes.buffer);
+  const s = new SurfaceMap(bsp, CollisionWorld.fromBSP(bsp)), out = new Float32Array(3);
+  return (x, y) => {
+    assert.ok(s.lightAt(out, x, y, 20), `a lit floor under ${x} ${y}`);
+    return [...out];
+  };
+}
+
+Deno.test('lamps: a bulb lights the floor under it, less farther off, not through a wall (draft: no shadows)', () => {
+  const dark = room([]);
+  assert.ok(dark(0, 0)[0] < 40, `a sealed room is dark (${dark(0, 0)})`);
+  const lit = room([{ origin: '0 0 200', _light: '255 200 150 200' }]);
+  const under = lit(0, 0), off = lit(400, 0);
+  assert.ok(under[0] > 80 && under[0] > under[2] * 1.3, `lit and warm under the lamp (${under})`);
+  assert.ok(off[0] < under[0] - 30 && off[0] > dark(400, 0)[0], `less 400 units off (${off})`);
+  // A partition across the room between the lamp and (400, 0).
+  const wall = [box(200, -256, 0, 216, 256, 256, W)];
+  const shadowed = room([{ origin: '0 0 200', _light: '255 200 150 200' }], wall);
+  assert.ok(shadowed(400, 0)[0] < 40, `nothing through the wall (${shadowed(400, 0)})`);
+  assert.ok(shadowed(0, 0)[0] > 80, 'the lamp still lights its own side');
+  const draft = room([{ origin: '0 0 200', _light: '255 200 150 200' }], wall, 'draft');
+  assert.ok(draft(400, 0)[0] > 40, `draft light casts no shadows (${draft(400, 0)})`);
+  // One number: brightness alone, white.
+  const plain = room([{ origin: '0 0 200', _light: '200' }]);
+  assert.ok(plain(0, 0)[0] > 80 && Math.abs(plain(0, 0)[0] - plain(0, 0)[2]) < 12, `white (${plain(0, 0)})`);
+});
+
+Deno.test('lamps: a spot lights inside its cone only; pitch from the key or the angles', () => {
+  const bulb = room([{ origin: '0 0 200', _light: '255 255 255 200' }]);
+  const spot = room([{ classname: 'light_spot', origin: '0 0 200', _light: '255 255 255 200', pitch: '-90', _cone: '20', _cone2: '30' }]);
+  assert.ok(spot(0, 0)[0] > 80, `lit under the spot (${spot(0, 0)})`);
+  assert.ok(bulb(200, 0)[0] > 40, `a bulb lights 200 units off (${bulb(200, 0)})`);
+  assert.ok(spot(200, 0)[0] < 30, `the spot (45 degrees off its axis) does not (${spot(200, 0)})`);
+  // Aimed 45 degrees down along +x by its angles (no pitch key): it lights the floor 200
+  // units east, not the floor under it nor the floor west.
+  const tilted = room([{ classname: 'light_spot', origin: '0 0 200', _light: '255 255 255 300', angles: '-45 0 0', _cone: '20', _cone2: '30' }]);
+  assert.ok(tilted(200, 0)[0] > 50, `lit on its axis (${tilted(200, 0)})`);
+  assert.ok(tilted(0, 0)[0] < 30 && tilted(-200, 0)[0] < 30, `dark off it (${tilted(0, 0)}, ${tilted(-200, 0)})`);
 });

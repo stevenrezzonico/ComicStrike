@@ -13,8 +13,9 @@
 //    clockwise seen from the front;
 //  * texture axes follow the face's nearest axis (GoldSrc's world alignment), and
 //    lightmaps (16 units a texel) are baked here: a warm sun with shadows and a cool sky
-//    seen from each texel (18 rays), traced against the brushes; `light: 'draft'` skips
-//    the rays (no shadows), for a quick look while editing.
+//    seen from each texel (18 rays), traced against the brushes, plus the map's lamps
+//    (`light` and `light_spot` point entities, see Lamps); `light: 'draft'` skips the
+//    rays (no shadows), for a quick look while editing.
 // Only the lumps the engine reads are filled (no visibility, no marksurfaces).
 // Deterministic: the same input gives the same bytes.
 
@@ -408,6 +409,51 @@ for (let ring = 0; ring < 3; ring++) { // three rings of directions over the hem
 }
 const SKY_NORM = SKY_DIRS.reduce((s, d) => s + d[2], 0); // an open floor sees all the sky
 
+// Lamps: GoldSrc's `light` (a bulb) and `light_spot` (a cone) point entities with the
+// `_light` key ("r g b brightness"). A surface facing a lamp LAMP_UNIT units away gets
+// `brightness` (approx.: qrad's inverse square has a scale of its own), falling off by
+// the inverse square less LAMP_CUTOFF, so it ends smoothly at `reach` (64 √brightness
+// units: 905 at 200); shadowed like the sun in full light, not in draft. A spot lights
+// fully within `_cone` of its axis (the `pitch` key, else its `angles` pitch, and its
+// `angles` yaw; -90 straight down) and fades to nothing at `_cone2` (half angles in
+// degrees). Light styles (switched, flickering) are ignored.
+const LAMP_UNIT = 128;
+const LAMP_CUTOFF = 4;
+const LAMP_DEFAULT = [255, 255, 255, 200];
+const CONE_DEFAULT = [30, 45];
+
+const nums = (s) => String(s ?? '').trim().split(/\s+/).map(Number);
+
+export function lampsOf(ents) {
+  const lamps = [];
+  for (const e of ents) {
+    if (e.classname !== 'light' && e.classname !== 'light_spot') continue;
+    const o = nums(e.origin);
+    if (o.length !== 3 || !o.every(Number.isFinite)) continue;
+    let v = nums(e._light);
+    if (v.length === 1 && Number.isFinite(v[0])) v = [255, 255, 255, v[0]];
+    if (v.length !== 4 || !v.every(Number.isFinite)) v = LAMP_DEFAULT;
+    const bright = v[3];
+    if (!(bright > 0)) continue;
+    const lamp = { o, rgb: v.slice(0, 3).map((c) => Math.max(0, Math.min(255, c)) / 255), bright,
+      reach: LAMP_UNIT * Math.sqrt(bright / LAMP_CUTOFF), dir: null, cosIn: 0, cosOut: 0 };
+    if (e.classname === 'light_spot') {
+      const angles = nums(e.angles);
+      const yaw = Number.isFinite(angles[1]) ? angles[1] : 0;
+      const pitch = Number.isFinite(+e.pitch) && String(e.pitch ?? '').trim() !== '' ? +e.pitch
+        : Number.isFinite(angles[0]) ? angles[0] : 0;
+      const p = pitch * Math.PI / 180, y = yaw * Math.PI / 180;
+      lamp.dir = [Math.cos(p) * Math.cos(y), Math.cos(p) * Math.sin(y), Math.sin(p)];
+      const inner = Number.isFinite(+e._cone) && e._cone !== undefined && e._cone !== '' ? +e._cone : CONE_DEFAULT[0];
+      const outer = Number.isFinite(+e._cone2) && e._cone2 !== undefined && e._cone2 !== '' ? +e._cone2 : CONE_DEFAULT[1];
+      lamp.cosIn = Math.cos(Math.min(89.9, Math.abs(inner)) * Math.PI / 180);
+      lamp.cosOut = Math.cos(Math.min(89.9, Math.max(Math.abs(inner), Math.abs(outer))) * Math.PI / 180);
+    }
+    lamps.push(lamp);
+  }
+  return lamps;
+}
+
 // Brushes that cast no shadows: triggers, volumes, ladders (and glass, the sky: see below).
 const SHADOWLESS = new Set(['func_buyzone', 'func_bomb_target', 'func_ladder', 'func_water', 'func_hostage_rescue',
   'func_illusionary']);
@@ -570,6 +616,9 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
     return false;
   }
 
+  const lamps = lampsOf(ents);
+  const toLamp = [0, 0, 0];
+
   // Light (0..255 rgb) at point p on a face with normal n.
   function lightAt(p, n) {
     const q = [p[0] + n[0], p[1] + n[1], p[2] + n[2]];
@@ -586,7 +635,33 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
       }
       sky /= SKY_NORM;
     }
-    return [0, 1, 2].map((c) => Math.min(255, Math.round(BASE_RGB[c] + SUN_RGB[c] * sun + SKY_RGB[c] * sky)));
+    let r = BASE_RGB[0] + SUN_RGB[0] * sun + SKY_RGB[0] * sky;
+    let g = BASE_RGB[1] + SUN_RGB[1] * sun + SKY_RGB[1] * sky;
+    let b = BASE_RGB[2] + SUN_RGB[2] * sun + SKY_RGB[2] * sky;
+    for (const l of lamps) {
+      const dx = l.o[0] - q[0], dy = l.o[1] - q[1], dz = l.o[2] - q[2];
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 >= l.reach * l.reach || d2 < 1) continue;
+      const d = Math.sqrt(d2);
+      const cos = (dx * n[0] + dy * n[1] + dz * n[2]) / d;
+      if (cos <= 0) continue;
+      let k = cos * (l.bright * LAMP_UNIT * LAMP_UNIT / d2 - LAMP_CUTOFF);
+      if (l.dir) { // the angle between the spot's axis and the way to this point
+        const c = -(dx * l.dir[0] + dy * l.dir[1] + dz * l.dir[2]) / d;
+        if (c <= l.cosOut) continue;
+        if (c < l.cosIn) k *= (c - l.cosOut) / (l.cosIn - l.cosOut);
+      }
+      if (light !== 'draft') {
+        toLamp[0] = dx / d;
+        toLamp[1] = dy / d;
+        toLamp[2] = dz / d;
+        if (blocked(q, toLamp, d - 1)) continue;
+      }
+      r += l.rgb[0] * k;
+      g += l.rgb[1] * k;
+      b += l.rgb[2] * k;
+    }
+    return [Math.min(255, Math.round(r)), Math.min(255, Math.round(g)), Math.min(255, Math.round(b))];
   }
 
   const texNames = Object.keys(TEX), texIndex = new Map(texNames.map((n, i) => [n, i]));
