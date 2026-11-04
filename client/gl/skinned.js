@@ -47,7 +47,8 @@ export class SkinnedMesh {
     this.bones = ix.bones; // bone matrices its vertices use
     this.vao = gl.createVertexArray();
     gl.bindVertexArray(this.vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    this.vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
     gl.bufferData(gl.ARRAY_BUFFER, ix.vertices, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, MESH_STRIDE, 0);
@@ -60,10 +61,19 @@ export class SkinnedMesh {
     gl.enableVertexAttribArray(3);
     gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, true, MESH_STRIDE, 16); // rgb, finish
     gl.enableVertexAttribArray(4);
-    gl.vertexAttribIPointer(4, 2, gl.UNSIGNED_BYTE, MESH_STRIDE, 20); // second bone, its weight
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer()); // kept by the VAO
+    // Second bone, its weight, the pattern coordinate (read as 4 bytes, like the normal).
+    gl.vertexAttribIPointer(4, 4, gl.UNSIGNED_BYTE, MESH_STRIDE, 20);
+    this.ibo = gl.createBuffer(); // kept by the VAO
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibo);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, ix.indices, gl.STATIC_DRAW);
     gl.bindVertexArray(null);
+  }
+
+  // Frees its GPU memory (a gun look replaced by another).
+  dispose(gl) {
+    gl.deleteVertexArray(this.vao);
+    gl.deleteBuffer(this.vbo);
+    gl.deleteBuffer(this.ibo);
   }
 }
 

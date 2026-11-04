@@ -9,12 +9,15 @@
 // load; the result is one interleaved buffer for client/gl/skinned.js.
 //
 // Vertex (24 bytes): pos f32x3 | normal i8x3 norm, bone u8 | color u8x4 norm (rgb, finish) |
-// second bone u8, its weight u8 (0..255; the first bone is the heavier), 2 spare bytes.
+// second bone u8, its weight u8 (0..255; the first bone is the heavier), a pattern coordinate u8
+// (0..255: the fade finish's place along a gun, client/models/looks.js), 1 spare byte.
 
 export const MESH_STRIDE = 24;
 
 // Surface finishes (the vertex color's alpha byte): how SKINNED_FS prints a part.
-export const FINISH = { CLOTH: 0, SKIN: 1, METAL: 2, POLYMER: 3, WOOD: 4, PATTERN: 5 };
+// 6-9: the gun finishes (client/models/looks.js): camo blotches, tiger stripes, a hex grid,
+// a fade along the gun.
+export const FINISH = { CLOTH: 0, SKIN: 1, METAL: 2, POLYMER: 3, WOOD: 4, PATTERN: 5, CAMO: 6, STRIPES: 7, HEX: 8, FADE: 9 };
 
 // A color that carries its finish: color(finish([r, g, b], FINISH.METAL)).
 export function finish(rgb, fin) {

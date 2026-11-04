@@ -56,6 +56,7 @@ import { Debris } from './gl/debris.js';
 import { Players } from './gl/players.js';
 import { PlayerModels } from './gl/playermodels.js';
 import { GunMeshes } from './gl/gunmeshes.js';
+import { LOOK_GUNS, lookOf } from './models/looks.js';
 import { GrenadeFx } from './gl/grenadefx.js';
 import { Blasts } from './gl/blast.js';
 import { PASS } from './gl/gputimer.js';
@@ -1612,6 +1613,7 @@ function draw(now, alpha, dt) {
   }
   lap(4);
   renderer.timer.mark(PASS.VIEW);
+  weaponView.viewmodel.own = !inEyes;
   if (inEyes) {
     spectator.syncWeapon(interp, now / 1000, dt, weaponView);
     weaponView.draw(canvas.height, aspect, spectator.ws, spectator.ps, 0, now / 1000, dt,
@@ -2288,6 +2290,13 @@ const applyFullscreen = () => {
   if (!input.fullscreen) input.leaveFullscreen();
 };
 watch(cv.fullscreen, applyFullscreen);
+
+// Our guns' looks (client/models/looks.js, Settings, Weapons): each mesh built when chosen.
+for (const name of LOOK_GUNS) {
+  const c = cv[`cl_finish_${name}`], apply = () => guns.setLook(WEAPON_ID[name], lookOf(name, c.number));
+  apply();
+  watch(c, apply);
+}
 applyFullscreen();
 // Where the keyboard is not locked (Firefox; Chrome out of fullscreen) a Ctrl+W (crouch
 // and forward) closes the tab: while a game runs with the mouse captured the browser asks

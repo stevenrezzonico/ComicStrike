@@ -7,6 +7,8 @@
 import { keyName, MOUSE_NAMES, PAD_NAMES } from './binds.js';
 import { drawCrosshair2d } from './gl/crosshair.js';
 import { quote } from '../shared/cvars.js';
+import { LOOK_GUNS, LOOKS, looksOf } from './models/looks.js';
+import { WEAPONS, WEAPON_ID } from '../shared/weapons.js';
 
 const ESCAPE_GRACE_MS = 300; // the Escape that released the mouse must not resume at once
 // Game mode names (server/host.js GAME_MODES) as shown.
@@ -99,8 +101,32 @@ const TABS = [
     ['slider', 'volume', 'Master volume', 0, 1, 0.01],
     ['slider', 'snd_footstep_volume', 'Footsteps', 0, 2, 0.01],
   ]],
+  ['Weapons', [
+    ['gunwindow'],
+    ...LOOK_GUNS.map((name) => ['looks', `cl_finish_${name}`, WEAPONS[WEAPON_ID[name]].label, name]),
+  ]],
   ['Controls', null],
 ];
+
+// A swatch of look `key` (client/models/looks.js) for the Weapons tab: the paint and the
+// pattern drawn with CSS.
+function swatchStyle(key) {
+  const look = LOOKS[key];
+  if (!look.paint) return 'linear-gradient(135deg, #2b2c2f 0 46%, #8d939b 47% 53%, #2b2c2f 54%)';
+  const rgb = (k) => `rgb(${look.paint.map((c) => Math.round(Math.min(1, c * k) * 255)).join(' ')})`;
+  const paint = rgb(1), dark = rgb(0.5), light = rgb(1.3);
+  switch (key) {
+    case 'tiger': return `repeating-linear-gradient(60deg, ${paint} 0 7px, #241b14 7px 11px)`;
+    case 'hex': return `repeating-linear-gradient(0deg, ${dark} 0 1px, transparent 1px 9px), ` +
+      `repeating-linear-gradient(60deg, ${dark} 0 1px, transparent 1px 9px), ` +
+      `repeating-linear-gradient(120deg, ${dark} 0 1px, ${paint} 1px 9px)`;
+    case 'fade': return 'linear-gradient(90deg, #f9cc4d, #ed73b8, #806be0)';
+    default: return `radial-gradient(circle at 28% 30%, ${dark} 0 20%, transparent 21%), ` +
+      `radial-gradient(circle at 72% 68%, ${dark} 0 24%, transparent 25%), ` +
+      `radial-gradient(circle at 78% 22%, ${light} 0 14%, transparent 15%), ` +
+      `radial-gradient(circle at 24% 80%, ${light} 0 12%, transparent 13%), ${paint}`;
+  }
+}
 
 // The print settings the Video tab's window compares against their defaults while the
 // compare button is held.
@@ -645,7 +671,9 @@ export class Menu {
     const [, rows] = TABS[this.tab];
     // The Video tab's window (the start menu only: in a game the print is right there)
     // stays put above the list, which scrolls under it.
-    if (rows && !this.inGame) for (const row of rows) if (row[0] === 'window') body.append(this.settingRow(row));
+    // The Weapons tab's gun preview too, in a game as well.
+    const pinned = (row) => row[0] === 'gunwindow' || (row[0] === 'window' && !this.inGame);
+    if (rows) for (const row of rows) if (pinned(row)) body.append(this.settingRow(row));
     const list = el('div', 'menu-settings');
     body.append(list);
     if (!rows) {
@@ -658,7 +686,7 @@ export class Menu {
       this.refresh();
       return;
     }
-    for (const row of rows) if (row[0] !== 'window') list.append(this.settingRow(row));
+    for (const row of rows) if (row[0] !== 'window' && row[0] !== 'gunwindow') list.append(this.settingRow(row));
     body.append(button('Restore defaults', () => {
       for (const row of rows) if (row[1]) this.cv[row[1]].set(this.cv[row[1]].defaultValue);
       this.refresh();
@@ -684,6 +712,37 @@ export class Menu {
       const box = el('div', 'menu-window-box');
       box.append(wrap, row);
       return box;
+    }
+    if (kind === 'gunwindow') {
+      // The gallery (client/guns.html) with the last gun touched, in its chosen look.
+      const wrap = el('div', 'menu-gun');
+      this.gunFrame = el('iframe');
+      this.gunFrame.title = 'Weapon preview';
+      wrap.append(this.gunFrame, el('span', 'menu-hint', 'Drag the gun to turn it. Your looks show in your own hands only.'));
+      if (!LOOK_GUNS.includes(this.gunShown)) {
+        this.gunShown = LOOK_GUNS.find((n) => this.cv[`cl_finish_${n}`].number > 0) || 'ak47';
+      }
+      this.showGun(this.gunShown);
+      return wrap;
+    }
+    if (kind === 'looks') {
+      const row = el('div', 'menu-row menu-looks');
+      row.title = `${name}: ${cv.help || ''}`;
+      const opts = el('span', 'menu-swatches'), note = el('span', 'menu-hint');
+      looksOf(a).forEach((key, i) => {
+        const sw = button('', () => {
+          this.set(cv, i);
+          this.showGun(a);
+        }, 'swatch');
+        sw.style.background = swatchStyle(key);
+        sw.title = LOOKS[key].label;
+        sw.setAttribute('aria-label', `${label}: ${LOOKS[key].label}`);
+        opts.append(sw);
+        this.refreshers.push(() => sw.classList.toggle('on', (cv.number | 0) === i));
+      });
+      this.refreshers.push(() => (note.textContent = LOOKS[looksOf(a)[cv.number | 0]].label));
+      row.append(el('span', '', label), opts, note);
+      return row;
     }
     if (kind === 'preview') {
       const wrap = el('div', 'menu-preview');
@@ -741,6 +800,15 @@ export class Menu {
   set(cv, value) {
     cv.set(value);
     this.refresh();
+  }
+
+  // The Weapons tab's preview: gun `name` in its chosen look.
+  showGun(name) {
+    this.gunShown = name;
+    if (!this.gunFrame) return;
+    const look = this.cv[`cl_finish_${name}`].number | 0;
+    const src = `/client/guns.html?only=${name}&look=${look}&embed`;
+    if (this.gunFrame.getAttribute('src') !== src) this.gunFrame.setAttribute('src', src);
   }
 
   refresh() {

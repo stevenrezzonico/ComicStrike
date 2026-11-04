@@ -4,6 +4,7 @@
 import { SkinnedMesh } from './skinned.js';
 import { MeshBuilder } from './meshkit.js';
 import { buildGun } from '../models/guns.js';
+import { paintMesh, paintsAll } from '../models/looks.js';
 import { fitHands } from '../anim/handfit.js';
 import { WEAPONS } from '../../shared/weapons.js';
 
@@ -32,6 +33,10 @@ export function buildFlash(mx, my, mz) {
 
 export class GunMeshes {
   constructor(gl) {
+    this.gl = gl;
+    this.look = []; // our own guns' look (client/models/looks.js): its key, or undefined (factory)
+    this.lookMesh = []; // ... and its mesh (and with the silencer off)
+    this.lookBare = [];
     this.mesh = []; // gun model
     this.flash = []; // muzzle flash at the muzzle (guns only)
     this.muzzle = [];
@@ -74,8 +79,23 @@ export class GunMeshes {
     return this.curls[id];
   }
 
-  meshOf(id, silencedOn = true) {
+  // own: our own gun (first person): in our chosen look; everyone else's is factory.
+  meshOf(id, silencedOn = true, own = false) {
+    if (own && this.lookMesh[id]) return !silencedOn && this.lookBare[id] ? this.lookBare[id] : this.lookMesh[id];
     return !silencedOn && this.bare[id] ? this.bare[id] : this.mesh[id];
+  }
+
+  // Our weapon `id` in look `key` (client/models/looks.js; 'plain' the factory finish): its
+  // mesh built now (a few ms; the menu or the config sets it, not a fight), the last one freed.
+  setLook(id, key) {
+    if (!this.mesh[id] || this.look[id] === key || (!this.look[id] && key === 'plain')) return;
+    for (const m of [this.lookMesh[id], this.lookBare[id]]) if (m) m.dispose(this.gl);
+    this.lookMesh[id] = this.lookBare[id] = null;
+    this.look[id] = key === 'plain' ? undefined : key;
+    if (!this.look[id]) return;
+    const name = WEAPONS[id].name, all = paintsAll(name);
+    this.lookMesh[id] = new SkinnedMesh(this.gl, paintMesh(buildGun(name).mesh, key, all));
+    if (this.bare[id]) this.lookBare[id] = new SkinnedMesh(this.gl, paintMesh(buildGun(name, { noSilencer: true }).mesh, key, all));
   }
 
   flashOf(id, silencedOn = true) {

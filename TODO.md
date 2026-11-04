@@ -4,25 +4,7 @@ Improvements proposed and kept, not yet built. Each has a plan grounded in the c
 was when the plan was written; check the files named before starting one. Done so far from
 these lists: text chat (14g), movers and breakables (14h), weapon leftovers (14i), bots'
 grenades, AWP and buttons (14j), radar levels (14k), point lights (14l), the round-end panel
-and damage report (14m), sun shadows for players (14n).
-
-## Procedural gun finishes
-
-Shader patterns per finish, a few looks per gun chosen in Settings, shown in the gallery,
-the first-person view and third person.
-
-- `FINISH` in `client/gl/meshkit.js` carries one finish per vertex color; add pattern
-  finishes (a camo of blotches, diagonal stripes, a hex grid, a two-tone fade) that
-  `SKINNED_FS` prints in model space (the way the shemagh's check is done), each over the
-  part's own color, so the ink and the two-tone shading stay.
-- A look is a set of part colors plus a pattern finish per gun (`client/models/guns.js`
-  specs: a `looks` list of 3-4 per gun, the first the plain one); `GunMeshes` builds the
-  chosen look's mesh on demand and caches it (the vertex colors change, nothing else).
-- Settings, a Weapons tab: a gun list with its looks as swatches, saved as cvars
-  (`cl_finish_<gun>`); the gallery (`client/guns.html`) takes `?look=`; third person uses
-  the owner's choice only for ourselves (others' choices are not sent: no protocol change).
-- Tests: every look stays within the triangle budget and closed; the finish byte round
-  trips; the gallery renders each look.
+and damage report (14m), sun shadows for players (14n), gun looks.
 
 ## Comic jingles
 

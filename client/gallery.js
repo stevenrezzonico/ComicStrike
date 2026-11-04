@@ -2,11 +2,14 @@
 // right side on, at one scale, printed through the game's own renderer (ink and dots), for
 // comparing the models with the real guns. Each gun gets its own camera, projected into
 // its cell of the canvas. Drag turns them all; a double click goes back to the side view.
-// ?only=ak47,m4a1 shows just those (and larger); ?bare takes the silencers off.
+// ?only=ak47,m4a1 shows just those (and larger); ?bare takes the silencers off; ?look=2 (a
+// choice of each gun's looks, or a look's name: fade) paints them (client/models/looks.js),
+// ?looks shows every look of each gun; ?embed leaves the help out (the Settings' preview).
 
 import { Renderer } from './gl/renderer.js';
 import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN } from './gl/skinned.js';
 import { buildGun } from './models/guns.js';
+import { LOOKS, looksOf, paintMesh, paintsAll } from './models/looks.js';
 import { WEAPONS } from '../shared/weapons.js';
 import { perspective, viewFromAngles, multiply, invert } from './gl/mat4.js';
 
@@ -16,6 +19,13 @@ const DIST = 110; // camera distance
 const params = new URLSearchParams(location.search);
 const only = params.get('only')?.split(',');
 const names = WEAPONS.filter((w) => w && (w.gun || w.name === 'knife') && (!only || only.includes(w.name))).map((w) => w.name);
+// What to draw: each gun in the look asked for, or in every one of its looks.
+const lookParam = params.get('look');
+const pickLook = (name) => (LOOKS[lookParam] ? lookParam : looksOf(name)[lookParam | 0] || 'plain');
+const shown = params.has('looks') ? names.flatMap((name) => looksOf(name).map((look) => ({ name, look })))
+  : names.map((name) => ({ name, look: pickLook(name) }));
+const embed = params.has('embed'); // the Settings' preview: no help, no labels, the gun filling the frame
+if (embed) document.getElementById('help').remove();
 const canvas = document.getElementById('c');
 const renderer = new Renderer(canvas);
 const gl = renderer.gl;
@@ -23,8 +33,9 @@ renderer.style.calm = 0;
 const sr = new SkinnedRenderer(gl);
 
 // Each model with its bounds' center (turned about it) and length.
-const guns = names.map((name) => {
+const guns = shown.map(({ name, look }) => {
   const g = buildGun(name, { noSilencer: params.has('bare') });
+  g.mesh = paintMesh(g.mesh, look, paintsAll(name));
   const p = g.mesh.positions, lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < p.length; i += 3) {
     for (let k = 0; k < 3; k++) {
@@ -32,7 +43,7 @@ const guns = names.map((name) => {
       hi[k] = Math.max(hi[k], p[i + k]);
     }
   }
-  return { name, mesh: new SkinnedMesh(gl, g.mesh), center: lo.map((v, k) => (v + hi[k]) / 2), length: hi[0] - lo[0],
+  return { name, look, mesh: new SkinnedMesh(gl, g.mesh), center: lo.map((v, k) => (v + hi[k]) / 2), length: hi[0] - lo[0],
     height: hi[2] - lo[2] };
 });
 
@@ -52,7 +63,8 @@ function layout(cw, ch) {
 const labels = document.getElementById('labels');
 const tags = guns.map((g) => {
   const d = document.createElement('div');
-  d.textContent = `${WEAPONS.find((w) => w && w.name === g.name).label || g.name} · ${g.length.toFixed(1)} in`;
+  const look = g.look === 'plain' ? '' : ` · ${LOOKS[g.look].label}`;
+  d.textContent = `${WEAPONS.find((w) => w && w.name === g.name).label || g.name}${look} · ${g.length.toFixed(1)} in`;
   labels.append(d);
   return d;
 });
@@ -93,17 +105,18 @@ function frame() {
   const cw = canvas.clientWidth, ch = canvas.clientHeight;
   layout(cw, ch);
   const w = cw / cols, h = ch / rows;
-  const span = only ? Math.max(LONGEST * 1.15, TALLEST * 1.6 * w / h) : 56;
+  const span = embed ? Math.max(LONGEST * 1.08, TALLEST * 1.25 * w / h) : only ? Math.max(LONGEST * 1.15, TALLEST * 1.6 * w / h) : 56;
   const fovY = 2 * Math.atan(span / (w / h) / 2 / DIST);
   viewFromAngles(view, 0, -DIST, 0, 0, 90); // looking along +y: the right side, muzzle to the right
   guns.forEach((_, i) => {
-    const x = (i % cols + 0.5) * w, y = (Math.floor(i / cols) + 0.45) * h;
+    const x = (i % cols + 0.5) * w, y = (Math.floor(i / cols) + (embed ? 0.5 : 0.45)) * h;
     perspective(proj, fovY, w / h, 4, 1000);
     proj[0] *= w / cw;
     proj[5] *= h / ch;
     proj[8] = -(x / cw * 2 - 1);
     proj[9] = y / ch * 2 - 1;
     multiply(cellVP[i], proj, view);
+    tags[i].hidden = embed;
     tags[i].style.left = `${x}px`;
     tags[i].style.top = `${y + Math.min(h * 0.36, w * 0.17)}px`;
   });

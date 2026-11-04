@@ -408,6 +408,15 @@
   #menu button.menu-hold:active { background: var(--red); color: var(--paper-hi); }
   .menu-settings { max-height: calc(100vh - 12vh - 180px); overflow-y: auto; padding-right: 8px; }
   .menu-window-box ~ .menu-settings { max-height: calc(100vh - 12vh - 215px - min(30vh, 0.5625 * min(612px, 88vw - 48px))); }
+  /* The Weapons tab: a gallery frame of the gun last touched, and a row of look swatches per gun. */
+  .menu-gun { margin: 0 0 8px; }
+  .menu-gun iframe { display: block; width: 100%; height: min(150px, 22vh); border: 3px solid var(--ink);
+    box-shadow: 4px 4px 0 var(--ink); background: var(--paper-hi); box-sizing: border-box; margin-bottom: 4px; }
+  .menu-gun ~ .menu-settings { max-height: calc(100vh - 12vh - 215px - min(150px, 22vh)); }
+  .menu-looks > span:first-child { flex-basis: 150px; }
+  .menu-swatches { display: flex; gap: 8px; }
+  #menu button.swatch { width: 40px; height: 28px; padding: 0; border: 3px solid var(--ink); box-shadow: 2px 2px 0 var(--ink); }
+  #menu button.swatch.on { outline: 3px solid var(--red); outline-offset: 2px; }
   .menu-preview canvas { display: block; width: 100%; height: 120px; border: 3px solid var(--ink); margin-bottom: 8px;
     box-sizing: border-box; }
   .menu-row input:not([type]) { flex: 1 1 120px; min-width: 0; }
@@ -461,7 +470,7 @@
     .menu-row.check > span:first-child { flex: 1; }
     .menu-choice > span:first-child { flex-basis: 100%; }
     .menu-settings { max-height: none; overflow: visible; padding-right: 0; }
-    .menu-window-box ~ .menu-settings { max-height: none; }
+    .menu-window-box ~ .menu-settings, .menu-gun ~ .menu-settings { max-height: none; }
     .menu-window { width: min(100%, 40vh * 16 / 9); }
     .menu-maps { max-height: none; overflow: visible; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
     .menu-tagline, .menu-features { display: none; }

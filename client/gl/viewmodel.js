@@ -22,6 +22,7 @@ export class Viewmodel {
     this.guns = guns;
     this.renderer = new SkinnedRenderer(gl);
     this.renderer.flags = G_FLAGS.VIEW;
+    this.own = true; // our own gun (in our look, client/models/looks.js); false: someone else's eyes
     this.proj = new Float32Array(16);
     this.fovY = 54 * Math.PI / 180;
     this.model = new Float32Array(16); // the whole view (bob, offsets), eye space
@@ -56,7 +57,7 @@ export class Viewmodel {
   // flying out of the hand and its rig-frame matrix }; light: rgb from the map at the
   // player; team: the player's team; silencerOn: the M4A1-S / USP-S wear theirs.
   draw(weaponId, aspect, va, anim, light, team, silencerOn = true) {
-    const gun = this.guns.meshOf(weaponId, silencerOn);
+    const gun = this.guns.meshOf(weaponId, silencerOn, this.own);
     if (!gun) return;
     const gl = this.gl, r = this.renderer;
     perspective(this.proj, this.fovY, aspect, 1, 128);
@@ -76,7 +77,7 @@ export class Viewmodel {
       r.draw(gun, multiply(this.tmp2, this.rig, va.gun2), va.gunSkin, light);
       if (va.flash2) this.tmp.set(this.tmp2);
     }
-    const tossed = anim.tossId ? this.guns.meshOf(anim.tossId, true) : null;
+    const tossed = anim.tossId ? this.guns.meshOf(anim.tossId, true, this.own) : null;
     if (tossed) r.draw(tossed, multiply(this.tmp3, this.rig, anim.toss), IDENTITY_SKIN, light);
     const flash = this.guns.flashOf(weaponId, silencerOn);
     if (anim.flash && flash) r.draw(flash, this.tmp, IDENTITY_SKIN, light, 1); // a flat comic burst

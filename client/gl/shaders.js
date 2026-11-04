@@ -558,7 +558,7 @@ layout(location=0) in vec3 a_pos;
 layout(location=1) in vec3 a_nrm;
 layout(location=2) in uint a_bone;
 layout(location=3) in vec4 a_col; // rgb, finish / 255
-layout(location=4) in uvec2 a_blend; // second bone, its weight (0..255)
+layout(location=4) in uvec4 a_blend; // second bone, its weight (0..255), the pattern coordinate
 uniform mat4 u_viewProj;
 uniform mat4 u_bones[24]; // bone -> world (the model matrix folded in, client/gl/skinned.js)
 uniform uint u_id;
@@ -568,9 +568,11 @@ out vec3 v_col;
 out vec3 v_pos; // world
 out vec3 v_obj; // model space (grain)
 out float v_w;
+out float v_t; // the pattern coordinate (a fade's place along the gun)
 flat out uint v_id;
 flat out uint v_fin;
 void main() {
+  v_t = float(a_blend.z) / 255.0;
   // Linear blend skinning between two bones (one when the weight is 0).
   float bw = float(a_blend.y) / 255.0;
   mat4 m = u_bones[a_bone] * (1.0 - bw) + u_bones[a_blend.x] * bw;
@@ -596,6 +598,7 @@ in vec3 v_col;
 in vec3 v_pos;
 in vec3 v_obj;
 in float v_w;
+in float v_t;
 flat in uint v_id;
 flat in uint v_fin;
 uniform vec3 u_light; // map light at the model, lifted like the world's
@@ -607,8 +610,57 @@ uniform float u_lightFull; // lifted light that prints fully lit (per map, Rende
 uniform uint u_flags;      // G_ flags for every pixel of the draw (G_VIEW: first person)
 const float MODEL_FLOOR = 0.55; // models print at least this lit
 const uint FIN_METAL = 2u, FIN_POLYMER = 3u, FIN_WOOD = 4u, FIN_PATTERN = 5u;
+const uint FIN_CAMO = 6u, FIN_STRIPES = 7u, FIN_HEX = 8u, FIN_FADE = 9u;
 ${NOISE}
 ${GBUFFER}
+// Hex grid (q in cells): the distance from the cell's middle (0.5 at its edge) and a hash
+// of the cell.
+vec2 hexCell(vec2 q) {
+  const vec2 s = vec2(1.0, 1.7320508);
+  vec4 c = floor(vec4(q, q - vec2(0.5, 1.0)) / s.xyxy) + 0.5;
+  vec4 h = vec4(q - c.xy * s, q - (c.zw + 0.5) * s);
+  vec4 r = dot(h.xy, h.xy) < dot(h.zw, h.zw) ? vec4(h.xy, c.xy) : vec4(h.zw, c.zw + 0.5);
+  vec2 a = abs(r.xy);
+  return vec2(max(dot(a, s * 0.5), a.x), h21(r.zw));
+}
+// The gun finishes (client/models/looks.js) over the painted color, in model space
+// (inches), with hard comic edges; each fades to the paint alone where it would crowd
+// closer than a few pixels (a gun far away).
+vec3 gunFinish(vec3 c, uint fin, vec3 p, float t) {
+  if (fin == FIN_FADE) {
+    // Gold at the stock to pink to violet at the muzzle, the painted part's own lightness kept.
+    float k = dot(c, vec3(0.3, 0.59, 0.11)) / 0.62;
+    vec3 g = t < 0.5 ? mix(vec3(0.98, 0.8, 0.3), vec3(0.93, 0.45, 0.72), t * 2.0)
+      : mix(vec3(0.93, 0.45, 0.72), vec3(0.5, 0.42, 0.88), t * 2.0 - 1.0);
+    return clamp(g * k, 0.0, 1.0);
+  }
+  if (fin == FIN_HEX) {
+    vec2 q = vec2(p.x + p.y * 0.5, p.z - p.y * 0.5) / 0.9;
+    vec2 h = hexCell(q);
+    float fw = max(fwidth(h.x), 1e-4), crowd = 1.0 - smoothstep(0.12, 0.3, length(fwidth(q)));
+    float line = smoothstep(0.42 - fw, 0.42 + fw, h.x);
+    vec3 cell = c * (h.y < 0.33 ? 1.18 : h.y < 0.66 ? 1.0 : 0.88);
+    return mix(c, mix(cell, c * 0.35, line), crowd);
+  }
+  vec2 q = vec2(p.x + p.y * 0.6, p.z - p.y * 0.4);
+  float crowd = 1.0 - smoothstep(0.35, 0.9, length(fwidth(q)));
+  if (fin == FIN_CAMO) {
+    // Two layers of blotches: dark over light over the paint.
+    q *= 0.3;
+    float n = vnoise(q) * 0.65 + vnoise(q * 2.3 + 7.1) * 0.35;
+    float m = vnoise(q * 1.1 + 31.7) * 0.65 + vnoise(q * 2.7 + 3.3) * 0.35;
+    float fn = max(fwidth(n), 1e-4), fm = max(fwidth(m), 1e-4);
+    float dark = smoothstep(0.57 - fn, 0.57 + fn, n);
+    float light = smoothstep(0.6 - fm, 0.6 + fm, m) * (1.0 - dark);
+    return mix(c, c * (1.0 - 0.5 * dark) + light * (vec3(1.0) - c) * 0.35, crowd);
+  }
+  // FIN_STRIPES: wavy tiger stripes across the gun, each its own width.
+  float d = (q.x * 0.5 + q.y * 0.35 + 0.8 * sin(q.y * 0.9 + q.x * 0.22) + 0.7 * vnoise(q * 0.35)) / 2.2;
+  float w = 0.16 + 0.14 * h21(vec2(floor(d), 3.7));
+  float s = abs(fract(d) - 0.5) * 2.0, fw = max(fwidth(d) * 2.0, 1e-4);
+  float stripe = 1.0 - smoothstep(w - fw, w + fw, s);
+  return mix(c, c * 0.2, stripe * crowd);
+}
 void main() {
   vec3 n = normalize(v_nrm);
   if (u_emissive > 0.5) {
@@ -619,6 +671,7 @@ void main() {
   vec3 V = normalize(u_eye - v_pos);
   float lum = dot(u_light, vec3(0.3, 0.59, 0.11));
   vec3 albedo = clamp(v_col * mix(vec3(1.0), clamp(u_light / max(lum, 0.05), 0.0, 2.0), 0.5), 0.0, 1.0);
+  if (v_fin >= FIN_CAMO) albedo = gunFinish(albedo, v_fin, v_obj, v_t);
   float lit = clamp(max(lum / u_lightFull, MODEL_FLOOR), 0.0, 1.0);
   float ndl = dot(n, u_lightDir);
   // Small on screen (a far figure, a few units a pixel): the detail (two tones, rim, shine)
@@ -632,7 +685,7 @@ void main() {
   float rim = smoothstep(0.68, 0.76, 1.0 - max(dot(n, V), 0.0)) * (1.0 - small);
   light = mix(light, lit, rim);
   albedo = mix(albedo, min(albedo * 1.35 + 0.08, vec3(1.0)), rim);
-  if (v_fin == FIN_METAL || v_fin == FIN_POLYMER) {
+  if (v_fin == FIN_METAL || v_fin == FIN_POLYMER || v_fin >= FIN_CAMO) {
     // Shine: a blue-grey sheen toward the light, a hard white streak at its peak. A flat
     // face (its normal does not bend) would turn white all over: it gets two diagonal
     // bars instead.

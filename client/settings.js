@@ -3,6 +3,7 @@
 
 import { Console, FCVAR_ARCHIVE, FCVAR_PROTECTED } from '../shared/cvars.js';
 import { Binds, PAD_NAMES } from './binds.js';
+import { LOOK_GUNS, LOOKS, looksOf } from './models/looks.js';
 
 const CONFIG_KEY = 'comicstrike.config.cfg';
 const OLD_CONFIG_KEY = 'webcs.config.cfg'; // saved before the rename to ComicStrike: read once
@@ -112,6 +113,11 @@ export function createConsole(print) {
   add('cl_interp_ratio', 2, 'Other players are drawn this many ticks behind', 1, 2);
   add('name', 'player', 'Your name');
   add('rcon_password', '', 'Password for rcon commands', undefined, undefined, FCVAR_PROTECTED);
+  // Our guns' looks (client/models/looks.js; Settings, Weapons).
+  for (const name of LOOK_GUNS) {
+    const looks = looksOf(name).map((k, i) => `${i} ${LOOKS[k].label}`).join(', ');
+    add(`cl_finish_${name}`, 0, `Finish of your ${name}: ${looks}`, 0, looksOf(name).length - 1);
+  }
 
   binds.register(con, save);
   con.command('host_writeconfig', (_a, ctx) => {
