@@ -17,16 +17,26 @@
 //    seen from each texel (18 rays), traced against the brushes, plus the map's lamps
 //    (`light` and `light_spot` point entities, see Lamps); `light: 'draft'` skips the
 //    rays (no shadows), for a quick look while editing.
-// Only the lumps the engine reads are filled (no visibility, no marksurfaces).
-// Deterministic: the same input gives the same bytes.
+//  * visibility (`vis: true`, shared/bspvis.js): each world leaf's PVS, worked on a coarse
+//    tree of the large opaque brushes, and each leaf's faces (marksurfaces), so the renderer
+//    draws what can be seen from where the camera is (client/gl/worldvis.js).
+// Only the lumps the engine reads are filled. Deterministic: the same input gives the
+// same bytes.
 
 import { sunEntity } from './sun.js';
+import { computeVis } from './bspvis.js';
 
 export const CONTENTS_EMPTY = -1, CONTENTS_SOLID = -2, CONTENTS_WATER = -3;
 
 const EPS = 0.01; // plane side tolerance (units)
 const HUGE = 65536;
 const SCORE_SAMPLE = 128; // brushes a split candidate is scored against at most
+// Visibility: brushes at least STRUCT_LONG long and STRUCT_WIDE across the next way make
+// the coarse tree (walls, slabs: furniture would only multiply the leaves; 128 x 64 made
+// cs_polaris's 1.8 times as many coarse leaves for little more culled); the portal flow
+// gets VIS_STEPS steps.
+const STRUCT_LONG = 192, STRUCT_WIDE = 128;
+const VIS_STEPS = 60_000_000;
 
 // --- Brushes ---------------------------------------------------------------------------
 
@@ -173,8 +183,9 @@ function boxCell(b) {
   return { polys, verts: polys.flat() };
 }
 
-// Splits a cell by plane (n, d): [back (n·p <= d), front].
-function splitCell(cell, n, d) {
+// Splits a cell by plane (n, d): [back (n·p <= d), front]. Each polygon keeps the `tag`
+// of the cut that made it (the cap: this one's), for the portals (shared/bspvis.js).
+function splitCell(cell, n, d, tag = null) {
   const back = [], front = [], cap = [];
   for (const poly of cell.polys) {
     const ds = poly.map((p) => dot3(n, p) - d);
@@ -182,8 +193,8 @@ function splitCell(cell, n, d) {
     else if (ds.every((x) => x >= -EPS)) front.push(poly);
     else {
       const b = clip(poly, n, d), f = clip(poly, n, d, true);
-      if (b.length) back.push(b);
-      if (f.length) front.push(f);
+      if (b.length) back.push(Object.assign(b, { tag: poly.tag }));
+      if (f.length) front.push(Object.assign(f, { tag: poly.tag }));
       for (let i = 0; i < poly.length; i++) { // where the edges cross the plane
         const a = ds[i], c = ds[(i + 1) % poly.length];
         if (Math.abs(a) <= EPS) cap.push(poly[i]);
@@ -196,6 +207,7 @@ function splitCell(cell, n, d) {
     }
   }
   const capPoly = orderLoop(cap, n);
+  capPoly.tag = tag;
   if (capPoly.length >= 3) {
     back.push(capPoly);
     front.push(capPoly);
@@ -271,8 +283,8 @@ function hullBrush(planes, h, origin, contents, index) {
 }
 
 // BSP tree over brushes inside `cell`: a node { n, d (canonical), type, front, back, cell
-// bounds } or a leaf { contents, bounds }.
-function buildTree(brushes, rootBounds) {
+// bounds } or a leaf { contents, bounds } (with `cells`, an empty leaf keeps its cell).
+function buildTree(brushes, rootBounds, cells = false) {
   const split = (cell, list) => {
     const verts = cell.verts, bounds = boundsOf(verts);
     const apart = (o) => { // bounds apart: the brush is wholly outside the cell
@@ -280,7 +292,7 @@ function buildTree(brushes, rootBounds) {
       return false;
     };
     const inside = list.filter((i) => !apart(brushes[i].b) && !brushes[i].planes.some((p) => sideOf(verts, p.n, p.d) === 1));
-    if (!inside.length) return { contents: CONTENTS_EMPTY, bounds };
+    if (!inside.length) return { contents: CONTENTS_EMPTY, bounds, cell: cells ? cell : undefined };
     // A solid leaf is `clear` (faces of other brushes inside it are kept: a wall behind a
     // ladder board, seen through its holes) when every brush reaching into it is.
     const clear = inside.every((i) => brushes[i].clear);
@@ -315,12 +327,12 @@ function buildTree(brushes, rootBounds) {
       }
     }
     if (!best) return { contents: brushes[inside[0]].contents, bounds, clear }; // (within the tolerance: call it inside)
-    const [b, f] = splitCell(cell, best.n, best.d);
+    const [b, f] = splitCell(cell, best.n, best.d, cells ? best : null);
     const front = split(f, inside), back = split(b, inside);
     // Two leaves alike need no node between them (a cell inside two overlapping brushes, cut
     // where one ends: a fifth of the clipnodes of a map opened from a .bsp).
     if (front.n === undefined && back.n === undefined && front.contents === back.contents && front.clear === back.clear) {
-      return { contents: front.contents, bounds, clear: front.clear };
+      return { contents: front.contents, bounds, clear: front.clear, cell: front.cell && cell };
     }
     return { n: best.n, d: best.d, type: best.type, bounds, front, back };
   };
@@ -336,7 +348,7 @@ function buildTree(brushes, rootBounds) {
 function faceFragments(tree, poly, normal, out) {
   const push = (node, p, on) => {
     if (node.n === undefined) {
-      if ((node.contents !== CONTENTS_SOLID || node.clear) && on) out.push({ poly: p, node: on.node, side: on.side });
+      if ((node.contents !== CONTENTS_SOLID || node.clear) && on) out.push({ poly: p, node: on.node, side: on.side, leaf: node });
       return;
     }
     const ds = p.map((v) => dot3(node.n, v) - node.d);
@@ -500,8 +512,9 @@ export class MapBuilder {
 }
 
 // models: [{ brushes, origin, contents? }] (model 0 the world), ents: entity key objects
-// (brush entities name their model as "*n"). Returns { bytes: Uint8Array, stats }.
-export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
+// (brush entities name their model as "*n"). light: 'full' or 'draft'; vis: work out the
+// world's visibility (seconds to a minute on a big map). Returns { bytes: Uint8Array, stats }.
+export function compileBSP(TEX, models, ents, { light = 'full', vis: withVis = false } = {}) {
   const planes = [], planeOf = new Map();
   // A canonical plane's index.
   function plane(c) {
@@ -766,18 +779,26 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
     return ofs;
   }
 
-  // Hull 0 tree -> nodes (with their faces) and leaves; returns the head node index.
-  function emitNodes(tree, facesByNode, origin) {
+  // Hull 0 tree -> nodes (with their faces) and leaves; returns the head node index. In the
+  // world a solid leaf seen through (a ladder board) is a leaf of its own, for the PVS and
+  // the faces in it; faceLeaves gets [face, its leaves].
+  const faceLeaves = [];
+  function emitNodes(tree, facesByNode, origin, world) {
     const emit = (n) => {
       if (n.n === undefined) {
-        if (n.contents === CONTENTS_SOLID) return -1; // leaf 0
-        leaves.push({ contents: n.contents, bounds: n.bounds });
+        if (n.contents === CONTENTS_SOLID && !(world && withVis && n.clear)) return -1; // leaf 0
+        leaves.push({ contents: n.contents, bounds: n.bounds, see: true, firstmark: 0, nummarks: 0 });
+        n.index = leaves.length - 1;
         return -leaves.length;
       }
       const i = nodes.length;
       const rec = { plane: plane(n), bounds: n.bounds, firstface: faces.length, numfaces: 0 };
       nodes.push(rec);
-      for (const f of facesByNode.get(n) || []) addFace({ ...f, planeIndex: rec.plane }, origin);
+      for (const f of facesByNode.get(n) || []) {
+        const before = faces.length;
+        addFace({ ...f, planeIndex: rec.plane }, origin);
+        if (world && faces.length > before) faceLeaves.push([before, f.leaves]);
+      }
       rec.numfaces = faces.length - rec.firstface;
       rec.front = emit(n.front);
       rec.back = emit(n.back);
@@ -802,6 +823,15 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
     };
     return emit(tree);
   }
+
+  // The world's visibility: leaves 1..visLeaves - 1 are the world's; the coarse tree is
+  // made of its large opaque brushes (structural).
+  let visLeaves = 0, visTree = null;
+  const structural = (br) => {
+    if (br.clear) return false;
+    const e = [br.b[3] - br.b[0], br.b[4] - br.b[1], br.b[5] - br.b[2]].sort((a, b) => b - a);
+    return e[0] >= STRUCT_LONG && e[1] >= STRUCT_WIDE;
+  };
 
   models.forEach((model, mi) => {
     if (!model.brushes.length) throw new Error(mi ? `entity model *${mi} has no brushes` : 'the map has no brushes');
@@ -832,7 +862,7 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
             faceFragments(tree, poly, ps[i].n, frags);
             for (const fr of frags) {
               if (!byNode.has(fr.node)) byNode.set(fr.node, []);
-              byNode.get(fr.node).push({ poly: fr.poly, normal: ps[i].n, d: ps[i].d, tex: ps[i].tex, side: fr.side, fit });
+              byNode.get(fr.node).push({ poly: fr.poly, normal: ps[i].n, d: ps[i].d, tex: ps[i].tex, side: fr.side, fit, leaves: [fr.leaf] });
             }
           });
         }
@@ -847,6 +877,7 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
                 const joined = joinPolys(p.poly, q.poly, p.normal);
                 if (!joined) continue;
                 p.poly = joined;
+                p.leaves = p.leaves.concat(q.leaves);
                 list.splice(j, 1);
                 merged = true;
               }
@@ -854,7 +885,11 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
           }
           for (const f of list) f.poly = simplify(f.poly, f.normal);
         }
-        heads.push(emitNodes(tree, byNode, model.origin));
+        heads.push(emitNodes(tree, byNode, model.origin, isWorld));
+        if (isWorld && withVis) {
+          visLeaves = leaves.length;
+          visTree = buildTree(brushes.filter(structural), root, true);
+        }
       } else heads.push(emitClipnodes(tree));
     }
     modelRecs.push({ mins: bounds0.slice(0, 3), maxs: bounds0.slice(3), heads, firstface, numfaces: faces.length - firstface });
@@ -898,7 +933,31 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
   d = buf(vertices.length * 12);
   vertices.forEach((v, i) => v.forEach((x, k) => d.setFloat32(i * 12 + k * 4, x, true)));
   lumps[3] = d;
-  lumps[4] = new Uint8Array(0); // visibility: none (everything is drawn)
+  // 4 visibility, and the marksurfaces: each world leaf's faces
+  const marks = [];
+  {
+    const lists = new Map();
+    for (const [face, ls] of faceLeaves) {
+      for (const l of ls) {
+        if (l.index === undefined) continue;
+        if (!lists.has(l.index)) lists.set(l.index, new Set());
+        lists.get(l.index).add(face);
+      }
+    }
+    for (let i = 1; i < visLeaves; i++) {
+      leaves[i].firstmark = marks.length;
+      for (const f of lists.get(i) || []) marks.push(f);
+      leaves[i].nummarks = marks.length - leaves[i].firstmark;
+    }
+  }
+  let visofs = null, vis = null;
+  lumps[4] = new Uint8Array(0);
+  if (visTree && marks.length <= 65535) {
+    const v = computeVis(visTree, leaves.slice(0, visLeaves), VIS_STEPS);
+    lumps[4] = v.lump;
+    visofs = v.offsets;
+    vis = v.stats;
+  }
   // 5 nodes
   const lo = (x) => Math.max(-32768, Math.min(32767, Math.floor(x)));
   const hi = (x) => Math.max(-32768, Math.min(32767, Math.ceil(x)));
@@ -954,14 +1013,21 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
   d = buf(leaves.length * 28);
   leaves.forEach((l, i) => {
     d.setInt32(i * 28, l.contents, true);
-    d.setInt32(i * 28 + 4, -1, true);
+    d.setInt32(i * 28 + 4, visofs && i < visLeaves ? visofs[i] : -1, true);
     for (let k = 0; k < 3; k++) {
       d.setInt16(i * 28 + 8 + k * 2, lo(l.bounds[k]), true);
       d.setInt16(i * 28 + 14 + k * 2, hi(l.bounds[k + 3]), true);
     }
+    if (visofs && i < visLeaves) {
+      d.setUint16(i * 28 + 20, l.firstmark, true);
+      d.setUint16(i * 28 + 22, l.nummarks, true);
+    }
   });
   lumps[10] = d;
-  lumps[11] = new Uint8Array(0); // marksurfaces: unused (no visibility)
+  // 11 marksurfaces
+  d = buf(visofs ? marks.length * 2 : 0);
+  if (visofs) marks.forEach((f, i) => d.setUint16(i * 2, f, true));
+  lumps[11] = d;
   // 12 edges, 13 surfedges
   d = buf(edges.length * 4);
   edges.forEach(([a, b], i) => {
@@ -981,7 +1047,7 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
       d.setFloat32(o + 12 + k * 4, m.maxs[k], true);
     }
     m.heads.forEach((h, k) => d.setInt32(o + 36 + k * 4, h, true));
-    d.setInt32(o + 52, 0, true);
+    d.setInt32(o + 52, i === 0 && visofs ? visLeaves - 1 : 0, true); // visleafs
     d.setInt32(o + 56, m.firstface, true);
     d.setInt32(o + 60, m.numfaces, true);
   });
@@ -1004,7 +1070,7 @@ export function compileBSP(TEX, models, ents, { light = 'full' } = {}) {
   return {
     bytes: out,
     stats: { models: models.length, faces: faces.length, nodes: nodes.length, clipnodes: clipnodes.length,
-      leaves: leaves.length, texels: lighting.length / 3 },
+      leaves: leaves.length, texels: lighting.length / 3, vis },
   };
 }
 

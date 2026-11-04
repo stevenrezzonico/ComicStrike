@@ -1127,11 +1127,11 @@ class Editor {
 
   // --- Compiling, preview, play --------------------------------------------------------
 
-  compile(light) {
+  compile(light, vis = false) {
     const id = ++this.jobId;
     return new Promise((resolve) => {
       this.jobs.set(id, resolve);
-      this.worker.postMessage({ id, project: this.project, light });
+      this.worker.postMessage({ id, project: this.project, light, vis });
     }).then((r) => ({ ...r, id }));
   }
 
@@ -1181,7 +1181,7 @@ class Editor {
   // The compiled map, carrying its project (withProject: the editor opens it again exactly).
   async exportBsp() {
     this.status('Compiling...');
-    const r = await this.compile('full');
+    const r = await this.compile('full', true); // with its visibility: the map that ships
     if (r.error) return this.status(r.error, true);
     const bytes = await withProject(new Uint8Array(r.bytes), this.project);
     this.download(new Blob([bytes], { type: 'application/octet-stream' }), `${this.project.name}.bsp`);

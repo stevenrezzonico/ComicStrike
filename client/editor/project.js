@@ -525,9 +525,10 @@ export async function projectIn(bytes) {
   }
 }
 
-// The compiled map: { bytes, stats } (throws when the project has errors).
-export function compileProject(p, light = 'full') {
+// The compiled map: { bytes, stats } (throws when the project has errors); vis: with its
+// visibility (shared/bspvis.js; the export, seconds more on a big map).
+export function compileProject(p, light = 'full', vis = false) {
   const { errors } = checkProject(p);
   if (errors.length) throw new Error(errors[0].text);
-  return projectToBuilder(p).compile({ light });
+  return projectToBuilder(p).compile({ light, vis });
 }
