@@ -139,8 +139,27 @@
     text-shadow: 1px 1px 0 var(--ink), 2px 2px 0 var(--ink), 3px 3px 0 var(--ink), 4px 4px 0 var(--ink),
       5px 5px 0 var(--ink); pointer-events: none; }
   /* Panels: paper, a heavy ink border, a hard shadow. */
-  #scoreboard { background: var(--paper); border: 4px solid var(--ink); box-shadow: 8px 8px 0 var(--ink);
+  #scoreboard, #roundpanel { background: var(--paper); border: 4px solid var(--ink); box-shadow: 8px 8px 0 var(--ink);
     color: var(--ink); }
+  /* The round-end panel: the winner, the scores, the MVP, our damage report. */
+  #roundpanel { position: fixed; left: 50%; top: 16%; transform: translateX(-50%) rotate(-1deg); display: none;
+    min-width: 400px; max-width: 80vw; padding: 10px 22px 14px; font: 15px/1.5 var(--body); text-align: center;
+    pointer-events: none; }
+  #roundpanel.on { display: block; }
+  #roundpanel h2 { margin: 0 0 4px; color: var(--yellow); font: 38px/1.15 var(--display); letter-spacing: 0.03em;
+    -webkit-text-stroke: 2px var(--ink); paint-order: stroke fill;
+    text-shadow: 1px 1px 0 var(--ink), 2px 2px 0 var(--ink), 3px 3px 0 var(--ink); }
+  #roundpanel .score { font: 28px/1.2 var(--display); letter-spacing: 0.05em; margin-bottom: 4px; }
+  #roundpanel .ct { color: var(--blue); }
+  #roundpanel .t { color: var(--red); }
+  #roundpanel .mvp { font: 700 17px/1.4 var(--body); margin: 2px 0 6px; }
+  #roundpanel .none { color: #6d665c; }
+  #roundpanel table { width: 100%; border-collapse: collapse; text-align: left; }
+  #roundpanel td:not(:first-child) { text-align: right; width: 48px; font-variant-numeric: tabular-nums; }
+  #roundpanel tr.head td { padding-top: 6px; font: 17px/1.4 var(--display); letter-spacing: 0.05em;
+    border-bottom: 3px solid var(--ink); color: var(--ink); }
+  #roundpanel tr.me td { font-weight: 700; }
+  body.nohud #roundpanel, body.dying #roundpanel { display: none !important; }
   #scoreboard { position: fixed; left: 50%; top: 14%; transform: translateX(-50%); display: none; min-width: 440px;
     padding: 10px 16px 12px; font: 15px/1.6 var(--body); pointer-events: none; }
   #scoreboard table { width: 100%; border-collapse: collapse; }
@@ -439,6 +458,9 @@
     .menu-tagline, .menu-features { display: none; }
     .hud { font-size: 28px; }
     #banner { font-size: 32px; }
+    #roundpanel { min-width: 0; width: 90vw; top: 12%; padding: 6px 12px 10px; font-size: 13px; }
+    #roundpanel h2 { font-size: 26px; }
+    #roundpanel .score { font-size: 22px; }
   }
   @media (pointer: coarse) {
     #menu button { min-height: 44px; }
@@ -465,6 +487,7 @@
 <div id="chatline"></div>
 <div id="roundbar"></div>
 <div id="banner"></div>
+<div id="roundpanel"></div>
 <div id="hud-money"></div>
 <div id="hud-bomb"></div>
 <div id="progress"><div></div><div></div></div>

@@ -4,8 +4,9 @@
 
 import {
   MAX_PLAYERS, Writer, Reader, SnapshotRing, OwnState, EventList, writeHello, writeCmds, readWelcome, readSnapshot,
-  readInfo, readItems, readGrenades, readHostages, readChat, writeBuy, writeCommand, S2C_WELCOME, S2C_SNAPSHOT,
-  S2C_REJECT, S2C_INFO, S2C_PRINT, S2C_CHANGELEVEL, S2C_ITEMS, S2C_GRENADES, S2C_HOSTAGES, S2C_CHAT, C2S_CMDS, C2S_BYE,
+  readInfo, readItems, readGrenades, readHostages, readChat, readReport, writeBuy, writeCommand, S2C_WELCOME, S2C_SNAPSHOT,
+  S2C_REJECT, S2C_INFO, S2C_PRINT, S2C_CHANGELEVEL, S2C_ITEMS, S2C_GRENADES, S2C_HOSTAGES, S2C_CHAT, S2C_REPORT, C2S_CMDS,
+  C2S_BYE,
 } from '../shared/protocol.js';
 import { Hostages } from '../shared/hostages.js';
 import { Items } from '../shared/items.js';
@@ -52,6 +53,8 @@ export class NetClient {
     this.kills = new Int32Array(MAX_PLAYERS);
     this.scores = new Int32Array(MAX_PLAYERS); // deathmatch points
     this.deaths = new Int32Array(MAX_PLAYERS);
+    this.mvps = new Int32Array(MAX_PLAYERS); // rounds each player was the MVP of
+    this.report = null; // the newest round's damage report { round, rows } (S2C_REPORT)
     this.buyId = 0;
     this.cmdId = 0;
     this.prints = []; // console text from the server, taken by the game loop
@@ -285,7 +288,9 @@ export class NetClient {
       } else if (type === S2C_REJECT) {
         this.rejected = r.str();
       } else if (type === S2C_INFO) {
-        readInfo(r, this.names, this.teams, this.kills, this.deaths, this.scores);
+        readInfo(r, this.names, this.teams, this.kills, this.deaths, this.scores, this.mvps);
+      } else if (type === S2C_REPORT) {
+        this.report = readReport(r);
       } else if (type === S2C_PRINT) {
         this.prints.push(r.lstr());
       } else if (type === S2C_CHAT) {

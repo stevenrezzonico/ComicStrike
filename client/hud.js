@@ -21,6 +21,9 @@ export class Hud {
     this.elMoney = $('hud-money');
     this.elRound = $('roundbar');
     this.elBanner = $('banner');
+    this.elPanel = $('roundpanel');
+    this.panelTitle = ''; // the round-end banner text, shown in the panel instead
+    this.panelKey = '';
     this.elScore = $('scoreboard');
     this.elMenu = $('buymenu');
     this.elBomb = $('hud-bomb');
@@ -117,7 +120,102 @@ export class Hud {
     } else if (notice) {
       banner = notice;
     }
+    if (rs.phase === PHASE_OVER && !(rs.mode & GAME_DEMO)) { // the round-end panel carries it
+      this.panelTitle = banner;
+      banner = '';
+    }
     this.set(this.elBanner, 'banner', banner);
+  }
+
+  // The round-end panel (CS:GO's): while the round is over, the winner line, the team
+  // scores, the MVP and our damage report (`net.report`); at a match's end the standings
+  // instead. Rebuilt only when what it shows changes.
+  roundPanel(rs, net, selfId) {
+    const show = !!rs && !!net && rs.phase === PHASE_OVER && !(rs.mode & GAME_DEMO);
+    if (!show) {
+      if (this.panelKey) {
+        this.panelKey = '';
+        this.elPanel.classList.remove('on');
+      }
+      return;
+    }
+    const matchEnd = rs.info >> 2 === END_MATCH, report = net.report && net.report.round === rs.round ? net.report : null;
+    const key = `${rs.serial}|${rs.info}|${rs.mvp}|${rs.scoreCT}|${rs.scoreT}|${this.panelTitle}|${report ? report.rows.length : -1}|` +
+      `${matchEnd ? net.names.join() + net.kills.join() + net.deaths.join() + net.mvps.join() : net.names[rs.mvp] || ''}`;
+    if (key === this.panelKey) return;
+    this.panelKey = key;
+    const winner = rs.info & 3, reason = rs.info >> 2;
+    const el = this.elPanel;
+    el.replaceChildren();
+    el.className = `on ${winner === TEAM_CT ? 'ct' : winner === TEAM_T ? 't' : ''}`;
+    const h = document.createElement('h2');
+    h.textContent = this.panelTitle;
+    el.append(h);
+    const ffa = (rs.mode & GAME_FFA) !== 0, dm = (rs.mode & GAME_DM) !== 0, armsRace = (rs.mode & GAME_ARMSRACE) !== 0;
+    if (!ffa && !dm && !armsRace) {
+      const score = document.createElement('div');
+      score.className = 'score';
+      const ct = document.createElement('span'), t = document.createElement('span');
+      ct.className = 'ct';
+      ct.textContent = `CT ${rs.scoreCT}`;
+      t.className = 't';
+      t.textContent = `${rs.scoreT} T`;
+      score.append(ct, ' : ', t);
+      el.append(score);
+    }
+    if (matchEnd) { // the standings: everyone, by kills (deathmatch: by score)
+      const ids = [];
+      for (let id = 0; id < net.names.length; id++) if (net.names[id] && net.teams[id] !== TEAM_SPECTATOR) ids.push(id);
+      ids.sort((a, b) => (dm || armsRace ? net.scores[b] - net.scores[a] : 0) || net.kills[b] - net.kills[a] || net.deaths[a] - net.deaths[b]);
+      const table = document.createElement('table');
+      const head = table.insertRow();
+      head.className = 'head';
+      for (const c of dm || armsRace ? ['', armsRace ? 'Level' : 'Score', 'K', 'D'] : ['', 'K', 'D', 'MVP']) head.insertCell().textContent = c;
+      for (const id of ids.slice(0, 10)) {
+        const tr = table.insertRow();
+        tr.className = `${id === selfId ? 'me ' : ''}${net.teams[id] === TEAM_CT ? 'ct' : 't'}`;
+        const cells = dm || armsRace ? [net.names[id], armsRace ? Math.min(net.scores[id] + 1, ARMS_RACE.length) : net.scores[id], net.kills[id], net.deaths[id]]
+          : [net.names[id], net.kills[id], net.deaths[id], net.mvps[id]];
+        for (const c of cells) tr.insertCell().textContent = c; // names as text, never HTML
+      }
+      el.append(table);
+      return;
+    }
+    if (rs.mvp < net.names.length && net.names[rs.mvp]) {
+      const mvp = document.createElement('div');
+      mvp.className = `mvp ${net.teams[rs.mvp] === TEAM_CT ? 'ct' : 't'}`;
+      const why = reason === END_BOMB ? 'planted the bomb' : reason === END_DEFUSE ? 'defused the bomb'
+        : reason === END_RESCUE ? 'rescued a hostage' : 'most kills';
+      mvp.textContent = `★ MVP: ${rs.mvp === selfId ? 'you' : net.names[rs.mvp]} (${why})`;
+      el.append(mvp);
+    }
+    if (report) { // our damage report: given, then taken
+      const table = document.createElement('table');
+      let any = false;
+      for (const [what, list] of [['Damage given', report.rows.filter((x) => x.given)], ['Damage taken', report.rows.filter((x) => x.taken)]]) {
+        if (!list.length) continue;
+        any = true;
+        const head = table.insertRow();
+        head.className = 'head';
+        head.insertCell().textContent = what;
+        head.insertCell().textContent = 'dmg';
+        head.insertCell().textContent = 'hits';
+        for (const x of list) {
+          const tr = table.insertRow();
+          const given = what === 'Damage given';
+          tr.insertCell().textContent = `${given ? 'to' : 'from'} ${net.names[x.id] || `player ${x.id}`}`;
+          tr.insertCell().textContent = given ? x.given : x.taken;
+          tr.insertCell().textContent = given ? x.givenHits : x.takenHits;
+        }
+      }
+      if (any) el.append(table);
+      else if (net.teams[selfId] !== TEAM_SPECTATOR) {
+        const none = document.createElement('div');
+        none.className = 'none';
+        none.textContent = 'No damage given or taken';
+        el.append(none);
+      }
+    }
   }
 
   // The C4 icon while we carry it (bright inside a bomb site), and the plant/defuse
@@ -170,7 +268,7 @@ export class Hud {
       : [[[TEAM_CT], 'Counter-Terrorists', 'ct'], [[TEAM_T], 'Terrorists', 't']];
     const lines = [];
     for (const [teams, title, cls] of groups) {
-      lines.push(dm ? [cls, title, armsRace ? 'Level' : 'Score', 'K', 'D'] : [cls, title, 'K', 'D']);
+      lines.push(dm ? [cls, title, armsRace ? 'Level' : 'Score', 'K', 'D'] : [cls, title, 'K', 'D', '★']);
       const ids = [];
       for (let id = 0; id < net.names.length; id++) if (net.names[id] && teams.includes(net.teams[id])) ids.push(id);
       ids.sort((a, b) => (dm ? net.scores[b] - net.scores[a] : 0) || net.kills[b] - net.kills[a] ||
@@ -178,7 +276,7 @@ export class Hud {
       for (const id of ids) {
         const cls = `${id === selfId ? 'me' : ''}${alive(id) ? '' : ' dead'}`;
         lines.push(dm ? [cls, net.names[id], ranked(id), net.kills[id], net.deaths[id]]
-          : [cls, net.names[id], net.kills[id], net.deaths[id]]);
+          : [cls, net.names[id], net.kills[id], net.deaths[id], net.mvps[id] || '']);
       }
     }
     const watching = [];

@@ -22,12 +22,16 @@
 //            (CHAT_TEAM: team chat, CHAT_DEAD: the sender was dead, CHAT_SPEC: a spectator),
 //            lstr text (a say / say_team line the server chose to deliver to this client)
 //   CHANGELEVEL u8 type, str map (the server is switching maps: reconnect)
-//   INFO     u8 type, u8 n, n x { u8 id, u8 team, u16 kills, u16 deaths, u16 score, str name }
+//   INFO     u8 type, u8 n, n x { u8 id, u8 team, u16 kills, u16 deaths, u16 score, u8 mvps, str name }
 //            (every player, resent periodically and on changes)
+//   REPORT   u8 type, u8 round, u8 n, n x { u8 id, u16 given, u8 givenHits, u16 taken, u8 takenHits }
+//            (the round's damage report for this client: what it dealt to and took from
+//            each player it exchanged damage with; sent to humans at the round's end)
 //   SNAPSHOT u8 type, u32 seq, u32 baseSeq (0 = full), u32 lastCmd, u8 flags,
 //            [u32 x 8 broken-breakable mask if flags & SNAP_BROKEN],
 //            round: u8 phase, u32 ticksLeft, u8 scoreT, u8 scoreCT, u8 roundInfo, u8 round, u8 mode,
 //                   u8 serial (+1 at every round start, restarts too: clients clear the marks),
+//                   u8 mvp (the last round's most valuable player, 255 none),
 //            bomb: u8 state, [f32 x, y, z, u16 ticksLeft if state >= BOMB_DROPPED],
 //            movers (shared/doors.js) not at rest where they spawned: u8 n, n x { u8 mover,
 //                        u8 bits (dir + 1 | sign < 0 << 2 | more << 3), f32 from, u32 t0,
@@ -54,7 +58,7 @@ import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 import { MAX_MOVERS } from './doors.js';
 
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -75,6 +79,8 @@ export const S2C_ITEMS = 16; // weapons on the ground
 export const S2C_GRENADES = 17;
 export const S2C_HOSTAGES = 18;
 export const S2C_CHAT = 19;
+export const S2C_REPORT = 20; // the round's damage report
+export const NO_MVP = 255;
 export const MAX_TEXT = 900; // bytes of console text per datagram
 export const CHAT_MAX = 127; // characters of one chat line (CS:GO's)
 export const CHAT_CONSOLE = 255; // CHAT sender: the server console's say
@@ -242,7 +248,7 @@ export function writeReject(w, reason) {
   return w.view();
 }
 
-// players: array indexed by id of { team, name, kills, deaths, score } or null.
+// players: array indexed by id of { team, name, kills, deaths, score, mvps } or null.
 export function writeInfo(w, players) {
   w.reset();
   w.u8v(S2C_INFO);
@@ -257,6 +263,7 @@ export function writeInfo(w, players) {
     w.u16v(p.kills);
     w.u16v(p.deaths);
     w.u16v(Math.min(Math.max(p.score, 0), 65535));
+    w.u8v(Math.min(p.mvps || 0, 255));
     w.str(p.name);
     n++;
   }
@@ -264,24 +271,52 @@ export function writeInfo(w, players) {
   return w.view();
 }
 
-// Fills names / teams / kills / deaths / scores indexed by id (others cleared).
-export function readInfo(r, names, teams, kills, deaths, scores) {
+// Fills names / teams / kills / deaths / scores / mvps indexed by id (others cleared).
+export function readInfo(r, names, teams, kills, deaths, scores, mvps = null) {
   names.fill('');
   teams.fill(0);
   kills.fill(0);
   deaths.fill(0);
   scores.fill(0);
+  if (mvps) mvps.fill(0);
   const n = r.u8v();
   for (let i = 0; i < n; i++) {
-    const id = r.u8v(), team = r.u8v(), k = r.u16v(), d = r.u16v(), score = r.u16v(), name = r.str();
+    const id = r.u8v(), team = r.u8v(), k = r.u16v(), d = r.u16v(), score = r.u16v(), m = r.u8v(), name = r.str();
     if (id < names.length) {
       names[id] = name;
       teams[id] = team;
       kills[id] = k;
       deaths[id] = d;
       scores[id] = score;
+      if (mvps) mvps[id] = m;
     }
   }
+}
+
+// The round's damage report for one client: rows [{ id, given, givenHits, taken, takenHits }].
+export function writeReport(w, round, rows) {
+  w.reset();
+  w.u8v(S2C_REPORT);
+  w.u8v(round & 255);
+  w.u8v(Math.min(rows.length, MAX_PLAYERS));
+  for (let i = 0; i < Math.min(rows.length, MAX_PLAYERS); i++) {
+    const x = rows[i];
+    w.u8v(x.id);
+    w.u16v(Math.min(x.given, 65535));
+    w.u8v(Math.min(x.givenHits, 255));
+    w.u16v(Math.min(x.taken, 65535));
+    w.u8v(Math.min(x.takenHits, 255));
+  }
+  return w.view();
+}
+
+// After the type byte: { round, rows }.
+export function readReport(r) {
+  const round = r.u8v(), n = r.u8v(), rows = [];
+  for (let i = 0; i < n; i++) {
+    rows.push({ id: r.u8v(), given: r.u16v(), givenHits: r.u8v(), taken: r.u16v(), takenHits: r.u8v() });
+  }
+  return { round, rows };
 }
 
 // Weapons on the ground (shared/items.js): count, then per item id, weapon, position,
@@ -732,6 +767,7 @@ export class RoundState {
     this.round = 0;
     this.mode = 0; // GAME_FFA | GAME_DM (shared/economy.js)
     this.serial = 0; // round starts mod 256 (the round number repeats on a restart in round 1)
+    this.mvp = NO_MVP; // the last round's most valuable player (a player id), NO_MVP none
   }
 }
 const NO_ROUND = new RoundState();
@@ -772,6 +808,7 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
   w.u8v(rs.round);
   w.u8v(rs.mode);
   w.u8v(rs.serial);
+  w.u8v(rs.mvp);
   w.u8v(bomb.state);
   if (bomb.state >= BOMB_DROPPED) {
     w.f32v(bomb.x);
@@ -951,6 +988,7 @@ export function readSnapshot(r, ring, own, ev = null) {
   rs.round = r.u8v();
   rs.mode = r.u8v();
   rs.serial = r.u8v();
+  rs.mvp = r.u8v();
   const bomb = own.bomb;
   bomb.state = r.u8v();
   if (bomb.state >= BOMB_DROPPED) {

@@ -44,7 +44,7 @@ import {
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
-  SHOT_BLOOD, writePrint, printChunks, writeChat, cleanChat, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC,
+  SHOT_BLOOD, writePrint, printChunks, writeChat, cleanChat, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC, writeReport, NO_MVP,
   KILL_HEADSHOT, KILL_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
   writeWelcome, writeReject, writeInfo, writeItems, writeGrenades, writeHostages, readCmds, writeSnapshot, quantizePitch,
   quantizeYaw,
@@ -58,6 +58,7 @@ const MAX_CMDS_PER_TICK = 8;
 const TIMEOUT_TICKS = 30 * TICK_RATE; // clients in hidden tabs send a 1 Hz keepalive
 const INFO_INTERVAL = TICK_RATE; // roster resent every second (datagrams can be lost)
 const SEND_BUFFERS = 8; // rotating send buffers: a datagram may still be queued when the next is written
+const hits = (n) => (n === 1 ? '1 hit' : `${n} hits`); // the damage report's wording
 const WARMUP_MONEY = 16000; // CS:GO warmup: buy anything
 const THROW_DISTANCE = 64; // a dropped (G) bomb lands this far ahead (weapons fly: shared/items.js)
 const PICKUP_DELAY = TICK_RATE; // ticks before a thrown bomb or weapon can be picked up
@@ -118,7 +119,13 @@ class Client {
     this.lastHealth = 100; // the demo: health last tick, and when it heals back
     this.healAt = 0;
     this.level = 0; // Arms Race / Demolition: place in the weapon list (shared/progression.js)
-    this.roundKills = 0; // Demolition: kills this round (one earns the next level)
+    this.roundKills = 0; // kills this round (the round's MVP; Demolition: one earns the next level)
+    this.mvps = 0; // rounds this player was the most valuable player of (INFO)
+    // This round's damage report: dealt to and taken from each player, and the hits.
+    this.given = new Uint16Array(MAX_PLAYERS);
+    this.givenHits = new Uint8Array(MAX_PLAYERS);
+    this.taken = new Uint16Array(MAX_PLAYERS);
+    this.takenHits = new Uint8Array(MAX_PLAYERS);
     this.cmdTime = 0; // sim time of the last command run (a weapon earned mid-command draws then)
     this.flashLeft = 0; // seconds of flashbang blindness left (sent in the own block)
     this.flashTotal = 0;
@@ -354,8 +361,21 @@ export class Game {
     if (victim.team === ownerTeam && victim.id !== ownerId && !this.rules.teammatesAreEnemies) return;
     if (this.tick < victim.immuneUntil) return;
     const w = WEAPONS[weapon];
+    const before = victim.player.health;
     applyDamage(victim.player, damage, w, w.grenade === 'fire' ? HITGROUP_LEGS : HITGROUP_CHEST);
+    this.recordDamage(owner && owner.joined ? owner : null, victim, before);
     if (victim.player.health <= 0) this.kill(owner && owner.joined ? owner : victim, victim, weapon, false);
+  }
+
+  // The round's damage report: the health `victim` lost since `before`, credited to
+  // `attacker` (null: the map, the bomb with no planter), for CS:GO's round-end lines.
+  recordDamage(attacker, victim, before) {
+    const lost = Math.min(before, Math.max(0, before - Math.max(0, victim.player.health)));
+    if (lost <= 0 || !attacker || attacker === victim) return;
+    attacker.given[victim.id] = Math.min(65535, attacker.given[victim.id] + lost);
+    attacker.givenHits[victim.id] = Math.min(255, attacker.givenHits[victim.id] + 1);
+    victim.taken[attacker.id] = Math.min(65535, victim.taken[attacker.id] + lost);
+    victim.takenHits[attacker.id] = Math.min(255, victim.takenHits[attacker.id] + 1);
   }
 
   get playerCount() {
@@ -753,7 +773,9 @@ export class Game {
       if (this.tick < victim.immuneUntil) continue; // spawn protection: the bullet does nothing
       ev.addShot(shooter.id, SHOT_BLOOD, x, y, z, nx, ny, nz, 0);
       if (!victim.alive) continue; // already killed by an earlier pellet
+      const before = victim.player.health;
       applyDamage(victim.player, im.damage[i], w, im.group[i]);
+      this.recordDamage(shooter, victim, before);
       if (victim.player.health <= 0) this.kill(shooter, victim, weapon, im.group[i] === HITGROUP_HEAD);
     }
   }
@@ -784,8 +806,8 @@ export class Game {
           k.money = Math.min(this.rules.maxMoney, k.money + (WEAPONS[weapon]?.killAward || 0));
         }
         if (this.phase === PHASE_LIVE) {
+          killer.roundKills++;
           if (this.rules.armsRace) this.armsRaceKill(killer, victim, weapon);
-          else if (this.rules.demolition) killer.roundKills++;
         }
       }
     }
@@ -926,7 +948,7 @@ export class Game {
       if (!c || !c.joined) continue;
       c.player.money = this.rules.startMoney;
       c.player.kills = c.player.deaths = c.player.score = 0;
-      c.level = c.roundKills = 0;
+      c.level = c.roundKills = c.mvps = 0;
     }
     this.rosterDirty = true;
     console.log('match start');
@@ -947,6 +969,10 @@ export class Game {
       if (demolition && c.roundKills > 0) c.level = Math.min(c.level + 1, DEMOLITION.length - 1); // a kill: the next weapon
       if (demolition) c.player.score = c.level; // clients show the level from the score
       c.roundKills = 0;
+      c.given.fill(0);
+      c.givenHits.fill(0);
+      c.taken.fill(0);
+      c.takenHits.fill(0);
       // Survivors keep their gear (deathmatch: the weapons picked); Demolition arms everyone
       // for their level instead.
       this.respawn(c, !fresh && c.alive && !demolition, this.rules.deathmatch);
@@ -977,16 +1003,20 @@ export class Game {
     }
     this.round.round++;
     this.round.serial = (this.round.serial + 1) & 255;
+    this.round.mvp = NO_MVP;
     if (demolition) this.rosterDirty = true; // the new levels
     this.setPhase(PHASE_FREEZE, this.rules.freezeTime);
   }
 
-  endRound(winner, reason) {
+  // `hero`: the client whose plant, defuse or rescue ended it (the MVP).
+  endRound(winner, reason, hero = null) {
     const rs = this.round;
     this.roundsPlayed++;
     if (winner === TEAM_T) rs.scoreT++;
     if (winner === TEAM_CT) rs.scoreCT++;
     rs.info = winner | (reason << 2);
+    this.roundMvp(winner, hero);
+    this.sendReports();
     for (const team of [TEAM_T, TEAM_CT]) {
       const won = team === winner;
       if (won) this.lossStreak[team] = Math.max(0, this.lossStreak[team] - 1);
@@ -1005,7 +1035,50 @@ export class Game {
     }
     this.setPhase(PHASE_OVER, this.rules.roundEndDelay);
     const who = winner === TEAM_T ? 'Terrorists' : winner === TEAM_CT ? 'Counter-Terrorists' : 'nobody';
-    console.log(`round ${rs.round}: ${who} win (${rs.scoreT}-${rs.scoreCT})`);
+    const mvp = rs.mvp !== NO_MVP && this.clients[rs.mvp];
+    console.log(`round ${rs.round}: ${who} win (${rs.scoreT}-${rs.scoreCT})${mvp ? `, MVP ${mvp.name}` : ''}`);
+  }
+
+  // CS:GO's MVP: the planter when the bomb won, the defuser or rescuer when a defuse or a
+  // rescue did, else the winning team's player with the most kills this round (none in a
+  // draw, or when nobody on it killed).
+  roundMvp(winner, hero) {
+    const rs = this.round;
+    let best = hero && hero.joined ? hero : null;
+    if (!best && winner) {
+      for (const c of this.clients) {
+        if (!c || !c.joined || c.team !== winner || c.roundKills <= 0) continue;
+        if (!best || c.roundKills > best.roundKills) best = c;
+      }
+    }
+    rs.mvp = best ? best.id : NO_MVP;
+    if (best) {
+      best.mvps = Math.min(255, best.mvps + 1);
+      this.rosterDirty = true;
+    }
+  }
+
+  // Every human's damage report for the round: a REPORT message for the round-end panel
+  // and CS:GO's console lines (Damage Given to "Name" - 27 in 1 hit).
+  sendReports() {
+    for (const c of this.clients) {
+      if (!c || !c.joined || c.bot) continue;
+      const rows = [], lines = [];
+      for (let id = 0; id < MAX_PLAYERS; id++) {
+        if (!c.given[id] && !c.taken[id]) continue;
+        const o = this.clients[id];
+        rows.push({ id, given: c.given[id], givenHits: c.givenHits[id], taken: c.taken[id], takenHits: c.takenHits[id] });
+        const name = o ? o.name : `player ${id}`;
+        if (c.given[id]) lines.push(`Damage Given to "${name}" - ${c.given[id]} in ${hits(c.givenHits[id])}`);
+      }
+      for (const row of rows) {
+        if (!row.taken) continue;
+        const o = this.clients[row.id];
+        lines.push(`Damage Taken from "${o ? o.name : `player ${row.id}`}" - ${row.taken} in ${hits(row.takenHits)}`);
+      }
+      c.session.send(writeReport(c.writer(), this.round.round, rows));
+      if (lines.length) this.print(c, lines.join('\n'));
+    }
   }
 
   // Back to warmup (`manual`: until mp_warmup_end, else for mp_warmuptime): everyone
@@ -1333,7 +1406,9 @@ export class Game {
   // victim's own doing.
   hurtBy(c, damage, by, weapon) {
     if (!c || !c.alive || this.tick < c.immuneUntil) return;
+    const before = c.player.health;
     applyDamage(c.player, damage, BLAST, HITGROUP_CHEST);
+    this.recordDamage(by && by.joined ? by : null, c, before);
     if (c.player.health <= 0) this.kill(by && by.joined ? by : c, c, weapon, false);
   }
 
@@ -1475,7 +1550,7 @@ export class Game {
       if (this.phase === PHASE_LIVE) {
         c.player.money = Math.min(this.rules.maxMoney, c.player.money + RESCUE_REWARD);
         console.log(`hostage rescued by ${c.name}`);
-        this.endRound(TEAM_CT, END_RESCUE);
+        this.endRound(TEAM_CT, END_RESCUE, c);
       }
     }
   }
@@ -1540,7 +1615,7 @@ export class Game {
     c.player.money = Math.min(this.rules.maxMoney, c.player.money + DEFUSE_REWARD);
     console.log(`bomb defused by player ${c.id}`);
     this.restockTick = this.tick + DEMO_RESTOCK * TICK_RATE;
-    if (!this.rules.ignoreWinConditions) this.endRound(TEAM_CT, END_DEFUSE);
+    if (!this.rules.ignoreWinConditions) this.endRound(TEAM_CT, END_DEFUSE, c);
   }
 
   // Each tick: Ts walking over a dropped bomb pick it up; a planted one counts down.
@@ -1604,7 +1679,9 @@ export class Game {
       const damage = bombDamage(this.bombSites.radius,
         Math.hypot(f[PS_ORIGIN] - b.x, f[PS_ORIGIN + 1] - b.y, f[PS_ORIGIN + 2] - b.z));
       if (damage <= 0) continue;
+      const before = c.player.health;
       applyDamage(c.player, damage, c4, HITGROUP_CHEST);
+      this.recordDamage(this.lastPlanter && this.lastPlanter.joined ? this.lastPlanter : null, c, before);
       if (c.player.health <= 0) this.kill(c, c, WEAPON_ID.c4, false);
     }
     // Breakables in reach shatter (approx.: the players' falloff is a gaussian over 3.5
@@ -1615,7 +1692,7 @@ export class Game {
     if (site >= 0 && this.bombSites.targets[site]) this.fireTarget(this.bombSites.targets[site], null);
     console.log('bomb exploded');
     this.restockTick = this.tick + DEMO_RESTOCK * TICK_RATE;
-    if (this.phase === PHASE_LIVE && !this.rules.ignoreWinConditions) this.endRound(TEAM_T, END_BOMB);
+    if (this.phase === PHASE_LIVE && !this.rules.ignoreWinConditions) this.endRound(TEAM_T, END_BOMB, this.lastPlanter);
   }
 
   // After round 15 (and after 3 rounds of an overtime): teams swap sides, scores follow

@@ -7,6 +7,7 @@ import {
   writeSnapshot, readSnapshot, quantizePitch, dequantizePitch, quantizeYaw, dequantizeYaw, E_ACTIVE, E_X, E_Y, E_Z,
   E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS, E_FIELDS, ANIM_RELOAD, ANIM_HELMET,
   RoundState, writeChat, readChat, cleanChat, S2C_CHAT, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_MAX,
+  writeInfo, readInfo, writeReport, readReport, S2C_INFO, S2C_REPORT, NO_MVP,
 } from '../shared/protocol.js';
 
 Deno.test('chat round-trip, and the server cleans a line before sending it', () => {
@@ -119,11 +120,11 @@ Deno.test('snapshots: full, then small deltas, removals and the breakable mask',
   server.ents[server.row(k, 3) + E_X] += 4;
   server.ents.fill(0, server.row(k, 7), server.row(k, 7) + E_FIELDS);
   const delta = writeSnapshot(w, server, k, base, 0, ownInfo);
-  // header 14 + round 11 + bomb 1 + movers 1 + own block (8 + money 3 + state) + 2 entries (moved: 2 + 12
+  // header 14 + round 12 + bomb 1 + movers 1 + own block (8 + money 3 + state) + 2 entries (moved: 2 + 12
   // bytes, removed: 2 bytes) + 2 empty event lists
   // (the weapon state: a field bitmask, then the fields that are not zero)
   const wsLength = Math.ceil(player.ws.f.length / 8) + 8 * player.ws.f.filter((v) => !Object.is(v, 0)).length;
-  assert.equal(delta.length, 14 + 11 + 1 + 1 + 8 + 6 + player.psBytes.length + wsLength + 1 + 14 + 2 + 2);
+  assert.equal(delta.length, 14 + 12 + 1 + 1 + 8 + 6 + player.psBytes.length + wsLength + 1 + 14 + 2 + 2);
   r.set(delta);
   r.u8v();
   const c2 = readSnapshot(r, client, own);
@@ -154,4 +155,23 @@ Deno.test('snapshots: full, then small deltas, removals and the breakable mask',
   r.set(orphan);
   r.u8v();
   assert.equal(readSnapshot(r, client, own), -1);
+});
+
+Deno.test('info carries the MVP counts; the damage report round-trips; the round block carries the MVP', () => {
+  const w = new Writer(), r = new Reader();
+  const players = new Array(MAX_PLAYERS).fill(null);
+  players[2] = { team: 2, name: 'ann', kills: 3, deaths: 1, score: 0, mvps: 2 };
+  players[5] = { team: 3, name: 'bob', kills: 0, deaths: 4, score: 0, mvps: 0 };
+  r.set(writeInfo(w, players));
+  assert.equal(r.u8v(), S2C_INFO);
+  const names = new Array(MAX_PLAYERS).fill(''), teams = new Uint8Array(MAX_PLAYERS), kills = new Int32Array(MAX_PLAYERS);
+  const deaths = new Int32Array(MAX_PLAYERS), scores = new Int32Array(MAX_PLAYERS), mvps = new Int32Array(MAX_PLAYERS);
+  readInfo(r, names, teams, kills, deaths, scores, mvps);
+  assert.deepEqual([names[2], kills[2], mvps[2], names[5], mvps[5]], ['ann', 3, 2, 'bob', 0]);
+  const rows = [{ id: 5, given: 127, givenHits: 4, taken: 0, takenHits: 0 }, { id: 9, given: 0, givenHits: 0, taken: 100, takenHits: 3 }];
+  r.set(writeReport(w, 7, rows));
+  assert.equal(r.u8v(), S2C_REPORT);
+  assert.deepEqual(readReport(r), { round: 7, rows });
+  const rs = new RoundState();
+  assert.equal(rs.mvp, NO_MVP);
 });

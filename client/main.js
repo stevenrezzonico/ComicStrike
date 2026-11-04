@@ -339,6 +339,7 @@ const predictedWs = new Uint8Array(HISTORY * WS_SIZE * 8);
 const predictedTick = new Int32Array(HISTORY).fill(-1);
 const serverBroken = new Uint32Array(8); // breakable mask of the last applied snapshot
 let roundSerial = -1; // the server's round starts (RoundState.serial) last seen
+let lastOwnTeam = 0; // our team in the last snapshot (a swap at a round start is the half-time)
 const replayShots = new ShotList();
 const smooth = new Float32Array(3); // visual offset hiding prediction corrections
 const netStats = { rtt: 0, compared: 0, corrected: 0, lastErr: 0 };
@@ -810,8 +811,14 @@ function applySnapshot() {
   }
   if (own.round.serial !== roundSerial) {
     if (roundSerial >= 0) clearRoundMarks();
+    // Our side changed with the round start (not by jointeam mid-round): the half-time swap.
+    const side = (t) => t === TEAM_T || t === TEAM_CT;
+    if (roundSerial >= 0 && side(lastOwnTeam) && side(own.team) && own.team !== lastOwnTeam) {
+      hud.flash('Half-time: switching sides', 5000, performance.now());
+    }
     roundSerial = own.round.serial;
   }
+  lastOwnTeam = own.team;
 
   // The bomb: announce the plant, blow up.
   const bomb = own.bomb;
@@ -1542,6 +1549,7 @@ function draw(now, alpha, dt) {
     (gameMode() & GAME_FFA) !== 0, net ? net.own.bomb : null, net ? net.hostages : null, now);
   lap(3);
   hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now, leader(), progress());
+  hud.roundPanel(net ? net.own.round : null, net, selfId);
   document.body.classList.toggle('dm', freeBuys() || gunGame()); // no money in deathmatch, the demo, the gun games
   const action = ws.f[WS_ACTION];
   const simTime = (tickCount - 1 + alpha) * TICK_DT;
@@ -2011,6 +2019,7 @@ const NO_ITEMS = new Items(), NO_HOSTAGES = new Hostages();
 function resetSession() {
   synced = false;
   roundSerial = -1;
+  lastOwnTeam = 0;
   words.clear();
   blasts.clear();
   chat.clear();
