@@ -881,6 +881,12 @@ function trainPath(e, corners, speed) {
 }
 
 const MAX_PUSHED = 32;
+// Entity I/O limits: names fired in one tick and delayed fires waiting. A map's logic can
+// loop (a relay naming itself, a multi_manager firing itself twice with delays doubles
+// the queue every tick): an uploaded map hung the whole server that way. Maps fire a few
+// names a tick.
+export const MAX_FIRES = 256;
+export const MAX_QUEUED = 256;
 const oldRot = new Float64Array(9); // a turning door's rotation before this tick's move
 const pushBuf = new Float64Array(MAX_PUSHED * 4);
 const pushPs = new Array(MAX_PUSHED);
@@ -903,6 +909,8 @@ export class MapLogic {
     this.relays = new Map(); // targetname -> [{ target, kill, delay, src }]
     this.autos = []; // { target, kill, delay, src }
     this.queue = []; // { tick, name, act, kill, src }
+    this.fireTick = -1; // the tick `fires` counts for
+    this.fires = 0;
     this.named = new Set(); // names something fires on its own (triggers players walk into, relays, autos)
     this.pressed = new Set(); // names only buttons and doors fire
     this.masters = new Map(); // multisource targetname -> { sources: [bsp entity], on: [bool], target, on }
@@ -990,8 +998,15 @@ export class MapLogic {
   // Fires `name` (every mover and breakable with that targetname, the relays passing it
   // on, a multisource's input) after `delay` seconds, from entity `src`, removing the
   // entities named `kill` first (SUB_UseTargets).
+  // At most MAX_FIRES a tick and MAX_QUEUED waiting: past that, fires are dropped.
   fireAt(tick, name, act, delay, src = -1, kill = '') {
+    if (tick !== this.fireTick) {
+      this.fireTick = tick;
+      this.fires = 0;
+    }
+    if (++this.fires > MAX_FIRES) return;
     if (delay > 0) {
+      if (this.queue.length >= MAX_QUEUED) return;
       this.queue.push({ tick: tick + ticksOf(delay), name, act, kill, src });
       return;
     }

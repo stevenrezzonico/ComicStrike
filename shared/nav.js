@@ -13,6 +13,9 @@ import { FloorGrid, floorFaces, LAYERS, STAIR, MOVE_WALK, MOVE_JUMP, MOVE_LADDER
 import { hullFits, HULL_STAND } from './trace.js';
 
 export const NAV_CELL = 24; // world units per cell (approx.: the hull is 32 wide)
+// The most nodes: 7 times the most of any map here (de_cbble, 17,705). A bigger map is
+// refused (FloorGrid throws during its flood fill, before the nodes and edges are built).
+export const MAX_NODES = 1 << 17;
 export const NODE_CROUCH = 1; // only a crouching player fits here
 export const EDGE_WALK = MOVE_WALK;
 export const EDGE_JUMP = MOVE_JUMP;
@@ -27,7 +30,9 @@ export class Nav {
   constructor(bsp, world, cell = NAV_CELL, doorsOpen = false) {
     const faces = floorFaces(bsp);
     const bounds = new FloorGrid(bsp, world, 96, { faces, doorsOpen }).layerBounds(); // where floors are at all
-    const g = this.grid = new FloorGrid(bsp, world, cell, { bounds, margin: 1, faces, doorsOpen, strictFalls: true });
+    const g = this.grid = new FloorGrid(bsp, world, cell, {
+      bounds, margin: 1, faces, doorsOpen, strictFalls: true, maxReached: MAX_NODES,
+    });
     const slots = g.w * g.h * LAYERS;
     const nodeOf = this.nodeOf = new Int32Array(slots).fill(-1); // grid slot -> node
     let n = 0;

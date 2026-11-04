@@ -14,6 +14,10 @@ import {
 import { hullFits, traceHull, Trace, HULL_DUCK, ENT_LADDER, ENT_NONE } from './trace.js';
 
 export const LAYERS = 6; // floor heights kept per cell (the highest go first when full)
+// The most cells a grid may have: 8 times the largest map here (cs_siege's navigation,
+// 66,700). An uploaded map can span the whole ±16384 world: its navigation at 24 units
+// held 1.7 GB and blocked every game on the server for seconds (server/rooms.js).
+export const MAX_CELLS = 1 << 19;
 export const STAIR = 18; // sv_stepsize: walked up without a jump
 export const CLIMB = 64; // a crouch jump reaches about this high (approx.)
 export const MOVE_WALK = 0; // walk, or fall
@@ -35,12 +39,18 @@ export class FloorGrid {
   // a move only where the hull really drops (`drops`; the navigation: a bot must not walk
   // against a railing or a crate's side), else wherever there is room over the neighbor
   // (the overview keeps the floors a player gets to somehow, over a railing or off a crate).
-  constructor(bsp, world, cell, { bounds = null, margin = 0, doorsOpen = false, faces = null, strictFalls = false } = {}) {
+  // maxReached: the flood fill throws past that many reachable floor slots (the navigation's
+  // node limit), so a map too big is refused before the work. Throws past MAX_CELLS too.
+  constructor(bsp, world, cell, {
+    bounds = null, margin = 0, doorsOpen = false, faces = null, strictFalls = false, maxReached = Infinity,
+  } = {}) {
     faces = faces || floorFaces(bsp);
     const [x0, y0, x1, y1] = bounds || faceBounds(faces);
     this.cell = cell;
     this.w = Math.ceil((x1 - x0) / cell) + 2 * margin;
     this.h = Math.ceil((y1 - y0) / cell) + 2 * margin;
+    if (!(this.w * this.h <= MAX_CELLS)) throw new Error(`the map is too big for its floor grid (${this.w}x${this.h} cells)`);
+    this.maxReached = maxReached;
     this.minX = x0 - margin * cell; // world x of column 0's left edge
     this.maxY = y1 + margin * cell; // world y of row 0's top edge (north up)
     this.layers = new Float32Array(this.w * this.h * LAYERS).fill(-Infinity); // per cell, highest first
@@ -163,8 +173,10 @@ export class FloorGrid {
   flood(bsp) {
     const n = this.w * this.h * LAYERS, reached = new Uint8Array(n), queue = new Int32Array(n);
     let head = 0, tail = 0;
+    const tooMany = () => new Error(`the map is too big: over ${this.maxReached} places to stand`);
     const visit = (s) => {
       if (reached[s]) return;
+      if (tail >= this.maxReached) throw tooMany();
       reached[s] = 1;
       queue[tail++] = s;
     };
@@ -177,7 +189,11 @@ export class FloorGrid {
       if (s >= 0) visit(s);
     }
     if (!tail) {
-      for (let s = 0; s < n; s++) reached[s] = this.layers[s] > -Infinity ? 1 : 0;
+      for (let s = 0; s < n; s++) {
+        if (!(this.layers[s] > -Infinity)) continue;
+        if (++tail > this.maxReached) throw tooMany();
+        reached[s] = 1;
+      }
       return reached;
     }
     while (head < tail) this.moves(queue[head++], visit);

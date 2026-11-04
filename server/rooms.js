@@ -20,6 +20,8 @@ export const ROOM_LIMITS = {
   cooldownMs: 30000, // between two uploads from one address
   idleMs: 2 * 60000, // a room closes this long after its last player left
   unusedMs: 10 * 60000, // ... or after its upload when nobody ever joined
+  uploads: 2, // uploads being read at once (each is held in memory until it is checked)
+  uploadMs: 120000, // an upload must arrive within this
 };
 const CODE_CHARS = 'abcdefghjkmnpqrstuvwxyz23456789'; // no 0/o, 1/l/i
 const CODE_LENGTH = 6;
@@ -42,6 +44,7 @@ export class Rooms {
     this.random = opts.random || (() => crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32);
     this.rooms = new Map(); // code -> room
     this.lastUpload = new Map(); // address key -> ms
+    this.uploading = new Set(); // address keys whose upload is being read (server/main.js)
   }
 
   get(code) {
@@ -55,13 +58,7 @@ export class Rooms {
   create(bytes, { fileName = '', mode = 'competitive', players = 0, difficulty = 1, armoury = true, address = '' } = {}) {
     const L = this.limits, now = this.now(), key = addressKey(address);
     if (bytes.byteLength > L.bytes) throw new RoomError(`the map is too large (${L.bytes >> 20} MB at most)`, 413);
-    if (this.rooms.size >= L.rooms) throw new RoomError('every room on this server is taken: try again later', 503);
-    if ([...this.rooms.values()].filter((r) => r.address === key).length >= L.perAddress) {
-      throw new RoomError('you already host a room: close it first (quit it and wait for it to empty)', 429);
-    }
-    if (now - (this.lastUpload.get(key) ?? -Infinity) < L.cooldownMs) {
-      throw new RoomError('one upload at a time: try again in a few seconds', 429);
-    }
+    this.check(address);
     this.lastUpload.set(key, now);
     const modeKey = Object.keys(GAME_MODES).find((k) => GAME_MODES[k] === mode);
     if (!modeKey) throw new RoomError(`unknown mode: ${mode}`);
@@ -110,6 +107,37 @@ export class Rooms {
     this.rooms.set(code, room);
     console.log(`room ${code}: ${name} (${mode}, ${(bytes.byteLength / 1048576).toFixed(1)} MB) for ${key || 'local'}`);
     return room;
+  }
+
+  // Throws a RoomError when `address` may not make a room now: the server's rooms are taken,
+  // it hosts one already, or it uploaded a moment ago. Run before an upload is read too
+  // (server/main.js: reading 24 MB first let parallel uploads fill the memory).
+  check(address) {
+    const L = this.limits, key = addressKey(address);
+    if (this.rooms.size >= L.rooms) throw new RoomError('every room on this server is taken: try again later', 503);
+    if ([...this.rooms.values()].filter((r) => r.address === key).length >= L.perAddress) {
+      throw new RoomError('you already host a room: close it first (quit it and wait for it to empty)', 429);
+    }
+    if (this.now() - (this.lastUpload.get(key) ?? -Infinity) < L.cooldownMs) {
+      throw new RoomError('one upload at a time: try again in a few seconds', 429);
+    }
+  }
+
+  // Reads an upload with `read(maxBytes, ms)` (the request body) once `check` passes, one
+  // at a time per address and `limits.uploads` in all, then makes its room (create).
+  async upload(read, opts) {
+    const L = this.limits, key = addressKey(opts.address);
+    this.check(opts.address);
+    if (this.uploading.has(key)) throw new RoomError('one upload at a time: try again in a few seconds', 429);
+    if (this.uploading.size >= L.uploads) throw new RoomError('the server is busy with other uploads: try again in a minute', 503);
+    this.uploading.add(key);
+    let bytes;
+    try {
+      bytes = await read(L.bytes, L.uploadMs);
+    } finally {
+      this.uploading.delete(key);
+    }
+    return this.create(bytes, opts);
   }
 
   // A player's session joined `room` (the bots fill in once the first one is there).

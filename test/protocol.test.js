@@ -7,7 +7,7 @@ import {
   writeSnapshot, readSnapshot, quantizePitch, dequantizePitch, quantizeYaw, dequantizeYaw, E_ACTIVE, E_X, E_Y, E_Z,
   E_PITCH, E_YAW, E_FLAGS, E_DUCK, E_WEAPON, E_HEALTH, E_TEAM, E_ANIM, E_SHOTS, E_FIELDS, ANIM_RELOAD, ANIM_HELMET,
   RoundState, writeChat, readChat, cleanChat, S2C_CHAT, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_MAX,
-  writeInfo, readInfo, writeReport, readReport, S2C_INFO, S2C_REPORT, NO_MVP,
+  writeInfo, readInfo, writeReport, readReport, S2C_INFO, S2C_REPORT, NO_MVP, cleanName, NAME_BYTES,
 } from '../shared/protocol.js';
 
 Deno.test('chat round-trip, and the server cleans a line before sending it', () => {
@@ -174,4 +174,21 @@ Deno.test('info carries the MVP counts; the damage report round-trips; the round
   assert.deepEqual(readReport(r), { round: 7, rows });
   const rs = new RoundState();
   assert.equal(rs.mvp, NO_MVP);
+});
+
+// Names are cut by UTF-8 bytes at a character, not by UTF-16 units: 16 players named with
+// 31 emoji-ish characters overflowed INFO and the server's tick threw before snapshots.
+Deno.test('names: control characters out, at most NAME_BYTES bytes, a full server fits INFO', () => {
+  const enc = new TextEncoder();
+  const emoji = String.fromCodePoint(0x1f600).repeat(20);
+  assert.equal(cleanName(emoji), String.fromCodePoint(0x1f600).repeat(7), 'whole characters only');
+  assert.equal(cleanName('  ann' + String.fromCharCode(10) + 'bind x' + String.fromCharCode(27) + '[31m '), 'ann bind x [31m');
+  assert.equal(cleanName('x'.repeat(40)), 'x'.repeat(31));
+  const w = new Writer(), players = [];
+  for (let id = 0; id < MAX_PLAYERS; id++) {
+    const name = cleanName(emoji + 'abc');
+    assert.ok(enc.encode(name).length <= NAME_BYTES);
+    players.push({ team: 2, name, kills: 65535, deaths: 65535, score: 65535, mvps: 255 });
+  }
+  assert.ok(writeInfo(w, players).length <= MAX_DATAGRAM);
 });

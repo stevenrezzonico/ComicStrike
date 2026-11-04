@@ -61,14 +61,19 @@ function readCString(bytes, start, max) {
   return s;
 }
 
-export function parseEntities(text) {
+// limits (an untrusted map's, BSP_LIMITS): throws past `entities` entities or `entityKeys`
+// keys in all, while parsing (23 MB of `{}` took 4 s and 1.1 GB before the count check).
+export function parseEntities(text, limits = null) {
   const out = [];
   const re = /"([^"]*)"|([{}])/g;
+  const maxEntities = limits ? limits.entities : Infinity, maxKeys = limits ? limits.entityKeys : Infinity;
   let ent = null;
   let key = null;
+  let keys = 0;
   let m;
   while ((m = re.exec(text)) !== null) {
     if (m[2] === '{') {
+      if (out.length >= maxEntities) throw new Error('bsp: too many entities');
       ent = {};
       key = null;
     } else if (m[2] === '}') {
@@ -77,6 +82,7 @@ export function parseEntities(text) {
     } else if (ent) {
       if (key === null) key = m[1];
       else {
+        if (++keys > maxKeys) throw new Error('bsp: too many entity keys');
         ent[key] = m[1];
         key = null;
       }
@@ -85,7 +91,9 @@ export function parseEntities(text) {
   return out;
 }
 
-export function parseBSP(buffer) {
+// limits: an untrusted map's (parseUntrustedBSP), checked while parsing where the parse
+// itself would cost (texture and entity counts).
+export function parseBSP(buffer, limits = null) {
   const dv = new DataView(buffer);
   const version = dv.getInt32(0, true);
   if (version !== 30) throw new Error(`bsp: unsupported version ${version} (expected 30)`);
@@ -163,6 +171,7 @@ export function parseBSP(buffer) {
   const texBase = lumpOfs[LUMP_TEXTURES];
   const numTextures = lumpLen[LUMP_TEXTURES] > 0 ? dv.getInt32(texBase, true) : 0;
   if (numTextures < 0 || 4 + numTextures * 4 > lumpLen[LUMP_TEXTURES]) throw new Error('bsp: bad texture count');
+  if (limits && numTextures > limits.textures) throw new Error('bsp: too many textures');
   const textureNames = new Array(numTextures);
   const textureSize = new Uint16Array(numTextures * 2);
   const bytes = new Uint8Array(buffer);
@@ -195,7 +204,7 @@ export function parseBSP(buffer) {
     numModels, modelsF, modelsI,
     edges, surfedges, marksurfaces, lighting, visibility,
     numTextures, textureNames, textureSize,
-    entities: parseEntities(entText),
+    entities: parseEntities(entText, limits),
   };
 }
 
@@ -210,6 +219,7 @@ export const BSP_LIMITS = {
   faceEdges: 256, // corners of one face
   lightmap: 256, // lightmap texels along a face's side
   entities: 8192,
+  entityKeys: 65536, // keys of all entities together (de_torn has the most here: 3,579)
   textures: 8192,
 };
 
@@ -342,7 +352,7 @@ export function mapNameOf(fileName) {
 }
 
 // parseBSP for a file from outside: parsed, then checked (validateBSP).
-export const parseUntrustedBSP = (buffer) => validateBSP(parseBSP(buffer));
+export const parseUntrustedBSP = (buffer) => validateBSP(parseBSP(buffer, BSP_LIMITS));
 
 // --- Record accessors (no allocation) -------------------------------------
 

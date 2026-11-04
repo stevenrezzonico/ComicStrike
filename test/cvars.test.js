@@ -166,3 +166,17 @@ Deno.test('binds: defaults added later are adopted where a saved config left the
   con.exec('unbindall; bind k messagemode2');
   assert.ok(b.adopt(['messagemode2']) === false, 'the command is bound elsewhere: not bound again');
 });
+
+// A saved value with a line break ran its second line as a command on every load (a link's
+// `?name=x%0Abind%20mouse1%20disconnect`): control characters are saved as spaces.
+Deno.test('a saved value cannot carry a command', () => {
+  const con = new Console(() => {});
+  con.cvar('name', 'player', { flags: FCVAR_ARCHIVE });
+  const ran = [];
+  con.command('bind', (args) => ran.push(args.join(' ')));
+  con.get('name').set('x' + String.fromCharCode(10) + 'bind mouse1 disconnect');
+  const saved = con.archive().join(String.fromCharCode(10));
+  con.exec(saved, { print: () => {} });
+  assert.deepEqual(ran, []);
+  assert.equal(con.get('name').value, 'x bind mouse1 disconnect');
+});

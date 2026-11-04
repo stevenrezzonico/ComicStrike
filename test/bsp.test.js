@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {
-  parseBSP, parseEntities, faceNumEdges, faceVertex, faceTexinfo,
+  parseBSP, parseEntities, BSP_LIMITS, faceNumEdges, faceVertex, faceTexinfo,
   modelFirstFace, modelNumFaces, entityModelIndex,
 } from '../shared/bsp.js';
 
@@ -77,4 +77,13 @@ Deno.test('every map in maps/ parses', async () => {
     if (!(e instanceof Deno.errors.NotFound)) throw e;
   }
   console.log(`parsed ${n} maps`);
+});
+
+// An untrusted map's entities are counted while parsing (23 MB of `{}` took 4 s and 1.1 GB
+// before the count check ran).
+Deno.test('parseEntities stops at the limits of an untrusted map', () => {
+  assert.equal(parseEntities('{}'.repeat(BSP_LIMITS.entities), BSP_LIMITS).length, BSP_LIMITS.entities);
+  assert.throws(() => parseEntities('{}'.repeat(4e6), BSP_LIMITS), /too many entities/);
+  assert.throws(() => parseEntities('{' + '"a" "b"'.repeat(BSP_LIMITS.entityKeys + 1) + '}', BSP_LIMITS), /too many entity keys/);
+  assert.equal(parseEntities('{}'.repeat(BSP_LIMITS.entities + 1)).length, BSP_LIMITS.entities + 1, 'trusted maps: no limit');
 });

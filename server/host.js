@@ -3,7 +3,7 @@
 // Transport-agnostic: sessions only need send(bytes) and close(reason).
 
 import { Console, FCVAR_PROTECTED } from '../shared/cvars.js';
-import { writeChangelevel, MAX_PLAYERS } from '../shared/protocol.js';
+import { writeChangelevel, cleanName, MAX_PLAYERS } from '../shared/protocol.js';
 import { TEAM_NAMES, TEAM_T, TEAM_CT } from '../shared/player.js';
 import { PHASE_WARMUP } from '../shared/economy.js';
 import { Game, DEFAULT_RULES } from './game.js';
@@ -110,7 +110,7 @@ export class Host {
       let difficulty = -1, name = '';
       for (const a of args) {
         if (a.toLowerCase() in DIFFICULTY) difficulty = DIFFICULTY[a.toLowerCase()];
-        else name = a.slice(0, 31);
+        else name = cleanName(a);
       }
       const c = this.game.bots.add(team, difficulty, name);
       if (!c) return con.out(ctx, 'bot_add: the server is full');

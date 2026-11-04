@@ -1,7 +1,9 @@
 // Rooms (server/rooms.js): a game on a map a player uploads, held in memory, with limits.
 import assert from 'node:assert/strict';
 import { Rooms, RoomError } from '../server/rooms.js';
-import { mapNameOf } from '../shared/bsp.js';
+import { mapNameOf, parseBSP } from '../shared/bsp.js';
+import { CollisionWorld } from '../shared/trace.js';
+import { FloorGrid, MAX_CELLS } from '../shared/floorgrid.js';
 import { Writer, Reader, writeHello, readHello, helloRoom, C2S_HELLO, S2C_WELCOME, S2C_REJECT, readWelcome } from '../shared/protocol.js';
 import { TEAM_T } from '../shared/player.js';
 
@@ -146,4 +148,40 @@ Deno.test('the map file is served gzipped from memory', async () => {
   const back = new Uint8Array(await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
   assert.deepEqual(back, PLAYGROUND);
   assert.equal(await rooms.gzipped(room), gz, 'made once');
+});
+
+// An uploaded map may span the whole ±16384 world: its navigation held 1.7 GB and blocked
+// every game for seconds. Grids past MAX_CELLS and floods past maxReached are refused
+// before that work (a room then reports the map does not run).
+Deno.test('a map too big for the navigation is refused before the work', () => {
+  const bsp = parseBSP(PLAYGROUND.slice().buffer), world = CollisionWorld.fromBSP(bsp);
+  assert.throws(() => new FloorGrid(bsp, world, 24, { bounds: [-16384, -16384, 16384, 16384] }), /too big/);
+  assert.ok(Math.ceil(32768 / 24) ** 2 > MAX_CELLS);
+  assert.throws(() => new FloorGrid(bsp, world, 24, { maxReached: 100 }), /over 100 places/);
+  assert.ok(new FloorGrid(bsp, world, 24).reached.some((r) => r), 'the playground itself is fine');
+});
+
+// The limits are checked before an upload is read (reading 24 MB first let parallel uploads
+// fill the server's memory): one upload being read per address, `uploads` in all.
+Deno.test('uploads are refused before their body is read', async () => {
+  const { rooms, clock } = makeRooms({ rooms: 2, uploads: 2 });
+  const reads = [];
+  const pending = () => new Promise((resolve) => reads.push(resolve));
+  const refused = async (address, pattern, status) => {
+    let read = false;
+    await assert.rejects(rooms.upload(() => (read = true) && pending(), { address }),
+      (e) => e instanceof RoomError && pattern.test(e.message) && e.status === status);
+    assert.ok(!read, 'refused without reading');
+  };
+  const a = rooms.upload(pending, { address: '1.1.1.1' });
+  await refused('1.1.1.1', /one upload at a time/, 429);
+  const b = rooms.upload(pending, { address: '2.2.2.2' });
+  await refused('3.3.3.3', /busy/, 503);
+  reads[0](PLAYGROUND);
+  reads[1](PLAYGROUND);
+  await quietly(() => Promise.all([a, b]));
+  assert.equal(rooms.rooms.size, 2);
+  await refused('3.3.3.3', /every room/, 503);
+  clock.ms += 1;
+  await refused('1.1.1.1', /every room|already host/, 503);
 });

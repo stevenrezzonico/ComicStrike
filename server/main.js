@@ -179,16 +179,29 @@ async function serveStatic(pathname, req) {
 }
 
 const tls = TLS_CERT ? { cert: certInfo.cert, key: certInfo.key } : {};
-// A request body, refused past `max` bytes (whatever content-length says).
-async function readBody(req, max) {
+// A request body, refused past `max` bytes (whatever content-length says) or when it has
+// not arrived within `ms` (a slow upload would hold one of the few upload slots).
+async function readBody(req, max, ms) {
   const declared = Number(req.headers.get('content-length') || 0);
   if (declared > max) throw new RoomError(`the map is too large (${max >> 20} MB at most)`, 413);
   const parts = [];
-  let size = 0;
-  for await (const chunk of req.body || []) {
-    size += chunk.byteLength;
-    if (size > max) throw new RoomError(`the map is too large (${max >> 20} MB at most)`, 413);
-    parts.push(chunk);
+  let size = 0, late = false;
+  const reader = req.body ? req.body.getReader() : null;
+  const timer = reader && setTimeout(() => {
+    late = true;
+    reader.cancel().catch(() => {});
+  }, ms);
+  try {
+    while (reader) {
+      const { value, done } = await reader.read();
+      if (late) throw new RoomError('the upload took too long', 408);
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) throw new RoomError(`the map is too large (${max >> 20} MB at most)`, 413);
+      parts.push(value);
+    }
+  } finally {
+    clearTimeout(timer);
   }
   const out = new Uint8Array(size);
   let o = 0;
@@ -204,9 +217,8 @@ async function readBody(req, max) {
 // console uses it) and the room console's catalog (the console's suggestions).
 async function createRoom(req, url, address) {
   try {
-    const bytes = await readBody(req, rooms.limits.bytes);
     const q = url.searchParams;
-    const room = rooms.create(bytes, {
+    const room = await rooms.upload((max, ms) => readBody(req, max, ms), {
       fileName: q.get('file') || '', mode: q.get('mode') || 'competitive', players: +q.get('players') || 0,
       difficulty: +(q.get('difficulty') ?? 1), armoury: q.get('armoury') !== '0', address,
     });

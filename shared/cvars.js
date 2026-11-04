@@ -86,8 +86,11 @@ export function parse(text) {
   return out;
 }
 
-// Quotes a token for printing / saving when it needs it.
-export const quote = (s) => `"${String(s).replaceAll('"', "'")}"`;
+// Quotes a token for printing / saving when it needs it. Control characters become spaces:
+// a line break ends a quoted token, so `?name=x%0Abind%20mouse1%20disconnect` was saved in
+// the config and ran as a command on every later visit.
+// deno-lint-ignore no-control-regex
+export const quote = (s) => `"${String(s).replaceAll('"', "'").replace(/[\u0000-\u001f\u007f]/g, ' ')}"`;
 
 export class Console {
   // print(text): where output goes unless a call passes ctx.print.

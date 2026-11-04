@@ -13,7 +13,7 @@ import { WEAPON_ID, WS_ACTIVE, giveWeapon, SLOT_PRIMARY } from '../shared/weapon
 import {
   Writer, Reader, CmdRing, SnapshotRing, OwnState, writeHello, writeCmds, readSnapshot, S2C_SNAPSHOT,
 } from '../shared/protocol.js';
-import { MOVER_PLAT, MOVER_TRAIN, MOVER_BUTTON, MOVER_MOMENTARY, MOVER_WHEEL } from '../shared/doors.js';
+import { MOVER_PLAT, MOVER_TRAIN, MOVER_BUTTON, MOVER_MOMENTARY, MOVER_WHEEL, MAX_FIRES, MAX_QUEUED } from '../shared/doors.js';
 import { blastDamage } from '../shared/breakables.js';
 import { Game } from '../server/game.js';
 
@@ -463,4 +463,29 @@ Deno.test('breakables: an HE grenade breaks the glass in its blast and the bomb 
   run(1);
   assert.equal(b.broken[3], 1, 'the site crate went');
   assert.equal(b.broken[4], 1, 'and the one beside it with its blast');
+});
+
+// Logic that loops (an uploaded map hung the server): a multi_manager firing itself twice
+// with delays doubled its queue every tick, a relay naming itself recursed until the stack
+// ran out. Both stay within MAX_FIRES a tick and MAX_QUEUED waiting.
+Deno.test('looping map logic is bounded', () => {
+  const bsp = yard((map) => {
+    map.point({ classname: 'trigger_auto', target: 'boom', delay: '0.5', origin: '0 0 64' });
+    map.point({ classname: 'multi_manager', targetname: 'boom', boom: '0.01', 'boom#1': '0.01', origin: '0 0 64' });
+    map.point({ classname: 'trigger_relay', targetname: 'self', target: 'self', origin: '0 0 64' });
+  });
+  const g = quiet(() => new Game('yard', bsp, { rounds: false }));
+  const logic = g.logic;
+  logic.reset(0);
+  let worst = 0, tick = 0;
+  for (; tick < 200; tick++) { // the logic alone (the game skips it on a map with no doors or triggers)
+    const t = performance.now();
+    logic.update(tick, []);
+    worst = Math.max(worst, performance.now() - t);
+    assert.ok(logic.queue.length <= MAX_QUEUED);
+  }
+  assert.ok(logic.queue.length > 100, 'the loop still runs, within the budget');
+  assert.ok(worst < 50, `the slowest tick took ${worst.toFixed(1)} ms`);
+  logic.fireAt(tick, 'self', null, 0);
+  assert.equal(logic.fires, MAX_FIRES + 1, 'the self relay stopped at the budget');
 });

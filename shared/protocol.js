@@ -527,6 +527,18 @@ export function cleanChat(text) {
   return String(text).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').trim().slice(0, CHAT_MAX);
 }
 
+// A player name as the server keeps it: control characters and line breaks gone (they
+// forged lines in the server log), trimmed, at most NAME_BYTES bytes of UTF-8 cut at a
+// character (31 characters of emoji were ~62 bytes: 16 such names overflowed INFO's
+// datagram and the tick threw before any snapshot went out). 20 players: 822 bytes.
+export const NAME_BYTES = 31;
+const nameBuf = new Uint8Array(NAME_BYTES);
+export function cleanName(text) {
+  // deno-lint-ignore no-control-regex
+  const s = String(text).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').trim();
+  return s.slice(0, utf8Encoder.encodeInto(s, nameBuf).read).trim();
+}
+
 // Console output split into datagram-sized PRINT messages (at line breaks when it can).
 export function printChunks(text) {
   const chunks = [];

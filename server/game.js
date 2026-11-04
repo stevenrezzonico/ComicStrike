@@ -44,7 +44,7 @@ import {
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
-  SHOT_BLOOD, writePrint, printChunks, writeChat, cleanChat, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC, writeReport, NO_MVP,
+  SHOT_BLOOD, writePrint, printChunks, writeChat, cleanChat, cleanName, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC, writeReport, NO_MVP,
   CHAT_RADIO, RADIO, radioIndex, writePing,
   KILL_HEADSHOT, KILL_REPEAT_TICKS, HURT_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
   writeWelcome, writeReject, writeInfo, writeItems, writeGrenades, writeHostages, readCmds, writeSnapshot, quantizePitch,
@@ -498,7 +498,7 @@ export class Game {
 
   join(c, h) {
     c.joined = true;
-    c.name = h.name.slice(0, 31) || `player${c.id}`;
+    c.name = cleanName(h.name) || `player${c.id}`;
     const p = c.player;
     p.primary = WEAPONS[h.primary] ? h.primary : 0;
     p.secondary = WEAPONS[h.secondary] ? h.secondary : 0;
@@ -1307,7 +1307,7 @@ export class Game {
       // The rest of the line as typed (quotes and ; included: it is text, not commands).
       this.chat(c, text.replace(/^\s*\S+\s?/, ''), name === 'say_team');
     } else if (name === 'name') {
-      const n = args.slice(1).join(' ').trim().slice(0, 31);
+      const n = cleanName(args.slice(1).join(' '));
       if (!n || n === c.name) return;
       console.log(`player ${c.id} "${c.name}" is now "${n}"`);
       c.name = n;
