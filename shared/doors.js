@@ -50,8 +50,10 @@ const SF_PLAT_TOGGLE = 1;
 // momentary_rot_button spawnflags.
 const SF_WHEEL_NOTSOLID = 1;
 const SF_WHEEL_AUTO_RETURN = 16;
-// path_corner spawnflags.
-const SF_CORNER_FIREONCE = 2;
+// path_corner spawnflags (the HL SDK's trains.h; 2 was read as fire once before).
+const SF_CORNER_WAITFORTRIG = 1; // the train waits here until triggered (as wait -1)
+const SF_CORNER_TELEPORT = 2; // the train gets here at once (the leg into it takes a tick)
+const SF_CORNER_FIREONCE = 4;
 // trigger_* spawnflags.
 const SF_TRIGGER_NOCLIENTS = 2;
 
@@ -859,22 +861,23 @@ function trainPath(e, corners, speed) {
   const pos = new Float64Array(Math.max(n, 1) * 3), next = new Int32Array(Math.max(n, 1)).fill(-1);
   const wait = new Float64Array(Math.max(n, 1)), rate = new Float64Array(Math.max(n, 1)), once = new Uint8Array(Math.max(n, 1));
   const message = [];
-  const speeds = new Float64Array(Math.max(n, 1));
+  const speeds = new Float64Array(Math.max(n, 1)), teleport = new Uint8Array(Math.max(n, 1));
   names.forEach((name, c) => {
-    const pc = corners.get(name);
+    const pc = corners.get(name), flags = +(pc.spawnflags || 0);
     parseVec3(pc.origin || '', pos, c * 3);
     const nx = pc.target ? index.get(pc.target) : undefined;
     next[c] = nx === undefined ? -1 : nx;
-    wait[c] = +(pc.wait || 0);
+    wait[c] = flags & SF_CORNER_WAITFORTRIG ? -1 : +(pc.wait || 0);
     speeds[c] = +(pc.speed || 0);
-    once[c] = (+(pc.spawnflags || 0) & SF_CORNER_FIREONCE) ? 1 : 0;
+    once[c] = flags & SF_CORNER_FIREONCE ? 1 : 0;
+    teleport[c] = flags & SF_CORNER_TELEPORT ? 1 : 0;
     message.push(pc.message || '');
   });
   for (let c = 0; c < n; c++) {
     const s = speeds[c] || speed;
     const d = next[c] >= 0 ? Math.hypot(pos[next[c] * 3] - pos[c * 3], pos[next[c] * 3 + 1] - pos[c * 3 + 1],
       pos[next[c] * 3 + 2] - pos[c * 3 + 2]) : 0;
-    rate[c] = d > 0 ? s / d / TICK_RATE : 1;
+    rate[c] = d > 0 && !teleport[next[c]] ? s / d / TICK_RATE : 1;
   }
   if (!n) message.push('');
   return { count: n, pos, next, wait, rate, once, message };

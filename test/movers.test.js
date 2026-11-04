@@ -503,3 +503,24 @@ Deno.test('delayed fires happen on a map with no doors or triggers', () => {
   for (let i = 0; i < TICK_RATE; i++) g.step();
   assert.equal(g.breakables.broken[1], 1);
 });
+
+// path_corner flags as the HL SDK has them: 1 waits for a trigger, 2 teleports (the leg into
+// it takes one tick), 4 fires its message once (2 was read as fire once before).
+Deno.test('path_corner: teleport, wait for a trigger, fire once', () => {
+  const bsp = yard((map) => {
+    map.brushEntity({ classname: 'func_train', target: 'c1', speed: '160' }, [box(-32, -32, 0, 32, 32, 16, 'steel')]);
+    map.point({ classname: 'path_corner', targetname: 'c1', target: 'c2', origin: '0 0 8', message: 'ding', spawnflags: '4' });
+    map.point({ classname: 'path_corner', targetname: 'c2', target: 'c3', origin: '800 0 8', spawnflags: '2' });
+    map.point({ classname: 'path_corner', targetname: 'c3', target: 'c1', origin: '800 300 8', spawnflags: '1' });
+  });
+  const { game, run } = walker(bsp);
+  const d = game.doors, p = d.path[0], e = game.world.ents[d.ent[0]];
+  assert.equal(p.rate[0], 1, 'into the teleport corner in one tick');
+  assert.deepEqual([p.wait[2], p.once[0], p.once[1]], [-1, 1, 0]);
+  run(3);
+  assert.equal(d.leg[0], 1, 'already at the second corner');
+  assert.ok(Math.abs(e.ox - 800) < 0.01 && e.oy < 20, `jumped there (${e.ox}, ${e.oy})`);
+  run(Math.ceil(300 / 160 * TICK_RATE) + 2);
+  assert.equal(d.leg[0], 2);
+  assert.equal(d.stopped[0], 1, 'waits at the third for a trigger');
+});
