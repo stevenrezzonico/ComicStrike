@@ -22,6 +22,7 @@ import { HULL_POINT, Trace, traceHull } from '../shared/trace.js';
 import {
   WEAPONS, WEAPON_ID, WS_SLOTS, WS_ACTIVE, WS_PUNCH, WS_RELOAD_END, WS_ACTION, WS_ZOOM, WS_RESUME_ZOOM, WS_DEPLOY_END,
   WS_THROW, WS_THROW_TIME, WS_GRENADES, GRENADE_IDS, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_GRENADE, SLOT_C4, activeWeapon,
+  ACTION_DEFUSE,
 } from '../shared/weapons.js';
 import { GRENADE_GRAVITY } from '../shared/grenades.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
@@ -101,6 +102,16 @@ const NADE_TIMEOUT = 3;
 const NADE_ARC_ERROR = 60; // units the solved arc may miss the spot by
 const AVERT = 1.6;
 const BLIND = 0.3;
+// Smokes and molotovs (normal and up; approx. of CS:GO's bots, which throw from spots the
+// maps' nav files mark): at a lost enemy, a molotov (CTs: an incendiary) within MOLLY_RANGE
+// when no HE fits, and a CT's smoke within SMOKE_RANGE when nothing else does (Ts pushing in:
+// their way blocked); a T's molotov on the planted bomb while a CT is heard defusing it
+// (within HEAR_RANGE, the bomb within MOLLY_BOMB); the Ts' smoke on the CT side of their
+// site, the place SMOKE_AHEAD along the way from the site toward the nearest CT spawn, once
+// a team a round, as a T comes within SMOKE_EXEC of the site (tried once a second).
+const MOLLY_RANGE = [250, 900], SMOKE_RANGE = [400, 1400], MOLLY_BOMB = 1100;
+const SMOKE_EXEC = [300, 1500], SMOKE_AHEAD = 400;
+const SMOKE_ROLL = 220; // a smoke bounces and rolls on before it pops: aimed this much short
 // A closed door a button opens within BUTTON_LOOKAHEAD waypoints and BUTTON_RANGE units
 // along the path sends the bot to the button first (given up after BUTTON_TIMEOUT).
 const BUTTON_LOOKAHEAD = 8;
@@ -117,6 +128,8 @@ export class Bots {
     this.random = Math.random;
     this.tSite = 0; // teamSite(): the Terrorists' site in round siteRound (RoundState.serial)
     this.siteRound = -1;
+    this.smokeSpots = []; // per bomb site: smokeSpot()'s place, null for none
+    this.smokedRound = -1; // the round (RoundState.serial) the Ts smoked their site's CT side
   }
 
   ensureNav() {
@@ -208,6 +221,31 @@ export class Bots {
     return best;
   }
 
+  // The place to smoke on the CT side of bomb site i: SMOKE_AHEAD along the bots' way from
+  // inside the site toward the nearest CT spawn (where the CTs come in), [x, y, floor] or
+  // null; worked out once a map.
+  smokeSpot(i) {
+    if (this.smokeSpots[i] !== undefined) return this.smokeSpots[i];
+    const g = this.game, nav = this.ensureNav(), b = g.bombSites.boxes[i];
+    const cx = (b[0] + b[3]) / 2, cy = (b[1] + b[4]) / 2;
+    let spawn = null, best = Infinity;
+    for (const sp of g.spawns[TEAM_CT]) {
+      const d = Math.hypot(sp[0] - cx, sp[1] - cy);
+      if (d < best) [spawn, best] = [sp, d];
+    }
+    let spot = null;
+    const from = nav.random(() => 0.5, b), to = spawn ? this.nearestNode(spawn[0], spawn[1], spawn[2] - 36, 300) : -1;
+    const path = new Int32Array(PATH_MAX), n = nav.path(from, to, path);
+    for (let k = 1, run = 0; k < n; k++) {
+      run += Math.hypot(nav.x[path[k]] - nav.x[path[k - 1]], nav.y[path[k]] - nav.y[path[k - 1]]);
+      if (run >= SMOKE_AHEAD) {
+        spot = [nav.x[path[k]], nav.y[path[k]], nav.z[path[k]]];
+        break;
+      }
+    }
+    return (this.smokeSpots[i] = spot);
+  }
+
   teamSite() {
     const g = this.game, n = g.bombSites.count;
     if (!n) return 0;
@@ -280,6 +318,7 @@ class Bot {
     this.nadeAt = 0; // tick the next throw may start
     this.nadeFor = -1; // the seenAt a throw was considered for (one per loss)
     this.avertUntil = 0; // looking away from our flashbang until then
+    this.playAt = 0; // tick considerPlay() may try a smoke at the site again
     this.avertYaw = 0;
     this.pressButton = -1; // the button to press for a door on our way, its door, the node by it
     this.pressDoor = -1;
@@ -417,7 +456,7 @@ class Bot {
         if (goal.select >= 0) select = goal.select;
         if (goal.look) [wantP, wantY] = angles(x, y, eye, goal.look[0], goal.look[1], goal.look[2]);
       } else if (!fighting && this.difficulty >= 1 && !g.rules.botDontShoot && (p.ps.i[PS_FLAGS] & FL_ONGROUND)) {
-        this.considerThrow(x, y, eye);
+        if (!this.considerPlay(x, y, eye)) this.considerThrow(x, y, eye);
       }
     }
     let moveYaw = null;
@@ -518,15 +557,52 @@ class Bot {
     if (g.tick < this.nadeAt || this.nadeFor === this.seenAt || !this.lastX) return;
     const lost = (g.tick - this.seenAt) / TICK_RATE;
     if (lost < NADE_LOST_MIN || lost > NADE_LOST_MAX) return;
-    const d = Math.hypot(this.lastX - x, this.lastY - y);
+    const d = Math.hypot(this.lastX - x, this.lastY - y), ct = this.c.team === TEAM_CT;
+    const fire = WEAPON_ID[ct ? 'incgrenade' : 'molotov'], inside = (r) => d >= r[0] && d <= r[1];
     let id = 0;
-    if (this.carries(WEAPON_ID.hegrenade) && d >= HE_RANGE[0] && d <= HE_RANGE[1]) id = WEAPON_ID.hegrenade;
-    else if (this.carries(WEAPON_ID.flashbang) && d >= FLASH_RANGE[0] && d <= FLASH_RANGE[1]) id = WEAPON_ID.flashbang;
+    if (this.carries(WEAPON_ID.hegrenade) && inside(HE_RANGE)) id = WEAPON_ID.hegrenade;
+    else if (this.carries(fire) && inside(MOLLY_RANGE)) id = fire;
+    else if (this.carries(WEAPON_ID.flashbang) && inside(FLASH_RANGE)) id = WEAPON_ID.flashbang;
+    else if (ct && this.carries(WEAPON_ID.smokegrenade) && inside(SMOKE_RANGE)) id = WEAPON_ID.smokegrenade;
     if (!id) return;
     this.nadeFor = this.seenAt;
-    const arc = throwAngles(g.world, x, y, eye, this.lastX, this.lastY, this.lastZ);
-    if (!arc) return;
-    this.nade = { id, pitch: arc[0], yaw: arc[1], phase: 0, hold: 0, until: g.tick + NADE_TIMEOUT * TICK_RATE };
+    this.aimThrow(id, x, y, eye, this.lastX, this.lastY, this.lastZ);
+  }
+
+  // Starts a throw of grenade `id` from (x, y, eye) to land at (tx, ty, tz), when an arc
+  // gets there; true if it did.
+  aimThrow(id, x, y, eye, tx, ty, tz) {
+    const arc = throwAngles(this.game.world, x, y, eye, tx, ty, tz);
+    if (!arc) return false;
+    this.nade = { id, pitch: arc[0], yaw: arc[1], phase: 0, hold: 0, until: this.game.tick + NADE_TIMEOUT * TICK_RATE };
+    return true;
+  }
+
+  // The Ts' own plays: a molotov on the planted bomb while a CT is heard defusing it, and
+  // the smoke on the CT side of their site on the way in. True if a throw started.
+  considerPlay(x, y, eye) {
+    const g = this.game, c = this.c, bomb = g.bomb;
+    if (c.team !== TEAM_T || g.tick < this.nadeAt || g.rules.deathmatch) return false;
+    if (bomb.state === BOMB_PLANTED) {
+      if (!this.carries(WEAPON_ID.molotov) || Math.hypot(bomb.x - x, bomb.y - y) > MOLLY_BOMB) return false;
+      let heard = false;
+      for (const o of g.clients) {
+        if (o && o.alive && o.team === TEAM_CT && o.player.ws.f[WS_ACTION] === ACTION_DEFUSE &&
+          Math.hypot(o.player.ps.f[PS_ORIGIN] - x, o.player.ps.f[PS_ORIGIN + 1] - y) < HEAR_RANGE) heard = true;
+      }
+      return heard && this.aimThrow(WEAPON_ID.molotov, x, y, eye, bomb.x, bomb.y, bomb.z + 4);
+    }
+    if (g.phase !== PHASE_LIVE || !g.bombSites.count || this.bots.smokedRound === g.round.serial ||
+      !this.carries(WEAPON_ID.smokegrenade) || g.tick < this.playAt) return false;
+    this.playAt = g.tick + TICK_RATE;
+    const i = this.site % g.bombSites.count, b = g.bombSites.boxes[i];
+    const d = Math.hypot((b[0] + b[3]) / 2 - x, (b[1] + b[4]) / 2 - y);
+    const spot = d >= SMOKE_EXEC[0] && d <= SMOKE_EXEC[1] ? this.bots.smokeSpot(i) : null;
+    if (!spot) return false;
+    const to = Math.hypot(spot[0] - x, spot[1] - y), k = Math.max(0, to - SMOKE_ROLL) / (to || 1);
+    if (!this.aimThrow(WEAPON_ID.smokegrenade, x, y, eye, x + (spot[0] - x) * k, y + (spot[1] - y) * k, spot[2])) return false;
+    this.bots.smokedRound = g.round.serial;
+    return true;
   }
 
   // The throw under way: bring the grenade out (4 again cycles the kinds), pull the pin
@@ -657,7 +733,9 @@ class Bot {
     if (!p.ws.f[WS_SLOTS + SLOT_PRIMARY * 3]) order.push(rifle);
     if (!free) order.push(ITEM_ASSAULTSUIT, ITEM_KEVLAR);
     if (ct && g.bombSites.count && !free) order.push(ITEM_DEFUSER);
-    if (!free && this.difficulty >= 1) order.push(WEAPON_ID.hegrenade, WEAPON_ID.flashbang);
+    if (!free && this.difficulty >= 1) {
+      order.push(WEAPON_ID.hegrenade, WEAPON_ID.flashbang, WEAPON_ID.smokegrenade, WEAPON_ID[ct ? 'incgrenade' : 'molotov']);
+    }
     for (const item of order) {
       const price = itemPrice(p, item);
       if (price < 0 || (!free && price > p.money)) continue;

@@ -3,8 +3,8 @@ import { parseBSP } from '../shared/bsp.js';
 import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
 import { CollisionWorld, Trace, traceHull, HULL_POINT } from '../shared/trace.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
-import { giveWeapon, WEAPON_ID, WS_ZOOM, WS_GRENADES, GRENADE_IDS } from '../shared/weapons.js';
-import { FX_HE, FX_FLASH } from '../shared/grenades.js';
+import { giveWeapon, WEAPON_ID, WS_ZOOM, WS_GRENADES, GRENADE_IDS, WS_ACTION, ACTION_DEFUSE } from '../shared/weapons.js';
+import { FX_HE, FX_FLASH, FX_SMOKE } from '../shared/grenades.js';
 import { BOMB_PLANTED } from '../shared/bomb.js';
 import { PHASE_LIVE, END_DEFUSE, END_RESCUE } from '../shared/economy.js';
 import { HS_CARRIED, HS_RESCUED } from '../shared/hostages.js';
@@ -301,6 +301,75 @@ Deno.test('bots: a flashbang goes where the enemy was lost, and the thrower look
   assert.equal(g.grenades.fxKind[0], FX_FLASH);
   // Facing away it gets the "behind" share (0.3 of the full 4.87 s), not the full blast.
   assert.ok(bot.c.flashLeft > 0 && bot.c.flashLeft < 1.8, `only a little of its own flash: ${bot.c.flashLeft.toFixed(2)} s`);
+});
+
+Deno.test('bots: the Ts smoke the CT side of their site on the way in, once a team a round', () => {
+  const { host, g, join, run } = setup('de_playground');
+  const ct = join('away', TEAM_CT);
+  host.con.exec('bot_add t normal; bot_add t normal');
+  run(4);
+  while (g.phase !== PHASE_LIVE) run(1);
+  teleport(ct, -10000, -10000, -10000); // alive, out of sight: the round goes on
+  const spawn = g.spawns[TEAM_CT][0];
+  for (let i = 0; i < g.bombSites.count; i++) { // the place: out of the site, toward the CTs
+    const b = g.bombSites.boxes[i], spot = g.bots.smokeSpot(i);
+    assert.ok(spot, `site ${i} has a smoke spot`);
+    const cx = (b[0] + b[3]) / 2, cy = (b[1] + b[4]) / 2;
+    assert.ok(Math.hypot(spot[0] - spawn[0], spot[1] - spawn[1]) < Math.hypot(cx - spawn[0], cy - spawn[1]), `site ${i}: toward the CTs`);
+  }
+  for (const bot of g.bots.list) giveWeapon(bot.c.player.ws, WEAPON_ID.smokegrenade);
+  const thrown = [];
+  const throwFn = g.grenades.throw.bind(g.grenades);
+  g.grenades.throw = (...a) => {
+    thrown.push(a[1]);
+    return throwFn(...a);
+  };
+  run(64 * 40, () => thrown.length > 0);
+  assert.deepEqual(thrown, [WEAPON_ID.smokegrenade], 'a smoke on the way in');
+  const spot = g.bots.smokeSpot(g.bots.list[0].site % g.bombSites.count);
+  run(64 * 6, () => g.grenades.fxCount > 0 && g.grenades.fxKind[0] === FX_SMOKE);
+  assert.equal(g.grenades.fxKind[0], FX_SMOKE, 'it popped');
+  const d = Math.hypot(g.grenades.fxPos[0] - spot[0], g.grenades.fxPos[1] - spot[1]);
+  assert.ok(d < 250, `within 250 units of the spot: ${d.toFixed(0)}`);
+  run(64 * 10);
+  assert.equal(thrown.length, 1, 'once a team a round');
+});
+
+Deno.test('bots: a T throws his molotov on the planted bomb while a CT is heard defusing it', () => {
+  const { host, g, join, run } = setup('de_playground');
+  const t = join('planter', TEAM_T), ct = join('defuser', TEAM_CT);
+  host.con.exec('bot_add t normal');
+  run(4);
+  while (g.phase !== PHASE_LIVE) run(1);
+  const nav = g.bots.nav, box = g.bombSites.boxes[0], spot = nav.random(seeded(3), box);
+  teleport(t, nav.x[spot], nav.y[spot], nav.z[spot] + 36);
+  giveWeapon(t.player.ws, WEAPON_ID.c4);
+  g.bombCarrier = t;
+  g.plantBomb(t);
+  assert.equal(g.bomb.state, BOMB_PLANTED);
+  const bot = g.bots.list[0], b = g.bomb;
+  giveWeapon(bot.c.player.ws, WEAPON_ID.molotov);
+  let from = -1; // somewhere 300-700 away with a throw to the bomb
+  for (let k = 0; k < nav.count && from < 0; k++) {
+    const d = Math.hypot(nav.x[k] - b.x, nav.y[k] - b.y);
+    if (d > 300 && d < 700 && Math.abs(nav.z[k] - b.z) < 64) from = k;
+  }
+  assert.ok(from >= 0);
+  teleport(bot.c, nav.x[from], nav.y[from], nav.z[from] + 36);
+  const x = nav.x[from], y = nav.y[from], eye = nav.z[from] + 64;
+  bot.nadeAt = 0;
+  assert.ok(!bot.considerPlay(x, y, eye), 'nobody defusing: nothing');
+  ct.player.ws.f[WS_ACTION] = ACTION_DEFUSE; // heard at the bomb
+  teleport(ct, b.x, b.y, b.z + 36);
+  let ok = false;
+  for (let k = 0; k < nav.count && !ok; k++) { // the first place with an arc to the bomb
+    const d = Math.hypot(nav.x[k] - b.x, nav.y[k] - b.y);
+    if (d < 250 || d > 900) continue;
+    ok = bot.considerPlay(nav.x[k], nav.y[k], nav.z[k] + 64);
+  }
+  assert.ok(ok, 'a molotov at the bomb');
+  assert.equal(bot.nade.id, WEAPON_ID.molotov);
+  run(1);
 });
 
 Deno.test('bots: a flashed bot sees nobody until it clears', () => {
