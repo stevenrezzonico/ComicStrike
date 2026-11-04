@@ -22,7 +22,7 @@ import { WorldVis } from './worldvis.js';
 // below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
 const LIGHT_FULL_SHARE = 0.75;
 const COMPOSITE_UNIFORMS = ['u_albedo', 'u_depth', 'u_ink', 'u_res', 'u_gscale', 'u_line', 'u_dot', 'u_zoom',
-  'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft', 'u_dead', 'u_smoke', 'u_inkaa'];
+  'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft', 'u_dead', 'u_smoke', 'u_inkaa', 'u_hatch'];
 const INK_UNIFORMS = ['u_normal', 'u_depth', 'u_line', 'u_gscale', 'u_zoom'];
 const CLOUD_TEX_SIZE = 512; // the sky's cloud noise (cloudNoise): CLOUD_PERIOD cells across
 
@@ -100,7 +100,7 @@ export class Renderer {
     // dead: 0..1, our death's red-brown print (client/deathpanel.js).
     // smoke: 0..1, the camera inside a smoke cloud: the print fogs over with distance.
     this.style = {
-      comic: true, ink: 1, dots: 1, bands: 0, lift: 0.3, calm: 0, soft: false, fast: false, inkaa: true, dead: 0, smoke: 0,
+      comic: true, ink: 1, dots: 1, bands: 0, lift: 0.3, calm: 0, soft: false, fast: false, inkaa: true, hatch: true, dead: 0, smoke: 0,
     };
     this.novis = false; // r_novis: draw the whole world (no visibility culling)
     this.zoom = 1; // 90 / fov
@@ -387,6 +387,7 @@ export class Renderer {
     gl.uniform1f(c.u_dead, st.dead);
     gl.uniform1f(c.u_smoke, st.smoke);
     gl.uniform1f(c.u_inkaa, st.inkaa ? 1 : 0);
+    gl.uniform1f(c.u_hatch, st.hatch ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
     gl.enable(gl.CULL_FACE);

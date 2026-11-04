@@ -1763,6 +1763,7 @@ function applyVideoSettings() {
   models.sunOn = cv.r_playershadows.bool;
   style.fast = cv.r_inkfast.bool;
   style.inkaa = cv.r_inkaa.bool;
+  style.hatch = cv.r_hatching.bool;
   return aspect;
 }
 
