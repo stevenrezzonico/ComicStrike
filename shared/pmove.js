@@ -57,6 +57,7 @@ export const MOVE = {
 // Eye heights above the feet (CS:GO standing 64; crouch matches the 36-unit GoldSrc duck hull).
 export const VIEW_STAND = 64;
 export const VIEW_DUCK = 30;
+export const AIR_TIME = 12; // s of air with the eyes under water (HL's AIRTIME): the server drowns, the client bubbles
 
 // PlayerState layout: floats then ints over one 64-byte buffer.
 export const PS_ORIGIN = 0; // 0..2, hull center

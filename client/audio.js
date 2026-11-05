@@ -376,6 +376,46 @@ export class Sounds {
     this.tone(v.out, v.t, 100, 55, 0.6, 0.14, 0, 'sine', 0.018);
   }
 
+  // Water at (x, y, z) (null: ours): 'in' / 'out' a splash going in or coming out (HL's
+  // PM_PlayWaterSounds), 'stroke' a swim stroke (a low push of water and a bubble or two),
+  // 'bubbles' air escaping under water (three to five rising chirps), 'gasp' a breath drawn
+  // on coming up after long under (noise through a band-pass rising 700 -> 1500 Hz).
+  water(kind, x = null, y = 0, z = 0, volume = 1) {
+    const v = this.voice(x, y, z, volume * 0.5, 400, 2500);
+    if (!v) return;
+    const r = 0.9 + Math.random() * 0.2, t = v.t;
+    if (kind === 'in' || kind === 'out') return this.splash(v.out, t, kind === 'in' ? 1.1 : 0.7, r);
+    if (kind === 'stroke') {
+      this.burst(v.out, t, 80, 500 * r, 0.3, 0.18, 0, 0.06);
+      for (let i = 0; i < 2; i++) {
+        const f = (260 + Math.random() * 120) * r;
+        this.tone(v.out, t, f, f * 1.5, 0.03, 0.05, 0.08 + Math.random() * 0.15, 'sine', 0.01);
+      }
+      return;
+    }
+    if (kind === 'bubbles') {
+      const n = 3 + Math.floor(Math.random() * 3);
+      for (let i = 0; i < n; i++) {
+        const f = (300 + Math.random() * 300) * r;
+        this.tone(v.out, t, f, f * 1.7, 0.04, 0.04, i * 0.05 + Math.random() * 0.04, 'sine', 0.008);
+      }
+      return;
+    }
+    const ctx = this.ctx, src = ctx.createBufferSource(), bp = ctx.createBiquadFilter(), g = ctx.createGain();
+    src.buffer = this.noise;
+    src.loop = true;
+    bp.type = 'bandpass';
+    bp.Q.value = 2.5;
+    bp.frequency.setValueAtTime(700 * r, t);
+    bp.frequency.exponentialRampToValueAtTime(1500 * r, t + 0.35);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.5, t + 0.25);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+    src.connect(bp).connect(g).connect(v.out);
+    src.start(t, Math.random() * 0.5);
+    src.stop(t + 0.5);
+  }
+
   // Knife or throw through the air.
   swish(x = null, y = 0, z = 0, volume = 1) {
     const v = this.voice(x, y, z, volume * 0.35, 250, 1200);

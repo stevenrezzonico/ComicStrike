@@ -207,7 +207,7 @@ const scape = new SoundScape(sounds, (x, y, z) => {
   if (gm === 87) return 'wood';
   if (gm === 68 || gm === 75 || gm === 79) return 'soft'; // dirt, snow, foliage
   return 'hard';
-});
+}, (x, y, z) => world !== null && liquid(x, y, z));
 
 // A muzzle flash lights the walls round it for a moment (client/gl/flashes.js); a silencer
 // keeps it small.
@@ -1340,7 +1340,7 @@ function tick() {
       gunShot(eye[0], eye[1], eye[2], angles[0], angles[1], silenced(ws, ws.f[WS_ACTIVE]), ++ownShots, w,
         hit ? ip[0] : NaN, hit ? ip[1] : 0, hit ? ip[2] : 0, cv.cl_righthand.bool ? 1 : -1);
     }
-    scape.ownMove(ps, buttons & IN_SPEED, ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1],
+    scape.ownMove(ps, buttons, ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1],
       ps.f[PS_ORIGIN + 2] - feetOffset(ps.i[PS_FLAGS]));
   }
   tickCount++;

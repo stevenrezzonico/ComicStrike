@@ -17,7 +17,8 @@ import {
 import { Doors, MapLogic, Killables, BLAST } from '../shared/doors.js';
 import { touched, touchedCount } from '../shared/pmove.js';
 import {
-  PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, PS_GROUNDENT, PS_WATERLEVEL, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, eyeOffset,
+  PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, PS_GROUNDENT, PS_WATERLEVEL, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, AIR_TIME,
+  eyeOffset,
 } from '../shared/pmove.js';
 import {
   ShotList, WEAPONS, WEAPON_ID, giveWeapon, silenced, canCarryGrenade, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4,
@@ -86,7 +87,7 @@ const ARMOURY_ITEMS = [
 ];
 const DEMO_RESTOCK = 2; // the demo: seconds from a bomb going off or being defused to the next one
 const DEMO_HEAL = 2; // the demo: seconds from the last hurt to full health
-export const AIR_TICKS = 12 * TICK_RATE; // HL's AIRTIME: air with the eyes under water
+export const AIR_TICKS = AIR_TIME * TICK_RATE;
 const DROWN_BACK = 10; // health drowned given back every DROWN_BACK_TICKS once the head is out
 const DROWN_BACK_TICKS = 2 * TICK_RATE;
 const BOT_PLACE_GAP = 40; // bot_place all: units between the bots in a row
