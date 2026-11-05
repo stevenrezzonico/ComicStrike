@@ -7,6 +7,7 @@
 
 import { SkinnedRenderer, SkinnedMesh, IDENTITY_SKIN, modelLight } from './skinned.js';
 import { MeshBuilder } from './meshkit.js';
+import { clock } from '../clock.js';
 
 const MAX_BLASTS = 6; // at once; the oldest is reused
 const RADIUS = 220; // fireball radius of a full-size blast (the C4), units
@@ -109,12 +110,8 @@ export class Blasts {
     this.start.fill(-1e9);
   }
 
-  // Every frame, before drawing: the clock (s, performance.now() / 1000).
-  update(time) {
-    this.time = time;
-  }
-
   draw(viewProj) {
+    this.time = clock.t; // (performance.now() / 1000, as add() stamps them)
     let begun = false;
     const r = this.renderer, v = this.view, m = this.m;
     // Camera axes in the world: right, up, and toward the camera.

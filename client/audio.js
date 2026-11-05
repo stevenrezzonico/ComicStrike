@@ -191,12 +191,13 @@ export class Sounds {
     return ref / (ref + dist);
   }
 
-  // The listener: eye position and view yaw (degrees).
-  listen(x, y, z, yaw) {
-    this.lx = x;
-    this.ly = y;
-    this.lz = z;
-    const r = yaw * Math.PI / 180;
+  // The listener: the eye (x, y, z in an array) and the view (pitch, yaw in degrees, an
+  // array): as arguments the four doubles were boxed every frame.
+  listen(eye, view) {
+    this.lx = eye[0];
+    this.ly = eye[1];
+    this.lz = eye[2];
+    const r = view[1] * Math.PI / 180;
     this.fwdX = Math.cos(r);
     this.fwdY = Math.sin(r);
     this.rightX = Math.sin(r);

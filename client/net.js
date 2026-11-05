@@ -31,7 +31,9 @@ export class NetClient {
     this.writer = null;
     this.closed = false;
     this.closeReason = '';
-    this.queue = new Array(QUEUE).fill(null);
+    this.queue = new Array(QUEUE).fill(null); // datagrams: queue[k][qOff[k], qEnd[k])
+    this.qOff = new Int32Array(QUEUE);
+    this.qEnd = new Int32Array(QUEUE);
     this.qHead = 0;
     this.qLen = 0;
     this.out = Array.from({ length: SEND_BUFFERS }, () => new Writer());
@@ -128,24 +130,37 @@ export class NetClient {
     this.opened();
   }
 
-  // Practice: the server running in a Web Worker (client/localserver.js); datagrams go
-  // as messages: one each to the worker, a batch (`dgrams`) from it (a demo's player
-  // sends `dgram`, one each). `rcon`: the worker's rcon password (the console uses it).
+  // Practice: the server running in a Web Worker (client/localserver.js). Datagrams go
+  // without a message object around them (an object per message was more garbage than the
+  // datagrams): to the worker one buffer of ours, reused, holding the session id (u32), the
+  // length (u16) and the datagram, which postMessage copies; from it a transferred
+  // ArrayBuffer, the session id (u32), then each datagram after its u16 length. A demo's
+  // player sends `dgram { id, bytes }` objects, one each.
+  // `rcon`: the worker's rcon password (the console uses it).
   connectLocal(worker, rcon) {
     const id = this.localId = ++localSessions;
     this.local = worker;
+    const out = this.localOut = new Uint8Array(6 + 2048);
+    out[0] = id;
+    out[1] = id >> 8;
+    out[2] = id >> 16;
+    out[3] = id >> 24;
     this.localRcon = rcon;
     this.onLocal = (e) => {
       const m = e.data;
-      if (m.id !== id) return;
-      if (m.type === 'dgrams') {
-        const b = new Uint8Array(m.bytes);
-        for (let o = 0; o + 2 <= b.length;) {
+      if (m instanceof ArrayBuffer) {
+        const b = new Uint8Array(m);
+        if (b.length < 4 || (b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24) !== id) return;
+        const t = performance.now();
+        for (let o = 4; o + 2 <= b.length;) {
           const n = b[o] | b[o + 1] << 8;
-          this.receiveDatagram(b.subarray(o + 2, o + 2 + n));
+          this.receive(b, o + 2, Math.min(o + 2 + n, b.length), t);
           o += 2 + n;
         }
-      } else if (m.type === 'dgram') this.receiveDatagram(new Uint8Array(m.bytes));
+        return;
+      }
+      if (m.id !== id) return;
+      if (m.type === 'dgram') this.receiveDatagram(new Uint8Array(m.bytes));
       else if (m.type === 'close') {
         this.ended(m.reason || 'closed');
         worker.removeEventListener('message', this.onLocal);
@@ -190,17 +205,25 @@ export class NetClient {
 
   // Queues an arriving datagram for the next poll().
   receiveDatagram(value) {
-    this.bytesIn += value.byteLength + 28; // + UDP/IP headers, like net_graph counts
+    this.receive(value, 0, value.length, performance.now());
+  }
+
+  // Queues bytes[from, to), arrived at t (ms), for the next poll().
+  receive(bytes, from, to, t) {
+    this.bytesIn += to - from + 28; // + UDP/IP headers, like net_graph counts
     this.packetsIn++;
-    const t = performance.now();
-    if (this.recorder) this.recorder.incoming(value, t);
+    if (this.recorder) this.recorder.incoming(from === 0 && to === bytes.length ? bytes : bytes.subarray(from, to), t);
     if (this.lastPacketAt) this.gaps[this.gapCount++ & 127] = t - this.lastPacketAt;
     this.lastPacketAt = t;
     if (this.qLen === QUEUE) { // tick loop stalled: drop the oldest
+      this.queue[this.qHead] = null;
       this.qHead = (this.qHead + 1) % QUEUE;
       this.qLen--;
     }
-    this.queue[(this.qHead + this.qLen) % QUEUE] = value;
+    const k = (this.qHead + this.qLen) % QUEUE;
+    this.queue[k] = bytes;
+    this.qOff[k] = from;
+    this.qEnd[k] = to;
     this.qLen++;
   }
 
@@ -234,9 +257,12 @@ export class NetClient {
     if (this.recorder) this.recorder.outgoing(bytes, this.lastSend);
     this.bytesOut += bytes.byteLength + 28;
     this.packetsOut++;
-    if (this.local) {
-      const copy = bytes.slice(); // the writers' buffers are reused
-      this.local.postMessage({ type: 'dgram', id: this.localId, bytes: copy.buffer }, [copy.buffer]);
+    if (this.local) { // our buffer: the id (written once), the length, the datagram; postMessage copies it
+      const out = this.localOut, n = Math.min(bytes.length, out.length - 6);
+      out[4] = n & 255;
+      out[5] = n >> 8;
+      out.set(n === bytes.length ? bytes : bytes.subarray(0, n), 6);
+      this.local.postMessage(out);
       return;
     }
     this.writer.write(bytes).catch(ignore);
@@ -291,11 +317,11 @@ export class NetClient {
     this.events.shots = 0;
     this.events.kills = 0;
     while (this.qLen) {
-      const bytes = this.queue[this.qHead];
-      this.queue[this.qHead] = null;
-      this.qHead = (this.qHead + 1) % QUEUE;
+      const h = this.qHead, bytes = this.queue[h], from = this.qOff[h], to = this.qEnd[h];
+      this.queue[h] = null;
+      this.qHead = (h + 1) % QUEUE;
       this.qLen--;
-      const r = this.reader.set(bytes);
+      const r = this.reader.setRange(bytes, from, to);
       const type = r.u8v();
       if (type === S2C_SNAPSHOT) {
         const k = readSnapshot(r, this.ring, this.scratch, this.events);
@@ -318,12 +344,12 @@ export class NetClient {
       } else if (type === S2C_WELCOME) {
         if (!this.welcome) {
           this.welcome = readWelcome(r);
-          this.keep.welcome = bytes;
+          this.keep.welcome = bytes.subarray(from, to);
         }
       } else if (type === S2C_REJECT) {
         this.rejected = r.str();
       } else if (type === S2C_INFO) {
-        this.keep.info = bytes;
+        this.keep.info = bytes.subarray(from, to);
         readInfo(r, this.names, this.teams, this.kills, this.deaths, this.scores, this.mvps);
       } else if (type === S2C_REPORT) {
         this.report = readReport(r);
@@ -336,7 +362,7 @@ export class NetClient {
       } else if (type === S2C_CHANGELEVEL) {
         this.changelevel = r.str();
       } else if (type === S2C_HOSTAGES) {
-        this.keep.hostages = bytes;
+        this.keep.hostages = bytes.subarray(from, to);
         readHostages(r, this.hostages);
       } else if (type === S2C_GRENADES) {
         const tick = readGrenades(r, this.grenadeScratch);
@@ -348,7 +374,7 @@ export class NetClient {
           this.grenadesVersion++;
         }
       } else if (type === S2C_ITEMS) {
-        this.keep.items = bytes;
+        this.keep.items = bytes.subarray(from, to);
         readItems(r, this.items);
         this.itemsVersion++;
       }

@@ -144,7 +144,10 @@ export class DemoRecorder {
     this.ring = saveRing(net.ring);
     const k = net.keep;
     for (const b of [k.welcome, k.info, k.items, k.hostages]) if (b) this.add(DIR_IN, 0, b);
-    for (let i = 0; i < net.qLen; i++) this.add(DIR_IN, 0, net.queue[(net.qHead + i) % net.queue.length]); // not decoded yet
+    for (let i = 0; i < net.qLen; i++) { // not decoded yet
+      const k = (net.qHead + i) % net.queue.length;
+      this.add(DIR_IN, 0, net.queue[k].subarray(net.qOff[k], net.qEnd[k]));
+    }
   }
 
   add(dir, t, bytes) {

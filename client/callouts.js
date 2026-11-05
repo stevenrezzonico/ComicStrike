@@ -33,7 +33,7 @@ export class Callouts {
       el.className = cls;
       el.style.display = 'none';
       root.appendChild(el);
-      return { el, until: -0, id: -1, x: -0, y: -0, z: -0, shown: false }; // (-0: doubles from the start)
+      return { el, until: -0, id: -1, x: -0, y: -0, z: -0, shown: false, px: 0, py: 0 }; // (-0: doubles from the start)
     };
     this.balloons = Array.from({ length: BALLOONS }, () => make('balloon'));
     this.pings = Array.from({ length: PINGS }, () => make('pingmark'));
@@ -84,7 +84,12 @@ export class Callouts {
       o.shown = on;
       o.el.style.display = on ? '' : 'none';
     }
-    if (on) o.el.style.transform = `translate(${this.pt[0].toFixed(0)}px, ${this.pt[1].toFixed(0)}px)`;
+    if (!on) return;
+    const px = Math.round(this.pt[0]), py = Math.round(this.pt[1]);
+    if (px === o.px && py === o.py) return; // (a new string and a style write only when it moved a pixel)
+    o.px = px;
+    o.py = py;
+    o.el.style.transform = `translate(${px}px, ${py}px)`;
   }
 
   clear() {

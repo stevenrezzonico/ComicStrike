@@ -38,6 +38,9 @@ const NONSOLID = new Set([
 
 export class Trace {
   constructor() {
+    // (-0 first: the fields that hold fractions are doubles from the start; a field first
+    // given a whole number changes the object's map when a fraction comes)
+    this.fraction = this.endx = this.endy = this.endz = this.nx = this.ny = this.nz = this.dist = -0;
     this.fraction = 1;
     this.allsolid = false;
     this.startsolid = false;
@@ -225,12 +228,25 @@ function conveyorPush(e) {
 
 let P, PT, CP, CC, T;
 
-function hullPointContents(num, x, y, z) {
+// The values a branch picks go through these, not through a ?: or a reassigned variable:
+// in Maglev (where the traces run for minutes) every phi is tagged, and each double that
+// flowed through one was a new heap number, per node visited (see CLAUDE.md, Performance,
+// The garbage). The same arithmetic: bit-exact.
+const HP = new Float64Array(1); // hullPointContents' plane side
+const S = new Float64Array(7); // recursiveHullCheck's: t1, t2, then frac, midf, mx, my, mz
+
+// Contents at the point A[o], A[o + 1], A[o + 2] (an array: three doubles passed as
+// arguments were boxed at every call).
+function hullPointContents(num, A, o) {
+  const x = A[o], y = A[o + 1], z = A[o + 2];
   while (num >= 0) {
     const p = CP[num];
-    const t = PT[p];
-    const d = (t < 3 ? (t === 0 ? x : t === 1 ? y : z) : P[p * 4] * x + P[p * 4 + 1] * y + P[p * 4 + 2] * z) -
-      P[p * 4 + 3];
+    const t = PT[p], q = p * 4;
+    if (t === 0) HP[0] = x;
+    else if (t === 1) HP[0] = y;
+    else if (t === 2) HP[0] = z;
+    else HP[0] = P[q] * x + P[q + 1] * y + P[q + 2] * z;
+    const d = HP[0] - P[q + 3];
     num = CC[num * 2 + (d < 0 ? 1 : 0)];
   }
   return num;
@@ -256,8 +272,9 @@ function recursiveHullCheck(num, depth) {
   const o = depth * 8;
   const p1f = ARGS[o], p2f = ARGS[o + 1];
   const x1 = ARGS[o + 2], y1 = ARGS[o + 3], z1 = ARGS[o + 4], x2 = ARGS[o + 5], y2 = ARGS[o + 6], z2 = ARGS[o + 7];
-  // Down the tree while both ends are on the same side of the node's plane.
-  let nx = 0, ny = 0, nz = 0, dist = 0, t1 = 0, t2 = 0;
+  // Down the tree while both ends are on the same side of the node's plane (t1, t2: the
+  // ends' distances, in S).
+  let p = 0;
   for (;;) {
     if (num < 0) {
       if (num !== CONTENTS_SOLID) {
@@ -269,28 +286,37 @@ function recursiveHullCheck(num, depth) {
       }
       return true;
     }
-    const p = CP[num];
-    const type = PT[p];
-    nx = P[p * 4]; ny = P[p * 4 + 1]; nz = P[p * 4 + 2]; dist = P[p * 4 + 3];
-    if (type < 3) {
-      t1 = (type === 0 ? x1 : type === 1 ? y1 : z1) - dist;
-      t2 = (type === 0 ? x2 : type === 1 ? y2 : z2) - dist;
+    p = CP[num];
+    const type = PT[p], q = p * 4, d = P[q + 3];
+    if (type === 0) {
+      S[0] = x1 - d;
+      S[1] = x2 - d;
+    } else if (type === 1) {
+      S[0] = y1 - d;
+      S[1] = y2 - d;
+    } else if (type === 2) {
+      S[0] = z1 - d;
+      S[1] = z2 - d;
     } else {
-      t1 = nx * x1 + ny * y1 + nz * z1 - dist;
-      t2 = nx * x2 + ny * y2 + nz * z2 - dist;
+      S[0] = P[q] * x1 + P[q + 1] * y1 + P[q + 2] * z1 - d;
+      S[1] = P[q] * x2 + P[q + 1] * y2 + P[q + 2] * z2 - d;
     }
-    if (t1 >= 0 && t2 >= 0) num = CC[num * 2];
-    else if (t1 < 0 && t2 < 0) num = CC[num * 2 + 1];
+    const a = S[0], b = S[1];
+    if (a >= 0 && b >= 0) num = CC[num * 2];
+    else if (a < 0 && b < 0) num = CC[num * 2 + 1];
     else break;
   }
+  const t1 = S[0], t2 = S[1], nx = P[p * 4], ny = P[p * 4 + 1], nz = P[p * 4 + 2], dist = P[p * 4 + 3];
 
   // Put the crosspoint DIST_EPSILON units on the near side.
-  let frac = t1 < 0 ? (t1 + DIST_EPSILON) / (t1 - t2) : (t1 - DIST_EPSILON) / (t1 - t2);
-  if (frac < 0) frac = 0;
-  if (frac > 1) frac = 1;
+  if (t1 < 0) S[2] = (t1 + DIST_EPSILON) / (t1 - t2);
+  else S[2] = (t1 - DIST_EPSILON) / (t1 - t2);
+  if (S[2] < 0) S[2] = 0;
+  if (S[2] > 1) S[2] = 1;
+  const frac = S[2];
 
-  let midf = p1f + (p2f - p1f) * frac;
-  let mx = x1 + frac * (x2 - x1), my = y1 + frac * (y2 - y1), mz = z1 + frac * (z2 - z1);
+  const midf = p1f + (p2f - p1f) * frac;
+  const mx = x1 + frac * (x2 - x1), my = y1 + frac * (y2 - y1), mz = z1 + frac * (z2 - z1);
   const side = t1 < 0 ? 1 : 0;
 
   const c = o + 8; // the child's arguments
@@ -299,7 +325,8 @@ function recursiveHullCheck(num, depth) {
   ARGS[c + 5] = mx; ARGS[c + 6] = my; ARGS[c + 7] = mz;
   if (!recursiveHullCheck(CC[num * 2 + side], depth + 1)) return false;
 
-  if (hullPointContents(CC[num * 2 + (side ^ 1)], mx, my, mz) !== CONTENTS_SOLID) {
+  // (ARGS[c + 5..7] still hold mx, my, mz: a child writes only its own children's slots)
+  if (hullPointContents(CC[num * 2 + (side ^ 1)], ARGS, c + 5) !== CONTENTS_SOLID) {
     ARGS[c] = midf; ARGS[c + 1] = p2f;
     ARGS[c + 2] = mx; ARGS[c + 3] = my; ARGS[c + 4] = mz;
     ARGS[c + 5] = x2; ARGS[c + 6] = y2; ARGS[c + 7] = z2;
@@ -317,20 +344,18 @@ function recursiveHullCheck(num, depth) {
 
   // Back off until the midpoint is outside the solid (rare float edge cases). NaN ends it too:
   // a trace toward an infinite point never left the loop, which froze every game.
-  while (hullPointContents(T.head, mx, my, mz) === CONTENTS_SOLID) {
-    frac -= 0.1;
-    if (!(frac >= 0)) {
-      T.fraction = midf;
-      T.endx = mx; T.endy = my; T.endz = mz;
-      return false;
-    }
-    midf = p1f + (p2f - p1f) * frac;
-    mx = x1 + frac * (x2 - x1);
-    my = y1 + frac * (y2 - y1);
-    mz = z1 + frac * (z2 - z1);
+  // (frac, midf, mx, my, mz in S[2..6]: the loop's changing values, not reassigned variables)
+  S[2] = frac; S[3] = midf; S[4] = mx; S[5] = my; S[6] = mz;
+  while (hullPointContents(T.head, S, 4) === CONTENTS_SOLID) {
+    S[2] -= 0.1;
+    if (!(S[2] >= 0)) break;
+    S[3] = p1f + (p2f - p1f) * S[2];
+    S[4] = x1 + S[2] * (x2 - x1);
+    S[5] = y1 + S[2] * (y2 - y1);
+    S[6] = z1 + S[2] * (z2 - z1);
   }
-  T.fraction = midf;
-  T.endx = mx; T.endy = my; T.endz = mz;
+  T.fraction = S[3];
+  T.endx = S[4]; T.endy = S[5]; T.endz = S[6];
   return false;
 }
 
@@ -371,10 +396,23 @@ export function toLocal(e, x, y, z, out) {
 
 const ls = new Float64Array(3), le = new Float64Array(3);
 
+// A trace's start and end in one array (sx, sy, sz, ex, ey, ez): the *A functions take it,
+// so no doubles cross their calls (as arguments each was boxed: 6 a call, 4 calls deep for a
+// player's move). The plain ones are the same with the numbers as arguments.
+const TA = new Float64Array(6);
+const setTA = (sx, sy, sz, ex, ey, ez) => {
+  TA[0] = sx; TA[1] = sy; TA[2] = sz; TA[3] = ex; TA[4] = ey; TA[5] = ez;
+  return TA;
+};
+
 // Traces one entity's hull in world space. Result goes into `out`.
 export function traceEntity(world, entIndex, hull, sx, sy, sz, ex, ey, ez, out) {
+  return traceEntityA(world, entIndex, hull, setTA(sx, sy, sz, ex, ey, ez), out);
+}
+
+export function traceEntityA(world, entIndex, hull, A, out) {
   const e = world.ents[entIndex];
-  if (e.rot) return traceRotated(world, e, entIndex, hull, sx, sy, sz, ex, ey, ez, out);
+  if (e.rot) return traceRotated(world, e, entIndex, hull, A, out);
   bind(world);
   T = out;
   out.fraction = 1;
@@ -385,9 +423,14 @@ export function traceEntity(world, entIndex, hull, sx, sy, sz, ex, ey, ez, out) 
   out.nx = out.ny = out.nz = out.dist = 0;
   out.ent = -1;
   out.head = e.heads[hull];
-  hullCheck(out.head, sx - e.ox, sy - e.oy, sz - e.oz, ex - e.ox, ey - e.oy, ez - e.oz);
+  // (hullCheck written out: the six doubles go straight into the recursion's arguments)
+  ARGS[0] = 0;
+  ARGS[1] = 1;
+  ARGS[2] = A[0] - e.ox; ARGS[3] = A[1] - e.oy; ARGS[4] = A[2] - e.oz;
+  ARGS[5] = A[3] - e.ox; ARGS[6] = A[4] - e.oy; ARGS[7] = A[5] - e.oz;
+  recursiveHullCheck(out.head, 0);
   if (out.fraction === 1) {
-    out.endx = ex; out.endy = ey; out.endz = ez;
+    out.endx = A[3]; out.endy = A[4]; out.endz = A[5];
   } else {
     out.endx += e.ox; out.endy += e.oy; out.endz += e.oz;
     out.dist += out.nx * e.ox + out.ny * e.oy + out.nz * e.oz;
@@ -399,7 +442,8 @@ export function traceEntity(world, entIndex, hull, sx, sy, sz, ex, ey, ez, out) 
 // A rotated entity (GoldSrc SV_ClipMoveToEntity): the trace runs in model space (the hull
 // box itself is not rotated, as in GoldSrc), then the plane turns back and the end point
 // is lerped in world space.
-function traceRotated(world, e, entIndex, hull, sx, sy, sz, ex, ey, ez, out) {
+function traceRotated(world, e, entIndex, hull, A, out) {
+  const sx = A[0], sy = A[1], sz = A[2], ex = A[3], ey = A[4], ez = A[5];
   toLocal(e, sx, sy, sz, ls);
   toLocal(e, ex, ey, ez, le);
   bind(world);
@@ -432,13 +476,18 @@ function traceRotated(world, e, entIndex, hull, sx, sy, sz, ex, ey, ez, out) {
 // Traces a hull against the world and all solid brush entities (GoldSrc PM_PlayerTrace
 // semantics: startsolid forces fraction 0).
 export function traceHull(world, hull, sx, sy, sz, ex, ey, ez, out) {
+  return traceHullA(world, hull, setTA(sx, sy, sz, ex, ey, ez), out);
+}
+
+export function traceHullA(world, hull, A, out) {
+  const sx = A[0], sy = A[1], sz = A[2], ex = A[3], ey = A[4], ez = A[5];
   const hminx = HULL_MINS[hull * 3], hminy = HULL_MINS[hull * 3 + 1], hminz = HULL_MINS[hull * 3 + 2];
   const hmaxx = HULL_MAXS[hull * 3], hmaxy = HULL_MAXS[hull * 3 + 1], hmaxz = HULL_MAXS[hull * 3 + 2];
   const bminx = Math.min(sx, ex) + hminx, bmaxx = Math.max(sx, ex) + hmaxx;
   const bminy = Math.min(sy, ey) + hminy, bmaxy = Math.max(sy, ey) + hmaxy;
   const bminz = Math.min(sz, ez) + hminz, bmaxz = Math.max(sz, ez) + hmaxz;
 
-  traceEntity(world, 0, hull, sx, sy, sz, ex, ey, ez, out);
+  traceEntityA(world, 0, hull, A, out);
   if (out.fraction !== 1 || out.startsolid) out.ent = 0;
 
   const ents = world.ents;
@@ -449,7 +498,7 @@ export function traceHull(world, hull, sx, sy, sz, ex, ey, ez, out) {
     if (bminx > e.amax[0] || bmaxx < e.amin[0] || bminy > e.amax[1] || bmaxy < e.amin[1] ||
       bminz > e.amax[2] || bmaxz < e.amin[2]) continue;
 
-    traceEntity(world, i, hull, sx, sy, sz, ex, ey, ez, entTrace);
+    traceEntityA(world, i, hull, A, entTrace);
     if (entTrace.allsolid || entTrace.startsolid || entTrace.fraction < out.fraction) {
       const wasStartSolid = out.startsolid;
       entTrace.ent = i;
@@ -487,6 +536,11 @@ export function clearBodies(world) {
 // through the slabs, the end backed off DIST_EPSILON like the BSP trace. A box the
 // start lies inside is skipped, a box touched exactly is not entered by a move along it.
 export function traceBodies(world, hull, sx, sy, sz, ex, ey, ez, out) {
+  return traceBodiesA(world, hull, setTA(sx, sy, sz, ex, ey, ez), out);
+}
+
+export function traceBodiesA(world, hull, A, out) {
+  const sx = A[0], sy = A[1], sz = A[2], ex = A[3], ey = A[4], ez = A[5];
   const n = world.bodyCount;
   if (n === 0 || out.startsolid) return out;
   const B = world.bodies, self = world.bodySelf, pass = world.solidTeam ? -1 : world.bodyTeam;
@@ -549,8 +603,12 @@ export function traceBodies(world, hull, sx, sy, sz, ex, ey, ez, out) {
 
 // A player's movement trace: the world, the brush entities, then the other players.
 export function tracePlayer(world, hull, sx, sy, sz, ex, ey, ez, out) {
-  traceHull(world, hull, sx, sy, sz, ex, ey, ez, out);
-  return traceBodies(world, hull, sx, sy, sz, ex, ey, ez, out);
+  return tracePlayerA(world, hull, setTA(sx, sy, sz, ex, ey, ez), out);
+}
+
+export function tracePlayerA(world, hull, A, out) {
+  traceHullA(world, hull, A, out);
+  return traceBodiesA(world, hull, A, out);
 }
 
 // Contents of a point in one entity's hull (CONTENTS_*).
@@ -558,7 +616,7 @@ export function entityContents(world, entIndex, hull, x, y, z) {
   const e = world.ents[entIndex];
   toLocal(e, x, y, z, ls);
   bind(world);
-  return hullPointContents(e.heads[hull], ls[0], ls[1], ls[2]);
+  return hullPointContents(e.heads[hull], ls, 0);
 }
 
 // Point contents for water checks: world hull 0 plus func_water volumes.

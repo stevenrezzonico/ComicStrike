@@ -174,17 +174,27 @@ export class Reader {
     this.u8 = new Uint8Array(0);
     this.dv = new DataView(this.u8.buffer);
     this.pos = 0;
+    this.end = 0;
   }
 
   set(bytes) {
-    this.u8 = bytes;
-    this.dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    this.pos = 0;
+    return this.setRange(bytes, 0, bytes.length);
+  }
+
+  // bytes[from, to) as the message: a datagram inside a batch (the practice worker's) is
+  // read in place, with no view made for it, and one DataView serves the whole batch.
+  setRange(bytes, from, to) {
+    if (bytes !== this.u8) {
+      this.u8 = bytes;
+      this.dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    }
+    this.pos = from;
+    this.end = to;
     return this;
   }
 
   get remaining() {
-    return this.u8.length - this.pos;
+    return this.end - this.pos;
   }
 
   u8v() { const v = this.dv.getUint8(this.pos); this.pos += 1; return v; }

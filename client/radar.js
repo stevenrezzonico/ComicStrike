@@ -77,14 +77,14 @@ export class Radar {
     this.sites = bombSites.boxes.map((b, i) => [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, bombSites.names[i], b[2]]);
   }
 
-  // view: { x, y, z (the feet of whoever we see through), yaw (degrees) }; rows:
+  // at: [x, y, z (the feet of whoever we see through), yaw (degrees)]; rows:
   // interpolated snapshot rows (or null offline); selfId / watched: our id and the one we
   // see through (-1); team: ours (TEAM_SPECTATOR sees all); ffa: free for all; bomb:
   // BombState or null; hostages or null. On a map of several levels (shared/overview.js)
   // the level under those feet is drawn; what is on another level (players, the bomb,
   // hostages, the sites) is drawn faint, players with their up / down mark.
-  draw(show, cx, cy, cz, yaw, rows, selfId, watched, team, ffa, bomb, hostages, now) {
-    const c = this.canvas;
+  draw(show, at, rows, selfId, watched, team, ffa, bomb, hostages, now) {
+    const c = this.canvas, cz = at[2], yaw = at[3];
     show = show && !this.hidden && this.overview !== null;
     if (show !== this.shown) {
       this.shown = show;
@@ -111,7 +111,8 @@ export class Radar {
     this.drawnAt = now;
     this.drawnYaw = yaw;
     this.level = level;
-    const ctx = this.ctx, o = this.overview, R = D / 2, selfX = cx, selfY = cy;
+    const ctx = this.ctx, o = this.overview, R = D / 2, selfX = at[0], selfY = at[1];
+    let cx = selfX, cy = selfY;
     const multi = o.levels.length > 1; // (one level: all at full strength, no levelOf calls)
     const k = D / (RANGE * this.cv.cl_radar_scale.number); // screen pixels per world unit
     const rotate = this.cv.cl_radar_rotate.bool;

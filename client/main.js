@@ -66,7 +66,8 @@ import { PASS } from './gl/gputimer.js';
 import { DynamicResolution, SLOW_MS } from './dynres.js';
 import { modelLight } from './gl/skinned.js';
 import { crosshairLayout } from './gl/crosshair.js';
-import { perspective, viewFromAngles, multiply, invert, CLIP_ALL } from './gl/mat4.js';
+import { perspective, viewFromAngles, viewFromEye, multiply, invert, CLIP_ALL } from './gl/mat4.js';
+import { clock } from './clock.js';
 import { PracticeMarks } from './gl/practice.js';
 import { Tracers } from './gl/tracers.js';
 import { Input, SELECT_LAST } from './input.js';
@@ -111,6 +112,8 @@ const clk = {
   serverClock: -0, // estimated newest server tick (fractional), advanced every frame; < 0: none yet
   prevEye: -0, prevPunchP: -0, prevPunchY: -0, // the eye height and aim punch at the last tick (draw lerps)
   accumulator: -0, // seconds owed to the ticks
+  elapsed: -0, // this frame's seconds (frame)
+  alpha: -0, // draw's: the share of a tick since the last one
   // The time since the last drawn frame, for the animations draw() advances by dt: a held frame
   // (fps_max, r_frames_ahead) adds its own, else the deaths, strides and view kick ran slow by
   // the held share (with the browser's frame limiter off, half the frames: slow motion).
@@ -407,6 +410,9 @@ const viewKick = new Float64Array(2);
 const shotKickOut = new Float64Array(2);
 
 const eye = new Float32Array(3);
+const cam = new Float64Array(2); // the camera's pitch and yaw this frame (draw), as an array: see clock.js
+const lightAt = new Float64Array(3); // where the held weapon's light is sampled
+const radarAt = new Float64Array(4); // the radar's center (feet) and view yaw
 const angles = new Float32Array(2); // pitch, yaw (without recoil); f32 like the wire format
 const proj = new Float32Array(16);
 const view = new Float32Array(16);
@@ -757,9 +763,9 @@ function useHint(off) {
     if (ws.f[WS_SLOTS + SLOT_C4 * 3] > 0 && onGround && inBombSite(world, ps)) k = 1;
     else if ((player.team === TEAM_CT || demo()) && onGround && bomb && bomb.state === BOMB_PLANTED &&
       canReachBomb(world, ps, angles[0], angles[1], bomb)) k = 2;
-    else if (net && player.team === TEAM_CT && !player.carrying &&
+    else if (net && player.team === TEAM_CT && !player.carrying && net.hostages.count > 0 &&
       net.hostages.inReach(ex, ey, ez, angles[0], angles[1]) >= 0) k = 3;
-    else if (net && !gunGame()) {
+    else if (net && !gunGame() && net.items.count > 0) { // (the counts first: the five doubles were boxed every frame)
       const i = net.items.inReach(ex, ey, ez, angles[0], angles[1]);
       if (i >= 0) {
         const id = net.items.weapon[i];
@@ -1406,8 +1412,9 @@ function tag(what) {
   if (bench.until && frameTags.length < 8 && !frameTags.includes(what)) frameTags.push(what);
 }
 function lap(part) {
+  if (!bench.until) return; // (performance.now() is a new heap number each: only while measuring)
   const t = performance.now();
-  if (bench.until) bench.parts[part] += t - lapAt;
+  bench.parts[part] += t - lapAt;
   lapAt = t;
 }
 
@@ -1516,7 +1523,9 @@ function frame(now) {
         (demoHeld ? '   (paused)' : demoPlayer.timescale !== 1 ? `   x${demoPlayer.timescale}` : ''), 1200, now);
     }
   }
-  const elapsed = paused ? 0 : (now - last) / 1000;
+  clk.elapsed = 0; // (assigned in two branches, not a ?: : a double through a phi was a new heap number)
+  if (!paused) clk.elapsed = (now - last) / 1000;
+  const elapsed = clk.elapsed;
   last = now;
   if (bench.until) {
     // A heap that shrank: a garbage collection ran (Chrome's performance.memory).
@@ -1552,7 +1561,10 @@ function frame(now) {
   if (sounds.music !== cv.snd_musicvolume.number) sounds.setMusic(cv.snd_musicvolume.number);
   pollPads(elapsed, now);
   input.applyMouse(angles);
-  const t0 = performance.now();
+  // The CPU clock only while something reads it (cl_showfps 3, the benchmark): each
+  // performance.now() is a new heap number.
+  const timing = bench.until > 0 || cv.cl_showfps.number >= 3;
+  const t0 = timing ? performance.now() : 0;
   clk.accumulator += elapsed;
   clk.drawDt += elapsed;
   if (clk.serverClock >= 0) clk.serverClock += Math.min(elapsed, 0.25) * TICK_RATE;
@@ -1564,7 +1576,7 @@ function frame(now) {
   }
   if (ticks === MAX_TICKS_PER_FRAME) clk.accumulator = 0; // fell far behind (tab was hidden)
   ticksSinceDraw += ticks;
-  const t1 = performance.now();
+  const t1 = timing ? performance.now() : 0;
   if (bench.until) {
     bench.parts[0] += t1 - t0;
     bench.ticks += ticks;
@@ -1615,17 +1627,18 @@ function frame(now) {
     bench.gpu += renderer.timer.frameMs;
     bench.gpuN++;
   }
-  draw(now, clk.accumulator / TICK_DT, Math.min(clk.drawDt, 0.1));
+  clk.alpha = clk.accumulator / TICK_DT;
+  draw(now, Math.min(clk.drawDt, 0.1));
   clk.drawDt = 0;
   renderer.timer.endFrame();
   if (previewEdit) previewEdit.draw();
   // r_drawrepeat: the same frame again (no time passing), for the GPU readout.
   for (let i = 1; i < cv.r_drawrepeat.number; i++) {
-    draw(now, clk.accumulator / TICK_DT, 0);
+    draw(now, 0);
     renderer.timer.endFrame();
   }
   renderer.gate.drawn(now);
-  clk.cpuDraw += performance.now() - t1;
+  if (timing) clk.cpuDraw += performance.now() - t1;
   if (bench.until) {
     bench.cpu += performance.now() - t0;
     if (now >= bench.until) benchmarkReport();
@@ -1670,7 +1683,12 @@ function frame(now) {
   netGraph.update(cv.net_graph.bool, now, net, gi);
 }
 
-function draw(now, alpha, dt) {
+// A frame: dt seconds since the last drawn one (an argument: boxed once here, then handed on
+// to a dozen callees as it is; read from a field, each call boxed it again); alpha, the
+// share of a tick since the last, in clk.
+function draw(now, dt) {
+  const alpha = clk.alpha;
+  clock.t = now / 1000;
   const f = ps.f;
   const k = Math.exp(-dt * SMOOTH_RATE);
   smooth[0] *= k;
@@ -1685,8 +1703,8 @@ function draw(now, alpha, dt) {
   const kk = Math.exp(-dt * RECOIL.viewPunchDecay);
   viewKick[0] *= kk;
   viewKick[1] *= kk;
-  let pitch = angles[0] + clk.prevPunchP + (viewPunchPitch(ws) - clk.prevPunchP) * alpha + viewKick[0];
-  let yaw = angles[1] + clk.prevPunchY + (viewPunchYaw(ws) - clk.prevPunchY) * alpha + viewKick[1];
+  cam[0] = angles[0] + clk.prevPunchP + (viewPunchPitch(ws) - clk.prevPunchP) * alpha + viewKick[0];
+  cam[1] = angles[1] + clk.prevPunchY + (viewPunchYaw(ws) - clk.prevPunchY) * alpha + viewKick[1];
 
   // Dead: after a moment, follow a living player (client/spectate.js). The spectator
   // team follows anyone at once or roams free.
@@ -1718,13 +1736,14 @@ function draw(now, alpha, dt) {
   if (spectating) {
     if (roaming) spectator.fly(buttons, angles[0], angles[1], dt);
     spectator.camera(interp, eye, specAngles, specSight);
-    pitch = roaming ? angles[0] : specAngles[0];
-    yaw = roaming ? angles[1] : specAngles[1];
+    const a = roaming ? angles : specAngles;
+    cam[0] = a[0];
+    cam[1] = a[1];
     lastCam[0] = eye[0];
     lastCam[1] = eye[1];
     lastCam[2] = eye[2];
-    lastCam[3] = pitch;
-    lastCam[4] = yaw;
+    lastCam[3] = cam[0];
+    lastCam[4] = cam[1];
   }
   specFollowing = spectating && !roaming;
   // Spectators have no health, armor, ammo or money of their own to show.
@@ -1743,7 +1762,7 @@ function draw(now, alpha, dt) {
     models.updateItems(now, selfId);
     models.updateHostages(net.hostages, dt, world && world.surfaces);
     const b = net.own.bomb;
-    models.setBomb(b.state === BOMB_DROPPED || b.state === BOMB_PLANTED || b.state === BOMB_DEFUSED, b.x, b.y, b.z, 0,
+    models.setBomb(b.state === BOMB_DROPPED || b.state === BOMB_PLANTED || b.state === BOMB_DEFUSED, b,
       b.state === BOMB_PLANTED && now - lastBeep < 120, world && world.surfaces);
   }
   if (net && synced) bombBeeps(now);
@@ -1759,14 +1778,13 @@ function draw(now, alpha, dt) {
   const fovY = 2 * Math.atan(Math.tan(clk.fov / 2 * DEG) * 0.75);
   weaponView.fovY = fovY; // the crosshair's spread circle
   perspective(proj, fovY, aspect, 4, 16384);
-  viewFromAngles(view, eye[0], eye[1], eye[2], pitch, yaw);
+  viewFromEye(view, eye, cam);
   multiply(viewProj, proj, view);
   invert(invViewProj, viewProj);
   debris.update(dt, world);
-  blasts.update(now / 1000);
   fx.update(net ? clk.serverClock - cv.cl_interp_ratio.number : tickCount - 1 + alpha, world && world.surfaces);
-  sounds.listen(eye[0], eye[1], eye[2], yaw);
-  scape.effects(fx.cur, now / 1000, dt);
+  sounds.listen(eye, cam);
+  scape.effects(fx.cur, dt);
   if (net && synced) {
     scape.others(interp, selfId, dt, rowFeet);
   }
@@ -1779,14 +1797,23 @@ function draw(now, alpha, dt) {
   tracers.screen[1] = canvas.height;
   practice.screen[0] = canvas.width;
   practice.screen[1] = canvas.height;
-  renderer.render(viewProj, invViewProj, eye, now / 1000, overlays);
+  renderer.render(viewProj, invViewProj, eye, overlays);
   lap(2);
 
   // The radar centers on whoever we see the game through.
   const watched = spectating && !roaming ? spectator.target : -1, w = watched * E_FIELDS;
   radar.pings = callouts.live(now, radarPings);
-  radar.draw(playing, watched >= 0 ? interp[w + E_X] : eye[0], watched >= 0 ? interp[w + E_Y] : eye[1],
-    watched >= 0 ? interp[w + E_Z] - 36 : eye[2] - eyeOffset(ps), yaw, interpolated ? interp : null, selfId, watched, player.team,
+  if (watched >= 0) {
+    radarAt[0] = interp[w + E_X];
+    radarAt[1] = interp[w + E_Y];
+    radarAt[2] = interp[w + E_Z] - 36;
+  } else {
+    radarAt[0] = eye[0];
+    radarAt[1] = eye[1];
+    radarAt[2] = eye[2] - eyeOffset(ps);
+  }
+  radarAt[3] = cam[1];
+  radar.draw(playing, radarAt, interpolated ? interp : null, selfId, watched, player.team,
     (gameMode() & GAME_FFA) !== 0, net ? net.own.bomb : null, net ? net.hostages : null, now);
   lap(3);
   hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now, leader(), progress());
@@ -1796,8 +1823,9 @@ function draw(now, alpha, dt) {
   const simTime = (tickCount - 1 + alpha) * TICK_DT;
   const actionTime = action === ACTION_PLANT ? PLANT_TIME : player.defuser ? DEFUSE_TIME_KIT : DEFUSE_TIME;
   const picking = net && !action && player.health > 0 ? net.own.useProgress : 0;
-  hud.bombStatus(ws.f[WS_SLOTS + SLOT_C4 * 3] > 0 && player.health > 0,
-    world.bombSites.touches(f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2], 16, 16, 36),
+  const carryC4 = ws.f[WS_SLOTS + SLOT_C4 * 3] > 0 && player.health > 0;
+  hud.bombStatus(carryC4, // (the site test only with the C4: its three doubles were boxed every frame)
+    carryC4 && world.bombSites.touches(f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2], 16, 16, 36),
     action === ACTION_PLANT ? 'Planting the bomb' : action === ACTION_DEFUSE ? 'Defusing the bomb'
     : picking > 0 ? 'Picking up the hostage' : '',
     picking > 0 ? picking : 1 - (ws.f[WS_ACTION_END] - simTime) / actionTime);
@@ -1809,9 +1837,16 @@ function draw(now, alpha, dt) {
   const target = spectator.target * E_FIELDS;
   weaponView.team = inEyes ? interp[target + E_TEAM] : player.team;
   // The held weapon is lit by the map under the player, eased like other models.
-  const lx = inEyes ? interp[target + E_X] : f[PS_ORIGIN], ly = inEyes ? interp[target + E_Y] : f[PS_ORIGIN + 1];
-  const lz = inEyes ? interp[target + E_Z] : f[PS_ORIGIN + 2];
-  if (world && world.surfaces.lightAt(lightSample, lx, ly, lz)) {
+  if (inEyes) {
+    lightAt[0] = interp[target + E_X];
+    lightAt[1] = interp[target + E_Y];
+    lightAt[2] = interp[target + E_Z];
+  } else {
+    lightAt[0] = f[PS_ORIGIN];
+    lightAt[1] = f[PS_ORIGIN + 1];
+    lightAt[2] = f[PS_ORIGIN + 2];
+  }
+  if (world && world.surfaces.lightAtP(lightSample, lightAt)) {
     modelLight(lightTarget, lightSample);
     const k = 1 - Math.exp(-dt * 8);
     for (let c = 0; c < 3; c++) weaponView.light[c] += (lightTarget[c] - weaponView.light[c]) * k;
@@ -1824,7 +1859,7 @@ function draw(now, alpha, dt) {
   if (renderer.style.dead < 0.005) renderer.style.dead = 0;
   // The camera inside a smoke cloud: the print fogs over (eased, so crossing the cloud's
   // shell is a short fade, not a pop).
-  const smoked = fx.cur.smokeDepth(eye[0], eye[1], eye[2]);
+  const smoked = fx.cur.smokeDepthAt(eye);
   renderer.style.smoke += (smoked - renderer.style.smoke) * Math.min(1, dt * 12);
   if (renderer.style.smoke < 0.005) renderer.style.smoke = 0;
   const deathDisplay = dead && net ? 'block' : 'none';
@@ -1858,7 +1893,7 @@ function draw(now, alpha, dt) {
   renderer.composite();
   words.enabled = cv.cl_comicwords.bool && cv.cl_drawhud.bool;
   words.update(now);
-  hurtDir.update(now / 1000, eye[0], eye[1], angles[1], !dead && !spectating && !preview);
+  if (hurtDir.active) hurtDir.update(clock.t, eye[0], eye[1], angles[1], !dead && !spectating && !preview);
   callouts.update(now, viewProj, headOf, playing && !preview);
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
   else showFlash(flash.left, flash.total);
@@ -1952,7 +1987,8 @@ function drawBackdrop(now) {
   viewFromAngles(view, eye[0], eye[1], eye[2], 4, yaw);
   multiply(viewProj, proj, view);
   invert(invViewProj, viewProj);
-  renderer.render(viewProj, invViewProj, eye, now / 1000, null);
+  clock.t = now / 1000;
+  renderer.render(viewProj, invViewProj, eye, null);
   renderer.composite();
 }
 

@@ -4,6 +4,7 @@
 // every gun has its own report; reloads click at the magazine's moments.
 
 import { GUN_SOUNDS } from './audio.js';
+import { clock } from './clock.js';
 import {
   WEAPONS, WEV_FIRE, WEV_MELEE, WEV_MELEE2, WEV_DRYFIRE, WEV_RELOAD, WEV_SHELL, WEV_DEPLOY, WEV_ZOOM, WEV_MODE, WEV_PIN,
   WEV_THROW, WEV_COCK, SLOT_SECONDARY,
@@ -133,9 +134,9 @@ export class SoundScape {
   }
 
   // Grenade effects each frame: fires crackle, decoys fire fake shots. g: the lists
-  // shown; time: seconds (any steady clock).
-  effects(g, time, dt) {
-    const s = this.s;
+  // shown; dt: the frame's seconds (the time: clock.t).
+  effects(g, dt) {
+    const s = this.s, time = clock.t;
     for (let k = 0; k < g.fxCount; k++) {
       const kind = g.fxKind[k], x = g.fxPos[k * 3], y = g.fxPos[k * 3 + 1], z = g.fxPos[k * 3 + 2];
       if (kind === FX_FIRE && Math.random() < dt * 14) {

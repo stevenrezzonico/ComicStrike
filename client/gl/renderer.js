@@ -17,6 +17,7 @@ import { FrameGate } from './framegate.js';
 import { FlashLights } from './flashes.js';
 import { Afterimage } from './afterimage.js';
 import { WorldVis } from './worldvis.js';
+import { clock } from '../clock.js';
 
 // The light that prints fully lit: this share of the map's lit lightmap texels is at or
 // below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
@@ -278,8 +279,9 @@ export class Renderer {
   // overlays: objects with draw(viewProj) (decals, debris, players), drawn after the
   // sky and before see-through surfaces; their GPU time counts under their 'pass' (PASS.EFFECTS
   // by default).
-  render(viewProj, invViewProj, eye, time, overlays = null) {
-    const gl = this.gl;
+  // The time is clock.t (seconds; set by the caller).
+  render(viewProj, invViewProj, eye, overlays = null) {
+    const gl = this.gl, time = clock.t;
     const w = this.world;
     const t = this.timer;
     this.flashes.update(time);

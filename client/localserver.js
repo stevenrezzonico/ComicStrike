@@ -1,8 +1,10 @@
 // Practice: the game server in a Web Worker. The same Host and Game as the real server
 // (server/host.js, served to the browser for this) on the same fixed 64 Hz loop, with
-// bots; the page talks to it like to the network (client/net.js `connectLocal`): one
-// datagram per message in, a task's datagrams in one message out (`dgrams`: a message
-// is an event, an object and a buffer on the page's heap; a tick sends 2-4 datagrams).
+// bots; the page talks to it like to the network (client/net.js `connectLocal`), with no
+// message object around the datagrams: in, a Uint8Array of the session id (u32), the length
+// (u16) and one datagram; out, a task's datagrams in one transferred ArrayBuffer after the
+// session id, each after its u16 length (a message is an event, an object and a buffer on
+// the page's heap, and a tick sends 2-4 datagrams).
 // The worker fetches the map and the mode cfgs itself (the Host
 // reads them synchronously), and handles `map` / `changelevel` by fetching first.
 //
@@ -11,11 +13,11 @@
 //                        (the map's own weapons laid out: mp_armoury_entities),
 //                        bytes: the map file itself (a player's own map, checked as untrusted:
 //                        parseUntrustedBSP), else fetched from maps/ },
-//               open { id }, dgram { id, bytes }, close { id },
+//               open { id }, a Uint8Array (the session id, the length, a datagram), close { id },
 //               pause { on }: the page's pause menu; the ticks stop (bots, the round clock,
 //                 timeouts) and go on from where they were
 // Messages out: ready { rcon, names: the server console's catalog() } | failed { error },
-//               dgrams { id, bytes: each datagram after its length (u16, little-endian) }, close { id, reason }
+//               an ArrayBuffer (the session id, then each datagram after its length; little-endian), close { id, reason }
 
 import { Host, GAME_MODES } from '../server/host.js';
 import { parseBSP, parseUntrustedBSP } from '../shared/bsp.js';
@@ -37,17 +39,21 @@ let flushQueued = false;
 function flush() {
   flushQueued = false;
   for (const [id, list] of pending) {
-    let n = 0;
+    let n = 4;
     for (const b of list) n += 2 + b.length;
     const out = new Uint8Array(n);
-    let o = 0;
+    out[0] = id;
+    out[1] = id >> 8;
+    out[2] = id >> 16;
+    out[3] = id >> 24;
+    let o = 4;
     for (const b of list) {
       out[o] = b.length & 255;
       out[o + 1] = b.length >> 8;
       out.set(b, o + 2);
       o += 2 + b.length;
     }
-    postMessage({ type: 'dgrams', id, bytes: out.buffer }, [out.buffer]);
+    postMessage(out.buffer, [out.buffer]);
   }
   pending.clear();
 }
@@ -127,6 +133,11 @@ function loop() {
 
 onmessage = (e) => {
   const m = e.data;
+  if (m instanceof Uint8Array) { // a datagram from the page: its session id and length first
+    const s = m.length >= 6 && sessions.get(m[0] | m[1] << 8 | m[2] << 16 | m[3] << 24);
+    if (s && s.client) s.game.receive(s.client, m.subarray(6, 6 + (m[4] | m[5] << 8)));
+    return;
+  }
   if (m.type === 'start') {
     start(m).catch((err) => postMessage({ type: 'failed', error: String(err.message || err) }));
   } else if (m.type === 'open') {
@@ -152,9 +163,6 @@ onmessage = (e) => {
       host.con.exec(`bot_quota_mode fill; bot_quota ${players}`);
       players = 0;
     }
-  } else if (m.type === 'dgram') {
-    const s = sessions.get(m.id);
-    if (s && s.client) s.game.receive(s.client, new Uint8Array(m.bytes));
   } else if (m.type === 'close') {
     const s = sessions.get(m.id);
     if (s) s.game.disconnect(s.client);

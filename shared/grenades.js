@@ -28,6 +28,7 @@ export const SMOKE_RADIUS = 144; // a cloud's radius once grown
 export const SMOKE_GROW = 1; // seconds to grow (approx.)
 export const SMOKE_FADE = 3; // shrinking away at the end (approx.)
 const SMOKE_DEEP = 12; // this far inside a cloud the view is all smoke (smokeDepth)
+const DEPTH_AT = new Float64Array(3); // smokeDepth's point (see smokeDepthAt)
 export const FIRE_TIME = 7; // inferno_flame_lifetime
 export const FIRE_RADIUS = 130; // the spread fire's reach (approx.: CS:GO's spreads irregularly)
 export const FIRE_GROW = 1.5; // seconds to spread (approx.)
@@ -188,6 +189,17 @@ export class Grenades {
   // How deep inside a smoke cloud (x, y, z) is: 0 outside, 1 from SMOKE_DEEP units in,
   // between near the cloud's surface (the print fogs the view by it).
   smokeDepth(x, y, z) {
+    const p = DEPTH_AT;
+    p[0] = x;
+    p[1] = y;
+    p[2] = z;
+    return this.smokeDepthAt(p);
+  }
+
+  // smokeDepth of the point in p (x, y, z): the client asks every frame, and its three
+  // doubles were boxed as arguments. Nothing but the clouds' smoke radius is called.
+  smokeDepthAt(p) {
+    const x = p[0], y = p[1], z = p[2];
     let deep = 0;
     for (let k = 0; k < this.fxCount; k++) {
       if (this.fxKind[k] !== FX_SMOKE) continue;

@@ -22,6 +22,20 @@ export function perspective(out, fovyRad, aspect, near, far) {
 
 // View matrix from eye position and GoldSrc angles (pitch down-positive, yaw).
 export function viewFromAngles(out, ex, ey, ez, pitchDeg, yawDeg) {
+  const e = VE, a = VA;
+  e[0] = ex;
+  e[1] = ey;
+  e[2] = ez;
+  a[0] = pitchDeg;
+  a[1] = yawDeg;
+  return viewFromEye(out, e, a);
+}
+const VE = new Float64Array(3), VA = new Float64Array(2);
+
+// viewFromAngles from the eye in e (x, y, z) and the angles in a (pitch, yaw): no doubles
+// cross the call (as arguments they were boxed, each frame).
+export function viewFromEye(out, e, a) {
+  const ex = e[0], ey = e[1], ez = e[2], pitchDeg = a[0], yawDeg = a[1];
   const sp = Math.sin(pitchDeg * DEG), cp = Math.cos(pitchDeg * DEG);
   const sy = Math.sin(yawDeg * DEG), cy = Math.cos(yawDeg * DEG);
   const fx = cp * cy, fy = cp * sy, fz = -sp; // forward

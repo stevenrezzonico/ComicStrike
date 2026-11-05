@@ -125,7 +125,7 @@ function frame() {
   invert(invViewProj, viewProj);
   renderer.zoom = 1;
   renderer.begin();
-  renderer.render(viewProj, invViewProj, eye, 0, [overlay]);
+  renderer.render(viewProj, invViewProj, eye, [overlay]); // (clock.t stays 0)
   renderer.composite();
 }
 

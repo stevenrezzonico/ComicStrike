@@ -231,9 +231,11 @@ export class PlayerModels {
       if (this.weapon[id]) {
         this.placeGun(id);
         const pts = this.guns.points[weapon], md = pts && pts.magDir, skin = this.gunSkinOf[id];
-        skin[GUN_MAG * 16 + 12] = md ? md[0] * a.magOff : 0;
-        skin[GUN_MAG * 16 + 13] = md ? md[1] * a.magOff : 0;
-        skin[GUN_MAG * 16 + 14] = md ? md[2] * a.magOff : 0;
+        if (md) { // (stores in branches, not ?: : a double through a phi was a new heap number)
+          skin[GUN_MAG * 16 + 12] = md[0] * a.magOff;
+          skin[GUN_MAG * 16 + 13] = md[1] * a.magOff;
+          skin[GUN_MAG * 16 + 14] = md[2] * a.magOff;
+        } else skin[GUN_MAG * 16 + 12] = skin[GUN_MAG * 16 + 13] = skin[GUN_MAG * 16 + 14] = 0;
         skin[GUN_BOLT * 16 + 12] = -a.boltOff;
       }
 
@@ -247,7 +249,9 @@ export class PlayerModels {
         for (let ch = 0; ch < 3; ch++) this.light[id * 3 + ch] += (this.tmpLight[ch] - this.light[id * 3 + ch]) * k;
       }
       // The floor for its contact shadow: under the feet when standing, else the face below.
-      this.floorZ[id] = !alive ? NaN : flags & FL_ONGROUND ? z : surfaces ? surfaces.hitZ : NaN;
+      if (alive && flags & FL_ONGROUND) this.floorZ[id] = z;
+      else if (alive && surfaces) this.floorZ[id] = surfaces.hitZ;
+      else this.floorZ[id] = NaN;
       // In the sun (after the floor: the lookup moves hitZ).
       if (this.sun && surfaces && alive && (this.frameNo + id) % SUN_EVERY === 0) {
         this.sunlit[id] = surfaces.skyward(x, y, z + SUN_CHEST, this.sun[0], this.sun[1], this.sun[2]) ? 1 : 0;
@@ -414,17 +418,19 @@ export class PlayerModels {
     if (begun) this.sunShadows.end(gbuf);
   }
 
-  // The bomb lying at (x, y, z = floor), turned by yaw (radians); show = false hides it.
-  setBomb(show, x = 0, y = 0, z = 0, yaw = 0, led = false, surfaces = null) {
+  // The bomb lying at at.x, at.y, at.z (its floor; a BombState: the numbers from the object,
+  // not boxed as arguments every frame); show = false hides it.
+  setBomb(show, at = null, led = false, surfaces = null) {
     const b = this.bomb;
     b.show = show;
     if (!show) return;
     b.led = led;
-    const c = Math.cos(yaw), s = Math.sin(yaw), m = b.model;
+    const m = b.model, sph = this.sph;
     m.fill(0);
-    m[0] = c; m[1] = s; m[4] = -s; m[5] = c; m[10] = 1; m[15] = 1;
-    m[12] = x - 3 * c; m[13] = y - 3 * s; m[14] = z + 1.5; // the brick's center over the spot
-    if (surfaces && surfaces.lightAt(this.lm, x, y, z + 8)) modelLight(b.light, this.lm);
+    m[0] = 1; m[5] = 1; m[10] = 1; m[15] = 1;
+    m[12] = at.x - 3; m[13] = at.y; m[14] = at.z + 1.5; // the brick's center over the spot
+    sph[0] = at.x; sph[1] = at.y; sph[2] = at.z + 8;
+    if (surfaces && surfaces.lightAtP(this.lm, sph)) modelLight(b.light, this.lm);
   }
 
   // The mesh for character `slot` (players, then hostages) with its feet at m: `mesh`, or

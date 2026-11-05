@@ -66,12 +66,13 @@ async function liveGame() {
   const link = new EventTarget();
   let c = null;
   link.postMessage = (m) => {
-    if (m.type === 'open') {
+    if (m instanceof Uint8Array) game.receive(c, m.slice(6, 6 + (m[4] | m[5] << 8))); // its session id and length first (postMessage would copy)
+    else if (m.type === 'open') {
       c = game.connect({
         send: (b) => link.dispatchEvent(new MessageEvent('message', { data: { id: m.id, type: 'dgram', bytes: b.slice().buffer } })),
         close() {}, closed: false,
       });
-    } else if (m.type === 'dgram') game.receive(c, new Uint8Array(m.bytes));
+    }
   };
   const net = new NetClient();
   net.connectLocal(link, '');
