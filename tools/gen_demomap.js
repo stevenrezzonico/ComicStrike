@@ -2,7 +2,7 @@
 // a walled courtyard under the sky with every kind of map element to try out: stairs
 // and a lift, a ladder tower, breakable crates and glass and an exploding barrel, a
 // conveyor belt, a metal yard with a cart on rails and a shutter a valve works, a
-// shallow pool with a deeper end, sliding / swinging / button doors, two bomb sites
+// shallow pool with a deeper end and a diving well, sliding / swinging / button doors, two bomb sites
 // (B's crates blow up with the bomb) and both spawns with buy zones.
 //
 // deno run --allow-write=maps tools/gen_demomap.js
@@ -11,7 +11,7 @@
 // (shared/bspwriter.js, also the map editor's). Deterministic: the same file every run.
 // Not used by the game at runtime.
 
-import { MapBuilder, box, NONE } from '../shared/bspwriter.js';
+import { MapBuilder, box, wedge, NONE } from '../shared/bspwriter.js';
 
 const OUT = new URL('../maps/de_playground.bsp', import.meta.url);
 
@@ -55,18 +55,32 @@ const X = 1600, Y = 1024, TOP = 640; // the courtyard's inside; walls 32 thick
 const floorTex = { top: '-0sand', bottom: 'azwall_a', side: 'azwall_a' };
 const wallTex = 'cssandwallbta';
 
-// Floor (64 deep), cut open for the pool: shallow (14 deep) west, deeper (30) east.
+// Floor (64 deep), cut open for the pool: shallow (14 deep) west, deeper (30) east, and in
+// its north-east corner a diving well 190 deep (WELL: x0, x1, y0, y1; its bottom at -192),
+// walled under the floor slab, a ramp down its south side from the knee-deep floor, a
+// ladder up its north wall.
 const POOL = [-300, 300, 300, 700];
+const WELL = [60, 300, 520, 700];
 world.push(
   box(-X - 32, -Y - 32, -64, X + 32, POOL[2], 0, floorTex),
   box(-X - 32, POOL[3], -64, X + 32, Y + 32, 0, floorTex),
   box(-X - 32, POOL[2], -64, POOL[0], POOL[3], 0, floorTex),
   box(POOL[1], POOL[2], -64, X + 32, POOL[3], 0, floorTex),
   box(POOL[0], POOL[2], -64, 0, POOL[3], -16, floorTex),
-  box(0, POOL[2], -64, POOL[1], POOL[3], -32, floorTex),
+  box(0, POOL[2], -64, POOL[1], WELL[2], -32, floorTex),
+  box(0, WELL[2], -64, WELL[0], POOL[3], -32, floorTex),
+  box(WELL[0] - 32, WELL[2] - 32, -224, WELL[1] + 32, WELL[3] + 32, -192, floorTex), // the well's bottom
+  box(WELL[0] - 32, WELL[2] - 32, -192, WELL[1] + 32, WELL[2], -64, floorTex), // its walls
+  box(WELL[0] - 32, WELL[3], -192, WELL[1] + 32, WELL[3] + 32, -64, floorTex),
+  box(WELL[0] - 32, WELL[2], -192, WELL[0], WELL[3], -64, floorTex),
+  box(WELL[1], WELL[2], -192, WELL[1] + 32, WELL[3], -64, floorTex),
+  wedge([WELL[0], WELL[2], -192, WELL[1], WELL[2] + 64, -32], 'nx', floorTex), // 34 degrees down
+  box(200, WELL[3] - 4, -192, 264, WELL[3], 0, { top: '{ladder1', bottom: null, side: '{ladder1', py: null }),
 );
+brushEntity({ classname: 'func_ladder' }, [box(200, WELL[3] - 20, -192, 264, WELL[3] - 4, 16, NONE)]);
 brushEntity({ classname: 'func_water', skin: '-3', WaveHeight: '0' }, [
   box(POOL[0], POOL[2], -32, POOL[1], POOL[3], -2, { top: '!watergreen', bottom: null, side: null }),
+  box(WELL[0], WELL[2], -192, WELL[1], WELL[3], -32, NONE),
 ], { contents: -3 });
 // A paved road from spawn to spawn.
 world.push(box(-X, -140, 0, X, 140, 1, { top: 'sandroad', bottom: null, side: 'sandtrim' }));

@@ -599,8 +599,9 @@ function categorizePosition() {
   const grounded = tr.fraction < 1 && !tr.startsolid && tr.nz >= MOVE.standableNormal;
   setGround(grounded, tr.ent);
   // Snap onto the ground we found (GoldSrc PM_CatagorizePosition), so idle players
-  // don't hover up to 2 units above the floor.
-  if (grounded) {
+  // don't hover up to 2 units above the floor; not waist deep in water (HL's rule too: on
+  // the bottom of deep water the snap undid every swim stroke, so nobody left it).
+  if (grounded && waterLevel < 2) {
     M.ox = tr.endx; M.oy = tr.endy; M.oz = tr.endz;
   }
 }
@@ -794,7 +795,6 @@ export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) 
       }
       waterMove(buttons);
       categorizePosition();
-      if (onGround) M.vz = 0;
     } else {
       M.vz -= MOVE.gravity * 0.5 * M.dt; // StartGravity
       if (buttons & IN_JUMP) checkJump();

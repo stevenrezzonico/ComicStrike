@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { IN_FORWARD } from '../shared/constants.js';
-import { PS_ORIGIN } from '../shared/pmove.js';
+import { IN_FORWARD, IN_JUMP } from '../shared/constants.js';
+import { PS_ORIGIN, PS_WATERLEVEL, PS_FLAGS, FL_ONGROUND, FL_WATERJUMP } from '../shared/pmove.js';
 import { Trace, traceHull, pointContents, hullFits, HULL_POINT, HULL_STAND } from '../shared/trace.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import { TEAM_T } from '../shared/player.js';
@@ -12,6 +12,7 @@ import { loadMap, joinClient, runInputs, teleport } from './harness.js';
 // de_playground is our own map (tools/gen_demomap.js), so it is in the repository.
 const bsp = loadMap('de_playground');
 const water = (c) => c <= -3 && c >= -5;
+const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg}: expected ${b}±${eps}, got ${a}`);
 
 function setup() {
   const game = new Game('de_playground', bsp, { rounds: false });
@@ -30,7 +31,7 @@ Deno.test('de_playground: every element is there; spawns stand on the floor insi
   assert.equal(count('info_player_start'), 5);
   assert.equal(count('func_buyzone'), 2);
   assert.equal(count('func_bomb_target'), 2);
-  assert.equal(count('func_ladder'), 1);
+  assert.equal(count('func_ladder'), 2);
   assert.equal(count('func_water'), 1);
   assert.equal(count('func_conveyor'), 1);
   assert.equal(count('func_breakable'), 10);
@@ -61,6 +62,31 @@ Deno.test('de_playground: the pool is shallow at one end and knee deep at the ot
     assert.equal(water(pointContents(game.world, x, 500, floor + 24)), wade, 'above the knees: wading');
     assert.ok(!water(pointContents(game.world, x, 500, floor + 36)), 'walking, not swimming');
   }
+});
+
+Deno.test('de_playground: the diving well: under water at its bottom, swim up, leap or climb out', () => {
+  const { c, run, put } = setup();
+  const f = c.player.ps.f, i = c.player.ps.i;
+  put(180, 640, -192);
+  run(16);
+  assert.equal(i[PS_WATERLEVEL], 3, 'the eyes under water');
+  near(f[PS_ORIGIN + 2] - 36, -192, 1, 'at the bottom');
+  c.input = { buttons: IN_JUMP, pitch: 0, yaw: 0 };
+  run(3 * 64);
+  assert.ok(f[PS_ORIGIN + 2] > -40 && i[PS_WATERLEVEL] >= 1, `swam up to the surface (z ${f[PS_ORIGIN + 2]})`);
+  put(280, 640, -50); // waist deep at the east edge, facing the deck
+  c.input = { buttons: IN_FORWARD, pitch: 0, yaw: 0 };
+  let leapt = false;
+  for (let t = 0; t < 128; t++) {
+    run(1);
+    leapt ||= (i[PS_FLAGS] & FL_WATERJUMP) !== 0;
+  }
+  assert.ok(leapt && (i[PS_FLAGS] & FL_ONGROUND) && f[PS_ORIGIN] > 300, 'leapt out onto the deck');
+  near(f[PS_ORIGIN + 2] - 36, 0, 0.1, 'standing on the deck');
+  put(232, 670, -192); // at the ladder's foot, looking up at it
+  c.input = { buttons: IN_FORWARD, pitch: -60, yaw: 90 };
+  run(4 * 64);
+  assert.ok(f[PS_ORIGIN + 1] > 700 && Math.abs(f[PS_ORIGIN + 2] - 36) < 1, `climbed out (${f[PS_ORIGIN + 1]}, ${f[PS_ORIGIN + 2]})`);
 });
 
 Deno.test('de_playground: the ladder climbs the tower; the belt carries; doors and breakables work', () => {
@@ -98,7 +124,8 @@ Deno.test('de_playground: baked sun and shade; bots find their way everywhere', 
   const nav = game.bots.nav, path = new Int32Array(4096);
   const from = nav.nodeAt(-1400, 0, 1);
   for (const [x, y, z, what] of [[1400, 0, 1, 'the CT spawn'], [-780, 700, 0, 'site A'], [780, 700, 0, 'site B'],
-    [-376, -896, 320, 'the tower top'], [-660, -860, 128, 'the stairs platform']]) {
+    [-376, -896, 320, 'the tower top'], [-660, -860, 128, 'the stairs platform'], [180, 660, -192, 'the bottom of the well']]) {
     assert.ok(nav.path(from, nav.nodeAt(x, y, z), path) > 0, `a path to ${what}`);
   }
+  assert.ok(nav.path(nav.nodeAt(180, 660, -192), from, path) > 0, 'a path out of the well');
 });

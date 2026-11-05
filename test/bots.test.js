@@ -296,15 +296,17 @@ Deno.test('bots: the Ts smoke the CT side of their site on the way in, once a te
   const thrown = [];
   const throwFn = g.grenades.throw.bind(g.grenades);
   g.grenades.throw = (...a) => {
-    thrown.push(a[1]);
+    if (a[1] !== WEAPON_ID.decoy) thrown.push(a[1]); // a decoy toward the other site may come first
     return throwFn(...a);
   };
   run(64 * 40, () => thrown.length > 0);
   assert.deepEqual(thrown, [WEAPON_ID.smokegrenade], 'a smoke on the way in');
   const spot = g.bots.smokeSpot(g.bots.list[0].site % g.bombSites.count);
-  run(64 * 6, () => g.grenades.fxCount > 0 && g.grenades.fxKind[0] === FX_SMOKE);
-  assert.equal(g.grenades.fxKind[0], FX_SMOKE, 'it popped');
-  const d = Math.hypot(g.grenades.fxPos[0] - spot[0], g.grenades.fxPos[1] - spot[1]);
+  const smoke = () => g.grenades.fxKind.subarray(0, g.grenades.fxCount).indexOf(FX_SMOKE); // past a decoy's
+  run(64 * 6, () => smoke() >= 0);
+  const k = smoke();
+  assert.ok(k >= 0, 'it popped');
+  const d = Math.hypot(g.grenades.fxPos[k * 3] - spot[0], g.grenades.fxPos[k * 3 + 1] - spot[1]);
   assert.ok(d < 250, `within 250 units of the spot: ${d.toFixed(0)}`);
   run(64 * 10);
   assert.equal(thrown.length, 1, 'once a team a round');
