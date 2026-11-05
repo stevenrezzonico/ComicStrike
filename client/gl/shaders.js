@@ -561,10 +561,12 @@ uniform vec2 u_screen; // canvas pixels
 uniform float u_width; // canvas pixels
 out vec3 v_col;
 out float v_w;
+out float v_across; // -1..1 across the quad (TRACER_FS's rim)
 void main() {
   vec4 ca = u_viewProj * vec4(a_a, 1.0), cb = u_viewProj * vec4(a_b, 1.0);
   v_col = a_col;
   v_w = 1.0;
+  v_across = (gl_VertexID & 2) == 0 ? -1.0 : 1.0;
   if (ca.w < 1.0 && cb.w < 1.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   if (ca.w < 1.0) ca = mix(ca, cb, (1.0 - ca.w) / (cb.w - ca.w));
   if (cb.w < 1.0) cb = mix(cb, ca, (1.0 - cb.w) / (ca.w - cb.w));
@@ -588,6 +590,23 @@ in float v_w;
 ${GBUFFER}
 void main() {
   gbuffer(v_col, 1.0, vec3(0.0, 0.0, 1.0), 125u, v_w, G_FLAT);
+}`;
+
+// Bullet tracers (client/gl/tracers.js): TRAIL_VS's quad, flat in its color with a thin ink
+// rim of its own, flagged see-through (G_SCREEN) so the ink pass draws no line round it
+// (its 2-3 px a side made a thin streak a thick black bar).
+export const TRACER_FS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec3 v_col;
+in float v_w;
+in float v_across;
+uniform float u_width; // canvas pixels
+uniform float u_rim;   // canvas pixels
+${GBUFFER}
+void main() {
+  float side = (1.0 - abs(v_across)) * 0.5 * u_width; // pixels to the quad's edge
+  gbuffer(side < u_rim ? INK : v_col, 1.0, vec3(0.0, 0.0, 1.0), 125u, v_w, G_FLAT | G_SCREEN);
 }`;
 
 // Crosshair: four arms and a dot generated from gl_VertexID (6 vertices each), in

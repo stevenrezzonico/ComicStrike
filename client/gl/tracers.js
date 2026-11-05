@@ -1,15 +1,17 @@
-// Bullet tracers: a yellow inked streak running from the muzzle to where the bullet hit,
+// Bullet tracers: a thin yellow streak running from the muzzle to where the bullet hit,
 // TRACER_LEN long at TRACER_SPEED, drawn with the practice arcs' screen-space line shader
-// (TRAIL_VS: a quad a segment, flat, an id of its own so the ink outlines it) but behind
-// what is nearer. A pool of MAX_TRACERS, the oldest replaced; nothing allocated per frame.
+// (TRAIL_VS: a quad a segment) but behind what is nearer, with a thin ink rim of its own
+// (TRACER_FS: the ink pass's outline was thicker than the streak). A pool of MAX_TRACERS,
+// the oldest replaced; nothing allocated per frame.
 
 import { program } from './program.js';
-import { TRAIL_VS, TRAIL_FS } from './shaders.js';
+import { TRAIL_VS, TRACER_FS } from './shaders.js';
 
 const MAX_TRACERS = 32;
 const TRACER_SPEED = 6000; // units a second (approx.)
-const TRACER_LEN = 260;
-const LINE_PX = 12; // at 1080 lines (under ~8 px the ink outline swallows the yellow)
+const TRACER_LEN = 150;
+const LINE_PX = 5; // at 1080 lines, the rim included
+const RIM_PX = 1; // at 1080 lines
 const COLOR = [1, 0.84, 0.3];
 const F = 7; // ax, ay, az, bx, by, bz, start time
 
@@ -21,7 +23,7 @@ export class Tracers {
     this.t = new Float32Array(MAX_TRACERS * F).fill(-1e9);
     this.next = 0;
     this.seg = new Float32Array(MAX_TRACERS * 9);
-    this.prog = program(gl, TRAIL_VS, TRAIL_FS, ['u_viewProj', 'u_screen', 'u_width']);
+    this.prog = program(gl, TRAIL_VS, TRACER_FS, ['u_viewProj', 'u_screen', 'u_width', 'u_rim']);
     this.vao = gl.createVertexArray();
     gl.bindVertexArray(this.vao);
     this.vbo = gl.createBuffer();
@@ -82,7 +84,8 @@ export class Tracers {
     gl.useProgram(this.prog.p);
     gl.uniformMatrix4fv(this.prog.loc.u_viewProj, false, viewProj);
     gl.uniform2fv(this.prog.loc.u_screen, this.screen);
-    gl.uniform1f(this.prog.loc.u_width, Math.max(7, LINE_PX * this.screen[1] / 1080));
+    gl.uniform1f(this.prog.loc.u_width, Math.max(3, LINE_PX * this.screen[1] / 1080));
+    gl.uniform1f(this.prog.loc.u_rim, Math.max(0.6, RIM_PX * this.screen[1] / 1080));
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, s, 0, n * 9);
     gl.bindVertexArray(this.vao);
