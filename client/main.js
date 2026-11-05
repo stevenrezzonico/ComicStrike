@@ -8,7 +8,7 @@
 // (?offline) runs the player alone in the page, without game rules (noclip, give).
 // The page opens on the start menu (client/menu.js); URL parameters skip it (testing):
 // ?team=t|ct|spec&primary=awp&secondary=deagle&name=me joins at once (the sandbox if no
-// server answers), &practice&map=de_dust2&mode=deathmatch&players=10 practices,
+// server answers), &practice&map=de_dust2&mode=deathmatch&players=10 practices (no map: defaultMap),
 // &offline&map=de_dust2 opens the sandbox.
 // Keys are CS:GO binds (client/binds.js); ` opens the console (client/settings.js).
 
@@ -88,7 +88,7 @@ import { TouchControls, altLabel } from './touch.js';
 import { Gamepads } from './gamepad.js';
 import { takeHandoff } from './handoff.js';
 import { PreviewEditor } from './previewedit.js';
-import { Menu } from './menu.js';
+import { Menu, defaultMap } from './menu.js';
 import { Radar } from './radar.js';
 import { Overview } from '../shared/overview.js';
 import { Items } from '../shared/items.js';
@@ -2822,7 +2822,7 @@ async function start() {
   // A room link (?room=code) opens on the Play panel: that room's teams.
   if (!['team', 'offline', 'map', 'practice'].some((p) => params.has(p))) return menu.showStart('', roomCode ? 'play' : '');
   const team = { spec: 1, t: 2, ct: 3 }[params.get('team')] || 0;
-  const map = params.get('map') || 'de_dust2';
+  const map = params.get('map') || defaultMap(await fetch('/maps.json').then((r) => r.json(), () => [])) || 'de_dust2';
   if (params.has('practice')) {
     return await startPractice(map, team, { mode: params.get('mode') || 'deathmatch',
       players: +(params.get('players') ?? 10), difficulty: +(params.get('difficulty') ?? 1), armoury: params.get('armoury') !== '0' });

@@ -22,6 +22,10 @@ const MODE_LABELS = {
 // fill both sides (bot_quota_mode fill: the player counts); Wingman is 2 a side
 // (mp_teamsize_max 2: more would sit as spectators); free-for-all modes count players, not
 // sides; the demo's bots are respawning targets on the enemy team.
+// The map a game starts on unless one is picked: de_dust2 (a Valve map, kept out of the
+// repository), else our own de_inkwell, else the first in `maps` (the names in maps/).
+export const defaultMap = (maps) => ['de_dust2', 'de_inkwell'].find((m) => maps.includes(m)) || maps[0];
+
 export function botOptions(mode) {
   if (mode === 'demo') return ['Targets', [[0, 'None'], [2, '1 bot'], [3, '2 bots'], [6, '5 bots']]];
   if (mode === 'wingman') return ['Bots', [[0, 'None'], [2, '1 vs 1'], [4, '2 vs 2']]];
@@ -636,7 +640,7 @@ export class Menu {
       body.append(el('p', 'menu-hint', this.maps ? 'No maps found in maps/.' : 'Loading maps...'));
       return;
     }
-    if (!own && !maps.includes(this.practiceMap)) this.practiceMap = maps.includes('de_dust2') ? 'de_dust2' : maps[0];
+    if (!own && !maps.includes(this.practiceMap)) this.practiceMap = defaultMap(maps);
     const grid = el('div', 'menu-maps');
     for (const m of own ? [] : maps) {
       const b = button(m, () => {

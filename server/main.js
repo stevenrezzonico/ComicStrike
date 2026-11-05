@@ -5,7 +5,7 @@
 //   deno run --unstable-net -A server/main.js
 //
 // Env: HTTP_PORT (tcp 27015), GAME_PORT (udp 27015), BIND (0.0.0.0),
-//      MAP (de_dust2) - maps/<MAP>.bsp, RCON_PASSWORD - enables rcon,
+//      MAP (de_dust2, else de_inkwell) - maps/<MAP>.bsp, RCON_PASSWORD - enables rcon,
 //      TLS_CERT, TLS_KEY - PEM files of a real certificate (e.g. Let's Encrypt fullchain.pem
 //        and privkey.pem): the pages go over HTTPS and WebTransport uses it as browsers
 //        check any site's. Without them: plain HTTP and a self-signed certificate made in
@@ -33,7 +33,15 @@ const HTTP_PORT = Number(Deno.env.get('HTTP_PORT') || 27015);
 const GAME_PORT = Number(Deno.env.get('GAME_PORT') || 27015);
 const HOSTNAMES = (Deno.env.get('HOSTNAMES') || 'localhost,127.0.0.1,::1').split(',');
 const BIND = Deno.env.get('BIND') || '0.0.0.0';
-const MAP = Deno.env.get('MAP') || 'de_dust2';
+const hasMap = (name) => {
+  try {
+    return Deno.statSync(new URL(`maps/${name}.bsp`, ROOT)).isFile;
+  } catch {
+    return false;
+  }
+};
+// de_dust2 (a Valve map, not in the repository), else our own de_inkwell.
+const MAP = Deno.env.get('MAP') || (hasMap('de_dust2') ? 'de_dust2' : 'de_inkwell');
 const TLS_CERT = Deno.env.get('TLS_CERT'), TLS_KEY = Deno.env.get('TLS_KEY');
 const REDIRECT_PORT = Number(Deno.env.get('REDIRECT_PORT') || 0);
 
