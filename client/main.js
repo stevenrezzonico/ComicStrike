@@ -142,6 +142,9 @@ const specAngles = new Float32Array(2);
 const specTrace = new Trace();
 let deadAt = 0, wasDead = false;
 let wasSpecTeam = false, specFollowing = false; // last frame: on the spectator team / following someone
+// Last frame: dead and not flying free (free roam): the mouse turns nothing, so the dead cannot
+// look round for their team.
+let deadView = false;
 const lastCam = new Float32Array(5); // last spectator camera: x, y, z, pitch, yaw
 
 // The console first: settings are read by everything below.
@@ -1560,6 +1563,7 @@ function frame(now) {
   sounds.stepVolume = cv.snd_footstep_volume.number;
   if (sounds.music !== cv.snd_musicvolume.number) sounds.setMusic(cv.snd_musicvolume.number);
   pollPads(elapsed, now);
+  if (deadView) input.mouseDX = input.mouseDY = 0;
   input.applyMouse(angles);
   // The CPU clock only while something reads it (cl_showfps 3, the benchmark): each
   // performance.now() is a new heap number.
@@ -1724,6 +1728,7 @@ function draw(now, dt) {
   const spectating = interpolated && dead &&
     spectator.update(interp, selfId, player.team, (now - deadAt) / 1000, buttons, specTeam);
   const roaming = spectating && spectator.mode === SPEC_ROAM;
+  deadView = dead && !roaming;
   if (roaming && !roamedBefore && specFollowing) { // from following someone: go on from that view
     spectator.place(lastCam[0], lastCam[1], lastCam[2]);
     angles[0] = lastCam[3];
