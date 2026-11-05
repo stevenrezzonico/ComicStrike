@@ -458,6 +458,7 @@ const invViewProj = new Float32Array(16);
 // they go nowhere unless hosted as a room), and the room (server/rooms.js) we play in or
 // host: its code, and when we host it, its rcon password and console catalog.
 const ownMaps = new Map();
+let useOwn = false; // the game on screen plays an ownMaps file (Your map, Try it, the editor's preview), not the server's
 let roomCode = (params.get('room') || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 let roomRcon = '', roomNames = null;
 
@@ -469,7 +470,7 @@ async function loadMap(name) {
   status.textContent = `loading ${name}...`;
   // Our own file, a room's map (from the server's memory) or the server's maps/; the first
   // two come from outside, so they are checked (parseUntrustedBSP).
-  let buffer = ownMaps.get(name), untrusted = true;
+  let buffer = useOwn ? ownMaps.get(name) : undefined, untrusted = true;
   const tf = performance.now();
   if (!buffer) {
     const room = net && net.room;
@@ -491,6 +492,7 @@ async function loadMap(name) {
   const mesh = buildMapMesh(bsp);
   step('mesh');
   renderer.loadMap(mesh, bsp);
+  renderer.clearBroken(); // the last map's broken slots mean nothing here
   step('upload');
   models.vis = renderer.vis;
   models.setSun(sunOf(bsp.entities));
@@ -2229,6 +2231,7 @@ async function playDemo(name, bytes) {
   const welcome = await net.join(TEAM_SPECTATOR, 0, 0, cv.name.value); // the HELLO goes nowhere: the WELCOME is the demo's
   selfId = -1; // nobody is us: the recorder is one of the players
   menu.busy(`Loading ${welcome.map}...`);
+  useOwn = false;
   await loadMap(welcome.map);
   spectator.mode = SPEC_ROAM;
   conWin.print(`playing demo ${name}: ${demo.header.map}, ${(dp.length / 1000).toFixed(1)} s (demo_pause, demo_timescale; jump: eyes, chase, free)`);
@@ -2261,6 +2264,7 @@ con.command('record', (a, ctx) => {
   const name = demoName(a[1]);
   if (!name) return con.out(ctx, 'record <name>: letters, digits, _ and - (up to 40)');
   if (!net || net.playback || !synced) return con.out(ctx, 'record: in a game (online or practice)');
+  if (useOwn || net.room) return con.out(ctx, 'record: a room or your own map cannot be played back (the demo keeps only the map name)');
   if (recorder) return con.out(ctx, `record: already recording ${recorder.name} (stop first)`);
   recorder = net.recorder = new DemoRecorder(net, name, currentMap, performance.now());
   con.out(ctx, `recording ${name} (stop ends it)`);
@@ -2474,6 +2478,7 @@ menu.onLeaveRoom = () => {
 };
 menu.room = roomCode;
 menu.onPractice = (map, team, opts) => run(() => startPractice(map, team, opts));
+menu.onPracticeOwn = (map, team, opts) => run(() => startPractice(map, team, { ...opts, own: true }));
 menu.onResume = () => input.lock().catch(() => {}).finally(updateOverlay); // already soft-locked: the menu still goes
 menu.onLeave = () => leaveGame();
 menu.onTeam = (team) => {
@@ -2553,6 +2558,7 @@ function resetSession() {
 
 // Play: join the server on a team (CS:GO numbers: 1 spectators, 2 T, 3 CT; 0 auto).
 async function startOnline(team) {
+  useOwn = false;
   if (playing) leaveGame();
   resetSession();
   try {
@@ -2621,7 +2627,8 @@ function setRoom(code, rcon = '', names = null) {
 // bots filling the teams to `players` at `difficulty` (bot_quota fill, bot_difficulty);
 // then join it like a server, on `team` (2 T, 3 CT, 1 spectators, 0 auto).
 let localWorker = null, localRcon = '', localPaused = false;
-async function startPractice(map, team, { mode = 'competitive', players = 10, difficulty = 1, armoury = true } = {}) {
+async function startPractice(map, team, { mode = 'competitive', players = 10, difficulty = 1, armoury = true, own = false } = {}) {
+  useOwn = own;
   if (playing) leaveGame();
   resetSession();
   localPaused = false; // the new worker starts running
@@ -2638,7 +2645,7 @@ async function startPractice(map, team, { mode = 'competitive', players = 10, di
         else if (e.data.type === 'failed') reject(new Error(e.data.error));
       };
       worker.onerror = (e) => reject(new Error(e.message || 'the practice server did not start'));
-      worker.postMessage({ type: 'start', map, mode, players, difficulty, armoury, bytes: ownMaps.get(map) }); // bytes: copied
+      worker.postMessage({ type: 'start', map, mode, players, difficulty, armoury, bytes: own ? ownMaps.get(map) : undefined }); // bytes: copied
     });
   } catch (err) {
     worker.terminate();
@@ -2770,6 +2777,7 @@ addEventListener('beforeunload', (e) => {
   e.returnValue = ''; // Safari and older Chrome want this one
 });
 async function previewMap(name, bytes) {
+  useOwn = true;
   ownMaps.clear();
   ownMaps.set(name, bytes);
   if (!playing) {
@@ -2805,7 +2813,7 @@ async function startFromEditor() {
   ownMaps.clear();
   ownMaps.set(m.name, m.bytes);
   menu.ownMap = m.name;
-  const opts = { mode: m.mode, players: m.players, difficulty: m.difficulty };
+  const opts = { mode: m.mode, players: m.players, difficulty: m.difficulty, own: true };
   await run(() => startPractice(m.name, m.team, opts));
 }
 

@@ -258,6 +258,7 @@ export class Menu {
     // Set by the game.
     this.onPlay = (_team) => {};
     this.onPractice = (_map, _team) => {};
+    this.onPracticeOwn = (_map, _team) => {};
     this.onResume = () => {};
     this.onLeave = () => {};
     this.onTeam = (_team) => {};
@@ -701,7 +702,7 @@ export class Menu {
       return;
     }
     const go = el('div', 'menu-teams');
-    go.append(button('Play alone', () => this.onPractice(this.ownMap, this.practiceTeam, opts), 'menu-go'));
+    go.append(button('Play alone', () => this.onPracticeOwn(this.ownMap, this.practiceTeam, opts), 'menu-go'));
     const host = button('Host for friends', () => this.onHost(this.ownMap, this.practiceTeam, opts), 'menu-go');
     host.disabled = !this.server || !hasWebTransport();
     if (!this.server) host.title = 'Hosting needs the server, which did not answer';
