@@ -39,6 +39,7 @@ const CLICKS = {
 const ATTACK = 0.008; // s a noise burst takes to swell to its level (tones: 3/4 of it)
 const ROOM = 0.18; // room echo send near the listener
 const ROOM_FAR = 0.35; // more of it far away
+const UNDER_CUTOFF = 600; // Hz: the bus's low-pass with the head under water (HL's waterroom_type)
 const MUSIC_LEVEL = 0.6; // the jingles at snd_musicvolume 1: their chords stay under the compressor's knee
 const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
 
@@ -99,6 +100,7 @@ export class Sounds {
     this.noise = null; // 1 s of white noise, shared by every noisy sound
     this.master = null; // every sound goes through it (the volume cvar)
     this.bus = null; // low-pass before the master: flashbangs muffle the world
+    this.open = 20000; // the bus's cutoff at rest: UNDER_CUTOFF with the head under water
     this.room = null; // the room echo (a convolver), fed by every voice
     this.stepVolume = 1; // footsteps, ours and others' (snd_footstep_volume)
     this.volume = 1;
@@ -158,7 +160,7 @@ export class Sounds {
     shelf.connect(comp);
     this.bus = ctx.createBiquadFilter();
     this.bus.type = 'lowpass';
-    this.bus.frequency.value = 20000;
+    this.bus.frequency.value = this.open;
     this.bus.connect(shelf);
     const n = ctx.sampleRate;
     this.noise = ctx.createBuffer(1, n, n);
@@ -529,7 +531,19 @@ export class Sounds {
     const f = this.bus.frequency;
     f.cancelScheduledValues(t);
     f.setValueAtTime(500, t);
-    f.exponentialRampToValueAtTime(20000, t + seconds + 0.5);
+    f.exponentialRampToValueAtTime(this.open, t + seconds + 0.5);
+  }
+
+  // The head under water (or not): the whole world muffled, as HL's waterroom_type. Going
+  // under or coming up cuts a flashbang's muffle short.
+  setUnder(on) {
+    const open = on ? UNDER_CUTOFF : 20000;
+    if (open === this.open) return;
+    this.open = open;
+    if (!this.bus) return;
+    const f = this.bus.frequency, t = this.ctx.currentTime;
+    f.cancelScheduledValues(t);
+    f.setTargetAtTime(open, t, 0.03);
   }
 
   // Jingle `name` (JINGLES; client/jingles.js), unless the music is off or a flashbang's

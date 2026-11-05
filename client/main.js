@@ -1777,7 +1777,19 @@ function draw(now, dt) {
   renderer.begin();
   const fovY = 2 * Math.atan(Math.tan(clk.fov / 2 * DEG) * 0.75);
   weaponView.fovY = fovY; // the crosshair's spread circle
+  // The camera in water (or slime, lava): the print fogs over (Renderer.style.liquid), the
+  // world wobbles (GoldSrc's underwater field of view, as Xash3D draws it) and the hearing
+  // is muffled.
+  const liquid = world ? pointContents(world, eye[0], eye[1], eye[2]) : -1;
+  const under = liquid <= -3 && liquid >= -5 ? liquid : 0;
+  renderer.style.liquid = under;
+  sounds.setUnder(under !== 0);
   perspective(proj, fovY, aspect, 4, 16384);
+  if (under) {
+    const wob = 0.03 * Math.sin(1.5 * clock.t);
+    proj[0] *= 0.97 + wob;
+    proj[5] *= 1.03 - wob;
+  }
   viewFromEye(view, eye, cam);
   multiply(viewProj, proj, view);
   invert(invViewProj, viewProj);
@@ -2533,6 +2545,8 @@ function resetSession() {
   deathPanel.show(false);
   renderer.style.dead = 0;
   renderer.style.smoke = 0;
+  renderer.style.liquid = 0;
+  sounds.setUnder(false);
   clk.serverClock = -1;
   predictedTick.fill(-1);
   serverBroken.fill(0);

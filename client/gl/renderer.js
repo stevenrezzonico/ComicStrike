@@ -9,6 +9,8 @@ import {
   CLOUD_PERIOD,
 } from './shaders.js';
 import { VERTEX_STRIDE } from '../mapmesh.js';
+import { withOriginalColor } from '../texcolors.js';
+import { classify } from '../../shared/materials.js';
 import { program } from './program.js';
 import { GBuffer } from './gbuffer.js';
 import { mapLight } from './skinned.js';
@@ -23,8 +25,16 @@ import { clock } from '../clock.js';
 // below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
 const LIGHT_FULL_SHARE = 0.75;
 const COMPOSITE_UNIFORMS = ['u_albedo', 'u_depth', 'u_ink', 'u_res', 'u_gscale', 'u_line', 'u_dot', 'u_zoom',
-  'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft', 'u_dead', 'u_smoke', 'u_inkaa'];
+  'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft', 'u_dead', 'u_fog', 'u_sight', 'u_inkaa'];
 const INK_UNIFORMS = ['u_normal', 'u_depth', 'u_line', 'u_gscale', 'u_zoom'];
+// The media the camera can be in (COMPOSITE_FS u_fog, u_sight): a tone, an e-fold in
+// units, the share of it over the first-person view. Water's tone is the map's own.
+const VIEW_TINT = 0.25; // a liquid over the first-person view
+const SMOKE_FOG = [0.86, 0.86, 0.84, 28, 0]; // the cloud's own grey; about arm's length still shows
+const WATER_SIGHT = 160;
+const WATER_LIGHT = 0.45; // the water's tone: its brightest channel at least this
+const SLIME_FOG = [0.36, 0.5, 0.14, 80, VIEW_TINT];
+const LAVA_FOG = [0.92, 0.42, 0.1, 40, VIEW_TINT];
 const CLOUD_TEX_SIZE = 512; // the sky's cloud noise (cloudNoise): CLOUD_PERIOD cells across
 
 // The render scale the GPU can hold for a w x h canvas: at most `scale`, within the largest
@@ -101,9 +111,13 @@ export class Renderer {
     // soft: soft shade dots (r_halftone_style 1).
     // dead: 0..1, our death's red-brown print (client/deathpanel.js).
     // smoke: 0..1, the camera inside a smoke cloud: the print fogs over with distance.
+    // liquid: the CONTENTS_* the camera is in (water, slime, lava), else 0: the same fog,
+    // the liquid's, under a longer sight, and the first-person view tinted.
     this.style = {
       comic: true, ink: 1, dots: 0, bands: 0, lift: 0.3, calm: 0, soft: false, inkaa: true, dead: 0, smoke: 0,
+      liquid: 0,
     };
+    this.waterFog = [0.2, 0.33, 0.36, WATER_SIGHT, VIEW_TINT]; // set per map (loadMap)
     this.novis = false; // r_novis: draw the whole world (no visibility culling)
     this.zoom = 1; // 90 / fov
     // The canvas's size on the page, kept by a ResizeObserver: reading clientWidth every
@@ -126,6 +140,16 @@ export class Renderer {
   // bsp: for the visible-world culling (WorldVis; without it everything is drawn).
   loadMap(mesh, bsp = null) {
     const gl = this.gl;
+    // Under water the print fogs toward the map's water as the world prints it (WORLD_FS:
+    // lifted and saturated): its first ! texture's measured color, else the class's teal,
+    // brightened to WATER_LIGHT at least (de_playground's !watergreen fogged to near black).
+    const wn = (bsp && bsp.textureNames.find((n) => n[0] === '!')) || '!water';
+    const m = withOriginalColor(classify(wn), wn), wf = this.waterFog;
+    for (let k = 0; k < 3; k++) wf[k] = Math.pow((k === 0 ? m.r : k === 1 ? m.g : m.b) / 255, 0.8);
+    const grey = wf[0] * 0.3 + wf[1] * 0.59 + wf[2] * 0.11;
+    for (let k = 0; k < 3; k++) wf[k] = Math.min(1, Math.max(0, grey + (wf[k] - grey) * 1.25));
+    const lift = WATER_LIGHT / Math.max(wf[0], wf[1], wf[2], 0.01);
+    if (lift > 1) for (let k = 0; k < 3; k++) wf[k] = Math.min(1, wf[k] * lift);
     if (this.vao) gl.deleteVertexArray(this.vao);
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
@@ -398,7 +422,9 @@ export class Renderer {
     gl.uniform3f(c.u_calm, this.canvas.width / 2, h / 2, st.calm);
     gl.uniform1f(c.u_soft, st.soft ? 1 : 0);
     gl.uniform1f(c.u_dead, st.dead);
-    gl.uniform1f(c.u_smoke, st.smoke);
+    const fog = st.liquid === -3 ? this.waterFog : st.liquid === -4 ? SLIME_FOG : st.liquid === -5 ? LAVA_FOG : SMOKE_FOG;
+    gl.uniform4f(c.u_fog, fog[0], fog[1], fog[2], st.liquid ? 1 : st.smoke);
+    gl.uniform2f(c.u_sight, fog[3], fog[4]);
     gl.uniform1f(c.u_inkaa, st.inkaa ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
