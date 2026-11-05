@@ -222,6 +222,16 @@ Deno.test('ladders: pressing forward climbs at ~200 u/s', () => {
   near(ps.f[PS_ORIGIN + 2], z1, 0.01, 'holds position on the ladder without input');
 });
 
+Deno.test('ladders: jumping off keeps simulating and leaves the ladder', () => {
+  const ladder = { kind: ENT_LADDER, boxes: [{ min: [200, -32, 0], max: [208, 32, 500] }] };
+  const w = boxWorld([FLOOR], [ladder]);
+  const ps = settle(w, spawn(186, 0, 36));
+  run(w, ps, 32, IN_FORWARD);
+  run(w, ps, 1, IN_JUMP);
+  run(w, ps, 30);
+  assert.ok(ps.f[PS_ORIGIN] < 186, `still at the ladder (x=${ps.f[PS_ORIGIN]})`);
+});
+
 Deno.test('water: submerged player sinks idle and swims up with jump', () => {
   const pool = { min: [-500, -500, 0], max: [500, 500, 200], contents: WATER };
   const w = boxWorld([{ min: [-8192, -8192, -8192], max: [8192, 8192, -1] }, pool]);

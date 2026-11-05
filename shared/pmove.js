@@ -728,7 +728,7 @@ export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) 
   f[PS_VELMOD] = velmod;
   M.maxspeed = maxSpeed * scale * velmod;
 
-  M.ladderCooldown = M.ladderCooldown > M.dt ? M.ladderCooldown - dt : 0;
+  M.ladderCooldown = M.ladderCooldown > M.dt ? M.ladderCooldown - M.dt : 0;
   const ladder = M.ladderCooldown > 0 ? -1 : findLadder();
   if (ladder >= 0) {
     flags |= FL_ONLADDER;
