@@ -208,6 +208,7 @@ const scape = new SoundScape(sounds, (x, y, z) => {
   if (gm === 68 || gm === 75 || gm === 79) return 'soft'; // dirt, snow, foliage
   return 'hard';
 }, (x, y, z) => world !== null && liquid(x, y, z));
+models.liquidAt = (p) => world !== null && liquid(p[0], p[1], p[2]);
 
 // A muzzle flash lights the walls round it for a moment (client/gl/flashes.js); a silencer
 // keeps it small.

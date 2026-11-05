@@ -70,6 +70,8 @@ export class PlayerModels {
     this.farLod = FAR_LOD; // r_lod_dist (0: always coarse)
     this.eye = new Float32Array(3);
     this.sph = new Float64Array(4); // inSight(): the sphere asked about (x, y, z, r)
+    this.at = new Float64Array(3); // a player's chest, for liquidAt
+    this.liquidAt = null; // ([x, y, z]): in water, slime or lava (set by main)
     this.box = new Float64Array(6); // and its box for the PVS
     this.weapon = new Int16Array(MAX_PLAYERS); // weapon id in hand (0: none drawn)
     this.silenced = new Uint8Array(MAX_PLAYERS);
@@ -224,6 +226,9 @@ export class PlayerModels {
         const i = a.in; // the animator's numbers go as array elements, not boxed arguments
         i[0] = owed; i[1] = x; i[2] = y; i[3] = z; i[4] = yaw;
         i[5] = dequantizePitch(ents[r + E_PITCH]); i[6] = ents[r + E_DUCK] / 255;
+        const at = this.at; // in water to the chest: the swim pose
+        at[0] = x; at[1] = y; at[2] = z + 40;
+        a.swim = alive && this.liquidAt !== null && this.liquidAt(at);
         a.step((flags & FL_ONGROUND) !== 0, holdOf(weapon), ents[r + E_ANIM], ents[r + E_SHOTS], alive,
           this.guns.points[weapon] || null, weapon);
         this.owedDt[id] = 0;

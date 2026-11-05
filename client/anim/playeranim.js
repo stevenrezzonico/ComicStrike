@@ -57,6 +57,15 @@ const MOVE_LEAN = 4; // degrees into the movement, forward or to a side
 const HIP_SWING = 7; // the hips turn this far with the stride, the shoulders a third against
 const BREATH = 0.8; // chest pitch, degrees, at 0.25 Hz
 const SWAY = 0.5; // the weight shifting from foot to foot, units, at 0.15 Hz
+// In water to the chest (CS's treadwater / swim): upright, the legs hang in a slow scissor
+// kick and the body bobs; moving, it leans forward up to SWIM_LEAN at SWIM_FULL u/s and the
+// legs trail behind.
+const SWIM_LEAN = 60; // degrees
+const SWIM_FULL = 150;
+const SWIM_LEG = 30; // hip to ankle, the knees a little bent
+const KICK = 5; // the scissor kick's reach either way, units
+const KICK_RATE = 4; // radians a second (0.64 Hz)
+const SWIM_BOB = 1.5; // units, at 0.38 Hz
 
 // Hand targets per hold, relative to the shoulder-line center (spine_3), in the aim frame
 // (x along the aim, z up) when `aimed`, else in the body frame: left xyz, right xyz.
@@ -134,6 +143,8 @@ export class PlayerAnimator {
     this.phase = -0; // stride cycle, in cycles
     this.stride = 4.5; // current half-stride length
     this.air = -0; // 0 grounded .. 1 airborne
+    this.swim = false; // input: in water to the chest (set before step(), like `in`)
+    this.wet = -0; // 0 .. 1 swimming, eased
     this.kick = -0; // fire kick, 1 at a shot
     this.toss = -0; // a weapon throw (G), 1 when it leaves the hand, down to 0
     this.shots = -1;
@@ -188,6 +199,7 @@ export class PlayerAnimator {
     this.kick = Math.max(0, this.kick - dt * 7);
     this.toss = Math.max(0, this.toss - dt * TOSS_RATE);
     this.air += ((onGround ? 0 : 1) - this.air) * (1 - Math.exp(-dt * 10));
+    this.wet += ((this.swim ? 1 : 0) - this.wet) * (1 - Math.exp(-dt * 6));
 
     // Velocity in the player's frame, and the stride cycle.
     const yr = yaw * Math.PI / 180, cy = Math.cos(yr), sy = Math.sin(yr);
@@ -199,7 +211,8 @@ export class PlayerAnimator {
     const duty = DUTY_WALK - (DUTY_WALK - DUTY_RUN) * run;
     // A planted foot covers 2 strides in `duty` of the cycle at the ground's speed.
     if (onGround) this.phase = (this.phase + speed * dt * duty / (2 * this.stride)) % 1;
-    const sw = Math.max(0, Math.min(1, (speed - 10) / 60)), walk = sw * sw * (3 - 2 * sw) * (1 - this.air);
+    const wet = this.wet, swimLean = SWIM_LEAN * Math.min(1, speed / SWIM_FULL) * wet;
+    const sw = Math.max(0, Math.min(1, (speed - 10) / 60)), walk = sw * sw * (3 - 2 * sw) * (1 - this.air) * (1 - wet);
     if (speed > 1) {
       sel[0] = fwd / speed;
       sel[1] = left / speed;
@@ -259,10 +272,10 @@ export class PlayerAnimator {
     const stride = Math.cos(this.phase * 2 * Math.PI) * walk; // 1: the left foot ahead
     p.pos[PELVIS * 3] = -5 * c;
     p.pos[PELVIS * 3 + 1] = SWAY * Math.sin(this.time * 0.94) * rest;
-    p.pos[PELVIS * 3 + 2] = PELVIS_Z - CROUCH_DROP * c - (drop + KNEE_SOFT) * (1 - c);
+    p.pos[PELVIS * 3 + 2] = PELVIS_Z - CROUCH_DROP * c - (drop + KNEE_SOFT) * (1 - c) + SWIM_BOB * Math.sin(this.time * 2.4) * wet;
     const hipYaw = -RIFLE_BLADE * blade - HIP_SWING * stride + HIP_TURN * moveYaw;
     const E = p.eul; // the turns, applied together by turnAll() (see Pose.turnAll)
-    E[PELVIS * 3] = MOVE_LEAN * dirF * walk; E[PELVIS * 3 + 1] = hipYaw; E[PELVIS * 3 + 2] = -MOVE_LEAN * dirL * walk;
+    E[PELVIS * 3] = MOVE_LEAN * dirF * walk + swimLean; E[PELVIS * 3 + 1] = hipYaw; E[PELVIS * 3 + 2] = -MOVE_LEAN * dirL * walk;
 
     // Spine: crouch lean, the ready lean, aim pitch (down-positive), rifle twist, the
     // shoulders taking back two thirds of the hips' swing and turn, breathing, fire kick;
@@ -276,8 +289,8 @@ export class PlayerAnimator {
     E[SPINE2 * 3] = lean * 0.3 + aimP * 0.15 + breath; E[SPINE2 * 3 + 1] = twist;
     const swing = Math.sin(Math.PI * this.toss); // the throw's arm swing, out and back (toss 0..1)
     E[SPINE3 * 3] = lean * 0.2 + aimP * 0.15 - this.kick * 5 + swing * 6; E[SPINE3 * 3 + 1] = twist + swing * 10;
-    E[NECK * 3] = -lean * 0.4 + aimP * 0.2 - breath * 0.5; E[NECK * 3 + 1] = unturn;
-    E[HEAD * 3] = -lean * 0.6 + aimP * 0.35 + this.kick * 5 - breath * 0.5; E[HEAD * 3 + 1] = unturn;
+    E[NECK * 3] = -lean * 0.4 + aimP * 0.2 - breath * 0.5 - swimLean * 0.45; E[NECK * 3 + 1] = unturn;
+    E[HEAD * 3] = -lean * 0.6 + aimP * 0.35 + this.kick * 5 - breath * 0.5 - swimLean * 0.45; E[HEAD * 3 + 1] = unturn;
     p.turnAll().solve();
 
     // Legs: feet under the hips, apart at rest (the right one back when bladed), the
@@ -291,6 +304,12 @@ export class PlayerAnimator {
       goal[3] = dirF * back * walk + (1 - walk);
       goal[4] = dirL * back * walk + SIDE[s] * 0.25;
       goal[5] = 0;
+      if (wet > 0) { // swimming: along the body's axis below the hips, kicking across it
+        const la = swimLean * Math.PI / 180, ca = Math.cos(la), sa = Math.sin(la);
+        const kick = Math.sin(this.time * KICK_RATE + s * Math.PI) * KICK;
+        goal[0] += (-sa * SWIM_LEG + ca * kick - goal[0]) * wet;
+        goal[2] += (p.pos[PELVIS * 3 + 2] - ca * SWIM_LEG - sa * kick - goal[2]) * wet;
+      }
       p.reachGoal(HIP[s], KNEE[s], ANKLE[s]);
       te[0] = 0; te[1] = SIDE[s] * TOES_OUT * (1 - this.air) + FOOT_TURN * moveYaw; te[2] = 0;
       Q.fromEulerAt(tq, 0, te, 0);
@@ -610,7 +629,7 @@ export class PlayerAnimator {
 
 // R.x / y / z = v (no destructuring: an iterator per call in unoptimized code).
 // Runs step() through what a match reaches later (running, crouching, kneeling, in the
-// air, reloading a rifle, a shotgun and a revolver, dying both ways) with one animator, so
+// air, swimming, reloading a rifle, a shotgun and a revolver, dying both ways) with one animator, so
 // the optimizer's type feedback, shared by every animator, holds fractions from the start.
 // A site that had only seen whole numbers (duck 0, run 0 while everyone stood) was compiled
 // for integers and deoptimized at the first crouch or run, which threw the function back
@@ -628,6 +647,9 @@ export function primeAnimator(points) {
   run(0, 30.5, -20.5, 0.5, true, HOLD_PISTOL, 0, true, 0, 40);
   run(0, 30.5, 0, 1, true, HOLD_C4, ANIM_PLANT, true);
   run(0, 30.5, 5.5, 0.3, false, HOLD_KNIFE, 0, true, 0, 40);
+  a.swim = true; // in water: treading, then swimming
+  run(0, 30.5, 0, 0, false, HOLD_RIFLE, 0, true, 0, 40);
+  a.swim = false;
   a.throwArm();
   run(0, 30.5, 0, 0, true, HOLD_KNIFE, 0, true, 0, 20);
   for (const name of ['ak47', 'nova', 'revolver']) {

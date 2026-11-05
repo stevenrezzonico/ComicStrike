@@ -112,6 +112,28 @@ Deno.test('player animation: lifted feet swing the way we walk, planted feet pus
   }
 });
 
+Deno.test('player animation: in water it treads upright, kicking; swimming, it leans forward with the legs behind', () => {
+  const tread = new PlayerAnimator();
+  tread.swim = true;
+  let lo = Infinity, hi = -Infinity;
+  run(tread, 64, () => [0, 0, 0], { ground: false });
+  for (let k = 0; k < 128; k++) {
+    run(tread, 1, () => [0, 0, 0], { ground: false });
+    const x = bone(tread, 'ankle_L')[0];
+    lo = Math.min(lo, x);
+    hi = Math.max(hi, x);
+  }
+  assert.ok(bone(tread, 'head_0')[2] > 55, `upright (head at ${bone(tread, 'head_0')[2].toFixed(1)})`);
+  assert.ok(hi - lo > 6, `a scissor kick (the ankle ${lo.toFixed(1)} .. ${hi.toFixed(1)})`);
+  const swim = new PlayerAnimator();
+  swim.swim = true;
+  run(swim, 128, (t) => [t * 200, 0, 0], { ground: false });
+  const pelvis = bone(swim, 'pelvis'), head = bone(swim, 'head_0'), ankle = bone(swim, 'ankle_L');
+  assert.ok(head[0] - pelvis[0] > 15, `leaning forward (head ${(head[0] - pelvis[0]).toFixed(1)} ahead of the hips)`);
+  assert.ok(pelvis[0] - ankle[0] > 15, `the legs behind (${(pelvis[0] - ankle[0]).toFixed(1)})`);
+  assert.ok(swim.pose.skin.every((v) => Number.isFinite(v)));
+});
+
 Deno.test('player animation: crouch drops the head toward the squashed head box', () => {
   const stand = run(new PlayerAnimator(), 32, () => [0, 0, 0]);
   const crouch = run(new PlayerAnimator(), 32, () => [0, 0, 0], { duck: 1 });
