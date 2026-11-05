@@ -7,7 +7,7 @@
 import {
   IN_JUMP, IN_DUCK, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_SPEED,
 } from './constants.js';
-import { CONTENTS_EMPTY } from './bsp.js';
+import { CONTENTS_EMPTY, CONTENTS_WATER, CONTENTS_SLIME } from './bsp.js';
 import {
   Trace, tracePlayerA, traceEntity, entityContents, pointContents, hullFits,
   HULL_STAND, HULL_DUCK, HULL_POINT, HULL_MINS, HULL_MAXS, ENT_LADDER, ENT_BODY_BASE, BODY_FIELDS,
@@ -31,7 +31,11 @@ export const MOVE = {
   ladderJumpSpeed: 270,
   ladderDetachTime: 0.2,
   waterSinkSpeed: 60,
-  waterJumpSpeed: 100,
+  waterJumpSpeed: 100, // jump held in water swims up at this (HL's PM_Jump; slime 80, lava 50)
+  slimeJumpSpeed: 80,
+  lavaJumpSpeed: 50,
+  waterJumpOut: 225, // HL's PM_CheckWaterJump: the leap out of the water onto a ledge
+  waterJumpPush: 50, // and its push into the wall
   nonJumpVelocity: 140, // NON_JUMP_VELOCITY
   standableNormal: 0.7,
   // Stamina: landing/jumping adds stamina, which scales ground speed by
@@ -78,6 +82,7 @@ export const FL_ONGROUND = 1;
 export const FL_DUCKING = 2; // using the duck hull
 export const FL_ONLADDER = 4;
 export const FL_NOCLIP = 8; // flying through walls (noclip: the demo, sv_cheats, the sandbox)
+export const FL_WATERJUMP = 16; // leaping out of the water onto a ledge (HL's FL_WATERJUMP)
 export const NOCLIP_SPEED = 800; // units a second (walking: 0.3 of it)
 
 export const EV_JUMP = 1;
@@ -102,7 +107,7 @@ export function noclipMove(ps, buttons, pitch, yaw, frametime) {
   }
   f[PS_FALL_VEL] = 0;
   f[PS_DUCK_AMOUNT] = 0;
-  i[PS_FLAGS] &= ~(FL_ONGROUND | FL_DUCKING | FL_ONLADDER);
+  i[PS_FLAGS] &= ~(FL_ONGROUND | FL_DUCKING | FL_ONLADDER | FL_WATERJUMP);
   i[PS_GROUNDENT] = -1;
   i[PS_EVENTS] = 0;
   i[PS_OLDBUTTONS] = buttons;
@@ -162,6 +167,7 @@ for (const k in M) M[k] = 0;
 let hull = HULL_STAND;
 let onGround = false;
 let flags = 0, waterLevel = 0, oldButtons = 0, events = 0;
+let waterType = CONTENTS_EMPTY; // the liquid at the feet (checkWater)
 let groundEnt = -1;
 
 const tr = new Trace();
@@ -420,6 +426,7 @@ function checkWater() {
   let c = pointContents(W, M.ox, M.oy, feet);
   if (c > -3 || c < -5) return; // not water / slime / lava
   waterLevel = 1;
+  waterType = c;
   c = pointContents(W, M.ox, M.oy, M.oz);
   if (c > -3 || c < -5) return;
   waterLevel = 2;
@@ -460,6 +467,45 @@ function waterMove(buttons) {
     }
   }
   tryPlayerMove();
+}
+
+// HL's PM_CheckWaterJump: waist deep (waterLevel 2), not sinking fast, not backing away,
+// facing a near-vertical wall within 24 units at the origin + 8 that is clear at the hull's
+// top: leap out (vz 225, pushing 50 u/s into the wall) under FL_WATERJUMP.
+function checkWaterJump() {
+  if (M.vz < -180) return; // just jumped in
+  const fl = Math.sqrt(M.fx * M.fx + M.fy * M.fy);
+  if (fl === 0) return;
+  const fx = M.fx / fl, fy = M.fy / fl;
+  if (M.vx * fx + M.vy * fy < 0) return; // backing into the water
+  const own = hull, low = M.oz + 8, top = M.oz + HULL_MAXS[own * 3 + 2];
+  hull = HULL_POINT;
+  trace(M.ox, M.oy, low, M.ox + 24 * fx, M.oy + 24 * fy, low);
+  if (tr.fraction < 1 && Math.abs(tr.nz) < 0.1) {
+    const nx = tr.nx, ny = tr.ny;
+    trace(M.ox, M.oy, top, M.ox + 24 * fx, M.oy + 24 * fy, top);
+    if (tr.fraction === 1) {
+      M.vx = -MOVE.waterJumpPush * nx;
+      M.vy = -MOVE.waterJumpPush * ny;
+      M.vz = MOVE.waterJumpOut;
+      flags |= FL_WATERJUMP;
+    }
+  }
+  hull = own;
+}
+
+// HL's PM_WaterJump and PM_FlyMove: the leap keeps its push into the wall every tick (the
+// wall clips it while it is in the way) and takes only the first half of the gravity, and
+// none while still waist deep (HL returns before its second half), until the feet are out
+// of the water, it falls or it lands. HL's 2 s timer never matters at 225 u/s.
+function waterJumpMove() {
+  const px = M.vx, py = M.vy;
+  if (waterLevel < 2) M.vz -= MOVE.gravity * 0.5 * M.dt;
+  tryPlayerMove();
+  M.vx = px; M.vy = py;
+  categorizePosition();
+  if (onGround) M.vz = 0;
+  if (waterLevel === 0 || M.vz <= 0) flags &= ~FL_WATERJUMP;
 }
 
 // Ladder volumes are func_ladder brushes; touching = player center inside the hull-expanded volume.
@@ -731,16 +777,20 @@ export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) 
   M.ladderCooldown = M.ladderCooldown > M.dt ? M.ladderCooldown - M.dt : 0;
   const ladder = M.ladderCooldown > 0 ? -1 : findLadder();
   if (ladder >= 0) {
-    flags |= FL_ONLADDER;
+    flags = (flags | FL_ONLADDER) & ~FL_WATERJUMP;
     ladderMove(ladder, buttons);
     categorizePosition();
   } else {
     flags &= ~FL_ONLADDER;
     checkWater();
-    if (waterLevel >= 2) {
+    if (waterLevel === 2 && !(flags & FL_WATERJUMP)) checkWaterJump();
+    if (flags & FL_WATERJUMP) {
+      waterJumpMove();
+    } else if (waterLevel >= 2) {
       if (buttons & IN_JUMP) {
         setGround(false);
-        M.vz = MOVE.waterJumpSpeed;
+        M.vz = waterType === CONTENTS_WATER ? MOVE.waterJumpSpeed
+          : waterType === CONTENTS_SLIME ? MOVE.slimeJumpSpeed : MOVE.lavaJumpSpeed;
       }
       waterMove(buttons);
       categorizePosition();

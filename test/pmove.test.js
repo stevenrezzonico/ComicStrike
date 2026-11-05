@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { parseVec3 } from '../shared/bsp.js';
+import { parseVec3, CONTENTS_SLIME, CONTENTS_LAVA } from '../shared/bsp.js';
 import { TICK_DT, IN_FORWARD, IN_JUMP, IN_DUCK, IN_SPEED, IN_MOVERIGHT } from '../shared/constants.js';
 import {
   CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, HULL_POINT, HULL_STAND, ENT_LADDER, ENT_SOLID, ENT_BODY_BASE,
 } from '../shared/trace.js';
 import {
   createPlayerState, playerMove, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_EVENTS, PS_WATERLEVEL, PS_GROUNDENT, PS_BASEVEL,
-  FL_ONGROUND, FL_DUCKING, EV_JUMP, EV_LAND, EV_APEX, MOVE, eyeOffset, VIEW_STAND, VIEW_DUCK,
+  FL_ONGROUND, FL_DUCKING, FL_WATERJUMP, EV_JUMP, EV_LAND, EV_APEX, MOVE, eyeOffset, VIEW_STAND, VIEW_DUCK,
 } from '../shared/pmove.js';
 import { feetOffset } from '../shared/hitgroups.js';
 import { boxWorld, floorWorld, emptyWorld, FLOOR, WATER } from './worlds.js';
@@ -241,6 +241,43 @@ Deno.test('water: submerged player sinks idle and swims up with jump', () => {
   const z = ps.f[PS_ORIGIN + 2];
   run(w, ps, 32, IN_JUMP);
   assert.ok(ps.f[PS_ORIGIN + 2] > z + 20, 'should swim up');
+});
+
+Deno.test('water: jump swims up fastest in water, slower in slime, slowest in lava', () => {
+  const up = (contents) => {
+    const pool = { min: [-500, -500, 0], max: [500, 500, 400], contents };
+    const w = boxWorld([{ min: [-8192, -8192, -8192], max: [8192, 8192, -1] }, pool]);
+    return run(w, spawn(0, 0, 200), 1, IN_JUMP).f[PS_VEL + 2];
+  };
+  const water = up(WATER), slime = up(CONTENTS_SLIME), lava = up(CONTENTS_LAVA);
+  assert.ok(water > slime && slime > lava && lava > 0, `water ${water}, slime ${slime}, lava ${lava}`);
+});
+
+// A pool (bottom -200, surface 0) against a deck at x >= 0 whose top is `deck`.
+function poolWorld(deck) {
+  const water = { min: [-500, -500, -200], max: [0, 500, 0], contents: WATER };
+  return boxWorld([{ min: [-8192, -8192, -8192], max: [8192, 8192, -200] }, { min: [0, -500, -200], max: [500, 500, deck] }, water]);
+}
+
+Deno.test('water: waist deep facing a low ledge leaps out onto it (HL water jump)', () => {
+  const w = poolWorld(8);
+  const ps = spawn(-20, 0, -10);
+  let leapt = false;
+  run(w, ps, 128, IN_FORWARD, 0, 0, (p) => {
+    if (p.i[PS_FLAGS] & FL_WATERJUMP) leapt = true;
+  });
+  assert.ok(leapt, 'water jump started');
+  assert.ok(ps.i[PS_FLAGS] & FL_ONGROUND, 'standing');
+  near(ps.f[PS_ORIGIN + 2], 8 + 36, 0.1, 'on the deck');
+  assert.ok(ps.f[PS_ORIGIN] > 0, `over the deck (x=${ps.f[PS_ORIGIN]})`);
+  assert.equal(ps.i[PS_FLAGS] & FL_WATERJUMP, 0, 'over');
+});
+
+Deno.test('water: no leap at a wall too high, nor backing away from a low one', () => {
+  const ps = spawn(-20, 0, -10);
+  run(poolWorld(64), ps, 64, IN_FORWARD, 0, 0, (p) => assert.equal(p.i[PS_FLAGS] & FL_WATERJUMP, 0, 'too high'));
+  const back = spawn(-20, 0, -10, -100, 0, 0);
+  run(poolWorld(8), back, 1, 0, 0, 0, (p) => assert.equal(p.i[PS_FLAGS] & FL_WATERJUMP, 0, 'backing'));
 });
 
 Deno.test('conveyor carries a standing player and its momentum survives leaving it', () => {
