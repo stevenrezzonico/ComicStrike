@@ -10,6 +10,7 @@ node_modules/
 wads/
 !maps/de_cache_cs2_beta.bsp
 !maps/fy_buzzkill.bsp
+!maps/fy_poolparty.bsp
 !maps/fy_snow_pool.bsp
 !maps/fy_snow_pool_classic.bsp
 !maps/awp_cs16.bsp

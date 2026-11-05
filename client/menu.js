@@ -197,6 +197,7 @@ export class Menu {
     this.con = con;
     this.config = config;
     this.configNote = null; // [text, error] after an import, shown under the settings
+    this.shift = [0, 0]; // px the pause menu's settings panel was dragged by (to see the gun under it)
     this.cv = cv;
     this.binds = binds;
     this.inGame = false; // pause menu (in a game) or start menu
@@ -448,6 +449,7 @@ export class Menu {
     else if (!this.inGame) this.renderWelcome(body);
     else if (this.room && this.online) this.renderInvite(body);
     body.classList.toggle('empty', !this.panel && this.inGame && !(this.room && this.online));
+    this.placePanel();
     this.updateWindow();
   }
 
@@ -731,6 +733,9 @@ export class Menu {
 
   renderSettings(body) {
     this.hole = null;
+    // In a game, with a mouse: a grip to drag the panel aside and watch the view (the gun) while
+    // trying the sliders.
+    if (this.inGame && matchMedia('(pointer: fine)').matches) body.append(this.grip());
     const tabs = el('div', 'menu-tabs');
     TABS.forEach(([name], i) => {
       const b = button(name, () => {
@@ -768,6 +773,47 @@ export class Menu {
     }, 'menu-reset'));
     this.configRow(body);
     this.refresh();
+  }
+
+  // The settings panel's grip: dragging it moves the panel, a double click puts it back.
+  grip() {
+    const grip = el('div', 'menu-grip', 'Drag here to move the settings (double click: back)');
+    grip.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      grip.setPointerCapture(e.pointerId);
+      const [sx, sy] = this.shift, x0 = e.clientX, y0 = e.clientY;
+      const move = (m) => {
+        this.shift = [sx + m.clientX - x0, sy + m.clientY - y0];
+        this.placePanel();
+      };
+      const up = () => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        grip.removeEventListener('pointercancel', up);
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    });
+    grip.addEventListener('dblclick', () => {
+      this.shift = [0, 0];
+      this.placePanel();
+    });
+    return grip;
+  }
+
+  // The settings panel moved by `shift` in a game (in place otherwise), kept inside the window
+  // (past its edge it made the menu scroll), its top first when it is taller.
+  placePanel() {
+    const b = this.body;
+    b.style.transform = '';
+    if (!this.inGame || this.panel !== 'settings' || (!this.shift[0] && !this.shift[1])) return;
+    const r = b.getBoundingClientRect();
+    const x = Math.max(Math.min(this.shift[0], innerWidth - r.right), -r.left);
+    const y = Math.max(Math.min(this.shift[1], innerHeight - r.bottom), -r.top);
+    this.shift = [x, y];
+    b.style.transform = `translate(${x}px, ${y}px)`;
   }
 
   // Export settings (every setting and bind as a .cfg file, the saved config's text) and
