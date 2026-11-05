@@ -1125,7 +1125,7 @@ void main() {
   // view (its depth is cleared before it draws) and its ink stay, the sky goes.
   if (u_smoke > 0.0 && (fl & G_VIEW) == 0u) {
     float fog = u_smoke * ((fl & G_SKY) != 0u ? 1.0 : 1.0 - exp(-dP / SMOKE_SIGHT));
-    vec3 smoke = mix(SMOKE_TONE, SMOKE_TONE * vec3(0.52, 0.53, 0.62), tone(frag, 0.15, size, TURN_SHADE, 0.0));
+    vec3 smoke = mix(SMOKE_TONE, SMOKE_TONE * vec3(0.52, 0.53, 0.62), tone(frag, 0.15, size, TURN_SHADE, u_dot < 1.0 ? 1.0 : 0.0));
     col = mix(col, smoke, fog);
     edge *= 1.0 - fog;
   }

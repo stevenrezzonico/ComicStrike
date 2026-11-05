@@ -102,7 +102,7 @@ export class Renderer {
     // dead: 0..1, our death's red-brown print (client/deathpanel.js).
     // smoke: 0..1, the camera inside a smoke cloud: the print fogs over with distance.
     this.style = {
-      comic: true, ink: 1, dots: 1, bands: 0, lift: 0.3, calm: 0, soft: false, inkaa: true, dead: 0, smoke: 0,
+      comic: true, ink: 1, dots: 0, bands: 0, lift: 0.3, calm: 0, soft: false, inkaa: true, dead: 0, smoke: 0,
     };
     this.novis = false; // r_novis: draw the whole world (no visibility culling)
     this.zoom = 1; // 90 / fov
