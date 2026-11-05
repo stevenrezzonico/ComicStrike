@@ -190,6 +190,11 @@ async function serveStatic(pathname, req) {
       'cache-control': 'no-cache',
       'etag': etag,
       'vary': 'accept-encoding',
+      // Cross-origin isolated pages and workers: practice's shared-memory rings need it
+      // (client/ring.js); everything the pages load is our own, so nothing is blocked.
+      'cross-origin-opener-policy': 'same-origin',
+      'cross-origin-embedder-policy': 'require-corp',
+      'cross-origin-resource-policy': 'same-origin',
     };
     if (req.headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers });
     if (COMPRESSED.has(ext) && /\bgzip\b/.test(req.headers.get('accept-encoding') || '')) {

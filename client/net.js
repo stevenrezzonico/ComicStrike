@@ -9,6 +9,7 @@ import {
   C2S_BYE,
 } from '../shared/protocol.js';
 import { Hostages } from '../shared/hostages.js';
+import { Ring, SLOT, TO_WORKER_SLOTS, TO_PAGE_SLOTS, ringBytes } from './ring.js';
 import { Items } from '../shared/items.js';
 import { Grenades } from '../shared/grenades.js';
 
@@ -130,16 +131,26 @@ export class NetClient {
     this.opened();
   }
 
-  // Practice: the server running in a Web Worker (client/localserver.js). Datagrams go
-  // without a message object around them (an object per message was more garbage than the
-  // datagrams): to the worker one buffer of ours, reused, holding the session id (u32), the
-  // length (u16) and the datagram, which postMessage copies; from it a transferred
-  // ArrayBuffer, the session id (u32), then each datagram after its u16 length. A demo's
-  // player sends `dgram { id, bytes }` objects, one each.
+  // Practice: the server running in a Web Worker (client/localserver.js). Cross-origin
+  // isolated (`shared`: the server's COOP and COEP headers), the datagrams go through two
+  // rings in shared memory (client/ring.js), each side taking what came at its own ticks:
+  // no message at all (a message to the idle worker cost ~37 µs to wake its thread, 40 % of
+  // a tick). Else as messages, with no object around them (an object per message was more
+  // garbage than the datagrams): to the worker one buffer of ours, reused, holding the
+  // session id (u32), the length (u16) and the datagram, which postMessage copies; from it a
+  // transferred ArrayBuffer, the session id (u32), then each datagram after its u16 length.
+  // A demo's player sends `dgram { id, bytes }` objects, one each.
   // `rcon`: the worker's rcon password (the console uses it).
-  connectLocal(worker, rcon) {
+  connectLocal(worker, rcon, shared = globalThis.crossOriginIsolated === true) {
     const id = this.localId = ++localSessions;
     this.local = worker;
+    if (shared) {
+      const sab = new SharedArrayBuffer(ringBytes(TO_WORKER_SLOTS) + ringBytes(TO_PAGE_SLOTS));
+      this.toWorker = new Ring(sab, 0, TO_WORKER_SLOTS);
+      this.fromWorker = new Ring(sab, ringBytes(TO_WORKER_SLOTS), TO_PAGE_SLOTS);
+      this.qbuf = new Uint8Array(QUEUE * SLOT); // the queue's own copies of what the ring brought
+      this.sab = sab;
+    }
     const out = this.localOut = new Uint8Array(6 + 2048);
     out[0] = id;
     out[1] = id >> 8;
@@ -167,7 +178,7 @@ export class NetClient {
       }
     };
     worker.addEventListener('message', this.onLocal);
-    worker.postMessage({ type: 'open', id });
+    worker.postMessage(shared ? { type: 'open', id, sab: this.sab } : { type: 'open', id });
     this.opened();
   }
 
@@ -212,7 +223,7 @@ export class NetClient {
   receive(bytes, from, to, t) {
     this.bytesIn += to - from + 28; // + UDP/IP headers, like net_graph counts
     this.packetsIn++;
-    if (this.recorder) this.recorder.incoming(from === 0 && to === bytes.length ? bytes : bytes.subarray(from, to), t);
+    if (this.recorder) this.recorder.incoming(bytes.slice(from, to), t); // (a copy: a batch or the queue's memory is reused)
     if (this.lastPacketAt) this.gaps[this.gapCount++ & 127] = t - this.lastPacketAt;
     this.lastPacketAt = t;
     if (this.qLen === QUEUE) { // tick loop stalled: drop the oldest
@@ -225,6 +236,24 @@ export class NetClient {
     this.qOff[k] = from;
     this.qEnd[k] = to;
     this.qLen++;
+  }
+
+  // What the practice worker put in the shared ring since the last poll, copied into the
+  // queue's own memory (`qbuf`, a slot per queue place): text cannot be decoded out of shared
+  // memory, and the ring's slot is the worker's again once taken.
+  drainRing() {
+    let t = -1;
+    for (;;) {
+      if (this.qLen === QUEUE) { // not polled for long: the oldest goes
+        this.queue[this.qHead] = null;
+        this.qHead = (this.qHead + 1) % QUEUE;
+        this.qLen--;
+      }
+      const off = ((this.qHead + this.qLen) % QUEUE) * SLOT, n = this.fromWorker.take(this.qbuf, off);
+      if (n < 0) return;
+      if (t < 0) t = performance.now();
+      this.receive(this.qbuf, off + 2, off + 2 + n, t);
+    }
   }
 
   close(reason) {
@@ -257,6 +286,10 @@ export class NetClient {
     if (this.recorder) this.recorder.outgoing(bytes, this.lastSend);
     this.bytesOut += bytes.byteLength + 28;
     this.packetsOut++;
+    if (this.toWorker) { // the shared ring (full: dropped, as on a network)
+      this.toWorker.put(bytes);
+      return;
+    }
     if (this.local) { // our buffer: the id (written once), the length, the datagram; postMessage copies it
       const out = this.localOut, n = Math.min(bytes.length, out.length - 6);
       out[4] = n & 255;
@@ -313,6 +346,7 @@ export class NetClient {
   // Decodes queued datagrams into the snapshot ring and `events` (emptied first).
   // Returns true if a newer snapshot arrived.
   poll() {
+    if (this.fromWorker) this.drainRing();
     let fresh = false;
     this.events.shots = 0;
     this.events.kills = 0;
@@ -344,12 +378,12 @@ export class NetClient {
       } else if (type === S2C_WELCOME) {
         if (!this.welcome) {
           this.welcome = readWelcome(r);
-          this.keep.welcome = bytes.subarray(from, to);
+          this.keep.welcome = bytes.slice(from, to);
         }
       } else if (type === S2C_REJECT) {
         this.rejected = r.str();
       } else if (type === S2C_INFO) {
-        this.keep.info = bytes.subarray(from, to);
+        this.keep.info = bytes.slice(from, to);
         readInfo(r, this.names, this.teams, this.kills, this.deaths, this.scores, this.mvps);
       } else if (type === S2C_REPORT) {
         this.report = readReport(r);
@@ -362,7 +396,7 @@ export class NetClient {
       } else if (type === S2C_CHANGELEVEL) {
         this.changelevel = r.str();
       } else if (type === S2C_HOSTAGES) {
-        this.keep.hostages = bytes.subarray(from, to);
+        this.keep.hostages = bytes.slice(from, to);
         readHostages(r, this.hostages);
       } else if (type === S2C_GRENADES) {
         const tick = readGrenades(r, this.grenadeScratch);
@@ -374,7 +408,7 @@ export class NetClient {
           this.grenadesVersion++;
         }
       } else if (type === S2C_ITEMS) {
-        this.keep.items = bytes.subarray(from, to);
+        this.keep.items = bytes.slice(from, to);
         readItems(r, this.items);
         this.itemsVersion++;
       }

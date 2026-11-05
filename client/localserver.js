@@ -13,7 +13,10 @@
 //                        (the map's own weapons laid out: mp_armoury_entities),
 //                        bytes: the map file itself (a player's own map, checked as untrusted:
 //                        parseUntrustedBSP), else fetched from maps/ },
-//               open { id }, a Uint8Array (the session id, the length, a datagram), close { id },
+//               open { id, sab? }: with a SharedArrayBuffer (a cross-origin isolated page) the
+//                 datagrams go through its two rings (client/ring.js) and no message carries
+//                 them; else as below,
+//               a Uint8Array (the session id, the length, a datagram), close { id },
 //               pause { on }: the page's pause menu; the ticks stop (bots, the round clock,
 //                 timeouts) and go on from where they were
 // Messages out: ready { rcon, names: the server console's catalog() } | failed { error },
@@ -22,6 +25,7 @@
 import { Host, GAME_MODES } from '../server/host.js';
 import { parseBSP, parseUntrustedBSP } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
+import { Ring, SLOT, TO_WORKER_SLOTS, TO_PAGE_SLOTS, ringBytes } from './ring.js';
 
 const CFGS = Object.values(GAME_MODES).map((name) => `gamemode_${name}.cfg`);
 const TICK_MS = 1000 / TICK_RATE;
@@ -31,7 +35,17 @@ let players = 0; // bot_quota (fill) once the player is in
 const maps = new Map(); // name -> parsed BSP
 let own = null; // a player's own map, from its bytes: { name, bsp } (kept across map changes)
 const cfgs = {};
-const sessions = new Map(); // id -> { game, client }
+const sessions = new Map(); // id -> { game, client, rings: { in, out } or null }
+const IN = new Uint8Array(SLOT); // a datagram taken from a page's ring
+
+// Every session's datagrams from its page's ring, before the ticks (the page puts its
+// commands there at its own ticks; nothing wakes this thread for them).
+function drainRings() {
+  for (const s of sessions.values()) {
+    if (!s.rings || !s.client) continue;
+    for (let n = s.rings.in.take(IN, 0); n >= 0; n = s.rings.in.take(IN, 0)) s.game.receive(s.client, IN.subarray(2, 2 + n));
+  }
+}
 // Datagrams waiting to go out, by session id: sent together once the task that made them
 // (the ticks due, a message from the page) is over.
 const pending = new Map(); // id -> [Uint8Array copies]
@@ -114,6 +128,7 @@ function loop() {
   epoch = performance.now();
   const step = () => {
     const game = host.game;
+    drainRings();
     if (paused) {
       epoch = performance.now() - game.tick * TICK_MS;
       setTimeout(step, 50);
@@ -142,8 +157,14 @@ onmessage = (e) => {
     start(m).catch((err) => postMessage({ type: 'failed', error: String(err.message || err) }));
   } else if (m.type === 'open') {
     const game = host.game, id = m.id;
+    const rings = m.sab
+      ? { in: new Ring(m.sab, 0, TO_WORKER_SLOTS), out: new Ring(m.sab, ringBytes(TO_WORKER_SLOTS), TO_PAGE_SLOTS) } : null;
     const session = {
       send(bytes) {
+        if (rings) { // the page takes it at its next tick (a full ring drops it, as a network would)
+          rings.out.put(bytes);
+          return;
+        }
         if (!pending.has(id)) pending.set(id, []);
         pending.get(id).push(bytes.slice()); // (the server's buffers are reused)
         if (!flushQueued) {
@@ -158,7 +179,7 @@ onmessage = (e) => {
       },
     };
     const client = game.connect(session);
-    if (client) sessions.set(id, { game, client });
+    if (client) sessions.set(id, { game, client, rings });
     if (players) { // bots fill the teams once the player is there (they balance around him)
       host.con.exec(`bot_quota_mode fill; bot_quota ${players}`);
       players = 0;
