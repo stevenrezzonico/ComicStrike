@@ -1,7 +1,7 @@
 // The client's console: CS:GO client cvars, key binds, and the saved config (archived
 // cvars + binds, kept in this browser's localStorage like CS:GO's config.cfg).
 
-import { Console, FCVAR_ARCHIVE, FCVAR_PROTECTED } from '../shared/cvars.js';
+import { Console, FCVAR_ARCHIVE, FCVAR_PROTECTED, parse } from '../shared/cvars.js';
 import { Binds, PAD_NAMES } from './binds.js';
 import { LOOK_GUNS, LOOKS, looksOf } from './models/looks.js';
 
@@ -26,9 +26,10 @@ export function createConsole(print) {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => writeConfig(), SAVE_DELAY_MS);
   };
+  const configText = () => [CONFIG_HEADER, ...con.archive(), ...binds.archive()].join('\n');
   const writeConfig = () => {
     try {
-      localStorage.setItem(CONFIG_KEY, [CONFIG_HEADER, ...con.archive(), ...binds.archive()].join('\n'));
+      localStorage.setItem(CONFIG_KEY, configText());
       return true;
     } catch {
       return false; // storage blocked (private window): settings last for this page only
@@ -117,6 +118,10 @@ export function createConsole(print) {
   add('viewmodel_offset_x', 1, 'Weapon model offset: right', -2.5, 2.5);
   add('viewmodel_offset_y', 1, 'Weapon model offset: forward', -2, 2);
   add('viewmodel_offset_z', -1, 'Weapon model offset: up', -2, 2);
+  add('viewmodel_pitch', 0, 'Weapon model turned: muzzle up (degrees)', -30, 30);
+  add('viewmodel_yaw', 0, 'Weapon model turned: muzzle toward the middle of the screen (degrees)', -30, 30);
+  add('viewmodel_roll', 0, 'Weapon model tilted: top toward the middle of the screen (degrees)', -45, 45);
+  add('cl_righthand', 1, 'Weapon in the right hand (0: the left, the first-person view mirrored)', 0, 1);
   // Sound, network, identity.
   add('volume', 1, 'Master volume', 0, 1);
   add('snd_footstep_volume', 1, 'Footstep volume (ours and other players)', 0, 2);
@@ -160,7 +165,19 @@ export function createConsole(print) {
     if (binds.adoptKeys(PAD_NAMES)) save();
     if (old) writeConfig();
   }
-  return { con, binds, cv, save };
+  // A file from Export settings (or written by hand): only what a config holds, archived
+  // cvars and binds, is run; any other command in it is dropped. Returns how many ran.
+  const importConfig = (text) => {
+    let n = 0;
+    for (const args of parse(text)) {
+      const name = args[0].toLowerCase(), cvar = con.cvars.get(name);
+      if (name !== 'bind' && name !== 'unbindall' && !(cvar && cvar.flags & FCVAR_ARCHIVE)) continue;
+      con.run(args, { print: () => {} });
+      n++;
+    }
+    return n;
+  };
+  return { con, binds, cv, save, configText, importConfig };
 }
 
 // Runs `fn` too when `cvar` changes (keeps its existing change handler).

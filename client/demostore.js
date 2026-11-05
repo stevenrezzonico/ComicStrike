@@ -57,10 +57,15 @@ export const deleteDemo = (name) => transact('readwrite', (m, d) => {
 
 // Saves `bytes` as a file named `name`.csdemo through the browser's download.
 export function downloadDemo(name, bytes) {
-  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+  downloadFile(`${name}.csdemo`, bytes);
+}
+
+// Saves `data` (bytes or text) as a file named `fileName` through the browser's download.
+export function downloadFile(fileName, data, type = 'application/octet-stream') {
+  const url = URL.createObjectURL(new Blob([data], { type }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${name}.csdemo`;
+  a.download = fileName;
   document.body.append(a);
   a.click();
   a.remove();

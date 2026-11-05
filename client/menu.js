@@ -9,6 +9,7 @@ import { drawCrosshair2d } from './gl/crosshair.js';
 import { quote } from '../shared/cvars.js';
 import { LOOK_GUNS, LOOKS, looksOf } from './models/looks.js';
 import { WEAPONS, WEAPON_ID } from '../shared/weapons.js';
+import { downloadFile } from './demostore.js';
 
 const ESCAPE_GRACE_MS = 300; // the Escape that released the mouse must not resume at once
 // Game mode names (server/host.js GAME_MODES) as shown.
@@ -83,6 +84,10 @@ const TABS = [
     ['slider', 'viewmodel_offset_x', 'Weapon offset right', -2.5, 2.5, 0.1],
     ['slider', 'viewmodel_offset_y', 'Weapon offset forward', -2, 2, 0.1],
     ['slider', 'viewmodel_offset_z', 'Weapon offset up', -2, 2, 0.1],
+    ['slider', 'viewmodel_pitch', 'Weapon turn up', -30, 30, 1],
+    ['slider', 'viewmodel_yaw', 'Weapon turn inward', -30, 30, 1],
+    ['slider', 'viewmodel_roll', 'Weapon tilt inward', -45, 45, 1],
+    ['select', 'cl_righthand', 'Weapon hand', ['Left', 'Right']],
     ['section', null, 'HUD'],
     ['toggle', 'cl_drawhud', 'Show HUD'],
     ['toggle', 'cl_comicwords', 'Comic sound words'],
@@ -169,6 +174,8 @@ const hasWebTransport = () => typeof WebTransport !== 'undefined';
 const NO_WEBTRANSPORT = 'This browser cannot play online: it has no WebTransport (Chrome, Edge and Firefox have it, ' +
   'Safari from 26.4). Practice and the map editor work here.';
 
+const CONFIG_MAX_BYTES = 1 << 20; // an imported settings file (the saved config is ~10 KB)
+
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -183,10 +190,13 @@ const button = (text, onClick, cls = '') => {
 };
 
 export class Menu {
-  // con, cv, binds: the client console (client/settings.js).
-  constructor(root, con, cv, binds) {
+  // con, cv, binds: the client console (client/settings.js); config: { text, load }, the
+  // saved settings as a file's text and one taken back (Export / Import settings).
+  constructor(root, con, cv, binds, config) {
     this.root = root;
     this.con = con;
+    this.config = config;
+    this.configNote = null; // [text, error] after an import, shown under the settings
     this.cv = cv;
     this.binds = binds;
     this.inGame = false; // pause menu (in a game) or start menu
@@ -725,6 +735,7 @@ export class Menu {
     TABS.forEach(([name], i) => {
       const b = button(name, () => {
         this.tab = i;
+        this.configNote = null;
         this.render();
       });
       if (i === this.tab) b.classList.add('active');
@@ -746,6 +757,7 @@ export class Menu {
         this.con.exec('binddefaults');
         this.render();
       }, 'menu-reset'));
+      this.configRow(body);
       this.refresh();
       return;
     }
@@ -754,7 +766,39 @@ export class Menu {
       for (const row of rows) if (row[1]) this.cv[row[1]].set(this.cv[row[1]].defaultValue);
       this.refresh();
     }, 'menu-reset'));
+    this.configRow(body);
     this.refresh();
+  }
+
+  // Export settings (every setting and bind as a .cfg file, the saved config's text) and
+  // Import settings (such a file taken back: client/settings.js importConfig), under every tab.
+  configRow(body) {
+    const input = el('input');
+    input.type = 'file';
+    input.accept = '.cfg,.txt';
+    input.hidden = true;
+    const done = (text, error) => {
+      this.configNote = [text, error];
+      if (this.panel === 'settings') this.render();
+    };
+    input.addEventListener('change', () => {
+      const file = input.files[0];
+      if (!file) return;
+      if (file.size > CONFIG_MAX_BYTES) return done('That file is too big to be a settings file.', true);
+      file.text().then((text) => {
+        const n = this.config.load(text);
+        done(n ? `Imported ${n} settings and binds from ${file.name}.` : `No settings in ${file.name}.`, !n);
+      }, () => done(`Could not read ${file.name}.`, true));
+    });
+    const row = el('div', 'menu-row menu-config');
+    row.append(
+      button('Export settings', () => downloadFile('comicstrike.cfg', this.config.text() + '\n', 'text/plain')),
+      button('Import settings', () => input.click()),
+      input,
+    );
+    body.append(row);
+    const note = this.configNote;
+    if (note) body.append(el('p', note[1] ? 'menu-hint menu-error' : 'menu-hint', note[0]));
   }
 
   settingRow([kind, name, label, a, b, step]) {

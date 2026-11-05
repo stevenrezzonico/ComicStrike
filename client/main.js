@@ -146,7 +146,7 @@ const lastCam = new Float32Array(5); // last spectator camera: x, y, z, pitch, y
 
 // The console first: settings are read by everything below.
 let conWin = null;
-const { con, binds, cv } = createConsole((s) => (conWin ? conWin.print(s) : console.log(s)));
+const { con, binds, cv, configText, importConfig } = createConsole((s) => (conWin ? conWin.print(s) : console.log(s)));
 conWin = new ConsoleWindow(con);
 const netGraph = new NetGraph();
 
@@ -181,7 +181,7 @@ const hud = new Hud((item) => { // a buy from the menu closes it
   buy(item);
   closeBuyMenu();
 });
-const menu = new Menu(document.getElementById('menu'), con, cv, binds);
+const menu = new Menu(document.getElementById('menu'), con, cv, binds, { text: configText, load: importConfig });
 const radar = new Radar(document.getElementById('radar'), cv);
 let playing = false; // in a game (online or practice); false: the start menu
 const sounds = new Sounds();
@@ -425,13 +425,13 @@ debris.onLand = (x, y, z) => sounds.tink(x, y, z);
 const tracerTrace = new Trace();
 let ownShots = 0;
 // A shot fired from the eye at (ex, ey, ez) along (pitch, yaw): its casing out of the right
-// side (not the revolver's), and a tracer to (bx, by, bz) (NaN: the first wall along the
-// view) on every third shot of an automatic gun and every shot of the others, none
-// silenced (CS:GO's tracer frequencies, approx.).
-function gunShot(ex, ey, ez, pitch, yaw, quiet, count, w, bx, by, bz) {
+// side (side -1: the left, our own gun in the left hand; not the revolver's), and a tracer
+// to (bx, by, bz) (NaN: the first wall along the view) on every third shot of an automatic
+// gun and every shot of the others, none silenced (CS:GO's tracer frequencies, approx.).
+function gunShot(ex, ey, ez, pitch, yaw, quiet, count, w, bx, by, bz, side = 1) {
   if (!w || !w.gun || !world) return;
   const p = pitch * DEG, yw = yaw * DEG, cp = Math.cos(p);
-  const fx = Math.cos(yw) * cp, fy = Math.sin(yw) * cp, fz = -Math.sin(p), rx = Math.sin(yw), ry = -Math.cos(yw);
+  const fx = Math.cos(yw) * cp, fy = Math.sin(yw) * cp, fz = -Math.sin(p), rx = Math.sin(yw) * side, ry = -Math.cos(yw) * side;
   if (w.name !== 'revolver') {
     const out = 90 + Math.random() * 50, up = 80 + Math.random() * 60;
     debris.casing(ex + fx * 14 + rx * 6, ey + fy * 14 + ry * 6, ez + fz * 14 - 7, rx * out - fx * 20, ry * out - fy * 20, up);
@@ -1340,7 +1340,7 @@ function tick() {
         silenced(ws, ws.f[WS_ACTIVE]));
       const ip = impacts.pos, hit = impacts.count > 0; // the first bullet's first hit
       gunShot(eye[0], eye[1], eye[2], angles[0], angles[1], silenced(ws, ws.f[WS_ACTIVE]), ++ownShots, w,
-        hit ? ip[0] : NaN, hit ? ip[1] : 0, hit ? ip[2] : 0);
+        hit ? ip[0] : NaN, hit ? ip[1] : 0, hit ? ip[2] : 0, cv.cl_righthand.bool ? 1 : -1);
     }
     scape.ownMove(ps, buttons & IN_SPEED, ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1],
       ps.f[PS_ORIGIN + 2] - feetOffset(ps.i[PS_FLAGS]));

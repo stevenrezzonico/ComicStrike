@@ -53,7 +53,7 @@ export class Viewmodel {
   }
 
   // va: the ViewAnimator, updated for this frame; anim: { x, y, z (eye-space offset),
-  // pitch, yaw, roll (degrees, about the hands), flash, tossId / toss: a dropped weapon
+  // pitch, yaw, roll (degrees, about the hands), mirror (the left hand), flash, tossId / toss: a dropped weapon
   // flying out of the hand and its rig-frame matrix }; light: rgb from the map at the
   // player; team: the player's team; silencerOn: the M4A1-S / USP-S wear theirs.
   draw(weaponId, aspect, va, anim, light, team, silencerOn = true) {
@@ -66,6 +66,7 @@ export class Viewmodel {
 
     gl.clear(gl.DEPTH_BUFFER_BIT); // never clip into walls
     r.begin(this.proj);
+    if (anim.mirror) gl.frontFace(gl.CW); // a mirror turns the winding over (end() restores it)
     const look = team === TEAM_CT ? 'CT' : 'T', hands = this.hands(look, weaponId);
     r.draw(this.arms[look], this.rig, va.pose.skin, light);
     if (va.blind > 0.45) { // shielding the eyes: an open hand
@@ -100,5 +101,11 @@ export class Viewmodel {
     m[13] = py - (m[1] * px + m[5] * py + m[9] * pz) + a.y;
     m[14] = pz - (m[2] * px + m[6] * py + m[10] * pz) + a.z;
     m[15] = 1;
+    if (a.mirror) { // the left hand (cl_righthand 0): x mirrored, offsets and turns with it
+      m[0] = -m[0];
+      m[4] = -m[4];
+      m[8] = -m[8];
+      m[12] = -m[12];
+    }
   }
 }

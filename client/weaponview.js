@@ -42,7 +42,7 @@ export class WeaponView {
     this.tossMid = 0; // the gun's middle along its barrel (the spin's pivot)
     this.spin = new Float32Array(16);
     this.bobPhase = 0;
-    this.anim = { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0, flash: false, tossId: 0, toss: new Float32Array(16) };
+    this.anim = { x: 0, y: 0, z: 0, pitch: -0, yaw: -0, roll: -0, mirror: false, flash: false, tossId: 0, toss: new Float32Array(16) };
     this.hidden = false; // dead: no viewmodel or crosshair, HUD only
     this.spread = -1; // crosshair spread gap (px) for drawCrosshair, -1: none
     this.scoped = false; // looking through a scope: its overlay replaces both
@@ -92,6 +92,11 @@ export class WeaponView {
       a.x += cv.viewmodel_offset_x.number - 1;
       a.z -= cv.viewmodel_offset_y.number - 1;
       a.y += cv.viewmodel_offset_z.number + 1;
+      // viewmodel_pitch / yaw / roll turn it about the hands; cl_righthand 0 mirrors it all.
+      a.pitch = cv.viewmodel_pitch.number;
+      a.yaw = cv.viewmodel_yaw.number;
+      a.roll = cv.viewmodel_roll.number;
+      a.mirror = !cv.cl_righthand.bool;
       // viewmodel_fov is horizontal at 4:3; 60 (the default) keeps the models' tuned 54 deg vertical.
       this.viewmodel.fovY = 2 * Math.atan(VM_TAN * Math.tan(cv.viewmodel_fov.number * Math.PI / 360));
 

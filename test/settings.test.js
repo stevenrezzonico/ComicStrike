@@ -30,3 +30,22 @@ Deno.test('settings: an old config takes the changed defaults once, a new one ke
     assert.equal(createConsole(() => {}).cv.r_halftone.number, 1);
   });
 });
+
+Deno.test('settings: an imported file runs its settings and binds only', () => {
+  withStorage({}, () => {
+    const { cv, binds, con, importConfig, configText } = createConsole(() => {});
+    const n = importConfig('// a config\nsensitivity "4"; alias evil "quit"\nbind "k" "+jump"\nrcon_password secret\nviewmodel_roll 12');
+    assert.equal(n, 3);
+    assert.equal(cv.sensitivity.number, 4);
+    assert.equal(binds.get('k'), '+jump');
+    assert.equal(cv.viewmodel_roll.number, 12);
+    assert.equal(cv.rcon_password.value, '', 'not a saved setting');
+    assert.ok(!con.aliases.has('evil'), 'other commands dropped');
+    // An export taken back gives the same settings.
+    const text = configText();
+    cv.sensitivity.set(1);
+    importConfig(text);
+    assert.equal(cv.sensitivity.number, 4);
+    assert.equal(configText(), text);
+  });
+});
