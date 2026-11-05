@@ -7,11 +7,11 @@ import { HITGROUP_CHEST } from '../shared/hitgroups.js';
 import { WEAPONS, WEAPON_ID, SLOT_GRENADE, THROW_LONG, THROW_SHORT, giveWeapon } from '../shared/weapons.js';
 import {
   Grenades, heDamage, flashDuration, fireRadius, smokeRadius, FUSE, HE_DAMAGE, HE_RADIUS, FX_HE, FX_SMOKE, FX_FIRE,
-  FIRE_DPS, SMOKE_TIME,
+  FX_FIZZLE, FIRE_DPS, SMOKE_TIME,
 } from '../shared/grenades.js';
 import { Writer, writeCmds } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
-import { mapOrNull, joinClient } from './harness.js';
+import { mapOrNull, loadMap, joinClient } from './harness.js';
 
 const bsp = mapOrNull('de_dust2');
 
@@ -173,3 +173,21 @@ Deno.test({ name: 'server: a thrown HE flies from the thrower, hurts an enemy, a
   assert.equal(a.player.kills, 1);
   assert.ok(a.player.health > 0 && a.player.health < 100, 'the thrower is hurt by his own HE');
 } });
+
+Deno.test('grenades in water drag and sink slowly (HL); a molotov in water fizzles', () => {
+  const world = CollisionWorld.fromBSP(loadMap('de_playground')); // its diving well: x 60..300, y 520..700, water -192..-2
+  const g = new Grenades(), none = targets([]);
+  g.throw(world, WEAPON_ID.decoy, 0, TEAM_T, 180, 610, 120, 89, 90, 0, 0, 0, THROW_LONG);
+  let under = 0, speed = Infinity;
+  for (let t = 0; t < 128 && !g.resting[0]; t++) {
+    g.update(world, none);
+    if (g.pos[2] < -10 && ++under === 20) speed = Math.hypot(g.vel[0], g.vel[1], g.vel[2]);
+  }
+  assert.ok(speed < 100, `slowed under water (it went in at ~400 u/s; sinking settles at ~49) (${speed.toFixed(0)} u/s after 20 ticks in)`);
+  const fire = new Grenades();
+  fire.throw(world, WEAPON_ID.molotov, 0, TEAM_T, 180, 610, 120, 89, 90, 0, 0, 0, THROW_LONG);
+  for (let t = 0; t < 192 && !fire.fxCount; t++) fire.update(world, none);
+  assert.equal(fire.fxCount, 1, 'it burst');
+  assert.equal(fire.fxKind[0], FX_FIZZLE, 'and fizzled');
+  assert.ok(fire.fxPos[2] < 0 && fire.fxPos[2] > -40, `at the surface (z ${fire.fxPos[2].toFixed(0)})`);
+});
