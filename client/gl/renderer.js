@@ -22,8 +22,8 @@ import { clock } from '../clock.js';
 // The light that prints fully lit: this share of the map's lit lightmap texels is at or
 // below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
 const LIGHT_FULL_SHARE = 0.75;
-const COMPOSITE_UNIFORMS = ['u_albedo', 'u_depth', 'u_ink', 'u_normal', 'u_rays', 'u_res', 'u_gscale', 'u_line', 'u_dot', 'u_zoom',
-  'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft', 'u_dead', 'u_smoke', 'u_inkaa', 'u_hatch'];
+const COMPOSITE_UNIFORMS = ['u_albedo', 'u_depth', 'u_ink', 'u_res', 'u_gscale', 'u_line', 'u_dot', 'u_zoom',
+  'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft', 'u_dead', 'u_smoke', 'u_inkaa'];
 const INK_UNIFORMS = ['u_normal', 'u_depth', 'u_line', 'u_gscale', 'u_zoom'];
 const CLOUD_TEX_SIZE = 512; // the sky's cloud noise (cloudNoise): CLOUD_PERIOD cells across
 
@@ -102,11 +102,10 @@ export class Renderer {
     // dead: 0..1, our death's red-brown print (client/deathpanel.js).
     // smoke: 0..1, the camera inside a smoke cloud: the print fogs over with distance.
     this.style = {
-      comic: true, ink: 1, dots: 1, bands: 0, lift: 0.3, calm: 0, soft: false, inkaa: true, hatch: true, dead: 0, smoke: 0,
+      comic: true, ink: 1, dots: 1, bands: 0, lift: 0.3, calm: 0, soft: false, inkaa: true, dead: 0, smoke: 0,
     };
     this.novis = false; // r_novis: draw the whole world (no visibility culling)
     this.zoom = 1; // 90 / fov
-    this.rays = new Float32Array(9); // COMPOSITE_FS u_rays, set by render()
     // The canvas's size on the page, kept by a ResizeObserver: reading clientWidth every
     // frame forces a layout whenever the DOM changed since the last one (a kill notice, a
     // console line written while the ticks ran).
@@ -285,18 +284,6 @@ export class Renderer {
     const gl = this.gl, time = clock.t;
     const w = this.world;
     const t = this.timer;
-    // The composite's rays (the hatching's plane test): from the points of NDC depth 0 at the
-    // middle, right and top, the ray to NDC x, y as right, up and forward at unit depth.
-    const m = invViewProj, r = this.rays, w0 = m[15], wx = m[3] + m[15], wy = m[7] + m[15];
-    const fx = m[12] / w0 - eye[0], fy = m[13] / w0 - eye[1], fz = m[14] / w0 - eye[2];
-    const unit = 1 / Math.sqrt(fx * fx + fy * fy + fz * fz);
-    for (let i = 0; i < 3; i++) {
-      r[i] = ((m[i] + m[12 + i]) / wx - m[12 + i] / w0) * unit;
-      r[3 + i] = ((m[4 + i] + m[12 + i]) / wy - m[12 + i] / w0) * unit;
-    }
-    r[6] = fx * unit;
-    r[7] = fy * unit;
-    r[8] = fz * unit;
     this.flashes.update(time);
     if (this.vao) {
       t.mark(PASS.WORLD);
@@ -400,8 +387,6 @@ export class Renderer {
     gl.uniform1i(c.u_albedo, 0);
     gl.uniform1i(c.u_depth, 2);
     gl.uniform1i(c.u_ink, 3);
-    gl.uniform1i(c.u_normal, 1);
-    gl.uniformMatrix3fv(c.u_rays, false, this.rays);
     gl.uniform2f(c.u_res, this.canvas.width, h);
     gl.uniform2f(c.u_gscale, gscale, this.gbuf.height / h);
     gl.uniform1f(c.u_line, line);
@@ -415,7 +400,6 @@ export class Renderer {
     gl.uniform1f(c.u_dead, st.dead);
     gl.uniform1f(c.u_smoke, st.smoke);
     gl.uniform1f(c.u_inkaa, st.inkaa ? 1 : 0);
-    gl.uniform1f(c.u_hatch, st.hatch ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
     gl.enable(gl.CULL_FACE);

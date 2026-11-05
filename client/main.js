@@ -1922,7 +1922,6 @@ function applyVideoSettings() {
   models.farLod = cv.r_lod_dist.number;
   models.sunOn = cv.r_playershadows.bool;
   style.inkaa = cv.r_inkaa.bool;
-  style.hatch = cv.r_hatching.bool;
   return aspect;
 }
 

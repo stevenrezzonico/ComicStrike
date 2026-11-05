@@ -87,7 +87,6 @@ export function createConsole(print) {
   add('r_shadowlift', 0.3, 'Share of the shade taken away: dark corners print lighter', 0, 1);
   add('r_halftone_style', 1, 'Shade dots: 0 bold, 1 soft (finer, paler, less ink)', 0, 1);
   add('r_crosshair_clearzone', 1, 'Dots melt into flat tone round the crosshair: size of that zone (0: off)', 0, 3);
-  add('r_hatching', 1, 'Ink hatching in corners: diagonal lines where floors meet walls and under things (screen-space, ~0.1 ms)', 0, 1);
   add('r_inkaa', 1, 'Smooth ink lines: at the full render resolution the steps of a slanted line get grey corners (below it the lines are filtered anyway)', 0, 1);
   add('mat_viewportscale', 2, 'Render resolution of the scene, relative to the window (the most r_dynres uses; over 1 supersamples: smoother edges and lines, for a strong GPU; capped by the GPU and r_supersample_max); the dots are always printed at the window resolution', 0.25, 8);
   add('r_supersample_max', 64, 'Supersampling: the most megapixels the scene is rendered at (the GPU memory it takes: ~15 bytes a pixel)', 1, 512);

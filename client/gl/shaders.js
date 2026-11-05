@@ -987,8 +987,6 @@ precision highp sampler2D;
 uniform sampler2D u_albedo;
 uniform sampler2D u_depth;
 uniform sampler2D u_ink;
-uniform sampler2D u_normal; // (the hatching's plane test)
-uniform mat3 u_rays;   // a texel's ray from the eye at unit depth: u_rays * (NDC x, y, 1), world axes
 uniform vec2 u_res;    // the canvas (px)
 uniform vec2 u_gscale; // G-buffer texels per canvas pixel (1; less at a lower render scale, more supersampling)
 uniform float u_line;  // ink line spacing (px); 0: no lines (the ink pass did not run)
@@ -1002,9 +1000,7 @@ uniform float u_soft;  // shade dots: 0 bold, 1 soft (a finer screen, a paler pr
 uniform float u_dead;  // 0..1: our death (client/deathpanel.js): a red-brown duotone, a darker vignette
 uniform float u_smoke; // 0..1: the camera inside a smoke cloud: everything but the view fogs over with distance
 uniform float u_inkaa; // 1: smooth the lines at the canvas's own render scale (r_inkaa)
-uniform float u_hatch; // 1: the corners' hatching (r_hatching)
 out vec4 o_color;
-const float HATCH_REACH = 28.0; // units round the pixel the corner test looks
 const vec3 SMOKE_TONE = vec3(0.86, 0.86, 0.84); // the cloud's own grey (client/gl/grenadefx.js)
 const float SMOKE_SIGHT = 28.0; // units: the fog's e-fold; about arm's length still shows
 const float INK_CORNER = 0.35; // smoothInk: the ink a step's inside corner takes
@@ -1024,9 +1020,6 @@ DTEX dtex(ivec2 p) { return texelFetch(u_depth, cl(p), 0).rg; }
 uint flagsOf(DTEX t) { return uint(t.g); }
 float depthOf(DTEX t) { return DEPTH_NEAR / t.r; }
 #endif
-vec3 normalOf(ivec2 p) { return texelFetch(u_normal, cl(p), 0).xyz * 2.0 - 1.0; }
-// The point a texel shows, from the eye, at its depth d.
-vec3 pointAt(ivec2 p, float d) { return d * (u_rays * vec3((vec2(p) + 0.5) / vec2(gsize) * 2.0 - 1.0, 1.0)); }
 
 // Smooth ink (r_inkaa) at the canvas's own render scale, where a line is a staircase of
 // whole texels (at any other scale the ink is filtered between texels): a pixel off the
@@ -1060,39 +1053,6 @@ float tone(vec2 frag, float dark, float size, vec2 turn, float far) {
   float cov = 1.13 * clamp(dark, 0.0, 1.0);
   return far >= 1.0 ? cov : mix(dots(frag, dark, size, turn), cov, far);
 }
-// The hatching (r_hatching): how far into an inside corner the pixel lies (a floor meeting
-// a wall, a crate on the floor, the edge of a ceiling). 1 / depth is linear on a plane, so
-// across a pair of samples round it their mean equals the pixel's; in a corner they are
-// nearer, their mean above it. Two pairs, across and up, HATCH_REACH units round in the
-// world; a pair with something much nearer (an object in front, not a corner) or another
-// kind of surface counts for nothing (it would print a halo round every figure and crate),
-// and so does one where the pixel lies behind a sample's plane: an edge standing in front
-// of the floor or wall beyond it, little nearer near its foot (in an inside corner each
-// surface lies in front of the other's plane; a wall's or crate's side was hatched beside it).
-// Per canvas pixel (in the ink pass, at the G-buffer's 4 texels a pixel of the default
-// supersampling, it doubled that pass).
-float cornerAt(ivec2 p, uint fl, float dP) {
-  if ((fl & (G_SKY | G_FLAT | G_VIEW | G_CHAR | G_SCREEN)) != 0u) return 0.0;
-  float focal = u_res.y / 1.5 * u_zoom;
-  float r = clamp(HATCH_REACH * focal / dP, 2.0, 12.0);
-  ivec2 ox = ivec2(int(r * u_gscale.x + 0.5), 0), oy = ivec2(0, int(r * u_gscale.y + 0.5));
-  float range = 32.0 + 0.15 * dP, sum = 0.0, wP = 1.0 / dP;
-  for (int k = 0; k < 2; k++) {
-    ivec2 o = k == 0 ? ox : oy;
-    DTEX a = dtex(p + o), b = dtex(p - o);
-    if (((flagsOf(a) | flagsOf(b)) & (G_SKY | G_FLAT | G_VIEW | G_CHAR | G_SCREEN)) != 0u) continue;
-    float da = depthOf(a), db = depthOf(b);
-    if (dP - min(da, db) > range) continue;
-    float c = 1.0 / da + 1.0 / db - 2.0 * wP;
-    if (c <= 0.0) continue;
-    vec3 P = pointAt(p, dP);
-    float tol = 2.0 + 0.003 * dP; // units: the half-float depth and the 8-bit normals
-    if (dot(normalOf(p + o), P - pointAt(p + o, da)) < -tol || dot(normalOf(p - o), P - pointAt(p - o, db)) < -tol) continue;
-    sum += c / wP;
-  }
-  return smoothstep(0.015, 0.12, sum * 0.5) * (1.0 - smoothstep(1200.0 * u_zoom, 2400.0 * u_zoom, dP));
-}
-
 const vec2 TURN_SHADE = vec2(0.70738827, 0.70682518); // 45 degrees (0.785 rad)
 const vec2 TURN_SKY = vec2(0.96638998, 0.25708055);   // 0.26 rad
 
@@ -1150,16 +1110,6 @@ void main() {
     vec3 shade = mix(alb * vec3(0.52, 0.53, 0.62), base, 0.3 * u_soft);
     vec3 print = mix(shade, INK, (0.12 + 0.28 * smoothstep(0.5, 0.9, dark)) * (1.0 - 0.6 * u_soft));
     col = mix(base, mix(print, alb * 0.72, farChar), m);
-    // The corners' hatching: diagonal ink lines on a fixed screen (they hold still while the
-    // view moves, like the dots), as wide as the corner is deep; with distance their average
-    // tone, as the dots go.
-    float corner = u_hatch > 0.0 ? cornerAt(p, fl, dP) : 0.0;
-    if (corner > 0.01) {
-      float cell = size * 1.8, w = 0.5 * corner;
-      float q = abs(fract((frag.x + frag.y) / (cell * 1.4142)) - 0.5) * 2.0;
-      float lines = 1.0 - smoothstep(w - 0.9 / cell, w + 0.9 / cell, q);
-      col = mix(col, mix(print, INK, 0.5), mix(lines, w, far) * 0.85);
-    }
   }
   // Inside a smoke cloud: the print fogs toward the cloud's grey with the pixel's
   // distance, printed with a faint dot screen so it still looks printed; the first-person
