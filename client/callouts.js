@@ -33,7 +33,7 @@ export class Callouts {
       el.className = cls;
       el.style.display = 'none';
       root.appendChild(el);
-      return { el, until: 0, id: -1, x: 0, y: 0, z: 0, shown: false };
+      return { el, until: -0, id: -1, x: -0, y: -0, z: -0, shown: false }; // (-0: doubles from the start)
     };
     this.balloons = Array.from({ length: BALLOONS }, () => make('balloon'));
     this.pings = Array.from({ length: PINGS }, () => make('pingmark'));
@@ -55,17 +55,28 @@ export class Callouts {
   }
 
   // The pings still showing (the radar's): [x, y] pairs.
+  // (Index loops in these two, every frame: a for-of made an iterator and a result per
+  // step in the optimized code the browser keeps them in.)
   live(now, out) {
     out.length = 0;
-    for (const p of this.pings) if (p.until > now) out.push(p.x, p.y);
+    for (let i = 0; i < this.pings.length; i++) {
+      const p = this.pings[i];
+      if (p.until > now) out.push(p.x, p.y);
+    }
     return out;
   }
 
   // Every frame: speakers' heads from headOf(id, out) (false: not to be shown).
   update(now, viewProj, headOf, show) {
     const pt = this.pt;
-    for (const b of this.balloons) this.place(b, show && b.until > now && headOf(b.id, b) && toScreen(viewProj, b, pt));
-    for (const p of this.pings) this.place(p, show && p.until > now && toScreen(viewProj, p, pt));
+    for (let i = 0; i < this.balloons.length; i++) {
+      const b = this.balloons[i];
+      this.place(b, show && b.until > now && headOf(b.id, b) && toScreen(viewProj, b, pt));
+    }
+    for (let i = 0; i < this.pings.length; i++) {
+      const p = this.pings[i];
+      this.place(p, show && p.until > now && toScreen(viewProj, p, pt));
+    }
   }
 
   place(o, on) {

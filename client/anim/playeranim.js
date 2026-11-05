@@ -20,7 +20,7 @@ import * as Q from './quat.js';
 import { HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4, HOLD_TIED } from '../models/players.js';
 import { WEAPONS, WEAPON_ID, SLOT_SECONDARY, SLOT_KNIFE, SLOT_C4 } from '../../shared/weapons.js';
 import { ANIM_RELOAD, ANIM_PLANT, ANIM_DEFUSE } from '../../shared/protocol.js';
-import { ramp, bump } from './viewanim.js';
+import { ramp } from './viewanim.js'; // (bump written out as ramps: as a call, not inlined, its double argument was boxed)
 
 const PELVIS = S.bone('pelvis'), SPINE1 = S.bone('spine_1'), SPINE2 = S.bone('spine_2'), SPINE3 = S.bone('spine_3');
 const NECK = S.bone('neck_0'), HEAD = S.bone('head_0');
@@ -58,15 +58,17 @@ const BREATH = 0.8; // chest pitch, degrees, at 0.25 Hz
 const SWAY = 0.5; // the weight shifting from foot to foot, units, at 0.15 Hz
 
 // Hand targets per hold, relative to the shoulder-line center (spine_3), in the aim frame
-// (x along the aim, z up) when `aimed`, else in the body frame: [left xyz, right xyz].
+// (x along the aim, z up) when `aimed`, else in the body frame: left xyz, right xyz.
+// Float64Arrays: a plain array of whole numbers has integer elements, and a load that met
+// both kinds boxed every double it read.
 const GRIPS = {
-  [HOLD_RIFLE]: { aimed: true, hands: [[20, -2.5, -4], [8, -6.5, -5]] }, // the stock in the right shoulder
-  [HOLD_PISTOL]: { aimed: true, hands: [[16.5, -0.4, -4.5], [17.5, -1.6, -4]] },
-  [HOLD_KNIFE]: { aimed: false, hands: [[1, 9.5, -21], [12, -6.5, -10]] },
-  [HOLD_C4]: { aimed: false, hands: [[11, 3, -13], [11, -2.5, -12.5]] },
-  [HOLD_TIED]: { aimed: false, hands: [[-7, 2.5, -24], [-7, -2.5, -24]] },
+  [HOLD_RIFLE]: { aimed: true, hands: Float64Array.of(20, -2.5, -4, 8, -6.5, -5) }, // the stock in the right shoulder
+  [HOLD_PISTOL]: { aimed: true, hands: Float64Array.of(16.5, -0.4, -4.5, 17.5, -1.6, -4) },
+  [HOLD_KNIFE]: { aimed: false, hands: Float64Array.of(1, 9.5, -21, 12, -6.5, -10) },
+  [HOLD_C4]: { aimed: false, hands: Float64Array.of(11, 3, -13, 11, -2.5, -12.5) },
+  [HOLD_TIED]: { aimed: false, hands: Float64Array.of(-7, 2.5, -24, -7, -2.5, -24) },
 };
-const RELOAD_HAND = { [HOLD_RIFLE]: [7, -2, -11], [HOLD_PISTOL]: [5, 2, -14] }; // guns without a magazine point
+const RELOAD_HAND = { [HOLD_RIFLE]: Float64Array.of(7, -2, -11), [HOLD_PISTOL]: Float64Array.of(5, 2, -14) }; // guns without a magazine point
 
 // Hands turn a quarter about z on top of the aim so their boxes point forward, like
 // fingers around a grip: the right +90 degrees, the left -90. The palm is PALM ahead of
@@ -103,11 +105,18 @@ const tq = new Float32Array(4);
 const tv = new Float32Array(6);
 const t3 = new Float32Array(3); // a rotated offset
 const te = new Float64Array(3); // Euler angles for Q.fromEulerAt (no doubles boxed at the call)
+// Values a branch picks. step() runs in Maglev, V8's middle tier, for minutes, and this V8
+// keeps every phi (a value that depends on the branch taken: a ?: or an if assigning a
+// variable) tagged: each double that flowed through one was a new heap number. Branches
+// write here instead and the code after reads it back.
+const sel = new Float64Array(4); // dirF, dirL, drop, handP; a headshot's direction
+const ho = new Float64Array(3); // a hand's offset
+const sp = new Float64Array(3); // the off hand's point on the gun
 
 export class PlayerAnimator {
   constructor() {
     this.pose = new Pose(S);
-    this.reload = { take: 0, roll: 0, drop: 0, x: 0, y: 0, z: 0 }; // reloadPose's result
+    this.reload = { take: -0, roll: -0, drop: -0, x: -0, y: -0, z: -0 }; // reloadPose's result (-0: see reset)
     this.in = new Float64Array(7); // step(): dt, x, y, z, yaw, pitch, duck
     this.deathDir = new Float32Array(2); // die(): the shot's direction in the world
     this.footAlong = new Float32Array(2); // the stride cycle this frame: each foot's offset along
@@ -115,28 +124,32 @@ export class PlayerAnimator {
     this.reset();
   }
 
+  // The fields that hold fractions start as doubles (-0, not 0): a field first given a whole
+  // number changes its object's map when a fraction comes, and the type feedback recorded
+  // on the old map (primeAnimator's) no longer counts: at the freeze's end the first
+  // running stride deoptimized step() to baseline code (~390 heap numbers a call).
   reset() {
     this.px = NaN; // last feet position
-    this.py = 0;
-    this.pz = 0;
-    this.vx = 0; // smoothed velocity
-    this.vy = 0;
-    this.phase = 0; // stride cycle, in cycles
-    this.stride = 4; // current half-stride length
-    this.air = 0; // 0 grounded .. 1 airborne
-    this.kick = 0; // fire kick, 1 at a shot
-    this.toss = 0; // a weapon throw (G), 1 when it leaves the hand, down to 0
+    this.py = -0;
+    this.pz = -0;
+    this.vx = -0; // smoothed velocity
+    this.vy = -0;
+    this.phase = -0; // stride cycle, in cycles
+    this.stride = 4.5; // current half-stride length
+    this.air = -0; // 0 grounded .. 1 airborne
+    this.kick = -0; // fire kick, 1 at a shot
+    this.toss = -0; // a weapon throw (G), 1 when it leaves the hand, down to 0
     this.shots = -1;
-    this.dead = 0; // seconds since death (0 = alive)
+    this.dead = -0; // seconds since death (0 = alive)
     this.deathDir[0] = this.deathDir[1] = 0;
     this.headshot = false;
-    this.deathDist = 0;
-    this.deathDrop = 0;
+    this.deathDist = -0;
+    this.deathDrop = -0;
     this.deathSeed = 0;
-    this.time = 0;
-    this.reloadStart = -1; // time the reload bit came on (-1: not reloading)
-    this.magOff = 0; // the gun's bones this frame: magazine out along magDir, bolt back
-    this.boltOff = 0;
+    this.time = -0;
+    this.reloadStart = -Infinity; // time the reload bit came on (< 0: not reloading)
+    this.magOff = -0; // the gun's bones this frame: magazine out along magDir, bolt back
+    this.boltOff = -0;
   }
 
   // A weapon left this player's hand (G): the arm swings it forward.
@@ -161,7 +174,7 @@ export class PlayerAnimator {
     this.time += dt;
     // Velocity from positions, smoothed; teleports (spawns) start over.
     const jx = x - this.px, jy = y - this.py, jz = z - this.pz;
-    if (Number.isNaN(this.px) || jx * jx + jy * jy + jz * jz > 96 * 96) {
+    if (this.px !== this.px || jx * jx + jy * jy + jz * jz > 96 * 96) {
       this.vx = this.vy = 0;
     } else if (dt > 0) {
       const k = 1 - Math.exp(-dt * 12);
@@ -190,7 +203,14 @@ export class PlayerAnimator {
     // A planted foot covers 2 strides in `duty` of the cycle at the ground's speed.
     if (onGround) this.phase = (this.phase + speed * dt * duty / (2 * this.stride)) % 1;
     const sw = Math.max(0, Math.min(1, (speed - 10) / 60)), walk = sw * sw * (3 - 2 * sw) * (1 - this.air);
-    const dirF = speed > 1 ? fwd / speed : 1, dirL = speed > 1 ? left / speed : 0;
+    if (speed > 1) {
+      sel[0] = fwd / speed;
+      sel[1] = left / speed;
+    } else {
+      sel[0] = 1;
+      sel[1] = 0;
+    }
+    const dirF = sel[0], dirL = sel[1];
     // The movement's direction in the body frame, degrees, kept within a quarter turn
     // (backpedalling runs the same cycle backwards with the feet still forward).
     const back = dirF < 0 ? -1 : 1;
@@ -231,12 +251,13 @@ export class PlayerAnimator {
     // hips to the right; moving, they turn part way toward the movement, swing with the
     // stride and the body leans into its direction.
     const reach = 33 - Math.sqrt(LEG * LEG - S * S * walk * walk);
-    let drop = 0;
+    sel[2] = 0;
     if (planted) {
-      for (let s = 0; s < 2; s++) if (lift[s] === 0) drop = Math.max(drop, 33 - Math.sqrt(LEG * LEG - along[s] * along[s]));
+      for (let s = 0; s < 2; s++) if (lift[s] === 0) sel[2] = Math.max(sel[2], 33 - Math.sqrt(LEG * LEG - along[s] * along[s]));
     } else {
-      drop = reach * (1 - 0.5 * Math.sin(Math.PI * ((this.phase % 0.5) - duty) / (0.5 - duty)));
+      sel[2] = reach * (1 - 0.5 * Math.sin(Math.PI * ((this.phase % 0.5) - duty) / (0.5 - duty)));
     }
+    const drop = sel[2];
     const rest = (1 - walk) * (1 - c), blade = (hold === HOLD_RIFLE ? 1 : 0) * (1 - kneel);
     const stride = Math.cos(this.phase * 2 * Math.PI) * walk; // 1: the left foot ahead
     p.pos[PELVIS * 3] = -5 * c;
@@ -256,7 +277,7 @@ export class PlayerAnimator {
     const breath = BREATH * Math.sin(this.time * 1.57);
     E[SPINE1 * 3] = lean * 0.5 + aimP * 0.15; E[SPINE1 * 3 + 1] = twist;
     E[SPINE2 * 3] = lean * 0.3 + aimP * 0.15 + breath; E[SPINE2 * 3 + 1] = twist;
-    const swing = this.toss > 0 ? Math.sin(Math.PI * this.toss) : 0; // the throw's arm swing, out and back
+    const swing = Math.sin(Math.PI * this.toss); // the throw's arm swing, out and back (toss 0..1)
     E[SPINE3 * 3] = lean * 0.2 + aimP * 0.15 - this.kick * 5 + swing * 6; E[SPINE3 * 3 + 1] = twist + swing * 10;
     E[NECK * 3] = -lean * 0.4 + aimP * 0.2 - breath * 0.5; E[NECK * 3 + 1] = unturn;
     E[HEAD * 3] = -lean * 0.6 + aimP * 0.35 + this.kick * 5 - breath * 0.5; E[HEAD * 3 + 1] = unturn;
@@ -281,59 +302,68 @@ export class PlayerAnimator {
 
     // Arms: grip points around the shoulder line, in the aim frame for guns.
     const w = p.wpos, cx = w[SPINE3 * 3], cyy = w[SPINE3 * 3 + 1], cz = w[SPINE3 * 3 + 2];
-    const handP = grip.aimed ? aimP : 25;
+    sel[3] = 25;
+    if (grip.aimed) sel[3] = aimP;
+    const handP = sel[3];
     const hr = handP * Math.PI / 180, ch = Math.cos(hr), sh = Math.sin(hr);
+    const hands = grip.hands, o = ho;
     for (let s = 1; s >= 0; s--) { // the gun hand first: the off hand follows the gun
-      const hand = grip.hands[s];
-      let ox = hand[0], oy = hand[1], oz = hand[2];
+      o[0] = hands[s * 3];
+      o[1] = hands[s * 3 + 1];
+      o[2] = hands[s * 3 + 2];
       if (s === 0 && grip.aimed && (support || reload.take > 0)) {
         // Off hand on a point of the gun (its support, or what the reload reaches for):
         // the right wrist plus the point turned by the gun's reload roll (aim frame).
-        const rh = grip.hands[1], rx = rh[0], ry = rh[1], rz = rh[2];
-        const k = reload.take, sx = support ? support[0] : ox - rx, sy = support ? support[1] : oy - ry;
-        const sz = support ? support[2] : oz - rz;
+        const rx = hands[3], ry = hands[4], rz = hands[5];
+        if (support) {
+          sp[0] = support[0];
+          sp[1] = support[1];
+          sp[2] = support[2];
+        } else {
+          sp[0] = o[0] - rx;
+          sp[1] = o[1] - ry;
+          sp[2] = o[2] - rz;
+        }
+        const k = reload.take, sx = sp[0], sy = sp[1], sz = sp[2];
         const gx = sx + (reload.x - sx) * k, gy = sy + (reload.y - sy) * k, gz = sz + (reload.z - sz) * k;
         const cr = Math.cos(reload.roll * Math.PI / 180), sr = Math.sin(reload.roll * Math.PI / 180);
-        ox = rx + gx;
-        oy = ry + gy * cr - gz * sr;
-        oz = rz + gy * sr + gz * cr + reload.drop;
+        o[0] = rx + gx;
+        o[1] = ry + gy * cr - gz * sr;
+        o[2] = rz + gy * sr + gz * cr + reload.drop;
       } else if (s === 0 && anim & ANIM_RELOAD && RELOAD_HAND[hold]) {
         const rl = RELOAD_HAND[hold];
-        ox = rl[0];
-        oy = rl[1];
-        oz = rl[2];
-        oz += Math.sin(this.time * 7) * 1.2;
+        o[0] = rl[0];
+        o[1] = rl[1];
+        o[2] = rl[2] + Math.sin(this.time * 7) * 1.2;
       }
-      ox -= this.kick * 2;
-      oz += breath * 0.6 * rest; // the gun rises with the chest
-      if (s === 0 && hold === HOLD_KNIFE) ox -= 8 * stride; // the free arm swings against the left leg
+      o[0] -= this.kick * 2;
+      o[2] += breath * 0.6 * rest; // the gun rises with the chest
+      if (s === 0 && hold === HOLD_KNIFE) o[0] -= 8 * stride; // the free arm swings against the left leg
       if (s === 1) { // throwing: the gun hand swings forward and up
-        ox += swing * 9;
-        oz += swing * 7;
-      }
-      let tx, ty, tz;
-      if (kneel) { // planting / defusing: hands down in front of the knees
-        tx = 15;
-        ty = SIDE[s] * 3;
-        tz = 9;
-      } else if (grip.aimed) { // pitch the offset about y (down-positive)
-        tx = cx + ox * ch + oz * sh;
-        ty = cyy + oy;
-        tz = cz - ox * sh + oz * ch;
-      } else {
-        tx = cx + ox;
-        ty = cyy + oy;
-        tz = cz + oz;
+        o[0] += swing * 9;
+        o[2] += swing * 7;
       }
       const goal = p.goal;
-      goal[0] = tx;
-      goal[1] = ty;
-      goal[2] = tz;
+      if (kneel) { // planting / defusing: hands down in front of the knees
+        goal[0] = 15;
+        goal[1] = SIDE[s] * 3;
+        goal[2] = 9;
+      } else if (grip.aimed) { // pitch the offset about y (down-positive)
+        goal[0] = cx + o[0] * ch + o[2] * sh;
+        goal[1] = cyy + o[1];
+        goal[2] = cz - o[0] * sh + o[2] * ch;
+      } else {
+        goal[0] = cx + o[0];
+        goal[1] = cyy + o[1];
+        goal[2] = cz + o[2];
+      }
       goal[3] = -0.2;
       goal[4] = SIDE[s] * 0.6;
       goal[5] = -1;
       p.reachGoal(ARM[s], ELBOW[s], HAND[s]);
-      te[0] = grip.aimed || kneel ? handP : 0; te[1] = 0; te[2] = s === 1 && grip.aimed ? reload.roll : 0;
+      te[0] = 0; te[1] = 0; te[2] = 0;
+      if (grip.aimed || kneel) te[0] = handP;
+      if (s === 1 && grip.aimed) te[2] = reload.roll;
       Q.fromEulerAt(tv, 0, te, 0);
       Q.mul(tq, 0, tv, 0, handTurn[s], 0);
       p.setWorldRotation(HAND[s], tq, 0);
@@ -351,7 +381,7 @@ export class PlayerAnimator {
     this.magOff = this.boltOff = 0;
     const w = WEAPONS[weapon];
     if (!(anim & ANIM_RELOAD) || !w || !w.gun || !pts || (hold !== HOLD_RIFLE && hold !== HOLD_PISTOL)) {
-      this.reloadStart = -1;
+      this.reloadStart = -Infinity;
       return R;
     }
     if (this.reloadStart < 0) this.reloadStart = this.time;
@@ -361,33 +391,34 @@ export class PlayerAnimator {
       R.roll = -25 * tilt;
       setPoint(R, pts.port);
       R.take = tilt;
-      if (t > w.reloadStart) R.drop = -7 * bump(((t - w.reloadStart) / w.shellTime) % 1, 0.05, 0.38, 0.5, 0.9);
+      const shell = ((t - w.reloadStart) / w.shellTime) % 1;
+      if (t > w.reloadStart) R.drop = -7 * ramp(shell, 0.05, 0.38) * (1 - ramp(shell, 0.5, 0.9));
       return R;
     }
     const r = Math.min(1, t / w.reloadTime);
-    R.roll = (pistol ? 22 : 18) * bump(r, 0, 0.12, 0.84, 1);
-    const out = r < 0.45 ? ramp(r, 0.2, 0.42) : 1 - ramp(r, 0.48, 0.64);
+    R.roll = (pistol ? 22 : 18) * ramp(r, 0, 0.12) * (1 - ramp(r, 0.84, 1));
+    const out = Math.min(ramp(r, 0.2, 0.42), 1 - ramp(r, 0.48, 0.64)); // out, then back in (no ?: : a phi)
     if (pts.mag) {
       const md = pts.magDir, dist = md[2] > 0 ? 9 : 16;
       this.magOff = dist * out * out;
       R.x = pts.mag[0] + md[0] * this.magOff;
       R.y = pts.mag[1] + md[1] * this.magOff;
       R.z = pts.mag[2] + md[2] * this.magOff;
-      R.take = bump(r, 0.08, 0.2, 0.62, 0.7);
-      R.drop = -5 * bump(r, 0.4, 0.46, 0.46, 0.55); // down for the new one
+      R.take = ramp(r, 0.08, 0.2) * (1 - ramp(r, 0.62, 0.7));
+      R.drop = -5 * ramp(r, 0.4, 0.46) * (1 - ramp(r, 0.46, 0.55)); // down for the new one
     } else if (pts.cylinder) { // revolver: rounds into the swung-out cylinder
       setPoint(R, pts.cylinder);
-      R.take = bump(r, 0.08, 0.2, 0.62, 0.7);
-      R.drop = -10 * bump(r, 0.28, 0.38, 0.48, 0.58);
+      R.take = ramp(r, 0.08, 0.2) * (1 - ramp(r, 0.62, 0.7));
+      R.drop = -10 * ramp(r, 0.28, 0.38) * (1 - ramp(r, 0.48, 0.58));
     }
     if (pts.bolt) { // bolt / slide release
-      const b = bump(r, 0.68, 0.74, 0.82, 0.9);
+      const b = ramp(r, 0.68, 0.74) * (1 - ramp(r, 0.82, 0.9));
       if (b > R.take) {
         setPoint(R, pts.bolt);
         R.take = b;
         R.drop = 0;
       }
-      this.boltOff = (pistol ? 1.1 : 1.6) * bump(r, 0.75, 0.78, 0.79, 0.83);
+      this.boltOff = (pistol ? 1.1 : 1.6) * ramp(r, 0.75, 0.78) * (1 - ramp(r, 0.79, 0.83));
     }
     return R;
   }
@@ -413,7 +444,7 @@ export class PlayerAnimator {
     const p = this.pose, g = p.goal, w = p.wpos, h = HIP[s];
     Q.identity(p.rot, KNEE[s] * 4);
     let dx = g[0] - w[h * 3], dy = g[1] - w[h * 3 + 1], dz = g[2] - w[h * 3 + 2];
-    const l = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+    const l = Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 1e-9); // (|| 1 made a phi: boxed)
     dx /= l;
     dy /= l;
     dz /= l;
@@ -455,14 +486,15 @@ export class PlayerAnimator {
     const buckle = ramp(t, 0, 0.35);
     const fold = ramp(t, 0.05, 0.5);
     const f = ramp(t, 0.3, 0.95);
-    const settle = bump(t, 0.85, 0.98, 0.98, 1.15);
+    const settle = ramp(t, 0.85, 0.98) * (1 - ramp(t, 0.98, 1.15));
     const c0 = c * (1 - buckle);
     const hUp = PELVIS_Z - CROUCH_DROP * c0 - 24 * buckle;
     const px = -5 * c0 + 10 * fwd * f, py = side * 13 * f, pz = hUp + (9 - hUp) * f + 2.5 * settle; // (9: broad shoulders lie high)
     p.pos[PELVIS * 3] = px;
     p.pos[PELVIS * 3 + 1] = py;
     p.pos[PELVIS * 3 + 2] = pz;
-    Q.fromEuler(tv, 0, 30 * fwd * f, twist * f, -side * 85 * f);
+    te[0] = 30 * fwd * f; te[1] = twist * f; te[2] = -side * 85 * f;
+    Q.fromEulerAt(tv, 0, te, 0);
     for (let k = 0; k < 4; k++) p.rot[PELVIS * 4 + k] = tv[k];
     const E = p.eul;
     E[SPINE1 * 3] = E[SPINE2 * 3] = 22 * fold;
@@ -500,17 +532,19 @@ export class PlayerAnimator {
   headshotPose(c, yaw) {
     const p = this.pose, t = this.dead;
     const yr = yaw * Math.PI / 180, cy = Math.cos(yr), sy = Math.sin(yr);
-    let dx = this.deathDir[0] * cy + this.deathDir[1] * sy, dy = -this.deathDir[0] * sy + this.deathDir[1] * cy;
-    if (dx * dx + dy * dy < 0.5) { // nobody known to have shot: backwards
-      dx = -1;
-      dy = 0;
+    sel[0] = this.deathDir[0] * cy + this.deathDir[1] * sy;
+    sel[1] = -this.deathDir[0] * sy + this.deathDir[1] * cy;
+    if (sel[0] * sel[0] + sel[1] * sel[1] < 0.5) { // nobody known to have shot: backwards
+      sel[0] = -1;
+      sel[1] = 0;
     }
+    const dx = sel[0], dy = sel[1];
     const u = Math.min(1, t / FLY), travel = 1 - Math.pow(1 - u, 1.6);
     const spread = ramp(t, 0, 0.14); // the arms fling out wide
     const flat = smoothstep(0, 0.8, u); // upright .. lying flat on the back
     const land = ramp(t, FLY, FLY + 0.22); // the hands and feet come down on the ground
     const slide = ramp(t, FLY, FLY + 0.3);
-    const bounce = bump(t, FLY, FLY + 0.07, FLY + 0.07, FLY + 0.28);
+    const bounce = ramp(t, FLY, FLY + 0.07) * (1 - ramp(t, FLY + 0.07, FLY + 0.28));
     const R = this.deathDist * travel + FLY_SLIDE * (1 - (1 - slide) * (1 - slide));
     const h = PELVIS_Z - CROUCH_DROP * c;
     const px = dx * R, py = dy * R;
@@ -524,7 +558,7 @@ export class PlayerAnimator {
     const arch = -8 * spread * (1 - land); // the chest thrown back; flat once down
     const E = p.eul;
     E[SPINE1 * 3] = E[SPINE2 * 3] = E[SPINE3 * 3] = arch;
-    E[HEAD * 3] = -50 * bump(t, 0, 0.06, 0.1, 0.35) - 18 * spread * (1 - land);
+    E[HEAD * 3] = -50 * ramp(t, 0, 0.06) * (1 - ramp(t, 0.1, 0.35)) - 18 * spread * (1 - land);
     p.turnAll().solve();
     const goal = p.goal;
     for (let s = 0; s < 2; s++) {

@@ -49,6 +49,11 @@ const UP_CLEAN_MS = 3000; // clean time (with room to spare) before a step up
 
 export class DynamicResolution {
   constructor() {
+    // The fields holding fractions and times are created as doubles (-0), then set: a field
+    // first given a whole number changes its object's map when a fraction comes, and the
+    // optimized frame() deoptimized there (once a page, ~30 s in).
+    this.factor = this.most = this.print = this.interval = -0;
+    this.changedAt = this.windowStart = this.cleanSince = this.raisedAt = -0;
     this.factor = 1; // the scene's render scale, of the largest (mat_viewportscale)
     this.most = 1; // that largest scale, of the canvas: the steps are of the canvas (0.05), so 0.05 / most of the factor
     this.print = 1; // the print's (the canvas), of the page's pixels

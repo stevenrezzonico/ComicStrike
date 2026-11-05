@@ -129,7 +129,8 @@ export class NetClient {
   }
 
   // Practice: the server running in a Web Worker (client/localserver.js); datagrams go
-  // as messages, one each way. `rcon`: the worker's rcon password (the console uses it).
+  // as messages: one each to the worker, a batch (`dgrams`) from it (a demo's player
+  // sends `dgram`, one each). `rcon`: the worker's rcon password (the console uses it).
   connectLocal(worker, rcon) {
     const id = this.localId = ++localSessions;
     this.local = worker;
@@ -137,7 +138,14 @@ export class NetClient {
     this.onLocal = (e) => {
       const m = e.data;
       if (m.id !== id) return;
-      if (m.type === 'dgram') this.receiveDatagram(new Uint8Array(m.bytes));
+      if (m.type === 'dgrams') {
+        const b = new Uint8Array(m.bytes);
+        for (let o = 0; o + 2 <= b.length;) {
+          const n = b[o] | b[o + 1] << 8;
+          this.receiveDatagram(b.subarray(o + 2, o + 2 + n));
+          o += 2 + n;
+        }
+      } else if (m.type === 'dgram') this.receiveDatagram(new Uint8Array(m.bytes));
       else if (m.type === 'close') {
         this.ended(m.reason || 'closed');
         worker.removeEventListener('message', this.onLocal);

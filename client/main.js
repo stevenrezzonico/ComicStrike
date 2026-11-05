@@ -102,7 +102,24 @@ import {
 const DEG = Math.PI / 180;
 const FOV_Y = 73.74 * DEG; // CS:GO fov 90 at 4:3, kept vertical (Hor+)
 const ZOOM_RATE = 30; // per second: how fast the view zooms in or out (approximation)
-let fov = 90; // current CS:GO-style fov (horizontal at 4:3), eased toward the scope's
+// The frame's running numbers, as fields of one object rather than module variables: a
+// double assigned to a module variable was a new heap number every time (a dozen a frame),
+// while a field holding doubles is written in place. Created with -0 so every field holds
+// doubles from the start (a field first given a whole number changes its object's map).
+const clk = {
+  fov: -0, // current CS:GO-style fov (horizontal at 4:3), eased toward the scope's
+  serverClock: -0, // estimated newest server tick (fractional), advanced every frame; < 0: none yet
+  prevEye: -0, prevPunchP: -0, prevPunchY: -0, // the eye height and aim punch at the last tick (draw lerps)
+  accumulator: -0, // seconds owed to the ticks
+  // The time since the last drawn frame, for the animations draw() advances by dt: a held frame
+  // (fps_max, r_frames_ahead) adds its own, else the deaths, strides and view kick ran slow by
+  // the held share (with the browser's frame limiter off, half the frames: slow motion).
+  drawDt: -0,
+  frameMsMax: -0, // the worst gap in the readout's window (cl_showfps)
+  cpuSim: -0, cpuDraw: -0, // ms summed over the readout's window (cl_showfps 3)
+};
+clk.fov = 90;
+clk.serverClock = -1;
 const scopeEl = document.getElementById('scope');
 let scopeShown = '';
 const MAX_TICKS_PER_FRAME = 8;
@@ -355,8 +372,8 @@ let lastSpawn = -1;
 function autoSwitch() {
   const respawn = player.spawnCount !== lastSpawn;
   lastSpawn = player.spawnCount;
-  for (const s of AUTO_SLOTS) {
-    const id = ws.f[WS_SLOTS + s * 3];
+  for (let i = 0; i < AUTO_SLOTS.length; i++) { // (every tick: a for-of allocates in optimized code)
+    const s = AUTO_SLOTS[i], id = ws.f[WS_SLOTS + s * 3];
     if (id !== lastSlots[s] && id && !respawn && cv.cl_autowepswitch.number && input.select === -1 &&
       !ws.f[WS_ACTION] && SLOT_RANK[s] > SLOT_RANK[ws.f[WS_ACTIVE]]) input.select = s;
     lastSlots[s] = id;
@@ -375,7 +392,6 @@ const smooth = new Float32Array(3); // visual offset hiding prediction correctio
 const netStats = { rtt: -0, compared: 0, corrected: 0, lastErr: -0 }; // (-0: doubles from the start, see BombState)
 
 // Other players, interpolated between snapshots around renderTick.
-let serverClock = -1; // estimated newest server tick (fractional), advanced every frame
 const interp = new Float32Array(MAX_PLAYERS * E_FIELDS);
 const targets = new HitTargets(MAX_PLAYERS);
 const seenKills = new Int32Array(32).fill(-1);
@@ -385,7 +401,6 @@ let nextBeep = 0; // ms
 let lastBeep = -1e9;
 
 const prevOrigin = new Float32Array(3);
-let prevEye = 0, prevPunchP = 0, prevPunchY = 0;
 // The camera's own jolt per shot (weapon_recoil_view_punch_extra), decaying every frame:
 // never in the weapon state, so the bullets and the server know nothing of it.
 const viewKick = new Float64Array(2);
@@ -528,7 +543,7 @@ function resetView(yaw) {
   angles[0] = 0;
   angles[1] = yaw;
   prevOrigin.set(ps.f.subarray(PS_ORIGIN, PS_ORIGIN + 3));
-  prevEye = eyeOffset(ps);
+  clk.prevEye = eyeOffset(ps);
   smooth.fill(0);
   weaponView.flashUntil = 0; // no muzzle flash carried over from before the respawn
 }
@@ -787,7 +802,7 @@ function progress() {
 
 // The top scorer (deathmatch): { name, score, self, tied } or null.
 // Per-frame arguments and callbacks, made once (no garbage per frame).
-const graphInfo = { fps: 0, rtt: 0, compared: 0, corrected: 0, interpTicks: 0 };
+const graphInfo = { fps: -0, rtt: -0, compared: 0, corrected: 0, interpTicks: 0 }; // (-0: doubles from the start)
 const leaderInfo = { name: '', score: 0, self: false, tied: false };
 const rowFeet = (rows, r) => rows[r + E_Z] - feetOffset(rows[r + E_FLAGS]);
 const rowAlive = (id) => id === selfId ? player.health > 0 : interp[id * E_FIELDS + E_HEALTH] > 0;
@@ -932,8 +947,8 @@ function applySnapshot() {
 
   // Keep the server clock estimate near the newest snapshot (it drifts with jitter).
   const seq = net.latestSeq;
-  if (serverClock < 0 || Math.abs(seq - serverClock) > 16) serverClock = seq;
-  else serverClock += (seq - serverClock) * 0.05;
+  if (clk.serverClock < 0 || Math.abs(seq - clk.serverClock) > 16) clk.serverClock = seq;
+  else clk.serverClock += (seq - clk.serverClock) * 0.05;
 }
 
 // Doors and buttons as the server has them (those absent are closed at rest).
@@ -996,17 +1011,18 @@ function sandboxDoors(t, alive) {
 const LOCKED_WAIT = 300, LOCKED_GAP = 1000;
 const lockedAt = new Map(); // mover -> when it last rattled
 let lockedTry = -1, lockedTryAt = 0; // a +use on a mover with a locked_sound, and when
-function lockedSounds(buttons) {
+// Mover k rattles (its locked_sound), at most once every LOCKED_GAP.
+function rattle(k, now) {
+  if (now - (lockedAt.get(k) ?? -Infinity) < LOCKED_GAP) return;
+  lockedAt.set(k, now);
+  const e = world.ents[doors.ent[k]];
+  sounds.locked((e.amin[0] + e.amax[0]) / 2, (e.amin[1] + e.amax[1]) / 2, (e.amin[2] + e.amax[2]) / 2);
+}
+function lockedSounds(buttons) { // (every tick: no closure in it, whose context was allocated at every call)
   const now = performance.now();
-  const rattle = (k) => {
-    if (now - (lockedAt.get(k) ?? -Infinity) < LOCKED_GAP) return;
-    lockedAt.set(k, now);
-    const e = world.ents[doors.ent[k]];
-    sounds.locked((e.amin[0] + e.amax[0]) / 2, (e.amin[1] + e.amax[1]) / 2, (e.amin[2] + e.amax[2]) / 2);
-  };
   for (let i = 0; i < touchedCount; i++) {
     const k = doors.ofEnt(touched[i]);
-    if (k >= 0 && doors.rattlesOnTouch(k)) rattle(k);
+    if (k >= 0 && doors.rattlesOnTouch(k)) rattle(k, now);
   }
   if ((buttons & IN_USE) && !(lastUseButtons & IN_USE)) {
     const f = ps.f, cp = Math.cos(angles[0] * DEG);
@@ -1019,7 +1035,7 @@ function lockedSounds(buttons) {
     }
   }
   if (lockedTry >= 0 && now - lockedTryAt >= LOCKED_WAIT + netStats.rtt) {
-    if (doors.dir[lockedTry] === 0 && doors.atBottom(lockedTry)) rattle(lockedTry);
+    if (doors.dir[lockedTry] === 0 && doors.atBottom(lockedTry)) rattle(lockedTry, now);
     lockedTry = -1;
   }
 }
@@ -1086,7 +1102,7 @@ function explosion(x, y, z, size = 1) {
 function bombBeeps(now) {
   const b = net.own.bomb;
   if (b.state !== BOMB_PLANTED || now < nextBeep) return;
-  const left = Math.max(0, b.ticksLeft - (serverClock - net.latestSeq)) / TICK_RATE;
+  const left = Math.max(0, b.ticksLeft - (clk.serverClock - net.latestSeq)) / TICK_RATE;
   nextBeep = now + 1000 * Math.max(0.1, 0.1 + 1.3 * left / C4_TIMER);
   lastBeep = now;
   sounds.beep(Sounds.falloff(Math.hypot(b.x - eye[0], b.y - eye[1], b.z - eye[2])));
@@ -1225,9 +1241,9 @@ function tick() {
   prevOrigin[0] = ps.f[PS_ORIGIN];
   prevOrigin[1] = ps.f[PS_ORIGIN + 1];
   prevOrigin[2] = ps.f[PS_ORIGIN + 2];
-  prevEye = eyeOffset(ps);
-  prevPunchP = viewPunchPitch(ws);
-  prevPunchY = viewPunchYaw(ws);
+  clk.prevEye = eyeOffset(ps);
+  clk.prevPunchP = viewPunchPitch(ws);
+  clk.prevPunchY = viewPunchYaw(ws);
 
   let viewTick = 0;
   if (reconnecting) return;
@@ -1242,7 +1258,7 @@ function tick() {
     if (synced) applyEvents();
     if (net.closed) return leaveGame(`Disconnected: ${net.closeReason}`);
     if (!synced) return;
-    viewTick = serverClock - cv.cl_interp_ratio.number;
+    viewTick = clk.serverClock - cv.cl_interp_ratio.number;
     if (interpolatePlayers(viewTick, interp)) buildTargets();
   }
 
@@ -1329,20 +1345,13 @@ function tick() {
 let last = performance.now();
 let lastDraw = last; // when the last frame was drawn (fps_max, r_frames_ahead skip frames)
 let ticksSinceDraw = 0; // the ticks run since, held frames included (the benchmark's frame kinds)
-// The time since the last drawn frame, for the animations draw() advances by dt: a held frame
-// (fps_max, r_frames_ahead) adds its own, else the deaths, strides and view kick ran slow by
-// the held share (with the browser's frame limiter off, half the frames: slow motion).
-let drawDt = 0;
-let accumulator = 0;
 let frames = 0;
 let fpsTime = last;
-let frameMsMax = 0;
 let fps = 0;
-let cpuSim = 0, cpuDraw = 0; // ms summed over the readout's window (cl_showfps 3)
 let gpuText = '';
 const dynres = new DynamicResolution(); // r_dynres
 // What it reads from the GPU timer each frame (per drawn frame: r_drawrepeat draws it several times).
-const gpuRead = { readings: 0, frameMs: 0, behind: 0 };
+const gpuRead = { readings: 0, frameMs: -0, behind: -0 }; // (-0: doubles from the start)
 // Where r_dynres settled, per window size, so the next map starts there: starting at full
 // scale and stepping down was a stutter at every map start on a GPU that cannot keep up.
 const DYNRES_KEY = 'comicstrike.dynres';
@@ -1485,7 +1494,7 @@ function frame(now) {
   if (!playing) { // the start menu: nothing runs; the settings window shows a backdrop scene
     pollPads(0, now); // the pad's buttons still reach the menu (the key capture)
     last = now;
-    accumulator = 0;
+    clk.accumulator = 0;
     if (backdrop) drawBackdrop(now);
     return;
   }
@@ -1527,7 +1536,7 @@ function frame(now) {
   touch.setAlt(altLabel(held));
   const zoom = held && held.altKind === 'scope' && player.health > 0 ? ws.f[WS_ZOOM] : 0;
   const fovTarget = zoom ? held.zoomFov[zoom] : 90;
-  fov += (fovTarget - fov) * (1 - Math.exp(-Math.min(elapsed, 0.1) * ZOOM_RATE));
+  clk.fov += (fovTarget - clk.fov) * (1 - Math.exp(-Math.min(elapsed, 0.1) * ZOOM_RATE));
   input.sensitivity = cv.sensitivity.number * (zoom ? cv.zoom_sensitivity_ratio_mouse.number * fovTarget / 90 : 1);
   const scope = zoom ? (held.name === 'aug' || held.name === 'sg556' ? 'dot' : 'cross') : '';
   if (scope !== scopeShown) {
@@ -1544,23 +1553,23 @@ function frame(now) {
   pollPads(elapsed, now);
   input.applyMouse(angles);
   const t0 = performance.now();
-  accumulator += elapsed;
-  drawDt += elapsed;
-  if (serverClock >= 0) serverClock += Math.min(elapsed, 0.25) * TICK_RATE;
+  clk.accumulator += elapsed;
+  clk.drawDt += elapsed;
+  if (clk.serverClock >= 0) clk.serverClock += Math.min(elapsed, 0.25) * TICK_RATE;
   let ticks = 0;
-  while (accumulator >= TICK_DT && ticks < MAX_TICKS_PER_FRAME) {
+  while (clk.accumulator >= TICK_DT && ticks < MAX_TICKS_PER_FRAME) {
     tick();
-    accumulator -= TICK_DT;
+    clk.accumulator -= TICK_DT;
     ticks++;
   }
-  if (ticks === MAX_TICKS_PER_FRAME) accumulator = 0; // fell far behind (tab was hidden)
+  if (ticks === MAX_TICKS_PER_FRAME) clk.accumulator = 0; // fell far behind (tab was hidden)
   ticksSinceDraw += ticks;
   const t1 = performance.now();
   if (bench.until) {
     bench.parts[0] += t1 - t0;
     bench.ticks += ticks;
   }
-  cpuSim += t1 - t0;
+  clk.cpuSim += t1 - t0;
   // Draw this frame? A browser with vsync off calls us as fast as we return: fps_max caps
   // the rate and r_frames_ahead holds a frame back while the GPU pipeline is full (see
   // client/gl/framegate.js). The ticks and the mouse ran whatever happens here.
@@ -1574,7 +1583,7 @@ function frame(now) {
     return;
   }
   lastDraw = now;
-  frameMsMax = Math.max(frameMsMax, gap);
+  clk.frameMsMax = Math.max(clk.frameMsMax, gap);
   if (bench.until) { // the gap, and what the frame before it carried (ticksSinceDraw, bench.dom, the tags)
     bench.frames++;
     if (ticksSinceDraw > 2) tag(`${ticksSinceDraw} ticks`);
@@ -1606,17 +1615,17 @@ function frame(now) {
     bench.gpu += renderer.timer.frameMs;
     bench.gpuN++;
   }
-  draw(now, accumulator / TICK_DT, Math.min(drawDt, 0.1));
-  drawDt = 0;
+  draw(now, clk.accumulator / TICK_DT, Math.min(clk.drawDt, 0.1));
+  clk.drawDt = 0;
   renderer.timer.endFrame();
   if (previewEdit) previewEdit.draw();
   // r_drawrepeat: the same frame again (no time passing), for the GPU readout.
   for (let i = 1; i < cv.r_drawrepeat.number; i++) {
-    draw(now, accumulator / TICK_DT, 0);
+    draw(now, clk.accumulator / TICK_DT, 0);
     renderer.timer.endFrame();
   }
   renderer.gate.drawn(now);
-  cpuDraw += performance.now() - t1;
+  clk.cpuDraw += performance.now() - t1;
   if (bench.until) {
     bench.cpu += performance.now() - t0;
     if (now >= bench.until) benchmarkReport();
@@ -1631,15 +1640,15 @@ function frame(now) {
     const lines = [];
     if (cv.cl_showfps.number) {
       const t = renderer.timer, gpu = t.readings ? `  gpu ${t.frameMs.toFixed(1)} ms, ${t.behind.toFixed(1)} frames behind` : '';
-      lines.push(`fps: ${fps.toFixed(0)}${cv.cl_showfps.number > 1 ? `  worst frame: ${frameMsMax.toFixed(1)} ms  res ${renderScale()}${gpu}` : ''}`);
+      lines.push(`fps: ${fps.toFixed(0)}${cv.cl_showfps.number > 1 ? `  worst frame: ${clk.frameMsMax.toFixed(1)} ms  res ${renderScale()}${gpu}` : ''}`);
     }
     if (cv.cl_showfps.number >= 3) {
       // CPU: the simulation ticks, then building and sending the frame (the draw calls).
-      lines.push(`cpu: sim ${(cpuSim / frames).toFixed(2)} ms · frame ${(cpuDraw / frames).toFixed(2)} ms`);
+      lines.push(`cpu: sim ${(clk.cpuSim / frames).toFixed(2)} ms · frame ${(clk.cpuDraw / frames).toFixed(2)} ms`);
       if (!bench.until) gpuText = renderer.timer.report() || gpuText; // the benchmark reads its own window
       if (gpuText) lines.push(gpuText);
     }
-    cpuSim = cpuDraw = 0;
+    clk.cpuSim = clk.cpuDraw = 0;
     if (cv.cl_showpos.number) {
       lines.push(`pos: ${f[0].toFixed(0)} ${f[1].toFixed(0)} ${f[2].toFixed(0)}`,
         `ang: ${angles[0].toFixed(1)} ${angles[1].toFixed(1)}`,
@@ -1650,7 +1659,7 @@ function frame(now) {
     if (debug.textContent !== text) debug.textContent = text;
     frames = 0;
     fpsTime = now;
-    frameMsMax = 0;
+    clk.frameMsMax = 0;
   }
   const gi = graphInfo;
   gi.fps = fps;
@@ -1670,14 +1679,14 @@ function draw(now, alpha, dt) {
   eye[0] = prevOrigin[0] + (f[PS_ORIGIN] - prevOrigin[0]) * alpha + smooth[0];
   eye[1] = prevOrigin[1] + (f[PS_ORIGIN + 1] - prevOrigin[1]) * alpha + smooth[1];
   eye[2] = prevOrigin[2] + (f[PS_ORIGIN + 2] - prevOrigin[2]) * alpha + smooth[2];
-  eye[2] += prevEye + (eyeOffset(ps) - prevEye) * alpha;
+  eye[2] += clk.prevEye + (eyeOffset(ps) - clk.prevEye) * alpha;
   // The camera shows a fraction of the aim punch (view_recoil_tracking) plus its own
   // jolt per shot, which decays at view_punch_decay.
   const kk = Math.exp(-dt * RECOIL.viewPunchDecay);
   viewKick[0] *= kk;
   viewKick[1] *= kk;
-  let pitch = angles[0] + prevPunchP + (viewPunchPitch(ws) - prevPunchP) * alpha + viewKick[0];
-  let yaw = angles[1] + prevPunchY + (viewPunchYaw(ws) - prevPunchY) * alpha + viewKick[1];
+  let pitch = angles[0] + clk.prevPunchP + (viewPunchPitch(ws) - clk.prevPunchP) * alpha + viewKick[0];
+  let yaw = angles[1] + clk.prevPunchY + (viewPunchYaw(ws) - clk.prevPunchY) * alpha + viewKick[1];
 
   // Dead: after a moment, follow a living player (client/spectate.js). The spectator
   // team follows anyone at once or roams free.
@@ -1692,7 +1701,7 @@ function draw(now, alpha, dt) {
   wasSpecTeam = specTeam;
   wasDead = dead;
   const buttons = input.locked ? input.buttons : 0;
-  const interpolated = net && synced && interpolatePlayers(serverClock - cv.cl_interp_ratio.number, interp);
+  const interpolated = net && synced && interpolatePlayers(clk.serverClock - cv.cl_interp_ratio.number, interp);
   const roamedBefore = spectator.mode === SPEC_ROAM;
   const spectating = interpolated && dead &&
     spectator.update(interp, selfId, player.team, (now - deadAt) / 1000, buttons, specTeam);
@@ -1745,9 +1754,9 @@ function draw(now, alpha, dt) {
   // r_dynres: the render scale (the scene's resolution under the full-resolution print)
   // lower while frames come late, down to half the canvas.
   const aspect = applyVideoSettings();
-  renderer.zoom = 90 / fov;
+  renderer.zoom = 90 / clk.fov;
   renderer.begin();
-  const fovY = 2 * Math.atan(Math.tan(fov / 2 * DEG) * 0.75);
+  const fovY = 2 * Math.atan(Math.tan(clk.fov / 2 * DEG) * 0.75);
   weaponView.fovY = fovY; // the crosshair's spread circle
   perspective(proj, fovY, aspect, 4, 16384);
   viewFromAngles(view, eye[0], eye[1], eye[2], pitch, yaw);
@@ -1755,7 +1764,7 @@ function draw(now, alpha, dt) {
   invert(invViewProj, viewProj);
   debris.update(dt, world);
   blasts.update(now / 1000);
-  fx.update(net ? serverClock - cv.cl_interp_ratio.number : tickCount - 1 + alpha, world && world.surfaces);
+  fx.update(net ? clk.serverClock - cv.cl_interp_ratio.number : tickCount - 1 + alpha, world && world.surfaces);
   sounds.listen(eye[0], eye[1], eye[2], yaw);
   scape.effects(fx.cur, now / 1000, dt);
   if (net && synced) {
@@ -2486,7 +2495,7 @@ function resetSession() {
   deathPanel.show(false);
   renderer.style.dead = 0;
   renderer.style.smoke = 0;
-  serverClock = -1;
+  clk.serverClock = -1;
   predictedTick.fill(-1);
   serverBroken.fill(0);
   smooth.fill(0);

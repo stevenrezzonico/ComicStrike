@@ -192,6 +192,9 @@ export class Reader {
   u16v() { const v = this.dv.getUint16(this.pos, true); this.pos += 2; return v; }
   u32v() { const v = this.dv.getUint32(this.pos, true); this.pos += 4; return v; }
   f32v() { const v = this.dv.getFloat32(this.pos, true); this.pos += 4; return v; }
+  // A float into a[i]: the decoders are too big to inline f32v, and its returned double was
+  // a new heap number each (3 a player a snapshot).
+  f32To(a, i) { a[i] = this.dv.getFloat32(this.pos, true); this.pos += 4; }
   f64v() { const v = this.dv.getFloat64(this.pos, true); this.pos += 8; return v; }
 
   bytesInto(dst) {
@@ -404,9 +407,9 @@ export function readHostages(r, h) {
     h.state[k] = r.u8v();
     h.carrier[k] = r.i8v();
     h.health[k] = r.u8v();
-    h.x[k] = r.f32v();
-    h.y[k] = r.f32v();
-    h.z[k] = r.f32v();
+    r.f32To(h.x, k);
+    r.f32To(h.y, k);
+    r.f32To(h.z, k);
     h.yaw[k] = r.u8v() / 256 * 360;
   }
 }
@@ -444,18 +447,18 @@ export function readGrenades(r, g) {
   for (let k = 0; k < g.count; k++) {
     g.id[k] = r.u16v();
     g.weapon[k] = r.u8v();
-    g.pos[k * 3] = r.f32v();
-    g.pos[k * 3 + 1] = r.f32v();
-    g.pos[k * 3 + 2] = r.f32v();
+    r.f32To(g.pos, k * 3);
+    r.f32To(g.pos, k * 3 + 1);
+    r.f32To(g.pos, k * 3 + 2);
   }
   g.fxCount = Math.min(r.u8v(), g.fxId.length);
   for (let k = 0; k < g.fxCount; k++) {
     g.fxId[k] = r.u16v();
     g.fxKind[k] = r.u8v();
     g.fxWeapon[k] = r.u8v();
-    g.fxPos[k * 3] = r.f32v();
-    g.fxPos[k * 3 + 1] = r.f32v();
-    g.fxPos[k * 3 + 2] = r.f32v();
+    r.f32To(g.fxPos, k * 3);
+    r.f32To(g.fxPos, k * 3 + 1);
+    r.f32To(g.fxPos, k * 3 + 2);
     g.fxAge[k] = r.u16v() / 64;
   }
   return tick;
@@ -1078,10 +1081,11 @@ export function readSnapshot(r, ring, own, ev = null) {
     const bits = r.u8v();
     mv.dir[m] = (bits & 3) - 1;
     mv.sign[m] = bits & 4 ? -1 : 1;
-    mv.from[m] = r.f32v();
+    r.f32To(mv.from, m);
     mv.t0[m] = r.u32v();
     mv.leg[m] = bits & 8 ? r.u8v() : 0;
-    mv.goal[m] = bits & 8 ? r.f32v() : 0;
+    if (bits & 8) r.f32To(mv.goal, m);
+    else mv.goal[m] = 0;
   }
   own.health = r.u8v();
   const armor = r.u8v();
@@ -1123,9 +1127,9 @@ export function readSnapshot(r, ring, own, ev = null) {
     }
     E[c + E_ACTIVE] = 1;
     if (mask & F_ORIGIN) {
-      E[c + E_X] = r.f32v();
-      E[c + E_Y] = r.f32v();
-      E[c + E_Z] = r.f32v();
+      r.f32To(E, c + E_X);
+      r.f32To(E, c + E_Y);
+      r.f32To(E, c + E_Z);
     }
     if (mask & F_ANGLES) {
       E[c + E_PITCH] = r.u16v();

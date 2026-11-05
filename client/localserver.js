@@ -1,7 +1,9 @@
 // Practice: the game server in a Web Worker. The same Host and Game as the real server
 // (server/host.js, served to the browser for this) on the same fixed 64 Hz loop, with
-// bots; the page talks to it like to the network (client/net.js `connectLocal`), one
-// datagram per message. The worker fetches the map and the mode cfgs itself (the Host
+// bots; the page talks to it like to the network (client/net.js `connectLocal`): one
+// datagram per message in, a task's datagrams in one message out (`dgrams`: a message
+// is an event, an object and a buffer on the page's heap; a tick sends 2-4 datagrams).
+// The worker fetches the map and the mode cfgs itself (the Host
 // reads them synchronously), and handles `map` / `changelevel` by fetching first.
 //
 // Messages in:  start { map, mode: a GAME_MODES name ('competitive', 'casual', 'wingman', 'armsrace',
@@ -12,7 +14,8 @@
 //               open { id }, dgram { id, bytes }, close { id },
 //               pause { on }: the page's pause menu; the ticks stop (bots, the round clock,
 //                 timeouts) and go on from where they were
-// Messages out: ready { rcon, names: the server console's catalog() } | failed { error }, dgram { id, bytes }, close { id, reason }
+// Messages out: ready { rcon, names: the server console's catalog() } | failed { error },
+//               dgrams { id, bytes: each datagram after its length (u16, little-endian) }, close { id, reason }
 
 import { Host, GAME_MODES } from '../server/host.js';
 import { parseBSP, parseUntrustedBSP } from '../shared/bsp.js';
@@ -27,6 +30,27 @@ const maps = new Map(); // name -> parsed BSP
 let own = null; // a player's own map, from its bytes: { name, bsp } (kept across map changes)
 const cfgs = {};
 const sessions = new Map(); // id -> { game, client }
+// Datagrams waiting to go out, by session id: sent together once the task that made them
+// (the ticks due, a message from the page) is over.
+const pending = new Map(); // id -> [Uint8Array copies]
+let flushQueued = false;
+function flush() {
+  flushQueued = false;
+  for (const [id, list] of pending) {
+    let n = 0;
+    for (const b of list) n += 2 + b.length;
+    const out = new Uint8Array(n);
+    let o = 0;
+    for (const b of list) {
+      out[o] = b.length & 255;
+      out[o + 1] = b.length >> 8;
+      out.set(b, o + 2);
+      o += 2 + b.length;
+    }
+    postMessage({ type: 'dgrams', id, bytes: out.buffer }, [out.buffer]);
+  }
+  pending.clear();
+}
 
 async function fetchMap(name) {
   if (own && name === own.name) return own.bsp;
@@ -109,10 +133,15 @@ onmessage = (e) => {
     const game = host.game, id = m.id;
     const session = {
       send(bytes) {
-        const copy = bytes.slice();
-        postMessage({ type: 'dgram', id, bytes: copy.buffer }, [copy.buffer]);
+        if (!pending.has(id)) pending.set(id, []);
+        pending.get(id).push(bytes.slice()); // (the server's buffers are reused)
+        if (!flushQueued) {
+          flushQueued = true;
+          queueMicrotask(flush);
+        }
       },
       close(reason) {
+        flush(); // what was sent before the close arrives first
         sessions.delete(id);
         postMessage({ type: 'close', id, reason });
       },

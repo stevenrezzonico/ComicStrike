@@ -23,6 +23,15 @@ const REDRAW_TURN = 1.5; // ... unless the view turned this many degrees since
 const COLOR = {
   [TEAM_T]: '#ffb84a', [TEAM_CT]: '#7db8ff', enemy: '#e2402a', bomb: '#ff9a3c', site: 'rgba(226,64,42,0.9)',
 };
+// The markers go to Canvas2D in 16ths of a pixel, as whole numbers, under a 1/16 scale: a
+// fraction handed to a canvas call is a new heap number each time (~1 KB a redraw, 30
+// redraws a second), a whole number is not. The helpers read their numbers from fields
+// and PT for the same reason (as arguments they were boxed too).
+const SUB = 16;
+const UNSUB = 1 / SUB;
+const TAU = 2 * Math.PI;
+const PT = new Float64Array(2); // place()'s world point
+const q = (v) => (v * SUB) | 0; // pixels to 16ths
 
 export class Radar {
   constructor(canvas, cv) {
@@ -40,7 +49,10 @@ export class Radar {
     this.cssSize = 0;
     this.shown = null;
     this.drawnAt = -Infinity; // when, and at which view yaw, it was last drawn
-    this.drawnYaw = 0;
+    this.drawnYaw = -0;
+    // This redraw's frame, and where place() put a point (pixels). -0: doubles from the
+    // start (a field first given a whole number changes its object's map later).
+    this.cx = this.cy = this.k = this.a = this.ca = this.sa = this.R = this.r = this.sx = this.sy = -0;
   }
 
   // A new map: its overview (an image per level) and bomb sites (A, B in entity order,
@@ -93,16 +105,14 @@ export class Radar {
     }
     // Drawn about 30 times a second (it cost ~0.3 ms a frame), every frame while the view
     // turns, so the rotating map stays smooth.
-    let turn = Math.abs(yaw - this.drawnYaw) % 360;
-    if (turn > 180) turn = 360 - turn;
+    const d = Math.abs(yaw - this.drawnYaw) % 360, turn = Math.min(d, 360 - d);
     const level = this.overview.levelOf(cz);
     if (now - this.drawnAt < REDRAW_MS && turn < REDRAW_TURN && level === this.level) return;
     this.drawnAt = now;
     this.drawnYaw = yaw;
     this.level = level;
     const ctx = this.ctx, o = this.overview, R = D / 2, selfX = cx, selfY = cy;
-    const onLevel = (z) => o.levelOf(z) === level; // (z: feet)
-    const faint = (z) => ctx.globalAlpha = onLevel(z) ? 1 : 0.45;
+    const multi = o.levels.length > 1; // (one level: all at full strength, no levelOf calls)
     const k = D / (RANGE * this.cv.cl_radar_scale.number); // screen pixels per world unit
     const rotate = this.cv.cl_radar_rotate.bool;
     if (!this.cv.cl_radar_always_centered.bool && !rotate) { // stop at the map's edges
@@ -136,7 +146,7 @@ export class Radar {
     ctx.globalAlpha = 1;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-    const r = 3.4 * dpr * Math.max(1, css / 200);
+    const r = this.r = 3.4 * dpr * Math.max(1, css / 200);
     const px = Math.round(r * 3.2);
     if (px !== this.fontPx) { // (a new string and a font parse only when the size changes)
       this.fontPx = px;
@@ -145,75 +155,89 @@ export class Radar {
     ctx.font = this.font;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    for (let i = 0; i < this.sites.length; i++) {
-      const site = this.sites[i], x = site[0], y = site[1], letter = site[2];
-      if (!this.place(x, y, false)) continue;
-      faint(site[3]);
+    for (let i = 0; i < this.sites.length; i++) { // (the letters at a pixel's scale: a few doubles a redraw)
+      const site = this.sites[i];
+      PT[0] = site[0];
+      PT[1] = site[1];
+      if (!this.place(false)) continue;
+      if (multi) this.faint(site[3]);
       ctx.lineWidth = dpr * 2;
       ctx.strokeStyle = 'rgba(0,0,0,0.7)';
-      ctx.strokeText(letter, this.sx, this.sy);
+      ctx.strokeText(site[2], this.sx, this.sy);
       ctx.fillStyle = COLOR.site;
-      ctx.fillText(letter, this.sx, this.sy);
+      ctx.fillText(site[2], this.sx, this.sy);
     }
+    ctx.setTransform(UNSUB, 0, 0, UNSUB, 0, 0); // the rest in 16ths of a pixel
     if (hostages) {
       for (let h = 0; h < hostages.count; h++) {
-        if (hostages.state[h] !== HS_IDLE || !this.place(hostages.x[h], hostages.y[h], false)) continue;
-        faint(hostages.z[h]);
+        PT[0] = hostages.x[h];
+        PT[1] = hostages.y[h];
+        if (hostages.state[h] !== HS_IDLE || !this.place(false)) continue;
+        if (multi) this.faint(hostages.z[h]);
         ctx.fillStyle = '#e6e6e0';
-        ctx.fillRect(this.sx - r * 0.8, this.sy - r * 0.8, r * 1.6, r * 1.6);
+        ctx.fillRect(q(this.sx - r * 0.8), q(this.sy - r * 0.8), q(r * 1.6), q(r * 1.6));
       }
     }
     const all = team === TEAM_SPECTATOR;
-    if (bomb && (all || team === TEAM_T) && (bomb.state === BOMB_DROPPED || bomb.state === BOMB_PLANTED) &&
-      this.place(bomb.x, bomb.y, true)) {
-      const blink = bomb.state === BOMB_PLANTED && Math.floor(now / 400) % 2;
-      faint(bomb.z);
-      ctx.fillStyle = blink ? '#ff3b2f' : COLOR.bomb;
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = dpr;
-      ctx.fillRect(this.sx - r * 1.1, this.sy - r * 0.8, r * 2.2, r * 1.6);
-      ctx.strokeRect(this.sx - r * 1.1, this.sy - r * 0.8, r * 2.2, r * 1.6);
+    if (bomb && (all || team === TEAM_T) && (bomb.state === BOMB_DROPPED || bomb.state === BOMB_PLANTED)) {
+      PT[0] = bomb.x;
+      PT[1] = bomb.y;
+      if (this.place(true)) {
+        const blink = bomb.state === BOMB_PLANTED && Math.floor(now / 400) % 2;
+        if (multi) this.faint(bomb.z);
+        ctx.fillStyle = blink ? '#ff3b2f' : COLOR.bomb;
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = q(dpr);
+        const x = q(this.sx - r * 1.1), y = q(this.sy - r * 0.8), w = q(r * 2.2), h = q(r * 1.6);
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeRect(x, y, w, h);
+      }
     }
 
     if (rows) {
       const spotBit = team === TEAM_T ? ANIM_SPOTTED_T : ANIM_SPOTTED_CT;
       for (let pass = 0; pass < 2; pass++) { // bodies first, then the living on top
         for (let id = 0; id < MAX_PLAYERS; id++) {
-          const q = id * E_FIELDS;
-          if (!rows[q + E_ACTIVE] || id === selfId || id === watched) continue;
-          const t = rows[q + E_TEAM], alive = rows[q + E_HEALTH] > 0;
+          const row = id * E_FIELDS;
+          if (!rows[row + E_ACTIVE] || id === selfId || id === watched) continue;
+          const t = rows[row + E_TEAM], alive = rows[row + E_HEALTH] > 0;
           if (alive !== (pass === 1)) continue;
           const mate = !ffa && t === team;
-          const visible = all || mate || (alive && (rows[q + E_ANIM] & (ffa ? ANIM_SPOTTED_T | ANIM_SPOTTED_CT : spotBit)));
+          const visible = all || mate || (alive && (rows[row + E_ANIM] & (ffa ? ANIM_SPOTTED_T | ANIM_SPOTTED_CT : spotBit)));
           if (!visible) continue;
           const color = mate || all ? COLOR[t] || '#ccc' : COLOR.enemy;
-          if (!this.place(rows[q + E_X], rows[q + E_Y], mate && alive)) continue;
-          const feet = rows[q + E_Z] - 36; // the origin is the hull's center (approx. when ducked)
-          faint(feet);
-          if (!alive) this.cross(color, r);
-          else this.dot(color, r, dequantizeYaw(rows[q + E_YAW]), feet - cz);
+          PT[0] = rows[row + E_X];
+          PT[1] = rows[row + E_Y];
+          if (!this.place(mate && alive)) continue;
+          const feet = rows[row + E_Z] - 36; // the origin is the hull's center (approx. when ducked)
+          if (multi) this.faint(feet);
+          if (!alive) this.cross(color);
+          else this.dot(color, rows, row, Math.abs(feet - cz) > LEVEL ? (feet > cz ? -1 : 1) : 0);
         }
       }
     }
     ctx.globalAlpha = 1;
     // Teammates' pings: a yellow "!" in an ink ring.
     for (let i = 0; i < this.pings.length; i += 2) {
-      if (!this.place(this.pings[i], this.pings[i + 1], true)) continue;
+      PT[0] = this.pings[i];
+      PT[1] = this.pings[i + 1];
+      if (!this.place(true)) continue;
+      const x = this.sx, y = this.sy;
       ctx.beginPath();
-      ctx.arc(this.sx, this.sy, r * 1.6, 0, Math.PI * 2);
+      ctx.arc(q(x), q(y), q(r * 1.6), 0, TAU);
       ctx.fillStyle = '#ffd23a';
       ctx.fill();
-      ctx.lineWidth = r * 0.45;
+      ctx.lineWidth = q(r * 0.45);
       ctx.strokeStyle = '#17130f';
       ctx.stroke();
       ctx.fillStyle = '#17130f';
-      ctx.fillRect(this.sx - r * 0.22, this.sy - r * 1.05, r * 0.44, r * 1.2);
-      ctx.fillRect(this.sx - r * 0.22, this.sy + r * 0.4, r * 0.44, r * 0.44);
+      ctx.fillRect(q(x - r * 0.22), q(y - r * 1.05), q(r * 0.44), q(r * 1.2));
+      ctx.fillRect(q(x - r * 0.22), q(y + r * 0.4), q(r * 0.44), q(r * 0.44));
     }
     // Us (or whoever we watch): an arrow along the view (straight up when the radar turns).
-    if (this.place(selfX, selfY, true)) {
-      this.arrow(r * 1.5, yaw, team === TEAM_CT ? COLOR[TEAM_CT] : team === TEAM_T ? COLOR[TEAM_T] : '#f2ecd8');
-    }
+    PT[0] = selfX;
+    PT[1] = selfY;
+    if (this.place(true)) this.arrow(team === TEAM_CT ? COLOR[TEAM_CT] : team === TEAM_T ? COLOR[TEAM_T] : '#f2ecd8');
     ctx.restore();
     ctx.beginPath();
     ctx.arc(R, R, R - dpr, 0, Math.PI * 2);
@@ -227,76 +251,79 @@ export class Radar {
     ctx.stroke();
   }
 
-  // Radar position of world (x, y) into this.sx / this.sy; false if off the radar (or,
-  // `clamp`: pulled in to the edge).
-  place(x, y, clamp) {
-    const dx = x - this.cx, dy = y - this.cy, k = this.k;
-    let px = k * (dx * this.ca - dy * this.sa), py = -k * (dx * this.sa + dy * this.ca);
+  // Faint unless feet at z are on the level drawn.
+  faint(z) {
+    this.ctx.globalAlpha = this.overview.levelOf(z) === this.level ? 1 : 0.45;
+  }
+
+  // Radar position (pixels) of the world point in PT into this.sx / this.sy; false if off
+  // the radar (or, `clamp`: pulled in to the edge).
+  place(clamp) {
+    const dx = PT[0] - this.cx, dy = PT[1] - this.cy, k = this.k;
+    const px = k * (dx * this.ca - dy * this.sa), py = -k * (dx * this.sa + dy * this.ca);
     const d = Math.sqrt(px * px + py * py), max = this.R * 0.9; // (hypot allocates its result)
-    if (d > max) {
-      if (!clamp) return false;
-      px *= max / d;
-      py *= max / d;
-    }
-    this.sx = this.R + px;
-    this.sy = this.R + py;
+    if (d > max && !clamp) return false;
+    const f = Math.min(1, max / d); // pulled in to the edge (no reassigned locals: see SUB)
+    this.sx = this.R + px * f;
+    this.sy = this.R + py * f;
     return true;
   }
 
-  // A player: a dot with a tick along his view (world yaw `pyaw`), a mark when far above
-  // or below us. A world direction at yaw p is at angle p + the radar's turn on screen.
-  dot(color, r, pyaw, dz) {
-    const ctx = this.ctx, x = this.sx, y = this.sy, a = pyaw * DEG + this.a;
+  // A player (row `row` of `rows`) at place()'s point: a dot with a tick along his view, a
+  // mark when far above (s -1) or below (1) us. A world direction at yaw p is at angle p +
+  // the radar's turn on screen.
+  dot(color, rows, row, s) {
+    const ctx = this.ctx, x = this.sx, y = this.sy, r = this.r, a = dequantizeYaw(rows[row + E_YAW]) * DEG + this.a;
     ctx.strokeStyle = color;
-    ctx.lineWidth = r * 0.6;
+    ctx.lineWidth = q(r * 0.6);
     ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + Math.cos(a) * r * 2, y - Math.sin(a) * r * 2);
+    ctx.moveTo(q(x), q(y));
+    ctx.lineTo(q(x + Math.cos(a) * r * 2), q(y - Math.sin(a) * r * 2));
     ctx.stroke();
     ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.arc(q(x), q(y), q(r), 0, TAU);
     ctx.fillStyle = color;
     ctx.fill();
-    ctx.lineWidth = r * 0.35;
+    ctx.lineWidth = q(r * 0.35);
     ctx.strokeStyle = '#000';
     ctx.stroke();
-    if (Math.abs(dz) > LEVEL) { // above: a cap over the dot; below: under it
-      const s = dz > 0 ? -1 : 1;
+    if (s !== 0) { // above: a cap over the dot; below: under it
       ctx.beginPath();
-      ctx.moveTo(x - r, y + s * r * 1.5);
-      ctx.lineTo(x, y + s * r * 2.6);
-      ctx.lineTo(x + r, y + s * r * 1.5);
-      ctx.lineWidth = r * 0.5;
+      ctx.moveTo(q(x - r), q(y + s * r * 1.5));
+      ctx.lineTo(q(x), q(y + s * r * 2.6));
+      ctx.lineTo(q(x + r), q(y + s * r * 1.5));
+      ctx.lineWidth = q(r * 0.5);
       ctx.strokeStyle = color;
       ctx.stroke();
     }
   }
 
-  cross(color, r) {
-    const ctx = this.ctx, x = this.sx, y = this.sy;
+  // A body at place()'s point: an X.
+  cross(color) {
+    const ctx = this.ctx, x = this.sx, y = this.sy, r = this.r;
     ctx.strokeStyle = color;
-    ctx.lineWidth = r * 0.6;
+    ctx.lineWidth = q(r * 0.6);
     ctx.beginPath();
-    ctx.moveTo(x - r, y - r);
-    ctx.lineTo(x + r, y + r);
-    ctx.moveTo(x + r, y - r);
-    ctx.lineTo(x - r, y + r);
+    ctx.moveTo(q(x - r), q(y - r));
+    ctx.lineTo(q(x + r), q(y + r));
+    ctx.moveTo(q(x + r), q(y - r));
+    ctx.lineTo(q(x - r), q(y + r));
     ctx.stroke();
   }
 
-  // An arrow along world yaw `yaw` (degrees).
-  arrow(r, yaw, color) {
-    const ctx = this.ctx, a = yaw * DEG + this.a, x = this.sx, y = this.sy;
+  // Us at place()'s point: an arrow along the view (drawnYaw, degrees).
+  arrow(color) {
+    const ctx = this.ctx, a = this.drawnYaw * DEG + this.a, x = this.sx, y = this.sy, r = this.r * 1.5;
     const ux = Math.cos(a), uy = -Math.sin(a); // forward on screen; (-uy, ux) is to its side
     ctx.beginPath();
-    ctx.moveTo(x + ux * r * 1.4, y + uy * r * 1.4);
-    ctx.lineTo(x - ux * r - uy * r, y - uy * r + ux * r);
-    ctx.lineTo(x - ux * r * 0.45, y - uy * r * 0.45);
-    ctx.lineTo(x - ux * r + uy * r, y - uy * r - ux * r);
+    ctx.moveTo(q(x + ux * r * 1.4), q(y + uy * r * 1.4));
+    ctx.lineTo(q(x - ux * r - uy * r), q(y - uy * r + ux * r));
+    ctx.lineTo(q(x - ux * r * 0.45), q(y - uy * r * 0.45));
+    ctx.lineTo(q(x - ux * r + uy * r), q(y - uy * r - ux * r));
     ctx.closePath();
     ctx.fillStyle = color;
     ctx.fill();
-    ctx.lineWidth = r * 0.25;
+    ctx.lineWidth = q(r * 0.25);
     ctx.strokeStyle = '#000';
     ctx.stroke();
   }

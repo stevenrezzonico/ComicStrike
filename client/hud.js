@@ -144,6 +144,12 @@ export class Hud {
       `${matchEnd ? net.names.join() + net.kills.join() + net.deaths.join() + net.mvps.join() : net.names[rs.mvp] || ''}`;
     if (key === this.panelKey) return;
     this.panelKey = key;
+    this.fillPanel(rs, net, selfId, matchEnd, report);
+  }
+
+  // (Apart from roundPanel, called every frame: the closures here made V8 allocate this
+  // function's context at every call, before any return.)
+  fillPanel(rs, net, selfId, matchEnd, report) {
     const winner = rs.info & 3, reason = reasonOf(rs.info);
     const el = this.elPanel;
     el.replaceChildren();
@@ -261,6 +267,11 @@ export class Hud {
     const now = performance.now();
     if (now - this.scoreAt < 250) return;
     this.scoreAt = now;
+    this.fillScores(net, selfId, alive);
+  }
+
+  // (Apart from scoreboard, called every frame: see fillPanel.)
+  fillScores(net, selfId, alive) {
     const mode = net.own.round.mode, armsRace = (mode & GAME_ARMSRACE) !== 0;
     const dm = (mode & GAME_DM) !== 0 || armsRace; // ranked by score (arms race: the level)
     const ranked = (id) => armsRace ? Math.min(net.scores[id] + 1, ARMS_RACE.length) : net.scores[id];
@@ -453,10 +464,11 @@ export class Hud {
     else if (this.view === 'items') lines = [BUY_MENU[this.category][0], free ? 'FREE' : `$${player.money}`, 'right click: back'];
     else lines = [free ? 'FREE' : `$${player.money}`, '', s ? BUY_MENU[this.hover][0] : 'BUY MENU'];
     if (!canBuy) lines = [lines[0], lines[1], 'Buying is not', 'possible here', 'or now'];
-    this.centerLines.forEach((t, i) => {
+    for (let i = 0; i < this.centerLines.length; i++) { // (no closure: its context was allocated at every call)
+      const t = this.centerLines[i];
       t.textContent = lines[i] || '';
       t.classList.toggle('warn', !canBuy && i >= 2);
-    });
+    }
   }
 
   toggleMenu(open = !this.menuOpen) {

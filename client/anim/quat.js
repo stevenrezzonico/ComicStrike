@@ -42,7 +42,18 @@ export function fromAxisAngle(out, oo, x, y, z, angle) {
 // Rotation from Euler angles in degrees, applied yaw (Z), then pitch (Y), then roll (X)
 // in the parent frame: q = qz * qy * qx (GoldSrc angle order).
 export function fromEuler(out, oo, pitch, yaw, roll) {
-  const d = Math.PI / 360;
+  const e = EUL;
+  e[0] = pitch;
+  e[1] = yaw;
+  e[2] = roll;
+  return fromEulerAt(out, oo, e, 0);
+}
+const EUL = new Float64Array(3);
+
+// fromEuler with the angles read from e (at eo): no doubles cross the call (passed as
+// arguments they are boxed, an allocation each, when the caller is not inlined).
+export function fromEulerAt(out, oo, e, eo) {
+  const d = Math.PI / 360, pitch = e[eo], yaw = e[eo + 1], roll = e[eo + 2];
   const cp = Math.cos(pitch * d), sp = Math.sin(pitch * d);
   const cy = Math.cos(yaw * d), sy = Math.sin(yaw * d);
   const cr = Math.cos(roll * d), sr = Math.sin(roll * d);
@@ -51,12 +62,6 @@ export function fromEuler(out, oo, pitch, yaw, roll) {
   out[oo + 2] = sy * cp * cr - cy * sp * sr;
   out[oo + 3] = cy * cp * cr + sy * sp * sr;
   return out;
-}
-
-// fromEuler with the angles read from e (at eo): no doubles cross the call (passed as
-// arguments they are boxed, an allocation each, when the caller is not inlined).
-export function fromEulerAt(out, oo, e, eo) {
-  return fromEuler(out, oo, e[eo], e[eo + 1], e[eo + 2]);
 }
 
 export function normalize(q, o) {
