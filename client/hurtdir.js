@@ -10,7 +10,7 @@
 export const HURT_FADE = 1.5; // seconds an arc lasts
 const HOLD = 0.4; // at full strength first
 const SLOTS = 4;
-const SPREAD = 24; // degrees each side of its direction
+const SPREAD = 16; // degrees each side of its direction
 const SAME = 48; // a hit from within this of a showing arc's place renews that arc (a spray)
 
 // The arc's place on the screen: degrees clockwise from straight up, for damage from (x, y)
@@ -27,7 +27,7 @@ function arcPath() {
   for (let side = 0; side < 2; side++) {
     for (let i = 0; i <= n; i++) {
       const u = side ? 1 - i / n : i / n, a = (u * 2 - 1) * SPREAD * Math.PI / 180;
-      const t = 1 - (u * 2 - 1) ** 2, r = 42 + (side ? -1 : 1) * (0.6 + 4.4 * t);
+      const t = 1 - (u * 2 - 1) ** 2, r = 42 + (side ? -1 : 1) * (0.3 + 1.7 * t); // (2.5 times as thick was too much)
       pts.push(`${(Math.sin(a) * r).toFixed(2)},${(-Math.cos(a) * r).toFixed(2)}`);
     }
   }
