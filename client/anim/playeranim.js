@@ -41,7 +41,8 @@ const LIFT_RUN = 15; // running: the heel comes up behind, the knee folds
 const FOOT_TURN = 0.6; // the feet turn this share of the way toward the movement direction
 const HIP_TURN = 0.4; // the hips too (the spine takes two thirds of it back)
 const TOSS_RATE = 2.5; // a throw's arm swing lasts 1 / this seconds
-const FLY = 0.55; // a headshot's body flies for this long (seconds)
+const FLY = 0.55; // a headshot's body flies for this long (seconds, before HS_PACE)
+const HS_PACE = 1.25; // the headshot's whole fall plays this much faster than its timings (1 was a little slow)
 const FLY_ARC = 14; // and rises this much at mid-flight (with room to fly)
 const FLY_SLIDE = 7; // then slides this far after landing
 const LYING = 8; // the hips this high lying on the back (broad shoulders)
@@ -530,7 +531,7 @@ export class PlayerAnimator {
   // lands (drop lower where the floor is), bounces once, slides a little further and the
   // hands and feet come down on the ground. yaw: the player's, to take the shot into his frame.
   headshotPose(c, yaw) {
-    const p = this.pose, t = this.dead;
+    const p = this.pose, t = this.dead * HS_PACE;
     const yr = yaw * Math.PI / 180, cy = Math.cos(yr), sy = Math.sin(yr);
     sel[0] = this.deathDir[0] * cy + this.deathDir[1] * sy;
     sel[1] = -this.deathDir[0] * sy + this.deathDir[1] * cy;
