@@ -5,17 +5,19 @@
 // kill events) every tick. Transport-agnostic: sessions only need send(bytes) and
 // close(reason).
 
-import { parseVec3, BSP_LIMITS, entityYaw, teamSpawns } from '../shared/bsp.js';
+import { parseVec3, BSP_LIMITS, entityYaw, teamSpawns, CONTENTS_SLIME, CONTENTS_LAVA } from '../shared/bsp.js';
 import { TICK_RATE, TICK_DT } from '../shared/constants.js';
 import { ARMS_RACE, DEMOLITION, armLevel } from '../shared/progression.js';
-import { CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, HULL_STAND, HULL_POINT } from '../shared/trace.js';
+import {
+  CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, pointContents, HULL_STAND, HULL_POINT,
+} from '../shared/trace.js';
 import {
   Breakables, EXPLODE_RANGE, blastDamage, SF_BREAK_TOUCH, SF_BREAK_PRESSURE, MAT_UNBREAKABLE_GLASS,
 } from '../shared/breakables.js';
 import { Doors, MapLogic, Killables, BLAST } from '../shared/doors.js';
 import { touched, touchedCount } from '../shared/pmove.js';
 import {
-  PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, PS_GROUNDENT, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, eyeOffset,
+  PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, PS_GROUNDENT, PS_WATERLEVEL, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, eyeOffset,
 } from '../shared/pmove.js';
 import {
   ShotList, WEAPONS, WEAPON_ID, giveWeapon, silenced, canCarryGrenade, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4,
@@ -84,6 +86,9 @@ const ARMOURY_ITEMS = [
 ];
 const DEMO_RESTOCK = 2; // the demo: seconds from a bomb going off or being defused to the next one
 const DEMO_HEAL = 2; // the demo: seconds from the last hurt to full health
+export const AIR_TICKS = 12 * TICK_RATE; // HL's AIRTIME: air with the eyes under water
+const DROWN_BACK = 10; // health drowned given back every DROWN_BACK_TICKS once the head is out
+const DROWN_BACK_TICKS = 2 * TICK_RATE;
 const BOT_PLACE_GAP = 40; // bot_place all: units between the bots in a row
 const CHAT_FLOOD_TICKS = Math.round(0.66 * TICK_RATE); // least gap between a player's chat lines (CS:GO's flood check: ~0.75 s)
 // Retakes: the Ts start RETAKE_T units from the planted bomb, the CTs RETAKE_CT, at most
@@ -146,6 +151,15 @@ class Client {
     this.controlled = false; // a bot a dead teammate took control of: out of play until it respawns
     this.lastHealth = 100; // the demo: health last tick, and when it heals back
     this.healAt = 0;
+    // Water (updateLiquid): the tick the air runs out with the eyes under, the next drowning
+    // hurt and its size, the health drowned and not yet given back, the next give-back, the
+    // next slime or lava burn.
+    this.airUntil = 0;
+    this.drownAt = 0;
+    this.drownDmg = 2;
+    this.drowned = 0;
+    this.restoreAt = 0;
+    this.burnAt = 0;
     this.level = 0; // Arms Race / Demolition: place in the weapon list (shared/progression.js)
     this.roundKills = 0; // kills this round (the round's MVP; Demolition: one earns the next level)
     this.mvps = 0; // rounds this player was the most valuable player of (INFO)
@@ -571,6 +585,8 @@ export class Game {
     c.placed = true;
     c.controlled = false;
     c.life++;
+    c.airUntil = this.tick + AIR_TICKS;
+    c.drowned = 0;
   }
 
   // CS:GO's bot takeover: dead `c`, watching a living bot of its team, takes its place
@@ -599,6 +615,8 @@ export class Game {
     c.immuneUntil = 0;
     c.placed = true;
     c.life++;
+    c.airUntil = o.airUntil;
+    c.drowned = 0;
     if (this.bombCarrier === o) this.bombCarrier = c;
     const h = this.hostages, k = h.carriedBy(o.id);
     if (k >= 0) {
@@ -713,6 +731,7 @@ export class Game {
       if (!c.joined) continue;
       if (!c.alive && this.tick >= c.respawnTick && this.phase !== PHASE_OVER) this.respawn(c, false, true);
       this.runCommands(c);
+      if (c.alive && c.playing) this.updateLiquid(c);
       if (this.rules.demo) this.demoHeal(c);
     }
     this.updateBomb();
@@ -1923,6 +1942,46 @@ export class Game {
 
   demoHuman(c) {
     return c && c.joined && c.alive && c.playing && !c.bot;
+  }
+
+  // HL's CBasePlayer::WaterMove: AIR_TICKS of air with the eyes under water, then drowning
+  // once a second, 3, 4, 5, 5, ... through armor, given back DROWN_BACK every 2 s once the
+  // head is out (no more than was drowned); slime burns 4 and lava 10 a second per water
+  // level (approx. of HL's timing). Not in noclip.
+  updateLiquid(c) {
+    const p = c.player, ps = p.ps, t = this.tick;
+    const level = (ps.i[PS_FLAGS] & FL_NOCLIP) ? 0 : ps.i[PS_WATERLEVEL];
+    if (level < 3) {
+      c.airUntil = t + AIR_TICKS;
+      c.drownDmg = 2;
+      if (c.drowned > 0 && t >= c.restoreAt) {
+        const back = Math.min(c.drowned, DROWN_BACK);
+        p.health = Math.min(100, p.health + back);
+        c.drowned -= back;
+        c.restoreAt = t + DROWN_BACK_TICKS;
+      }
+    } else if (t >= c.airUntil && t >= c.drownAt) {
+      c.drownDmg = Math.min(5, c.drownDmg + 1);
+      c.drownAt = t + TICK_RATE;
+      c.restoreAt = t + DROWN_BACK_TICKS;
+      c.drowned += c.drownDmg;
+      if (this.hurtSelf(c, c.drownDmg)) return;
+    }
+    if (level === 0 || t < c.burnAt) return;
+    const f = ps.f, feet = f[PS_ORIGIN + 2] - ((ps.i[PS_FLAGS] & FL_DUCKING) ? 18 : 36) + 1;
+    const kind = pointContents(this.world, f[PS_ORIGIN], f[PS_ORIGIN + 1], feet);
+    if (kind !== CONTENTS_SLIME && kind !== CONTENTS_LAVA) return;
+    c.burnAt = t + TICK_RATE;
+    this.hurtSelf(c, (kind === CONTENTS_LAVA ? 10 : 4) * level);
+  }
+
+  // Health lost to the world with nobody to blame (drowning, slime, lava): through armor,
+  // no hurt indicator, a death the player's own (like a fall). True when it killed.
+  hurtSelf(c, damage) {
+    c.player.health -= damage;
+    if (c.player.health > 0) return false;
+    this.kill(c, c, 0, false);
+    return !c.alive;
   }
 
   // The demo: a human's health comes back DEMO_HEAL s after the last hurt.

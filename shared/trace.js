@@ -127,6 +127,7 @@ export class CollisionWorld {
       pushY: push ? push[1] : 0,
       pushZ: push ? push[2] : 0,
       bspEntity: -1,
+      liquid: -3, // a func_water's CONTENTS_*: water, or slime / lava by its skin key (GoldSrc's)
       slot: 0, // world vertex slot (shared/breakables.js, shared/doors.js): decals sit on it
       rot: null, // model -> world rotation (columns forward, left, up), null = none
       amin: B.subarray(j, j + 3), // world bounds (views into this.bounds)
@@ -202,6 +203,7 @@ export class CollisionWorld {
       }
       const i = world.addEntity(kind, heads, o[0], o[1], o[2], mins, maxs, push);
       world.ents[i].bspEntity = bspEntity; // index into bsp.entities, -1 for the world
+      return i;
     };
 
     add(ENT_SOLID, 0, [0, 0, 0]);
@@ -216,7 +218,9 @@ export class CollisionWorld {
       else if ((cls.startsWith('func_') && !NONSOLID.has(cls)) || MOVERS.has(cls)) kind = ENT_SOLID;
       else return;
       parseVec3(e.origin, origin);
-      add(kind, m, origin, cls === 'func_conveyor' ? conveyorPush(e) : null, bspEntity);
+      const i = add(kind, m, origin, cls === 'func_conveyor' ? conveyorPush(e) : null, bspEntity);
+      const skin = +e.skin;
+      if (kind === ENT_WATER && (skin === -4 || skin === -5)) world.ents[i].liquid = skin; // slime, lava
     });
     return world;
   }
@@ -633,7 +637,7 @@ export function entityContents(world, entIndex, hull, x, y, z) {
   return hullPointContents(e.heads[hull], ls, 0);
 }
 
-// Point contents for water checks: world hull 0 plus func_water volumes.
+// Point contents for water checks: world hull 0 plus func_water volumes (their liquid).
 export function pointContents(world, x, y, z) {
   const c = entityContents(world, 0, HULL_POINT, x, y, z);
   if (c !== CONTENTS_EMPTY) return c;
@@ -641,7 +645,7 @@ export function pointContents(world, x, y, z) {
   for (let k = 0; k < water.length; k++) {
     const i = water[k];
     if (ents[i].kind === ENT_WATER && entityContents(world, i, HULL_POINT, x, y, z) !== CONTENTS_EMPTY) {
-      return -3; // CONTENTS_WATER
+      return ents[i].liquid;
     }
   }
   return CONTENTS_EMPTY;
