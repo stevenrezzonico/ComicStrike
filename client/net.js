@@ -123,7 +123,9 @@ export class NetClient {
     } finally {
       clearTimeout(timer);
     }
-    this.writer = this.wt.datagrams.writable.getWriter();
+    // The spec moved the datagram writer to createWritable(); Safari has only that, Chrome both.
+    const dg = this.wt.datagrams;
+    this.writer = (dg.createWritable ? dg.createWritable() : dg.writable).getWriter();
     this.wt.closed
       .then((info) => info && info.reason, (err) => err.message)
       .then((reason) => this.ended(reason || 'closed'));
