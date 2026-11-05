@@ -1328,6 +1328,7 @@ function tick() {
 
 let last = performance.now();
 let lastDraw = last; // when the last frame was drawn (fps_max, r_frames_ahead skip frames)
+let ticksSinceDraw = 0; // the ticks run since, held frames included (the benchmark's frame kinds)
 let accumulator = 0;
 let frames = 0;
 let fpsTime = last;
@@ -1365,7 +1366,24 @@ function saveDynres() {
 const bench = {
   until: 0, start: 0, seconds: 0, gaps: new Float32Array(32768), n: 0, frames: 0, cpu: 0, ctx: null,
   parts: new Float64Array(7), hitches: [], heap: 0, gpu: 0, gpuN: 0, passes: false, skipped: 0, capped: 0,
+  // kind: what the frame before each gap carried: ticks (1), DOM writes (2); ticks: how many ran;
+  // dom: DOM writes since the last drawn frame; alloc: heap growth between collections (the garbage).
+  kind: new Uint8Array(32768), ticks: 0, dom: 0, alloc: 0, gcs: 0, gcFreed: 0, gcMax: 0, domBy: new Map(),
 };
+// Every DOM write in the page while a benchmark runs (the HUD, the comic words, the kill feed,
+// the chat, the console), counted by the nearest element with an id: each costs a style
+// recalculation on that frame (1-1.8 ms on a laptop: see Performance, Consistent frame times).
+// The records arrive as a microtask right after the frame's script, so they count for the gap
+// recorded next.
+const domWatch = new MutationObserver((records) => {
+  bench.dom += records.length;
+  for (const r of records) {
+    const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
+    const owner = el && el.closest('[id]');
+    const key = owner ? `#${owner.id}` : el ? el.tagName.toLowerCase() : 'text';
+    bench.domBy.set(key, (bench.domBy.get(key) || 0) + 1);
+  }
+});
 const CPU_PARTS = ['ticks', 'models', 'render', 'radar', 'hud', 'view', 'print'];
 const HITCH_MS = 25; // a frame gap over this is listed (60 Hz misses read 33)
 const MAX_HITCHES = 30;
@@ -1385,11 +1403,28 @@ const renderScale = () =>
   `${Math.round(100 * renderer.renderScale)}%${renderer.capped ? ' (capped)' : ''}${cv.r_dynres.bool && dynres.print < 1 ? `, print ${Math.round(100 * dynres.print)}%` : ''}`;
 
 function benchmarkReport() {
-  const { gaps, n, frames: n0 } = bench; // n: the gaps kept (the first of a long run), n0: every drawn frame
+  const { gaps, n, frames: n0, kind } = bench; // n: the gaps kept (the first of a long run), n0: every drawn frame
   const sorted = Array.from(gaps.subarray(0, n)).sort((a, b) => a - b);
-  const at = (q) => (n ? sorted[Math.min(n - 1, Math.floor(n * q))] : 0).toFixed(1);
+  const quantile = (list, q) => (list.length ? list[Math.min(list.length - 1, Math.floor(list.length * q))] : 0);
+  const at = (q) => quantile(sorted, q).toFixed(1);
+  const low = (q) => `${(1000 / Math.max(0.01, quantile(sorted, q))).toFixed(0)} fps`;
   let slow = 0;
   for (let i = 0; i < n; i++) if (gaps[i] > SLOW_MS) slow++;
+  // The frames by what they carried: at 1000 fps a tick or a DOM write is a visible share of a frame.
+  const ofKind = (test) => {
+    const list = [];
+    for (let i = 0; i < n; i++) if (test(kind[i])) list.push(gaps[i]);
+    list.sort((a, b) => a - b);
+    return `median ${quantile(list, 0.5).toFixed(2)} ms (${(list.length / bench.seconds).toFixed(0)}/s)`;
+  };
+  const kinds = `by kind: plain ${ofKind((k) => k === 0)} · with ticks ${ofKind((k) => k & 1)}, ` +
+    `${(bench.parts[0] / Math.max(1, bench.ticks)).toFixed(2)} ms a tick · with DOM writes ${ofKind((k) => k & 2)}`;
+  const writers = [...bench.domBy].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, n]) => `${k} ${n}`).join(', ');
+  const dom = `dom writes: ${[...bench.domBy.values()].reduce((a, b) => a + b, 0)}${writers ? ` (${writers})` : ''}`;
+  const garbage = performance.memory
+    ? `garbage: ${(bench.alloc / 1024 / Math.max(1, n0)).toFixed(1)} KB a frame · ${bench.gcs} collections` +
+      (bench.gcs ? ` freeing ${(bench.gcFreed / bench.gcs / 1e6).toFixed(1)} MB each, the largest ${(bench.gcMax / 1e6).toFixed(1)}` : '')
+    : 'garbage: no heap readings (Chrome and Edge only)';
   const t = renderer.timer;
   const gpu = bench.passes ? t.report() : t.ext && bench.gpuN ? `gpu: ${(bench.gpu / bench.gpuN).toFixed(2)} ms a frame` : '';
   const per = (ms) => (ms / Math.max(1, n0)).toFixed(2);
@@ -1398,8 +1433,12 @@ function benchmarkReport() {
     `benchmark ${bench.seconds} s: ${(n0 / bench.seconds).toFixed(1)} fps, ${(100 * slow / Math.max(1, n)).toFixed(0)}% slow ` +
       `(over ${SLOW_MS} ms), res ${renderScale()}${cv.r_dynres.bool ? ' (r_dynres)' : ''}` +
       (held ? `, ${held} frames held back (${bench.skipped} by r_frames_ahead, ${bench.capped} by fps_max)` : ''),
-    `frame ms: median ${at(0.5)} · 95% ${at(0.95)} · 99% ${at(0.99)} · worst ${at(1)}${n < n0 ? ` (the first ${n} frames)` : ''}`,
+    `frame ms: median ${at(0.5)} · 95% ${at(0.95)} · 99% ${at(0.99)} (1% low: ${low(0.99)}) · 99.9% ${at(0.999)} ` +
+      `(0.1% low: ${low(0.999)}) · worst ${at(1)}${n < n0 ? ` (the first ${n} frames)` : ''}`,
+    kinds,
+    dom,
     `cpu: ${per(bench.cpu)} ms a frame: ${CPU_PARTS.map((p, i) => `${p} ${per(bench.parts[i])}`).join(' · ')}`,
+    garbage,
     (gpu || 'gpu: no timings') +
       (bench.passes ? '\n(timing every pass slows a GPU near its limit: compare frame rates without "passes")' : ''),
     t.behindReport() || 'gpu behind: no timings',
@@ -1409,6 +1448,7 @@ function benchmarkReport() {
   for (const [t, g, what] of h) lines.push(`  ${(t / 1000).toFixed(2)} s: ${g.toFixed(0)} ms${what ? ` after ${what}` : ''}`);
   con.out(bench.ctx, lines.join('\n'));
   bench.until = 0;
+  domWatch.disconnect();
 }
 
 con.command('benchmark', (a, ctx) => {
@@ -1423,8 +1463,11 @@ con.command('benchmark', (a, ctx) => {
   bench.parts.fill(0);
   bench.hitches.length = 0;
   bench.heap = 0;
+  bench.ticks = bench.dom = bench.alloc = bench.gcs = bench.gcFreed = bench.gcMax = 0;
+  bench.domBy.clear();
   frameTags.length = 0;
   bench.ctx = ctx;
+  domWatch.observe(document.body, { childList: true, characterData: true, attributes: true, subtree: true });
   renderer.timer.report(); // a fresh window for the GPU times
   renderer.timer.behindReport();
   con.out(ctx, `benchmark: measuring ${bench.seconds} s...`);
@@ -1465,7 +1508,13 @@ function frame(now) {
   if (bench.until) {
     // A heap that shrank: a garbage collection ran (Chrome's performance.memory).
     const heap = performance.memory ? performance.memory.usedJSHeapSize : 0;
-    if (heap && heap < bench.heap) tag('gc');
+    const grew = bench.heap ? heap - bench.heap : 0;
+    if (grew < 0) {
+      tag('gc');
+      bench.gcs++;
+      bench.gcFreed -= grew;
+      bench.gcMax = Math.max(bench.gcMax, -grew);
+    } else bench.alloc += grew;
     bench.heap = heap;
   }
 
@@ -1500,9 +1549,12 @@ function frame(now) {
     ticks++;
   }
   if (ticks === MAX_TICKS_PER_FRAME) accumulator = 0; // fell far behind (tab was hidden)
-  if (ticks > 2) tag(`${ticks} ticks`);
+  ticksSinceDraw += ticks;
   const t1 = performance.now();
-  if (bench.until) bench.parts[0] += t1 - t0;
+  if (bench.until) {
+    bench.parts[0] += t1 - t0;
+    bench.ticks += ticks;
+  }
   cpuSim += t1 - t0;
   // Draw this frame? A browser with vsync off calls us as fast as we return: fps_max caps
   // the rate and r_frames_ahead holds a frame back while the GPU pipeline is full (see
@@ -1518,14 +1570,21 @@ function frame(now) {
   }
   lastDraw = now;
   frameMsMax = Math.max(frameMsMax, gap);
-  if (bench.until) {
+  if (bench.until) { // the gap, and what the frame before it carried (ticksSinceDraw, bench.dom, the tags)
     bench.frames++;
-    if (bench.n < bench.gaps.length) bench.gaps[bench.n++] = gap;
+    if (ticksSinceDraw > 2) tag(`${ticksSinceDraw} ticks`);
+    if (bench.dom) tag(`${bench.dom} DOM writes`);
+    if (bench.n < bench.gaps.length) {
+      bench.gaps[bench.n] = gap;
+      bench.kind[bench.n++] = (ticksSinceDraw ? 1 : 0) | (bench.dom ? 2 : 0);
+    }
     if (gap > HITCH_MS && bench.hitches.length < MAX_HITCHES) {
       bench.hitches.push([now - bench.start, gap, frameTags.join(', ')]);
     }
     frameTags.length = 0;
+    bench.dom = 0;
   }
+  ticksSinceDraw = 0;
   if (cv.r_dynres.bool) {
     const t = renderer.timer, repeat = cv.r_drawrepeat.number;
     gpuRead.readings = t.readings;

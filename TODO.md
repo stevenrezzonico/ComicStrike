@@ -7,6 +7,15 @@ grenades, AWP and buttons (14j), radar levels (14k), point lights (14l), the rou
 panel and damage report (14m), sun shadows for players (14n), gun looks, comic jingles,
 the demo's practice tools, demo recording, the hurt indicator and the killer's health, characters culled by the PVS, bots' smokes and molotovs, tracers and casings, visibility for our own maps (opt-in: cs_polaris and editor exports), radio and pings, Retakes, hatching in corners, comic skies, map load time (the radar's overview off the page's thread), the 2026-11-04 audit's findings (left as they are: duplicated one-line vector helpers and `el` across modules, the two IndexedDB openers, and test-only `buildDefuser`, `buildAllGuns` and the mannequin), the 2026-11-05 audit's 20 findings (its smaller ones below).
 
+## Consistent frame times (Phase 15; the measuring is done)
+
+The goal: the 1 % low near the average on every machine, no caps, the quality the GPU can give. See CLAUDE.md, Performance, Consistent frame times, for the numbers and the method.
+
+1. **Garbage to under 1 KB a frame.** 20-33 KB a frame now: at 1000 fps a major collection (2.6 ms) every second or two. Profile with V8's sampling heap profiler over CDP on the real page (`HeapProfiler.startSampling` with the objects collected by minor and major GC) during a 5v5; fix every site over ~100 bytes a frame. Suspects: `navigator.getGamepads()` every frame (a new array each call; poll only while a pad is connected), the datagram send's promise per tick, HUD strings, closures and destructuring in per-frame code.
+2. **DOM writes.** `--roundbar-w` set on `body` each second (`client/main.js`, the round bar's ResizeObserver) restyles the whole page: set it on `#pausebtn` itself, and only under `body.softplay`, where the button shows. `contain: layout style paint` on the HUD's boxes. The scoreboard: a version counter instead of `JSON.stringify` while Tab is held.
+3. **The radar as two layers.** The level image on a canvas the compositor turns and moves by a CSS transform; a small overlay canvas for the dots, redrawn only when one moved a pixel (0.3 ms a redraw, 30 a second, now).
+4. **The tick's parts.** Measure poll and decode, interpolate, buildTargets, prediction, sendCmds, the sounds; a tick frame should stay under 1.3× a plain one.
+
 ## Audit leftovers (2026-11-05)
 
 The smaller findings of the second audit, each checked in code:
