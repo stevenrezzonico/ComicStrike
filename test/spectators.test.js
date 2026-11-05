@@ -1,34 +1,24 @@
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import { PHASE_WARMUP, PHASE_FREEZE, PHASE_LIVE } from '../shared/economy.js';
-import { Writer, CmdRing, writeHello, writeCmds, E_ACTIVE } from '../shared/protocol.js';
+import { Writer, E_ACTIVE } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
+import { mapOrNull, joinClient, sendCmd } from './harness.js';
 
-let bsp = null;
-try {
-  bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_dust2.bsp', import.meta.url)).buffer);
-} catch { /* map-dependent tests skip */ }
+const bsp = mapOrNull('de_dust2');
 
 function setup() {
   const game = new Game('de_dust2', bsp, { freezeTime: 1, roundTime: 60, buyTime: 1, roundEndDelay: 1, warmupTime: 0 });
   const w = new Writer();
   const clients = [];
   const join = (name, team) => {
-    const c = game.connect({ send() {}, close() {} });
-    game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
+    const c = joinClient(game, w, name, team);
     clients.push(c);
     return c;
   };
   const run = (ticks) => {
     for (let i = 0; i < ticks; i++) {
-      for (const c of clients) {
-        if (!c.joined) continue;
-        c.cmds.put(c.tick, 0, -1, 0, 0, 0);
-        game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      }
+      for (const c of clients) if (c.joined) sendCmd(game, w, c);
       game.step();
     }
   };

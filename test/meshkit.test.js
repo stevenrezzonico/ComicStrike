@@ -5,6 +5,7 @@ import { eyeOf } from '../client/gl/skinned.js';
 import { perspective, viewFromAngles, multiply, sphereInView } from '../client/gl/mat4.js';
 import { PLAYER_SKELETON, Pose } from '../client/anim/skeleton.js';
 import * as Q from '../client/anim/quat.js';
+import { loadBSP } from './harness.js';
 
 // Closed and outward: every directed edge is matched by its reverse exactly once
 // (positions keyed to 1e-4), and the enclosed signed volume is positive.
@@ -273,15 +274,9 @@ Deno.test('mannequin: closed, low-poly, and every part follows the bone it sits 
 });
 
 Deno.test('light point: the lightmap under a point, like GoldSrc R_LightPoint', async (t) => {
-  const { parseBSP } = await import('../shared/bsp.js');
   const { SurfaceMap } = await import('../shared/surfaces.js');
-  let bsp;
-  try {
-    bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_dust2.bsp', import.meta.url)).buffer);
-  } catch {
-    await t.step({ name: 'skipped: maps/de_dust2.bsp missing', fn: () => {}, ignore: true });
-    return;
-  }
+  const bsp = await loadBSP(t, 'de_dust2');
+  if (!bsp) return;
   const s = new SurfaceMap(bsp);
   const out = new Float32Array(3);
   assert.ok(s.lightAt(out, -832, -704, 164), 'T spawn floor is lit');

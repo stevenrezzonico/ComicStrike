@@ -9,16 +9,8 @@ import { CollisionWorld, Trace, traceHull, pointContents, entityContents, HULL_S
 import { Game } from '../server/game.js';
 import { Host } from '../server/host.js';
 import { textureRecord } from '../client/texcolors.js';
+import { quiet } from './harness.js';
 
-const quiet = (fn) => {
-  const log = console.log;
-  console.log = () => {};
-  try {
-    return fn();
-  } finally {
-    console.log = log;
-  }
-};
 const compileToBsp = (p, light = 'draft') => parseUntrustedBSP(compileProject(p, light).bytes.buffer);
 
 Deno.test('every editor texture has its measured color', () => {

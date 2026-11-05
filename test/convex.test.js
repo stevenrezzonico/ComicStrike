@@ -4,59 +4,11 @@ import assert from 'node:assert/strict';
 import { MapBuilder, box, wedge, turnedBox, prism, convex, brushPolygons, brushPlanes } from '../shared/bspwriter.js';
 import { parseUntrustedBSP } from '../shared/bsp.js';
 import { CollisionWorld, Trace, traceHull, pointContents, HULL_STAND } from '../shared/trace.js';
-import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
 import { IN_FORWARD } from '../shared/constants.js';
-import { TEAM_T } from '../shared/player.js';
-import { Writer, CmdRing, writeHello, writeCmds } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
 import { Nav } from '../shared/nav.js';
 import { SurfaceMap } from '../shared/surfaces.js';
-
-const TEX = { sky: [256, 256], crete3_wall02: [128, 128], '-0sand': [128, 128] };
-const W = 'crete3_wall02';
-
-// A walled yard 2048 x 1024 under the sky, plus `extra(map)`.
-function yard(extra) {
-  const map = new MapBuilder(TEX, { message: 'test' });
-  map.world.push(
-    box(-1024, -512, -32, 1024, 512, 0, '-0sand'),
-    box(-1056, -544, -32, -1024, 544, 512, W), box(1024, -544, -32, 1056, 544, 512, W),
-    box(-1024, -544, -32, 1024, -512, 512, W), box(-1024, 512, -32, 1024, 544, 512, W),
-    box(-1056, -544, 512, 1056, 544, 544, 'sky'),
-  );
-  extra(map);
-  map.point({ classname: 'info_player_deathmatch', origin: '-900 0 37', angles: '0 0 0' });
-  map.point({ classname: 'info_player_start', origin: '900 0 37', angles: '0 180 0' });
-  return parseUntrustedBSP(map.compile({ light: 'draft' }).bytes.buffer);
-}
-
-function walker(bsp) {
-  const log = console.log;
-  console.log = () => {};
-  const game = new Game('test', bsp, { rounds: false });
-  console.log = log;
-  const w = new Writer();
-  const c = game.connect({ send() {}, close() {} });
-  game.receive(c, writeHello(w, TEAM_T, 0, 0, 'tester').slice());
-  c.cmds = new CmdRing();
-  let tick = 1;
-  const run = (ticks, buttons, yaw) => {
-    for (let i = 0; i < ticks; i++) {
-      c.cmds.put(tick, buttons, -1, 0, yaw, 0);
-      game.receive(c, writeCmds(w, 0, c.cmds, tick++).slice());
-      game.step();
-    }
-  };
-  const put = (x, y, feet) => {
-    const f = c.player.ps.f;
-    f[PS_ORIGIN] = x;
-    f[PS_ORIGIN + 1] = y;
-    f[PS_ORIGIN + 2] = feet + 36;
-    f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
-  };
-  run(2, 0, 0);
-  return { c, run, put, feet: () => c.player.ps.f[PS_ORIGIN + 2] - 36, pos: () => c.player.ps.f };
-}
+import { TEX, W, yard, walker, quiet } from './harness.js';
 
 Deno.test('shapes: polygons close round their volume', () => {
   for (const br of [wedge([0, 0, 0, 256, 128, 128], 'px', W), turnedBox([0, 0, 0, 200, 16, 128], 37, W),
@@ -124,10 +76,7 @@ Deno.test('the bots find their way over a ramp and onto a deck', () => {
   const bsp = yard((map) => {
     map.world.push(wedge([-400, -100, 0, -144, 100, 128], 'px', W), box(-144, -480, 0, 200, 480, 128, W));
   });
-  const log = console.log;
-  console.log = () => {};
-  const game = new Game('test', bsp, { rounds: false });
-  console.log = log;
+  const game = quiet(() => new Game('test', bsp, { rounds: false }));
   const nav = new Nav(bsp, game.world, 24, () => false);
   const from = nav.nodeAt(-800, 0, 0), to = nav.nodeAt(0, 300, 128);
   assert.ok(from >= 0 && to >= 0, 'both ends on the graph');

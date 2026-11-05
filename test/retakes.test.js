@@ -3,24 +3,17 @@
 // loadouts by round and a kit for every CT; the bomb ticks from the end of the freeze. On
 // de_playground (two sites), so no Valve map is needed.
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
 import { BOMB_PLANTED } from '../shared/bomb.js';
 import { WS_SLOTS, SLOT_PRIMARY, SLOT_C4, WEAPONS, WEAPON_ID } from '../shared/weapons.js';
 import { PHASE_FREEZE, GAME_RETAKES } from '../shared/economy.js';
 import { TICK_RATE } from '../shared/constants.js';
-import { Writer, CmdRing, writeHello, writeCmds } from '../shared/protocol.js';
+import { Writer } from '../shared/protocol.js';
 import { Host } from '../server/host.js';
+import { loadMap, readCfg, joinClient, sendCmd } from './harness.js';
 
-const bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url)).buffer);
-const readCfg = (n) => {
-  try {
-    return Deno.readTextFileSync(new URL(`../cfg/${n}`, import.meta.url));
-  } catch {
-    return null;
-  }
-};
+const bsp = loadMap('de_playground');
 
 Deno.test('retakes: the bomb is planted in a site, Ts round it, CTs further off, loadouts and kits', () => {
   const host = new Host({ loadMap: () => bsp, listMaps: () => ['de_playground'], readCfg, print: () => {}, defer: (fn) => fn() });
@@ -30,18 +23,13 @@ Deno.test('retakes: the bomb is planted in a site, Ts round it, CTs further off,
   assert.equal(host.modeName, 'retakes');
   assert.ok(!game.rules.giveC4 && game.rules.freezeTime === 3, 'the mode cfg ran');
   const join = (name, team) => {
-    const c = game.connect({ send() {}, close() {}, closed: false });
-    game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    Object.assign(c, { cmds: new CmdRing(), tick: 1 });
+    const c = joinClient(game, w, name, team);
     humans.push(c);
     return c;
   };
   const run = (ticks) => {
     for (let i = 0; i < ticks; i++) {
-      for (const c of humans) {
-        c.cmds.put(c.tick, 0, -1, 0, 0, 0);
-        game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      }
+      for (const c of humans) sendCmd(game, w, c);
       game.step();
     }
   };

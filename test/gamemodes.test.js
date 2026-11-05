@@ -2,106 +2,18 @@
 // their cfgs, Wingman's team cap and single bomb site, halftime, and the gun game modes'
 // weapon progressions (shared/progression.js).
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
-import { IN_ATTACK } from '../shared/constants.js';
-import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
-import { hullFits, HULL_STAND } from '../shared/trace.js';
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import {
   WEAPON_ID, WS_SLOTS, WS_ACTIVE, WS_GRENADES, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, SLOT_C4, SLOT_GRENADE,
   createWeaponState, giveWeapon, activeWeapon,
 } from '../shared/weapons.js';
 import {
-  PHASE_LIVE, PHASE_OVER, END_MATCH, GAME_ARMSRACE, GAME_DEMOLITION, GAME_WINGMAN, ITEM_KEVLAR,
+  PHASE_OVER, END_MATCH, GAME_ARMSRACE, GAME_DEMOLITION, GAME_WINGMAN, ITEM_KEVLAR,
 } from '../shared/economy.js';
 import { ARMS_RACE, DEMOLITION, levelWeapon, armLevel } from '../shared/progression.js';
-import { Writer, CmdRing, writeHello, writeCmds, writeBuy } from '../shared/protocol.js';
-import { Host } from '../server/host.js';
+import { mapOrNull, modeServer as setup, lineUp, fireUntil } from './harness.js';
 
-const maps = {};
-function loadMap(name) {
-  if (!maps[name]) maps[name] = parseBSP(Deno.readFileSync(new URL(`../maps/${name}.bsp`, import.meta.url)).buffer);
-  return maps[name];
-}
-const readCfg = (name) => {
-  try {
-    return Deno.readTextFileSync(new URL(`../cfg/${name}`, import.meta.url));
-  } catch {
-    return null;
-  }
-};
-let haveMap = true;
-try {
-  loadMap('de_dust2');
-} catch {
-  haveMap = false;
-}
-
-// A server on de_dust2 in game_type / game_mode `mode` (the real cfgs), `rules` overriding.
-function setup(mode, rules = { immunityTime: 0, freezeTime: 0 }) {
-  const host = new Host({ loadMap, listMaps: () => ['de_dust2'], readCfg, print: () => {}, rules, defer: (fn) => fn() });
-  host.con.exec(`game_type ${mode[0]}; game_mode ${mode[1]}`);
-  host.start('de_dust2');
-  const w = new Writer();
-  const clients = [];
-  let buyId = 0;
-  const join = (name, team) => {
-    const c = host.game.connect({ send() {}, close() {} });
-    host.game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
-    c.input = { buttons: 0, pitch: 0, yaw: 0 };
-    c.buy = (item) => host.game.receive(c, writeBuy(w, ++buyId, item).slice());
-    clients.push(c);
-    return c;
-  };
-  const run = (ticks) => {
-    for (let i = 0; i < ticks; i++) {
-      for (const c of clients) {
-        const k = c.input;
-        c.cmds.put(c.tick, k.buttons, -1, k.pitch, k.yaw, 0);
-        host.game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      }
-      host.game.step();
-    }
-  };
-  const live = () => {
-    for (let i = 0; i < 64 * 5 && host.game.phase !== PHASE_LIVE; i++) run(1);
-    assert.equal(host.game.phase, PHASE_LIVE);
-  };
-  return { host, join, run, live };
-}
-
-function teleport(c, x, y, z) {
-  const f = c.player.ps.f;
-  f[PS_ORIGIN] = x;
-  f[PS_ORIGIN + 1] = y;
-  f[PS_ORIGIN + 2] = z;
-  f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
-}
-
-// `shooter` 120 units west of `target` on open ground, aiming at its chest.
-function lineUp(game, shooter, target) {
-  for (const s of game.spawns[TEAM_CT]) {
-    const [x, y, z] = s;
-    if (!hullFits(game.world, HULL_STAND, x - 120, y, z)) continue;
-    teleport(target, x, y, z);
-    teleport(shooter, x - 120, y, z);
-    shooter.input.yaw = 0;
-    shooter.input.pitch = 8;
-    target.input.yaw = 180;
-    return;
-  }
-  throw new Error('no open spawn');
-}
-
-function fireUntil(run, c, done, ticks = 300) {
-  for (let i = 0; i < ticks && !done(); i++) {
-    c.input.buttons = i & 1 ? 0 : IN_ATTACK;
-    run(1);
-  }
-  c.input.buttons = 0;
-}
+const haveMap = !!mapOrNull('de_dust2');
 
 const slot = (c, s) => c.player.ws.f[WS_SLOTS + s * 3];
 

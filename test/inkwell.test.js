@@ -9,8 +9,9 @@ import { BOMB_PLANTED } from '../shared/bomb.js';
 import { PHASE_LIVE } from '../shared/economy.js';
 import { readProject, checkProject, compileProject } from '../client/editor/project.js';
 import { TEAM_CT } from '../shared/player.js';
-import { Writer, CmdRing, writeHello, writeCmds } from '../shared/protocol.js';
+import { Writer } from '../shared/protocol.js';
 import { Host } from '../server/host.js';
+import { readCfg, seeded, joinClient, sendCmd } from './harness.js';
 
 // de_inkwell is our own defusal map (tools/gen_inkwell.js), so it is in the repository:
 // its editor project and the map compiled from it.
@@ -19,13 +20,6 @@ const bytes = Deno.readFileSync(new URL('../maps/de_inkwell.bsp', import.meta.ur
 const bsp = parseUntrustedBSP(bytes.slice().buffer); // checked like a map from outside
 const world = CollisionWorld.fromBSP(bsp);
 const at = (cls) => bsp.entities.filter((e) => e.classname === cls);
-const readCfg = (name) => {
-  try {
-    return Deno.readTextFileSync(new URL(`../cfg/${name}`, import.meta.url));
-  } catch {
-    return null;
-  }
-};
 
 Deno.test('de_inkwell: the map is its project compiled; the project reads clean with no problems', () => {
   const p = readProject(projectText);
@@ -116,15 +110,6 @@ Deno.test('de_inkwell: the radar overview shows both sites and both spawns', () 
   assert.ok(shown(1536, 1296) && shown(-1536, 800), 'the sites');
 });
 
-// A seeded random (mulberry32) for Math.random and the bots, so games repeat.
-function seeded(seed) {
-  return () => {
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 function game(cfg, seed) {
   const host = new Host({ loadMap: () => bsp, listMaps: () => ['de_inkwell'], readCfg, print: () => {}, defer: (fn) => fn() });
   host.start('de_inkwell');
@@ -137,13 +122,9 @@ Deno.test('de_inkwell: T bots take the bomb to either site and plant it', () => 
   for (const site of [0, 1]) {
     const host = game('mp_warmuptime 0; mp_freezetime 0; bot_dont_shoot 1; bot_join_team t; bot_quota 3', 5);
     const g = host.game, w = new Writer();
-    const ct = g.connect({ send() {}, close() {} }); // stands at the CT spawn: seen, but the bots do not shoot
-    g.receive(ct, writeHello(w, TEAM_CT, 0, 0, 'watcher').slice());
-    ct.cmds = new CmdRing();
-    ct.tick = 1;
+    const ct = joinClient(g, w, 'watcher', TEAM_CT); // stands at the CT spawn: seen, but the bots do not shoot
     const step = () => {
-      ct.cmds.put(ct.tick, 0, -1, 0, 0, 0);
-      g.receive(ct, writeCmds(w, 0, ct.cmds, ct.tick++).slice());
+      sendCmd(g, w, ct);
       g.step();
     };
     for (let i = 0; i < 64 * 10 && g.phase !== PHASE_LIVE; i++) step();

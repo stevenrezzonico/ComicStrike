@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
-import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
+import { PS_ORIGIN } from '../shared/pmove.js';
 import { CollisionWorld, Trace, traceHull, HULL_POINT } from '../shared/trace.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { TICK_RATE } from '../shared/constants.js';
@@ -12,40 +11,11 @@ import { BOMB_PLANTED } from '../shared/bomb.js';
 import { PHASE_LIVE, END_DEFUSE, END_RESCUE } from '../shared/economy.js';
 import { HS_CARRIED, HS_RESCUED } from '../shared/hostages.js';
 import { Nav, EDGE_WALK } from '../shared/nav.js';
-import { Writer, CmdRing, writeHello, writeCmds } from '../shared/protocol.js';
+import { Writer } from '../shared/protocol.js';
 import { Host } from '../server/host.js';
+import { loadMap, mapOrNull, readCfg, seeded, joinClient, sendCmd, teleport } from './harness.js';
 
-const maps = {};
-function loadMap(name) {
-  if (!maps[name]) maps[name] = parseBSP(Deno.readFileSync(new URL(`../maps/${name}.bsp`, import.meta.url)).buffer);
-  return maps[name];
-}
-const readCfg = (name) => {
-  try {
-    return Deno.readTextFileSync(new URL(`../cfg/${name}`, import.meta.url));
-  } catch {
-    return null;
-  }
-};
-const has = (name) => {
-  try {
-    loadMap(name);
-    return true;
-  } catch {
-    return false;
-  }
-};
-const dust2 = has('de_dust2'), office = has('cs_office');
-
-// A seeded random (mulberry32) so bot decisions repeat.
-function seeded(seed) {
-  return () => {
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+const dust2 = !!mapOrNull('de_dust2'), office = !!mapOrNull('cs_office');
 
 function setup(map, cfg = '') {
   const host = new Host({ loadMap, listMaps: () => [map], readCfg, print: () => {}, defer: (fn) => fn() });
@@ -57,31 +27,17 @@ function setup(map, cfg = '') {
   const w = new Writer();
   const humans = [];
   const join = (name, team) => { // a test player that stands where it is put
-    const c = g.connect({ send() {}, close() {} });
-    g.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
+    const c = joinClient(g, w, name, team);
     humans.push(c);
     return c;
   };
   const run = (ticks, until = () => false) => {
     for (let i = 0; i < ticks && !until(); i++) {
-      for (const c of humans) {
-        c.cmds.put(c.tick, 0, -1, 0, 0, 0);
-        g.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      }
+      for (const c of humans) sendCmd(g, w, c);
       g.step();
     }
   };
   return { host, g, join, run, humans };
-}
-
-function teleport(c, x, y, z) {
-  const f = c.player.ps.f;
-  f[PS_ORIGIN] = x;
-  f[PS_ORIGIN + 1] = y;
-  f[PS_ORIGIN + 2] = z;
-  f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
 }
 
 const inBox = (c, b) => {

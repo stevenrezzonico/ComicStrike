@@ -3,18 +3,18 @@
 // meets for the team; "Follow me." sends the team's bots after the speaker. On
 // de_playground, so no Valve map is needed.
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
 import { PHASE_LIVE } from '../shared/economy.js';
 import {
-  Writer, Reader, CmdRing, writeHello, writeCmds, writeCommand, readChat, readPing, writePing, S2C_CHAT, S2C_PING,
+  Writer, Reader, writeCommand, readChat, readPing, writePing, S2C_CHAT, S2C_PING,
   CHAT_RADIO, CHAT_TEAM, RADIO, RADIO_MENUS, radioIndex,
 } from '../shared/protocol.js';
 import { WS_SLOTS, SLOT_C4 } from '../shared/weapons.js';
 import { Host } from '../server/host.js';
+import { loadMap, joinClient, sendCmd } from './harness.js';
 
-const bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url)).buffer);
+const bsp = loadMap('de_playground');
 
 function setup() {
   const host = new Host({ loadMap: () => bsp, listMaps: () => ['de_playground'], readCfg: () => null, print: () => {}, defer: (fn) => fn() });
@@ -23,9 +23,8 @@ function setup() {
   const w = new Writer(), humans = [];
   const join = (name, team) => {
     const sent = [];
-    const c = host.game.connect({ send: (b) => sent.push(b.slice()), close: () => {}, closed: false });
-    host.game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    Object.assign(c, { cmds: new CmdRing(), tick: 1, sent, commands: 0 });
+    const c = joinClient(host.game, w, name, team, { send: (b) => sent.push(b.slice()), close: () => {}, closed: false });
+    Object.assign(c, { sent, commands: 0 });
     c.of = (type) => sent.filter((b) => b[0] === type).map((b) => {
       const r = new Reader().set(b);
       r.u8v();
@@ -37,10 +36,7 @@ function setup() {
   };
   const run = (ticks) => {
     for (let i = 0; i < ticks; i++) {
-      for (const c of humans) {
-        c.cmds.put(c.tick, 0, -1, 0, 0, 0);
-        host.game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      }
+      for (const c of humans) sendCmd(host.game, w, c);
       host.game.step();
     }
   };

@@ -1,40 +1,25 @@
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { IN_FORWARD } from '../shared/constants.js';
-import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
+import { PS_ORIGIN } from '../shared/pmove.js';
 import { Trace, traceHull, pointContents, hullFits, HULL_POINT, HULL_STAND } from '../shared/trace.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import { TEAM_T } from '../shared/player.js';
-import { Writer, CmdRing, writeHello, writeCmds } from '../shared/protocol.js';
+import { Writer } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
 import { buildMapMesh, VERTEX_STRIDE, SCROLL_UNIT } from '../client/mapmesh.js';
+import { loadMap, joinClient, runInputs, teleport } from './harness.js';
 
 // de_playground is our own map (tools/gen_demomap.js), so it is in the repository.
-const bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url)).buffer);
+const bsp = loadMap('de_playground');
 const water = (c) => c <= -3 && c >= -5;
 
 function setup() {
   const game = new Game('de_playground', bsp, { rounds: false });
   const w = new Writer();
-  const c = game.connect({ send() {}, close() {} });
-  game.receive(c, writeHello(w, TEAM_T, 0, 0, 'tester').slice());
-  c.cmds = new CmdRing();
-  c.tick = 1;
+  const c = joinClient(game, w, 'tester', TEAM_T);
   c.input = { buttons: 0, pitch: 0, yaw: 0 };
-  const run = (ticks) => {
-    for (let i = 0; i < ticks; i++) {
-      c.cmds.put(c.tick, c.input.buttons, -1, c.input.pitch, c.input.yaw, 0);
-      game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      game.step();
-    }
-  };
-  const put = (x, y, feet) => {
-    const f = c.player.ps.f;
-    f[PS_ORIGIN] = x;
-    f[PS_ORIGIN + 1] = y;
-    f[PS_ORIGIN + 2] = feet + 36;
-    f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
-  };
+  const run = (ticks) => runInputs(game, w, [c], ticks);
+  const put = (x, y, feet) => teleport(c, x, y, feet + 36);
   run(2);
   return { game, c, run, put };
 }

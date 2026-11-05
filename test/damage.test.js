@@ -6,6 +6,7 @@ import { HitTargets, HITGROUP_HEAD, HITGROUP_CHEST, HITGROUP_LEGS } from '../sha
 import { Player, applyDamage, resolveShots, penetrationLoss, ImpactList } from '../shared/player.js';
 import { SURF_DEFAULT, GM_GLASS, GM_WOOD } from '../shared/surfaces.js';
 import { boxWorld, floorWorld } from './worlds.js';
+import { loadBSP } from './harness.js';
 
 const ak = WEAPONS[WEAPON_ID.ak47];
 const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg}: ${a} vs ${b}`);
@@ -127,13 +128,8 @@ Deno.test('penetration rules: glass and grates barely slow bullets; wood-to-wood
 });
 
 Deno.test('de_dust2: almost every bullet hit finds the face (and texture) it landed on', async (t) => {
-  let bsp;
-  try {
-    const { parseBSP } = await import('../shared/bsp.js');
-    bsp = parseBSP((await Deno.readFile(new URL('../maps/de_dust2.bsp', import.meta.url))).buffer);
-  } catch {
-    return t.step({ name: 'skipped: maps/de_dust2.bsp missing', fn: () => {}, ignore: true });
-  }
+  const bsp = await loadBSP(t, 'de_dust2');
+  if (!bsp) return;
   const { CollisionWorld, Trace, traceHull, HULL_POINT } = await import('../shared/trace.js');
   const { SurfaceMap } = await import('../shared/surfaces.js');
   const world = CollisionWorld.fromBSP(bsp);

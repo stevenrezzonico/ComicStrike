@@ -2,36 +2,24 @@
 // in a decided match, the dead after a team empties, a planter who left, a picked-up silenced
 // gun. On de_playground, so no Valve map is needed.
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { IN_ATTACK, IN_USE } from '../shared/constants.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { PHASE_LIVE, PHASE_OVER, PHASE_WARMUP, ROUND_FINAL, END_ELIMINATION, END_DRAW } from '../shared/economy.js';
-import { Writer, CmdRing, writeHello, writeCmds, NO_MVP } from '../shared/protocol.js';
+import { Writer, NO_MVP } from '../shared/protocol.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
 import {
   giveWeapon, silenced, WEAPON_ID, WS_ACTIVE, WS_SLOTS, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_C4,
 } from '../shared/weapons.js';
 import { Game } from '../server/game.js';
+import { loadMap, joinClient, sendCmd, quiet as quietly } from './harness.js';
 
-const bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url)).buffer);
+const bsp = loadMap('de_playground');
 
 function setup(rules) {
-  const log = console.log;
-  console.log = () => {};
-  const game = new Game('de_playground', bsp, rules);
-  console.log = log;
+  const game = quietly(() => new Game('de_playground', bsp, rules));
   const w = new Writer();
-  const join = (name, team) => {
-    const c = game.connect({ send() {}, close() {} });
-    game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
-    return c;
-  };
-  const send = (c, buttons = 0, yaw = 0) => {
-    c.cmds.put(c.tick, buttons, -1, 0, yaw, 0);
-    game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-  };
+  const join = (name, team) => joinClient(game, w, name, team);
+  const send = (c, buttons = 0, yaw = 0) => sendCmd(game, w, c, buttons, -1, 0, yaw);
   const run = (ticks, players, buttons = 0) => {
     for (let i = 0; i < ticks; i++) {
       for (const c of players) if (game.clients[c.id] === c) send(c, buttons);
@@ -40,16 +28,6 @@ function setup(rules) {
   };
   return { game, join, send, run };
 }
-
-const quietly = (fn) => {
-  const log = console.log;
-  console.log = () => {};
-  try {
-    return fn();
-  } finally {
-    console.log = log;
-  }
-};
 
 // Fire held and E pressed in a site: the rifle fired, then the C4 came out, and the bullet
 // was traced with the C4's stats: NaN damage, a CT at NaN health, dead with no kill.

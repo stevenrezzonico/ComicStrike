@@ -1,26 +1,18 @@
 import assert from 'node:assert/strict';
 import { parseBSP } from '../shared/bsp.js';
 import { IN_ATTACK } from '../shared/constants.js';
-import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
 import { CollisionWorld, hullFits, HULL_STAND } from '../shared/trace.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { Overview } from '../shared/overview.js';
 import { Grenades, FX_SMOKE, SMOKE_GROW } from '../shared/grenades.js';
 import { PHASE_LIVE } from '../shared/economy.js';
-import {
-  Writer, CmdRing, writeHello, writeCmds, E_ANIM, ANIM_SPOTTED_T, ANIM_SPOTTED_CT,
-} from '../shared/protocol.js';
+import { Writer, E_ANIM, ANIM_SPOTTED_T, ANIM_SPOTTED_CT } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
+import { mapOrNull, joinClient, runInputs, teleport } from './harness.js';
 
 import { BombSites } from '../shared/bomb.js';
 
-let bsp = null, nuke = null;
-try {
-  bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_dust2.bsp', import.meta.url)).buffer);
-} catch { /* map-dependent tests skip */ }
-try {
-  nuke = parseBSP(Deno.readFileSync(new URL('../maps/de_nuke.bsp', import.meta.url)).buffer);
-} catch { /* map-dependent tests skip */ }
+const bsp = mapOrNull('de_dust2'), nuke = mapOrNull('de_nuke');
 
 Deno.test({ name: 'overview: the reachable floors, lighter higher; spawns on them; north up', ignore: !bsp, fn: () => {
   const world = CollisionWorld.fromBSP(bsp);
@@ -102,38 +94,18 @@ function setup() {
   const w = new Writer();
   const clients = [];
   const join = (name, team) => {
-    const c = game.connect({ send() {}, close() {} });
-    game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
+    const c = joinClient(game, w, name, team);
     c.input = { buttons: 0, pitch: 0, yaw: 0 };
     clients.push(c);
     return c;
   };
-  const run = (ticks) => {
-    for (let i = 0; i < ticks; i++) {
-      for (const c of clients) {
-        const k = c.input;
-        c.cmds.put(c.tick, k.buttons, -1, k.pitch, k.yaw, 0);
-        game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      }
-      game.step();
-    }
-  };
+  const run = (ticks) => runInputs(game, w, clients, ticks);
   // The spotted bits the newest snapshot carries for player `c`.
   const spotted = (c) => {
     const ring = game.snapshots;
     return ring.ents[ring.row(ring.find(game.tick), c.id) + E_ANIM] & (ANIM_SPOTTED_T | ANIM_SPOTTED_CT);
   };
   return { game, join, run, spotted };
-}
-
-function teleport(c, x, y, z) {
-  const f = c.player.ps.f;
-  f[PS_ORIGIN] = x;
-  f[PS_ORIGIN + 1] = y;
-  f[PS_ORIGIN + 2] = z;
-  f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
 }
 
 Deno.test({ name: 'spotting: seen in the view cone, not behind, not through smoke; firing shows', ignore: !bsp, fn: () => {

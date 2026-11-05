@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { IN_FORWARD } from '../shared/constants.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
 import { WEAPON_ID, WS_SLOTS, SLOT_PRIMARY, SLOT_SECONDARY } from '../shared/weapons.js';
@@ -8,26 +7,19 @@ import {
   PHASE_WARMUP, PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, START_MONEY, WIN_REWARD, LOSS_BONUS, END_ELIMINATION,
   END_TIME, ITEM_KEVLAR, ITEM_ASSAULTSUIT, MAX_ROUNDS, OVERTIME_MONEY, lossBonus, ROUND_FINAL, matchOver, reasonOf,
 } from '../shared/economy.js';
-import { Writer, CmdRing, writeHello, writeCmds, writeBuy } from '../shared/protocol.js';
+import { Writer, writeBuy } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
+import { loadBSP, joinClient, sendCmd } from './harness.js';
 
 const RULES = { freezeTime: 1, roundTime: 3, buyTime: 1, roundEndDelay: 1 }; // seconds
 
 async function setup(t) {
-  let bsp;
-  try {
-    bsp = parseBSP((await Deno.readFile(new URL('../maps/de_dust2.bsp', import.meta.url))).buffer);
-  } catch {
-    await t.step({ name: 'skipped: maps/de_dust2.bsp missing', fn: () => {}, ignore: true });
-    return null;
-  }
+  const bsp = await loadBSP(t, 'de_dust2');
+  if (!bsp) return null;
   const game = new Game('de_dust2', bsp, RULES);
   const w = new Writer();
   const join = (name, team) => {
-    const c = game.connect({ send() {}, close() {} });
-    game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
+    const c = joinClient(game, w, name, team);
     c.buyId = 0;
     return c;
   };
@@ -36,10 +28,7 @@ async function setup(t) {
   // Each tick both players hold `buttons` (commands delivered as a client would).
   const run = (ticks, buttons = 0) => {
     for (let i = 0; i < ticks; i++) {
-      for (const c of [t1, ct]) {
-        c.cmds.put(c.tick, buttons, -1, 0, 0, 0);
-        game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      }
+      for (const c of [t1, ct]) sendCmd(game, w, c, buttons);
       game.step();
     }
   };

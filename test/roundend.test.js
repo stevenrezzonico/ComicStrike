@@ -2,17 +2,17 @@
 // console lines) and the MVP counts in INFO; and where damage came from, sent in the own
 // block for the hurt indicator. On de_playground, so no Valve map is needed.
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { PHASE_LIVE, PHASE_OVER, END_ELIMINATION } from '../shared/economy.js';
 import {
-  Writer, Reader, CmdRing, writeHello, writeCmds, S2C_PRINT, S2C_REPORT, S2C_INFO, S2C_SNAPSHOT, readReport, readInfo,
+  Writer, Reader, S2C_PRINT, S2C_REPORT, S2C_INFO, S2C_SNAPSHOT, readReport, readInfo,
   readSnapshot, SnapshotRing, OwnState, MAX_PLAYERS, NO_MVP, OWN_HURT, HURT_REPEAT_TICKS,
 } from '../shared/protocol.js';
 import { WEAPON_ID } from '../shared/weapons.js';
 import { Host } from '../server/host.js';
+import { loadMap, joinClient, sendCmd } from './harness.js';
 
-const bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url)).buffer);
+const bsp = loadMap('de_playground');
 
 function setup() {
   const host = new Host({ loadMap: () => bsp, listMaps: () => ['de_playground'], readCfg: () => null, print: () => {}, defer: (fn) => fn() });
@@ -21,10 +21,7 @@ function setup() {
   const w = new Writer();
   const join = (name, team) => {
     const sent = [];
-    const c = host.game.connect({ send: (b) => sent.push(b.slice()), close: () => {}, closed: false });
-    host.game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
+    const c = joinClient(host.game, w, name, team, { send: (b) => sent.push(b.slice()), close: () => {}, closed: false });
     c.sent = sent;
     const of = (type) => sent.filter((b) => b[0] === type).map((b) => {
       const r = new Reader().set(b);
@@ -51,10 +48,7 @@ function setup() {
   };
   const run = (ticks, players) => {
     for (let i = 0; i < ticks; i++) {
-      for (const c of players) {
-        c.cmds.put(c.tick, 0, -1, 0, 0, 0);
-        host.game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      }
+      for (const c of players) sendCmd(host.game, w, c);
       host.game.step();
     }
   };

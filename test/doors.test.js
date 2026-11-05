@@ -1,47 +1,26 @@
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { IN_FORWARD, IN_USE, TICK_RATE } from '../shared/constants.js';
 import { CollisionWorld, Trace, traceHull, hullFits, HULL_STAND, HULL_POINT } from '../shared/trace.js';
 import { Breakables } from '../shared/breakables.js';
 import { Doors, MOVER_ROTATING } from '../shared/doors.js';
-import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
+import { PS_ORIGIN } from '../shared/pmove.js';
 import { ShotList } from '../shared/weapons.js';
 import { Player, runCommand, TEAM_CT } from '../shared/player.js';
 import {
   S2C_SNAPSHOT, Writer, Reader, CmdRing, SnapshotRing, OwnState, writeHello, writeCmds, readSnapshot,
 } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
+import { mapOrNull as loadMap, joinClient, runInputs, teleport } from './harness.js';
 
-const maps = {};
-function loadMap(name) {
-  if (!(name in maps)) {
-    try {
-      maps[name] = parseBSP(Deno.readFileSync(new URL(`../maps/${name}.bsp`, import.meta.url)).buffer);
-    } catch {
-      maps[name] = null;
-    }
-  }
-  return maps[name];
-}
 const have = (...names) => names.every((n) => loadMap(n));
 
 // A game on `map` with one player (a CT) driven by `input`.
 function setup(map) {
   const g = new Game(map, loadMap(map), { rounds: false });
   const w = new Writer();
-  const c = g.connect({ send() {}, close() {} });
-  g.receive(c, writeHello(w, TEAM_CT, 0, 0, 'p').slice());
-  c.cmds = new CmdRing();
-  c.tick = 1;
+  const c = joinClient(g, w, 'p', TEAM_CT);
   c.input = { buttons: 0, pitch: 0, yaw: 0 };
-  const run = (ticks) => {
-    for (let i = 0; i < ticks; i++) {
-      const k = c.input;
-      c.cmds.put(c.tick, k.buttons, -1, k.pitch, k.yaw, 0);
-      g.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      g.step();
-    }
-  };
+  const run = (ticks) => runInputs(g, w, [c], ticks);
   run(2);
   return { g, c, run };
 }
@@ -51,11 +30,7 @@ function place(g, c, x, y, z) {
   for (let dz = 0; dz < 160; dz += 2) {
     if (!hullFits(g.world, HULL_STAND, x, y, z - dz)) continue;
     const tr = traceHull(g.world, HULL_STAND, x, y, z - dz, x, y, z - dz - 200, new Trace());
-    const f = c.player.ps.f;
-    f[PS_ORIGIN] = x;
-    f[PS_ORIGIN + 1] = y;
-    f[PS_ORIGIN + 2] = tr.endz;
-    f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
+    teleport(c, x, y, tr.endz);
     return;
   }
   throw new Error(`no room at ${x} ${y} ${z}`);

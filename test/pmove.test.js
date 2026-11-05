@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { parseBSP, parseVec3 } from '../shared/bsp.js';
+import { parseVec3 } from '../shared/bsp.js';
 import { TICK_DT, IN_FORWARD, IN_JUMP, IN_DUCK, IN_SPEED, IN_MOVERIGHT } from '../shared/constants.js';
 import {
   CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, HULL_POINT, HULL_STAND, ENT_LADDER, ENT_SOLID, ENT_BODY_BASE,
@@ -10,6 +10,7 @@ import {
 } from '../shared/pmove.js';
 import { feetOffset } from '../shared/hitgroups.js';
 import { boxWorld, floorWorld, emptyWorld, FLOOR, WATER } from './worlds.js';
+import { loadBSP } from './harness.js';
 
 const KNIFE = 250;
 const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg ?? ''} expected ${b}±${eps}, got ${a}`);
@@ -253,13 +254,9 @@ Deno.test('conveyor carries a standing player and its momentum survives leaving 
 });
 
 Deno.test('fy_buzzkill: conveyor ramp launches the player onto the central tower', async (t) => {
-  let buf;
-  try {
-    buf = await Deno.readFile(new URL('../maps/fy_buzzkill.bsp', import.meta.url));
-  } catch {
-    return t.step({ name: 'skipped: maps/fy_buzzkill.bsp missing', fn: () => {}, ignore: true });
-  }
-  const w = CollisionWorld.fromBSP(parseBSP(buf.buffer));
+  const bsp = await loadBSP(t, 'fy_buzzkill');
+  if (!bsp) return;
+  const w = CollisionWorld.fromBSP(bsp);
   const ps = run(w, spawn(-512, -1000, -200), 64); // in front of the +y ramp
   near(ps.f[PS_ORIGIN + 2], -284, 1, 'standing on the arena floor');
   run(w, ps, 40, IN_FORWARD, 90); // walk onto the ramp
@@ -277,13 +274,8 @@ Deno.test('movement is bit-for-bit deterministic', () => {
 });
 
 Deno.test('de_dust2: every spawn settles on the ground and can walk', async (t) => {
-  let buf;
-  try {
-    buf = await Deno.readFile(new URL('../maps/de_dust2.bsp', import.meta.url));
-  } catch {
-    return t.step({ name: 'skipped: maps/de_dust2.bsp missing', fn: () => {}, ignore: true });
-  }
-  const bsp = parseBSP(buf.buffer);
+  const bsp = await loadBSP(t, 'de_dust2');
+  if (!bsp) return;
   const w = CollisionWorld.fromBSP(bsp);
   const spawns = bsp.entities.filter((e) => /^info_player_(start|deathmatch)$/.test(e.classname));
   assert.ok(spawns.length >= 20);

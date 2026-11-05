@@ -6,18 +6,9 @@ import { CollisionWorld } from '../shared/trace.js';
 import { FloorGrid, MAX_CELLS, floorFaces } from '../shared/floorgrid.js';
 import { Writer, Reader, writeHello, readHello, helloRoom, C2S_HELLO, S2C_WELCOME, S2C_REJECT, readWelcome } from '../shared/protocol.js';
 import { TEAM_T } from '../shared/player.js';
+import { quiet as quietly } from './harness.js';
 
 const PLAYGROUND = Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url));
-
-function quietly(fn) {
-  const log = console.log;
-  console.log = () => {};
-  try {
-    return fn();
-  } finally {
-    console.log = log;
-  }
-}
 
 function makeRooms(limits = {}) {
   const clock = { ms: 0 };

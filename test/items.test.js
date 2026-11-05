@@ -4,14 +4,12 @@ import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { IN_DROP, IN_USE } from '../shared/constants.js';
 import { WEAPONS, WEAPON_ID, WS_SLOTS, WS_ACTIVE, SLOT_PRIMARY, SLOT_SECONDARY } from '../shared/weapons.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
-import { Writer, Reader, CmdRing, writeHello, writeCmds, writeBuy, readItems, S2C_ITEMS } from '../shared/protocol.js';
+import { Writer, Reader, writeHello, writeBuy, readItems, S2C_ITEMS } from '../shared/protocol.js';
 import { Items, MAX_ITEMS } from '../shared/items.js';
 import { Game } from '../server/game.js';
+import { mapOrNull, joinClient, sendCmd } from './harness.js';
 
-let bsp = null;
-try {
-  bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_dust2.bsp', import.meta.url)).buffer);
-} catch { /* map-dependent tests skip */ }
+const bsp = mapOrNull('de_dust2');
 
 // A game with free buying and no round flow, and helpers to drive clients.
 function setup() {
@@ -20,10 +18,7 @@ function setup() {
   let buyId = 0;
   const join = (name, team) => {
     const sent = [];
-    const c = game.connect({ send: (b) => sent.push(b.slice()), close: () => {}, closed: false });
-    game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
+    const c = joinClient(game, w, name, team, { send: (b) => sent.push(b.slice()), close: () => {}, closed: false });
     c.sent = sent;
     c.next = { buttons: 0, pitch: 0, yaw: 0 };
     c.buy = (item) => game.receive(c, writeBuy(w, ++buyId, item).slice());
@@ -42,10 +37,7 @@ function setup() {
   };
   const run = (ticks, players) => {
     for (let i = 0; i < ticks; i++) {
-      for (const c of players) {
-        c.cmds.put(c.tick, c.next.buttons, -1, c.next.pitch, c.next.yaw, 0);
-        game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      }
+      for (const c of players) sendCmd(game, w, c, c.next.buttons, -1, c.next.pitch, c.next.yaw);
       game.step();
     }
   };
@@ -172,10 +164,7 @@ Deno.test({ name: 'weapons on the ground: G throws the gun in an arc; it lands a
   assert.equal(a.items().flying[0], 0, 'clients are told it lies still');
 } });
 
-let buzzkill = null;
-try {
-  buzzkill = parseBSP(Deno.readFileSync(new URL('../maps/fy_buzzkill.bsp', import.meta.url)).buffer);
-} catch { /* map-dependent */ }
+const buzzkill = mapOrNull('fy_buzzkill');
 
 Deno.test({ name: "weapons on the ground: fy_buzzkill's armoury_entity weapons lie out at every round start", ignore: !buzzkill, fn: () => {
   const game = new Game('fy_buzzkill', buzzkill, { rounds: false });

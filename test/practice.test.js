@@ -2,31 +2,24 @@
 // bot_place through the Host with the caller's view, the grenade arcs and impact boxes kept
 // for drawing (client/gl/practice.js).
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { TEAM_CT } from '../shared/player.js';
 import { IN_JUMP, IN_FORWARD } from '../shared/constants.js';
 import {
   PS_ORIGIN, PS_FLAGS, FL_NOCLIP, FL_ONGROUND, NOCLIP_SPEED, createPlayerState, noclipMove, playerMove,
 } from '../shared/pmove.js';
 import { traceHull, Trace, HULL_POINT, hullFits, HULL_STAND } from '../shared/trace.js';
-import { Writer, Reader, CmdRing, writeHello, writeCmds, writeCommand, S2C_PRINT } from '../shared/protocol.js';
+import { Writer, Reader, writeCommand, S2C_PRINT } from '../shared/protocol.js';
 import { Host } from '../server/host.js';
 import { TrajectoryLog, ImpactLog, TRAIL_KEEP, IMPACT_KEEP, MAX_IMPACTS, TRAIL_POINTS } from '../client/gl/practice.js';
+import { loadMap, readCfg, joinClient, sendCmd } from './harness.js';
 
 const MAP = 'de_playground';
-const bsp = parseBSP(Deno.readFileSync(new URL(`../maps/${MAP}.bsp`, import.meta.url)).buffer);
+const bsp = loadMap(MAP);
 
 // A Host on the playground in `mode` (the real cfg files), and a way in for players.
 function setup(mode) {
   const host = new Host({
-    loadMap: () => bsp, listMaps: () => [MAP], print: () => {}, defer: (fn) => fn(), now: () => 0,
-    readCfg: (name) => {
-      try {
-        return Deno.readTextFileSync(new URL(`../cfg/${name}`, import.meta.url));
-      } catch {
-        return null;
-      }
-    },
+    loadMap: () => bsp, listMaps: () => [MAP], print: () => {}, defer: (fn) => fn(), now: () => 0, readCfg,
   });
   host.con.exec(mode === 'demo' ? 'game_type 2; game_mode 0' : 'game_type 0; game_mode 1');
   host.start(MAP);
@@ -35,10 +28,7 @@ function setup(mode) {
   let cmdId = 0;
   const join = (name, team) => {
     const sent = [];
-    const c = host.game.connect({ send: (b) => sent.push(b.slice()), close() {}, closed: false });
-    host.game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
+    const c = joinClient(host.game, w, name, team, { send: (b) => sent.push(b.slice()), close() {}, closed: false });
     c.prints = () => sent.filter((b) => b[0] === S2C_PRINT).map((b) => {
       const r = new Reader().set(b);
       r.u8v();
@@ -50,8 +40,7 @@ function setup(mode) {
   // Every tick c holds `buttons`, looking at (pitch, yaw).
   const run = (c, ticks, buttons = 0, pitch = 0, yaw = 0) => {
     for (let i = 0; i < ticks; i++) {
-      c.cmds.put(c.tick, buttons, -1, pitch, yaw, 0);
-      host.game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
+      sendCmd(host.game, w, c, buttons, -1, pitch, yaw);
       host.game.step();
     }
   };

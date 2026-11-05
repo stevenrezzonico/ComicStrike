@@ -1,54 +1,29 @@
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { IN_USE, IN_ATTACK, TICK_RATE } from '../shared/constants.js';
 import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
 import { traceHull, hullFits, Trace, HULL_POINT, HULL_STAND } from '../shared/trace.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { HS_IDLE, HS_CARRIED, HS_RESCUED, HS_DEAD, HOSTAGES_PER_ROUND, PICKUP_TIME, CARRY_SPEED } from '../shared/hostages.js';
 import { PHASE_LIVE, PHASE_OVER, END_RESCUE, RESCUE_REWARD, HOSTAGE_KILL_PENALTY } from '../shared/economy.js';
-import { Writer, CmdRing, writeHello, writeCmds } from '../shared/protocol.js';
+import { Writer } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
+import { mapOrNull, joinClient, runInputs, teleport } from './harness.js';
 
-let bsp = null;
-try {
-  bsp = parseBSP(Deno.readFileSync(new URL('../maps/cs_office.bsp', import.meta.url)).buffer);
-} catch { /* map-dependent tests skip */ }
+const bsp = mapOrNull('cs_office');
 
 function setup() {
   const game = new Game('cs_office', bsp, { freezeTime: 1, roundTime: 60, buyTime: 1, roundEndDelay: 1 });
   const w = new Writer();
   const players = {};
   for (const [name, team] of [['ct', TEAM_CT], ['t', TEAM_T]]) {
-    const c = game.connect({ send() {}, close() {} });
-    game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
-    c.input = { buttons: 0, select: -1, pitch: 0, yaw: 0 };
-    players[name] = c;
+    players[name] = joinClient(game, w, name, team);
+    players[name].input = { buttons: 0, select: -1, pitch: 0, yaw: 0 };
   }
-  const run = (ticks) => {
-    for (let i = 0; i < ticks; i++) {
-      for (const c of Object.values(players)) {
-        const k = c.input;
-        c.cmds.put(c.tick, k.buttons, k.select, k.pitch, k.yaw, 0);
-        k.select = -1;
-        game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      }
-      game.step();
-    }
-  };
+  const run = (ticks) => runInputs(game, w, Object.values(players), ticks);
   const live = () => {
     while (game.phase !== PHASE_LIVE) run(1);
   };
   return { game, players, run, live };
-}
-
-function teleport(c, x, y, z) {
-  const f = c.player.ps.f;
-  f[PS_ORIGIN] = x;
-  f[PS_ORIGIN + 1] = y;
-  f[PS_ORIGIN + 2] = z;
-  f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
 }
 
 // Stand `c` 50 units from hostage k, looking at its chest.

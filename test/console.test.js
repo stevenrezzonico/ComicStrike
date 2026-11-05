@@ -1,19 +1,13 @@
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import { PHASE_WARMUP, PHASE_FREEZE } from '../shared/economy.js';
 import {
-  Writer, Reader, CmdRing, writeHello, writeCmds, writeCommand, printChunks, S2C_PRINT, S2C_CHANGELEVEL, S2C_REJECT,
+  Writer, Reader, writeCommand, printChunks, S2C_PRINT, S2C_CHANGELEVEL, S2C_REJECT,
   MAX_TEXT, S2C_CHAT, readChat, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC,
 } from '../shared/protocol.js';
 import { Host, AddressCounts } from '../server/host.js';
 import { TICK_RATE } from '../shared/constants.js';
-
-const maps = {};
-function loadMap(name) {
-  if (!maps[name]) maps[name] = parseBSP(Deno.readFileSync(new URL(`../maps/${name}.bsp`, import.meta.url)).buffer);
-  return maps[name];
-}
+import { loadMap, joinClient, sendCmd } from './harness.js';
 
 async function setup(t) {
   try {
@@ -34,10 +28,7 @@ async function setup(t) {
   const join = (name, team, address) => {
     const sent = [];
     const session = { send: (b) => sent.push(b.slice()), close: (reason) => sent.push(reason), closed: false, address };
-    const c = host.game.connect(session);
-    host.game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
+    const c = joinClient(host.game, w, name, team, session);
     c.sent = sent;
     // Console output this client received.
     c.prints = () => sent.filter((b) => b instanceof Uint8Array && b[0] === S2C_PRINT).map((b) => {
@@ -60,10 +51,7 @@ async function setup(t) {
   };
   const run = (ticks, players) => {
     for (let i = 0; i < ticks; i++) {
-      for (const c of players) {
-        c.cmds.put(c.tick, 0, -1, 0, 0, 0);
-        host.game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      }
+      for (const c of players) sendCmd(host.game, w, c);
       host.game.step();
     }
   };

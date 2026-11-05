@@ -1,102 +1,19 @@
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { IN_ATTACK, TICK_RATE } from '../shared/constants.js';
-import { PS_ORIGIN, PS_VEL, eyeOffset } from '../shared/pmove.js';
-import { hullFits, traceHull, Trace, HULL_STAND, HULL_POINT } from '../shared/trace.js';
+import { PS_ORIGIN, eyeOffset } from '../shared/pmove.js';
+import { traceHull, Trace, HULL_POINT } from '../shared/trace.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { WEAPON_ID, WS_SLOTS, SLOT_PRIMARY } from '../shared/weapons.js';
 import {
   PHASE_WARMUP, PHASE_LIVE, PHASE_OVER, END_MATCH, GAME_FFA, GAME_DM, DM_KILL_POINTS, DM_RESPAWN,
 } from '../shared/economy.js';
-import { Writer, CmdRing, writeHello, writeCmds, writeBuy } from '../shared/protocol.js';
-import { Host } from '../server/host.js';
+import { mapOrNull, modeServer, teleport, lineUp, fireUntil } from './harness.js';
 
-const maps = {};
-function loadMap(name) {
-  if (!maps[name]) maps[name] = parseBSP(Deno.readFileSync(new URL(`../maps/${name}.bsp`, import.meta.url)).buffer);
-  return maps[name];
-}
-const readCfg = (name) => {
-  try {
-    return Deno.readTextFileSync(new URL(`../cfg/${name}`, import.meta.url));
-  } catch {
-    return null;
-  }
-};
-let haveMap = true;
-try {
-  loadMap('de_dust2');
-} catch {
-  haveMap = false;
-}
+const haveMap = !!mapOrNull('de_dust2');
 
 // A deathmatch server on de_dust2 (the real cfg/gamemode_deathmatch.cfg), with `rules`
 // overriding it (tests: no spawn protection unless asked).
-function setup(rules = { immunityTime: 0 }) {
-  const host = new Host({ loadMap, listMaps: () => ['de_dust2'], readCfg, print: () => {}, rules, defer: (fn) => fn() });
-  host.con.exec('game_type 1; game_mode 2');
-  host.start('de_dust2');
-  const w = new Writer();
-  const clients = [];
-  let buyId = 0;
-  const join = (name, team) => {
-    const c = host.game.connect({ send() {}, close() {} });
-    host.game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
-    c.input = { buttons: 0, pitch: 0, yaw: 0 };
-    c.buy = (item) => host.game.receive(c, writeBuy(w, ++buyId, item).slice());
-    clients.push(c);
-    return c;
-  };
-  const run = (ticks) => {
-    for (let i = 0; i < ticks; i++) {
-      for (const c of clients) {
-        const k = c.input;
-        c.cmds.put(c.tick, k.buttons, -1, k.pitch, k.yaw, 0);
-        host.game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      }
-      host.game.step();
-    }
-  };
-  const live = () => {
-    for (let i = 0; i < 64 * 5 && host.game.phase !== PHASE_LIVE; i++) run(1);
-    assert.equal(host.game.phase, PHASE_LIVE);
-  };
-  return { host, join, run, live };
-}
-
-function teleport(c, x, y, z) {
-  const f = c.player.ps.f;
-  f[PS_ORIGIN] = x;
-  f[PS_ORIGIN + 1] = y;
-  f[PS_ORIGIN + 2] = z;
-  f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
-}
-
-// `shooter` 120 units west of `target` on open ground, aiming at its chest.
-function lineUp(game, shooter, target) {
-  for (const s of game.spawns[TEAM_CT]) {
-    const [x, y, z] = s;
-    if (!hullFits(game.world, HULL_STAND, x - 120, y, z)) continue;
-    teleport(target, x, y, z);
-    teleport(shooter, x - 120, y, z);
-    shooter.input.yaw = 0;
-    shooter.input.pitch = 8;
-    target.input.yaw = 180;
-    return;
-  }
-  throw new Error('no open spawn');
-}
-
-// Holds the trigger (a tap per tick pair, for pistols) until `done()` or `ticks` pass.
-function fireUntil(run, c, done, ticks = 300) {
-  for (let i = 0; i < ticks && !done(); i++) {
-    c.input.buttons = i & 1 ? 0 : IN_ATTACK;
-    run(1);
-  }
-  c.input.buttons = 0;
-}
+const setup = (rules = { immunityTime: 0 }) => modeServer([1, 2], rules);
 
 Deno.test({ name: 'deathmatch: game_type 1 / game_mode 2 load the mode cfg; back to competitive resets it', ignore: !haveMap, fn: () => {
   const { host } = setup();

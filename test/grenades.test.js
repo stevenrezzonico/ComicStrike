@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { TICK_DT, IN_ATTACK } from '../shared/constants.js';
 import { CollisionWorld } from '../shared/trace.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
@@ -10,13 +9,11 @@ import {
   Grenades, heDamage, flashDuration, fireRadius, smokeRadius, FUSE, HE_DAMAGE, HE_RADIUS, FX_HE, FX_SMOKE, FX_FIRE,
   FIRE_DPS, SMOKE_TIME,
 } from '../shared/grenades.js';
-import { Writer, CmdRing, writeHello, writeCmds } from '../shared/protocol.js';
+import { Writer, writeCmds } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
+import { mapOrNull, joinClient } from './harness.js';
 
-let bsp = null;
-try {
-  bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_dust2.bsp', import.meta.url)).buffer);
-} catch { /* map-dependent tests skip */ }
+const bsp = mapOrNull('de_dust2');
 
 // A T spawn on de_dust2 (open ground).
 const SPAWN = bsp ? bsp.entities.find((e) => e.classname === 'info_player_deathmatch').origin.split(' ').map(Number) : [];
@@ -140,10 +137,7 @@ Deno.test({ name: 'server: a thrown HE flies from the thrower, hurts an enemy, a
   const game = new Game('de_dust2', bsp, { rounds: false });
   const w = new Writer();
   const join = (name, team) => {
-    const c = game.connect({ send() {}, close() {}, closed: false });
-    game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
+    const c = joinClient(game, w, name, team);
     c.input = { buttons: 0, select: -1, pitch: 0, yaw: 0 };
     return c;
   };

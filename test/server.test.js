@@ -12,15 +12,7 @@ import {
   E_HEALTH, MAX_PLAYERS,
 } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
-
-async function loadBSP(t, name) {
-  try {
-    return parseBSP((await Deno.readFile(new URL(`../maps/${name}.bsp`, import.meta.url))).buffer);
-  } catch {
-    await t.step({ name: `skipped: maps/${name}.bsp missing`, fn: () => {}, ignore: true });
-    return null;
-  }
-}
+import { loadBSP } from './harness.js';
 
 // A client as the browser runs it, minus rendering: it predicts with the shared
 // simulation and talks to the Game through a fake session.

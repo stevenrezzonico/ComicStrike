@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { IN_ATTACK, IN_USE, IN_DROP, IN_FORWARD } from '../shared/constants.js';
-import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
+import { PS_ORIGIN } from '../shared/pmove.js';
 import { traceHull, hullFits, Trace, HULL_POINT, HULL_STAND } from '../shared/trace.js';
 import {
   WEAPON_ID, WS_SLOTS, WS_ACTION, WS_ACTIVE, SLOT_C4, SLOT_SECONDARY, ACTION_PLANT, ACTION_DEFUSE,
@@ -14,17 +13,11 @@ import {
   PHASE_LIVE, PHASE_OVER, START_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD, PLANT_LOSS_BONUS,
   END_BOMB, END_DEFUSE, lossBonus,
 } from '../shared/economy.js';
-import { Writer, CmdRing, writeHello, writeCmds } from '../shared/protocol.js';
+import { Writer } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
+import { loadBSP, joinClient, runInputs, teleport } from './harness.js';
 
-async function loadDust2(t) {
-  try {
-    return parseBSP((await Deno.readFile(new URL('../maps/de_dust2.bsp', import.meta.url))).buffer);
-  } catch {
-    await t.step({ name: 'skipped: maps/de_dust2.bsp missing', fn: () => {}, ignore: true });
-    return null;
-  }
-}
+const loadDust2 = (t) => loadBSP(t, 'de_dust2');
 
 // A game with players joined by name -> team; each tick every player sends its `input`.
 function setup(bsp, teams, rules = {}) {
@@ -32,24 +25,10 @@ function setup(bsp, teams, rules = {}) {
   const w = new Writer();
   const players = {};
   for (const [name, team] of Object.entries(teams)) {
-    const c = game.connect({ send() {}, close() {} });
-    game.receive(c, writeHello(w, team, 0, 0, name).slice());
-    c.cmds = new CmdRing();
-    c.tick = 1;
-    c.input = { buttons: 0, select: -1, pitch: 0, yaw: 0 };
-    players[name] = c;
+    players[name] = joinClient(game, w, name, team);
+    players[name].input = { buttons: 0, select: -1, pitch: 0, yaw: 0 };
   }
-  const run = (ticks) => {
-    for (let i = 0; i < ticks; i++) {
-      for (const c of Object.values(players)) {
-        const k = c.input;
-        c.cmds.put(c.tick, k.buttons, k.select, k.pitch, k.yaw, 0);
-        k.select = -1;
-        game.receive(c, writeCmds(w, 0, c.cmds, c.tick++).slice());
-      }
-      game.step();
-    }
-  };
+  const run = (ticks) => runInputs(game, w, Object.values(players), ticks);
   const live = () => {
     while (game.phase !== PHASE_LIVE) run(1);
   };
@@ -70,14 +49,6 @@ function siteSpot(game, i) {
   throw new Error('no spot in the bomb site');
 }
 
-function teleport(c, [x, y, z]) {
-  const f = c.player.ps.f;
-  f[PS_ORIGIN] = x;
-  f[PS_ORIGIN + 1] = y;
-  f[PS_ORIGIN + 2] = z;
-  f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
-}
-
 const slotId = (c, slot) => c.player.ws.f[WS_SLOTS + slot * 3];
 
 // Live round, the T at bomb site A with the C4 in hand.
@@ -86,7 +57,7 @@ function readyToPlant(bsp, rules) {
   const { game, players: { terro }, run, live } = s;
   live();
   s.spot = siteSpot(game, 0);
-  teleport(terro, s.spot);
+  teleport(terro, ...s.spot);
   terro.input.select = SLOT_C4;
   run(70); // land, draw the C4 (1 s)
   return s;
@@ -126,7 +97,7 @@ Deno.test('planting: one T carries the C4, plants in a site in 3 s rooted in pla
   assert.equal(game.bomb.state, BOMB_CARRIED, 'not in a bomb site: nothing happens');
   assert.equal(terro.player.ws.f[WS_ACTION], 0);
 
-  teleport(terro, siteSpot(game, 0));
+  teleport(terro, ...siteSpot(game, 0));
   terro.input.buttons = 0;
   run(8);
   terro.input.buttons = IN_ATTACK | IN_FORWARD;
@@ -165,7 +136,7 @@ Deno.test('planting with E: in a site use takes the C4 out and plants it; outsid
   assert.equal(terro.player.ws.f[WS_ACTION], 0, 'not in a bomb site');
   assert.equal(active(), SLOT_SECONDARY);
 
-  teleport(terro, siteSpot(game, 1));
+  teleport(terro, ...siteSpot(game, 1));
   terro.input.buttons = 0;
   run(8);
   terro.input.buttons = IN_USE;
@@ -184,7 +155,7 @@ Deno.test('defusing: a CT on the bomb, looking at it, holds use for 10 s; the Ts
   const s = readyToPlant(bsp, { c4Timer: 15 });
   const { game, players: { terro, ceetee }, run } = s;
   plant(s);
-  teleport(ceetee, s.spot);
+  teleport(ceetee, ...s.spot);
   run(8);
   ceetee.input.pitch = 89; // straight down at it
   ceetee.input.buttons = IN_USE | IN_FORWARD;
@@ -209,7 +180,7 @@ Deno.test('defusing with a kit takes 5 s; letting go of use starts over', async 
   const { game, players: { ceetee }, run } = s;
   plant(s);
   ceetee.player.defuser = true;
-  teleport(ceetee, s.spot);
+  teleport(ceetee, ...s.spot);
   run(8);
   ceetee.input.pitch = 89;
   ceetee.input.buttons = IN_USE;
@@ -240,7 +211,7 @@ Deno.test('the bomb drops when thrown (G) or when its carrier dies; another T pi
   const d = Math.hypot(game.bomb.x - carrier.player.ps.f[PS_ORIGIN], game.bomb.y - carrier.player.ps.f[PS_ORIGIN + 1]);
   assert.ok(d > 20, `thrown ahead (${d.toFixed(0)} units)`);
 
-  teleport(other, [game.bomb.x, game.bomb.y, game.bomb.z + 37]);
+  teleport(other, game.bomb.x, game.bomb.y, game.bomb.z + 37);
   run(70);
   assert.equal(game.bomb.state, BOMB_CARRIED);
   assert.equal(game.bombCarrier, other);
@@ -249,7 +220,7 @@ Deno.test('the bomb drops when thrown (G) or when its carrier dies; another T pi
   game.kill(players.ceetee, other, WEAPON_ID.usp_silencer, false);
   assert.equal(game.bomb.state, BOMB_DROPPED, 'dropped where the carrier died');
   assert.ok(Math.hypot(game.bomb.x - other.player.ps.f[PS_ORIGIN], game.bomb.y - other.player.ps.f[PS_ORIGIN + 1]) < 1);
-  teleport(players.ceetee, [game.bomb.x, game.bomb.y, game.bomb.z + 37]);
+  teleport(players.ceetee, game.bomb.x, game.bomb.y, game.bomb.z + 37);
   run(2);
   assert.equal(game.bomb.state, BOMB_DROPPED, 'CTs cannot pick it up');
 });

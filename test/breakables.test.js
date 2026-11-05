@@ -1,18 +1,14 @@
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { CollisionWorld, Trace, traceHull, ENT_SOLID, ENT_NONE, HULL_POINT, HULL_STAND } from '../shared/trace.js';
 import { Breakables, MAT_WOOD } from '../shared/breakables.js';
 import { WEAPONS, WEAPON_ID, damageAtRange } from '../shared/weapons.js';
+import { loadBSP } from './harness.js';
 
 async function loadMap(t, name) {
-  try {
-    const bsp = parseBSP((await Deno.readFile(new URL(`../maps/${name}.bsp`, import.meta.url))).buffer);
-    const world = CollisionWorld.fromBSP(bsp);
-    return { bsp, world, breakables: new Breakables(bsp, world) };
-  } catch {
-    await t.step({ name: `skipped: maps/${name}.bsp missing`, fn: () => {}, ignore: true });
-    return null;
-  }
+  const bsp = await loadBSP(t, name);
+  if (!bsp) return null;
+  const world = CollisionWorld.fromBSP(bsp);
+  return { bsp, world, breakables: new Breakables(bsp, world) };
 }
 
 // A slot's world-space center and its top.

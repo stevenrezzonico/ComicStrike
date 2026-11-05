@@ -3,87 +3,16 @@
 // master; and what breakables set off (shared/breakables.js, server/game.js): their
 // targets, their explosions, the blasts that break them.
 import assert from 'node:assert/strict';
-import { MapBuilder, box, NONE } from '../shared/bspwriter.js';
-import { parseUntrustedBSP } from '../shared/bsp.js';
+import { box, NONE } from '../shared/bspwriter.js';
 import { Trace, traceHull, hullFits, HULL_POINT, HULL_STAND, ENT_NONE, ENT_SOLID } from '../shared/trace.js';
 import { PS_ORIGIN, PS_VEL, PS_GROUNDENT } from '../shared/pmove.js';
 import { IN_USE, IN_ATTACK, IN_FORWARD, TICK_RATE } from '../shared/constants.js';
-import { TEAM_T, TEAM_CT } from '../shared/player.js';
+import { TEAM_CT } from '../shared/player.js';
 import { WEAPON_ID, WS_ACTIVE, giveWeapon, SLOT_PRIMARY } from '../shared/weapons.js';
-import {
-  Writer, Reader, CmdRing, SnapshotRing, OwnState, writeHello, writeCmds, readSnapshot, S2C_SNAPSHOT,
-} from '../shared/protocol.js';
 import { MOVER_PLAT, MOVER_TRAIN, MOVER_BUTTON, MOVER_MOMENTARY, MOVER_WHEEL, MAX_FIRES, MAX_QUEUED } from '../shared/doors.js';
 import { blastDamage } from '../shared/breakables.js';
 import { Game } from '../server/game.js';
-
-const TEX = { sky: [256, 256], crete3_wall02: [128, 128], '-0sand': [128, 128], steel: [64, 64], crate08: [64, 64], glass_med: [64, 64] };
-const W = 'crete3_wall02';
-
-// A walled yard 2048 x 1024 under the sky, plus `extra(map)`.
-function yard(extra) {
-  const map = new MapBuilder(TEX, { message: 'test' });
-  map.world.push(
-    box(-1024, -512, -32, 1024, 512, 0, '-0sand'),
-    box(-1056, -544, -32, -1024, 544, 512, W), box(1024, -544, -32, 1056, 544, 512, W),
-    box(-1024, -544, -32, 1024, -512, 512, W), box(-1024, 512, -32, 1024, 544, 512, W),
-    box(-1056, -544, 512, 1056, 544, 544, 'sky'),
-  );
-  extra(map);
-  map.point({ classname: 'info_player_deathmatch', origin: '-900 0 37', angles: '0 0 0' });
-  map.point({ classname: 'info_player_start', origin: '900 0 37', angles: '0 180 0' });
-  return parseUntrustedBSP(map.compile({ light: 'draft' }).bytes.buffer);
-}
-
-const quiet = (fn) => {
-  const log = console.log;
-  console.log = () => {};
-  try {
-    return fn();
-  } finally {
-    console.log = log;
-  }
-};
-
-// A game on `bsp` with one player driven tick by tick (its snapshots kept for reading).
-function walker(bsp, team = TEAM_T) {
-  const game = quiet(() => new Game('test', bsp, { rounds: false }));
-  const w = new Writer();
-  const inbox = [];
-  const c = game.connect({ send: (b) => inbox.push(b.slice()), close() {} });
-  game.receive(c, writeHello(w, team, 0, 0, 'tester').slice());
-  c.cmds = new CmdRing();
-  let tick = 1;
-  const run = (ticks, buttons = 0, yaw = 0, pitch = 0) => {
-    for (let i = 0; i < ticks; i++) {
-      c.cmds.put(tick, buttons, -1, pitch, yaw, 0);
-      game.receive(c, writeCmds(w, 0, c.cmds, tick++).slice());
-      game.step();
-    }
-  };
-  const put = (x, y, feet) => {
-    const f = c.player.ps.f;
-    f[PS_ORIGIN] = x;
-    f[PS_ORIGIN + 1] = y;
-    f[PS_ORIGIN + 2] = feet + 36;
-    f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
-    c.player.ps.i[PS_GROUNDENT] = -1; // not riding whatever it stood on (a mover pushes its riders)
-  };
-  // The newest snapshot the server sent, read like the client does.
-  const ring = new SnapshotRing(), own = new OwnState(), r = new Reader();
-  const snapshot = () => {
-    let k = -1;
-    for (const bytes of inbox.splice(0)) {
-      r.set(bytes);
-      if (r.u8v() !== S2C_SNAPSHOT) continue;
-      const s = readSnapshot(r, ring, own);
-      if (s >= 0) k = s;
-    }
-    return { k, ring, own };
-  };
-  run(2);
-  return { game, c, run, put, feet: () => c.player.ps.f[PS_ORIGIN + 2] - 36, pos: () => c.player.ps.f, snapshot, inbox };
-}
+import { W, yard, walker, quiet } from './harness.js';
 
 const ticksOf = (s) => Math.round(s * TICK_RATE);
 
