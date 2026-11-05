@@ -328,11 +328,9 @@
   .dp-caption em { display: block; font: 2.4vh/1.2 var(--body); }
   .dp-caption em:empty { display: none; }
   /* Comic sound words (client/inkwords.js). */
-  #fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  #fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; contain: strict; } /* a word's text relaid out inside it alone */
   .pop { position: absolute; left: 0; top: 0; will-change: transform; }
-  .pop .in { position: absolute; left: 0; top: 0; display: grid; place-items: center;
-    transform: translate(-50%, -50%) rotate(var(--r));
-    animation: pop var(--life, 700ms) cubic-bezier(0.2, 0.9, 0.3, 1.2) forwards; }
+  .pop .in { position: absolute; left: 0; top: 0; display: grid; place-items: center; opacity: 0; } /* the pop: a Web Animation (client/inkwords.js) */
   .pop .bk, .pop .fg { position: absolute; inset: -46% -20%; }
   .pop .bk { background: var(--ink); transform: scale(1.1); }
   .pop .fg { background: var(--yellow); }
@@ -345,28 +343,12 @@
   .pop.shot b, .pop.ticker b { color: var(--yellow); text-shadow: 0.05em 0.05em 0 var(--red), 0.1em 0.1em 0 var(--ink); }
   /* A spray's growing line: it grows to the right from where it starts, on a jagged balloon. */
   .pop.ticker { transition: transform 0.12s; }
-  .pop.ticker .in { animation: none; transform: translate(0, -50%) rotate(var(--r)); transition: opacity 0.3s, transform 0.3s; }
+  .pop.ticker .in { opacity: 1; transform: translate(0, -50%) rotate(var(--r)); transition: opacity 0.3s, transform 0.3s; }
   .pop.ticker .bk, .pop.ticker .fg { inset: -38% -9%; }
   .pop.ticker .fg { background: var(--red); }
   .pop.ticker b { transform-origin: 0 50%; }
   .pop.ticker.old .in { opacity: 0.45; }
   .pop.ticker.out .in { opacity: 0; transform: translate(0, calc(-50% - 30px)) rotate(var(--r)); }
-  @keyframes pop {
-    0% { transform: translate(-50%, -50%) rotate(var(--r)) scale(0.2); opacity: 1; }
-    14% { transform: translate(-50%, -50%) rotate(var(--r)) scale(1.18); }
-    26% { transform: translate(-50%, -50%) rotate(var(--r)) scale(1); }
-    72% { opacity: 1; }
-    100% { transform: translate(-50%, -78%) rotate(var(--r)) scale(0.92); opacity: 0; }
-  }
-  /* The same, under a second name: switching names restarts a reused word's animation. */
-  @keyframes pop2 {
-    0% { transform: translate(-50%, -50%) rotate(var(--r)) scale(0.2); opacity: 1; }
-    14% { transform: translate(-50%, -50%) rotate(var(--r)) scale(1.18); }
-    26% { transform: translate(-50%, -50%) rotate(var(--r)) scale(1); }
-    72% { opacity: 1; }
-    100% { transform: translate(-50%, -78%) rotate(var(--r)) scale(0.92); opacity: 0; }
-  }
-  @media (prefers-reduced-motion: reduce) { .pop .in { animation-timing-function: linear; } }
   /* Start / pause menu (client/menu.js): actions on the left, the open panel beside them, over
      a dot-screened sky (start) or the dotted, dimmed game (pause). */
   #menu { position: fixed; inset: 0; z-index: 5; display: none; gap: 32px; padding: 6vh 6vw; box-sizing: border-box;

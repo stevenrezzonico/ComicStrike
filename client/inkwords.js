@@ -2,9 +2,12 @@
 // BLAM! / RATA-TA-TA! for our own gunfire, PAK! on walls we hit, KA-BOOM! on explosions,
 // SMOKE! on smoke grenades, FIRE! and CRACKLE! on fires. Nothing covers the crosshair:
 // our own hits land under it, so their words go beside it (they hid the target in a fight).
-// A fixed pool of DOM elements, reused oldest first; the pop animation is CSS (#fx in
-// index.html). Spawning happens on events, never per frame; update() only hides the
-// expired ones and fades the gunfire lines.
+// A fixed pool of DOM elements, reused oldest first; the look is CSS (#fx in index.html),
+// the pop a Web Animation of transform and opacity with the word's place and turn in its
+// keyframes, which the compositor runs (a CSS animation reading var(--r) in its keyframes
+// may not be), ending invisible. A spawn writes only what differs from the slot's last
+// word: each write is a style recalculation that frame. Spawning happens on events, never
+// per frame; update() only fades the gunfire lines.
 
 import { GUN_SOUNDS } from './audio.js';
 
@@ -55,6 +58,19 @@ const BANNER = (() => {
 const JOLTS = [-3, -1.8, -0.6, 0.6, 1.8, 3].map((j) => [
   { transform: `scale(1.28) translate(${j}px, ${-Math.abs(j)}px) rotate(${j}deg)` }, { transform: 'scale(1)' }]);
 const JOLT_TIMING = { duration: 120 };
+// The pop: scales up past full size, settles, then drifts up and fades (each segment eased,
+// as a CSS animation's timing function is).
+const EASE = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'linear' : 'cubic-bezier(0.2, 0.9, 0.3, 1.2)';
+function popFrames(x, y, r) {
+  const at = `translate(${x}px, ${y}px) translate(-50%, `;
+  return [
+    { transform: `${at}-50%) rotate(${r}deg) scale(0.2)`, opacity: 1, offset: 0, easing: EASE },
+    { transform: `${at}-50%) rotate(${r}deg) scale(1.18)`, offset: 0.14, easing: EASE },
+    { transform: `${at}-50%) rotate(${r}deg) scale(1)`, offset: 0.26, easing: EASE },
+    { opacity: 1, offset: 0.72, easing: EASE },
+    { transform: `${at}-78%) rotate(${r}deg) scale(0.92)`, opacity: 0, offset: 1 },
+  ];
+}
 
 export class InkWords {
   constructor(root) {
@@ -72,7 +88,7 @@ export class InkWords {
       root.append(el);
       // Each slot keeps one burst outline (set once: a new clip path every spawn restyled it).
       const it = { el, inner: el.firstChild, bk: el.querySelector('.bk'), fg: el.querySelector('.fg'),
-        b: el.querySelector('b'), end: 0, flip: false };
+        b: el.querySelector('b'), anim: null, cls: '', size: '' };
       it.bk.style.clipPath = it.fg.style.clipPath = STARS[i % STARS.length];
       this.items.push(it);
     }
@@ -100,22 +116,21 @@ export class InkWords {
     if (!this.enabled) return;
     const it = this.items[this.next];
     this.next = (this.next + 1) % POOL;
-    const el = it.el, s = size * innerHeight / 720;
-    el.className = `pop ${cls}`;
-    el.style.setProperty('--s', `${s.toFixed(1)}px`);
-    el.style.setProperty('--r', `${rnd(-14, 14).toFixed(1)}deg`);
-    el.style.setProperty('--life', `${life}ms`);
-    el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
-    const burst = cls !== 'wall' && !cls.startsWith('shot');
-    it.bk.hidden = it.fg.hidden = !burst;
-    it.b.textContent = text;
-    el.hidden = false;
-    // Restart the CSS animation on a reused element by switching between two identical
-    // keyframes (reading offsetWidth between two writes, the usual trick, forced a layout
-    // of the whole page for every word: a few per shot in a fight).
-    it.flip = !it.flip;
-    it.inner.style.animationName = it.flip ? 'pop2' : 'pop';
-    it.end = performance.now() + life;
+    const el = it.el, s = (size * innerHeight / 720).toFixed(1);
+    if (cls !== it.cls) {
+      it.cls = cls;
+      el.className = `pop ${cls}`;
+      const burst = cls !== 'wall' && !cls.startsWith('shot');
+      it.bk.hidden = it.fg.hidden = !burst;
+    }
+    if (s !== it.size) {
+      it.size = s;
+      el.style.setProperty('--s', `${s}px`);
+    }
+    if (it.b.textContent !== text) it.b.textContent = text;
+    if (el.hidden) el.hidden = false;
+    if (it.anim) it.anim.cancel();
+    it.anim = it.inner.animate(popFrames(x.toFixed(1), y.toFixed(1), rnd(-14, 14).toFixed(1)), { duration: life, fill: 'forwards' });
   }
 
   // World point (x, y, z) on the screen (this.sx, this.sy, CSS px) with viewProj; false
@@ -233,15 +248,8 @@ export class InkWords {
     l.b.animate?.(pick(JOLTS), JOLT_TIMING);
   }
 
-  // Every frame: hides expired words and fades a spray's lines after it.
+  // Every frame: fades a spray's lines after it (a word's pop ends invisible by itself).
   update(now) {
-    for (let i = 0; i < POOL; i++) {
-      const it = this.items[i];
-      if (it.end && now > it.end) {
-        it.end = 0;
-        it.el.hidden = true;
-      }
-    }
     if (this.burst && now - this.lastBeat > TICKER_GAP_MS) {
       const gone = now - this.lastBeat > TICKER_GAP_MS + 320;
       for (const l of this.lines) {
@@ -255,7 +263,8 @@ export class InkWords {
 
   clear() {
     for (const it of this.items) {
-      it.end = 0;
+      if (it.anim) it.anim.cancel();
+      it.anim = null;
       it.el.hidden = true;
     }
     for (const l of this.lines) l.el.hidden = true;

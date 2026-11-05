@@ -44,6 +44,11 @@ const FAR_LOD = 520, LOD_BAND = 100;
 // SUN_SHARE of it under its shadow, about what the baked shade of a wall prints (de_dust2:
 // sunlit ground ~0.6, shade ~0.4; our compiler's maps alike).
 const SUN_SHARE = 0.65, SUN_EVERY = 8, SUN_CHEST = 48;
+// A character's limbs are posed at most this often (seconds): up to ~300 fps every frame,
+// at 1000 fps every third or fourth (still 250 times a second), the players staggered so
+// the frames share the work; the body's place and turn follow every frame. Posing 9
+// players was 0.15-0.4 ms a frame on a laptop, a third of a 1000 fps frame.
+const POSE_DT = 1 / 300;
 
 export class PlayerModels {
   // guns: GunMeshes (client/gl/gunmeshes.js).
@@ -127,6 +132,8 @@ export class PlayerModels {
     this.vis = null; // the map's WorldVis (main sets it with the map)
     this.frameNo = 0;
     this.owedDt = new Float32Array(MAX_PLAYERS);
+    // (staggered: each player crosses POSE_DT on its own frames at high frame rates)
+    for (let id = 0; id < MAX_PLAYERS; id++) this.owedDt[id] = (id & 3) * POSE_DT / 4;
     // Hostages.
     this.bodyH = new SkinnedMesh(gl, buildPlayer('H'));
     this.farOf.set(this.bodyH, new SkinnedMesh(gl, buildPlayer('H', false, true)));
@@ -147,13 +154,17 @@ export class PlayerModels {
     for (let k = 0; k < h.count; k++) {
       const a = this.hostageAnim[k], m = this.hostageModel[k], state = h.state[k];
       if (state === HS_IDLE || state === HS_DEAD) {
-        a.update(dt, h.x[k], h.y[k], h.z[k], h.yaw[k], 0, 0, true, HOLD_TIED, 0, 0, state === HS_IDLE);
+        const i = a.in; // (as array elements: arguments were boxed every frame)
+        i[0] = dt; i[1] = h.x[k]; i[2] = h.y[k]; i[3] = h.z[k]; i[4] = h.yaw[k]; i[5] = 0; i[6] = 0;
+        a.step(true, HOLD_TIED, 0, 0, state === HS_IDLE);
         const yr = h.yaw[k] * Math.PI / 180, c = Math.cos(yr), s = Math.sin(yr);
         m.fill(0);
         m[0] = c; m[1] = s; m[4] = -s; m[5] = c; m[10] = 1;
         m[12] = h.x[k]; m[13] = h.y[k]; m[14] = h.z[k]; m[15] = 1;
         this.hostageFloorLight[k] = 1;
-        if (surfaces && surfaces.lightAt(this.lm, h.x[k], h.y[k], h.z[k] + 36)) {
+        const sph = this.sph;
+        sph[0] = h.x[k]; sph[1] = h.y[k]; sph[2] = h.z[k] + 36;
+        if (surfaces && surfaces.lightAtP(this.lm, sph)) {
           modelLight(this.hostageLight[k], this.lm);
           this.hostageFloorLight[k] = printedLight(this.lm);
         }
@@ -165,7 +176,9 @@ export class PlayerModels {
       } else if (state === HS_CARRIED && h.carrier[k] >= 0 && this.visible[h.carrier[k]]) {
         // Lying across his shoulders, face down, head to his left.
         const id = h.carrier[k];
-        a.update(dt, 0, 0, 0, 0, 0, 0, true, HOLD_TIED, 0, 0, true);
+        const i = a.in;
+        i[0] = dt; i[1] = i[2] = i[3] = i[4] = i[5] = i[6] = 0;
+        a.step(true, HOLD_TIED, 0, 0, true);
         const w = this.anim[id].pose.wpos, L = this.carryM;
         L.fill(0);
         L[2] = -1; // hostage x (face) -> down
@@ -205,10 +218,11 @@ export class PlayerModels {
       const sph = this.sph;
       sph[0] = x; sph[1] = y; sph[2] = z + BODY_MID; sph[3] = BODY_R;
       const seen = !this.haveView || this.inSight(this.lastViewProj);
-      if (!seen && ((this.frameNo + id) & 1)) this.owedDt[id] += dt;
+      const owed = this.owedDt[id] + dt;
+      if (owed < POSE_DT || (!seen && ((this.frameNo + id) & 1))) this.owedDt[id] = owed;
       else {
         const i = a.in; // the animator's numbers go as array elements, not boxed arguments
-        i[0] = dt + this.owedDt[id]; i[1] = x; i[2] = y; i[3] = z; i[4] = yaw;
+        i[0] = owed; i[1] = x; i[2] = y; i[3] = z; i[4] = yaw;
         i[5] = dequantizePitch(ents[r + E_PITCH]); i[6] = ents[r + E_DUCK] / 255;
         a.step((flags & FL_ONGROUND) !== 0, holdOf(weapon), ents[r + E_ANIM], ents[r + E_SHOTS], alive,
           this.guns.points[weapon] || null, weapon);

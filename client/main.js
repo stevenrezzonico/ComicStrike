@@ -2854,7 +2854,7 @@ globalThis.comicstrike = {
   angles,
   input,
   tick,
-  draw: () => draw(performance.now(), 1, 1 / 60),
+  draw: () => draw(performance.now(), 1 / 60),
   get net() {
     return net;
   },
@@ -2866,6 +2866,7 @@ globalThis.comicstrike = {
   weaponView,
   spectator,
   radar,
+  words, // the comic words (measuring their DOM writes)
   buy,
   sounds,
   con,
