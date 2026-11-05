@@ -90,7 +90,7 @@ export function createConsole(print) {
   add('r_inkaa', 1, 'Smooth ink lines: at the full render resolution the steps of a slanted line get grey corners (below it the lines are filtered anyway)', 0, 1);
   add('mat_viewportscale', 2, 'Render resolution of the scene, relative to the window (the most r_dynres uses; over 1 supersamples: smoother edges and lines, for a strong GPU; capped by the GPU and r_supersample_max); the dots are always printed at the window resolution', 0.25, 8);
   add('r_supersample_max', 64, 'Supersampling: the most megapixels the scene is rendered at (the GPU memory it takes: ~15 bytes a pixel)', 1, 512);
-  add('r_dynres', 1, 'Automatic render resolution: lowers the scene resolution while frames come late (under 60 fps), raises it again when they keep up', 0, 1);
+  add('r_dynres', 0, 'Automatic render resolution: lowers the scene resolution while frames come late (under 60 fps), raises it again when they keep up', 0, 1);
   add('r_hidpi', 0, 'Sharp: render at the screen pixel density on high-DPI screens (up to 2x; costs up to 4x the pixels)', 0, 1);
   add('r_lowlatency', 1, 'Low-latency display: frames go to the screen without the browser compositor (a frame less of mouse lag where the browser allows it; 0 if it tears during fast turns; takes effect on reload)', 0, 1);
   add('fullscreen', 0, 'Fullscreen while playing: the page fills the screen when it takes the mouse; in Chrome and Edge the keyboard is locked too, so Ctrl+W, Ctrl+T and Alt+Tab stay in the game (hold Escape 2 s to leave)', 0, 1);
