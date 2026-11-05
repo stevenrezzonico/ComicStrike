@@ -337,6 +337,8 @@ Deno.test('the view tick of a command: unwrapped, and no older than the shooter 
   game.tick = 2 ** 24 + 100;
   assert.equal(game.viewOf({ ackSeq: 0 }, (2 ** 24 + 98) % 2 ** 24), 2 ** 24 + 98);
   assert.equal(game.viewOf({ ackSeq: 0 }, 98.5), 2 ** 24 + 98.5);
+  assert.equal(game.viewOf({ ackSeq: 0 }, 2 ** 24 + 40), 2 ** 24 + 100 - 32 - 2 - 13, 'no ack: clamped');
+  assert.equal(game.viewOf({ ackSeq: 2 ** 24 + 10 }, 2 ** 24 + 40), 2 ** 24 + 100 - 32 - 2 - 13, 'stale ack: clamped');
   game.tick = 1000;
   assert.equal(game.viewOf({ ackSeq: 998 }, 995.25), 995.25, 'an honest view');
   assert.equal(game.viewOf({ ackSeq: 998 }, 938), 998 - 2 - 13, 'a second ago: clamped');

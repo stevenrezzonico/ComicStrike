@@ -2,18 +2,18 @@ import assert from 'node:assert/strict';
 import { parseBSP } from '../shared/bsp.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { IN_DROP, IN_USE } from '../shared/constants.js';
-import { WEAPONS, WEAPON_ID, WS_SLOTS, WS_ACTIVE, SLOT_PRIMARY, SLOT_SECONDARY } from '../shared/weapons.js';
+import { WEAPONS, WEAPON_ID, WS_SLOTS, WS_ACTIVE, SLOT_PRIMARY, SLOT_SECONDARY, grenadeCount } from '../shared/weapons.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
 import { Writer, Reader, writeHello, writeBuy, readItems, S2C_ITEMS } from '../shared/protocol.js';
 import { Items, MAX_ITEMS } from '../shared/items.js';
 import { Game } from '../server/game.js';
-import { mapOrNull, joinClient, sendCmd } from './harness.js';
+import { loadMap, mapOrNull, joinClient, sendCmd } from './harness.js';
 
 const bsp = mapOrNull('de_dust2');
 
 // A game with free buying and no round flow, and helpers to drive clients.
-function setup() {
-  const game = new Game('de_dust2', bsp, { rounds: false });
+function setup(map = 'de_dust2', b = bsp) {
+  const game = new Game(map, b, { rounds: false });
   const w = new Writer();
   let buyId = 0;
   const join = (name, team) => {
@@ -44,6 +44,19 @@ function setup() {
   const slot = (c, s) => c.player.ws.f[WS_SLOTS + s * 3];
   return { game, join, run, slot };
 }
+
+Deno.test('buying a second kind of grenade drops nothing', () => {
+  const { game, join, run } = setup('de_playground', loadMap('de_playground'));
+  const a = join('alpha', TEAM_T);
+  run(2, [a]);
+  a.buy(WEAPON_ID.hegrenade);
+  run(2, [a]);
+  a.buy(WEAPON_ID.flashbang);
+  run(2, [a]);
+  assert.equal(game.items.count, 0, 'no free copy on the ground');
+  assert.equal(grenadeCount(a.player.ws, WEAPON_ID.hegrenade), 1);
+  assert.equal(grenadeCount(a.player.ws, WEAPON_ID.flashbang), 1);
+});
 
 Deno.test({ name: 'weapons on the ground: buying over a pistol drops it, the ground list reaches clients', ignore: !bsp, fn: () => {
   const { game, join, run, slot } = setup();

@@ -984,7 +984,7 @@ class Bot {
     }
     // A teammate's radio order: after him (looked up once a second), or where we stood.
     const o = this.order;
-    if (o && g.tick < o.until && o.who.alive && !carrier) {
+    if (o && g.tick < o.until && o.who.joined && o.who.alive && !carrier) {
       const f = o.who.player.ps.f, follow = o.kind === 'follow';
       const tx = follow ? f[PS_ORIGIN] : o.x, ty = follow ? f[PS_ORIGIN + 1] : o.y, tz = follow ? f[PS_ORIGIN + 2] - 36 : o.z;
       if (Math.hypot(tx - x, ty - y) < (follow ? FOLLOW_NEAR : 32)) return { node: -1, why: 'order', stop: true };

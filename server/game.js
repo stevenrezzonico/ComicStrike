@@ -47,7 +47,7 @@ import {
   END_MATCH, ROUND_FINAL, matchOver, GAME_FFA, GAME_DM, GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION, GAME_WINGMAN, GAME_GHOST_TEAM, GAME_RETAKES, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
 } from '../shared/economy.js';
 import {
-  PROTOCOL_VERSION, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
+  PROTOCOL_VERSION, SNAPSHOT_HISTORY, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
   SHOT_BLOOD, writePrint, printChunks, writeChat, cleanChat, cleanName, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC, writeReport, NO_MVP,
   CHAT_RADIO, RADIO, radioIndex, writePing,
   KILL_HEADSHOT, KILL_REPEAT_TICKS, HURT_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
@@ -664,7 +664,7 @@ export class Game {
     // A weapon bought into a taken slot throws the old one down (CS:GO; deathmatch: it is
     // gone, and the new one is handed out again at every respawn).
     const w = WEAPONS[item], p = c.player;
-    if (w && !w.melee && !w.c4 && p.ws.f[WS_SLOTS + w.slot * 3] && !free) this.dropSlot(c, w.slot, true);
+    if (w && !w.melee && !w.c4 && !w.grenade && p.ws.f[WS_SLOTS + w.slot * 3] && !free) this.dropSlot(c, w.slot, true);
     applyBuy(p, item, free);
     if (free && w && w.slot === SLOT_PRIMARY) p.primary = item;
     if (free && w && w.slot === SLOT_SECONDARY) p.secondary = item;
@@ -742,7 +742,8 @@ export class Game {
   // modified client claimed a second ago and hit players already behind cover).
   viewOf(c, view) {
     const v = view + Math.round((this.tick - view) / VIEW_WRAP) * VIEW_WRAP;
-    return c.ackSeq ? Math.max(v, c.ackSeq - MAX_INTERP - VIEW_SLACK) : v;
+    // A missing or stale ack counts as one SNAPSHOT_HISTORY ticks old.
+    return Math.max(v, Math.max(c.ackSeq, this.tick - SNAPSHOT_HISTORY) - MAX_INTERP - VIEW_SLACK);
   }
 
   runCommands(c) {
