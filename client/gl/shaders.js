@@ -987,6 +987,8 @@ precision highp sampler2D;
 uniform sampler2D u_albedo;
 uniform sampler2D u_depth;
 uniform sampler2D u_ink;
+uniform sampler2D u_normal; // (the hatching's plane test)
+uniform mat3 u_rays;   // a texel's ray from the eye at unit depth: u_rays * (NDC x, y, 1), world axes
 uniform vec2 u_res;    // the canvas (px)
 uniform vec2 u_gscale; // G-buffer texels per canvas pixel (1; less at a lower render scale, more supersampling)
 uniform float u_line;  // ink line spacing (px); 0: no lines (the ink pass did not run)
@@ -1022,6 +1024,9 @@ DTEX dtex(ivec2 p) { return texelFetch(u_depth, cl(p), 0).rg; }
 uint flagsOf(DTEX t) { return uint(t.g); }
 float depthOf(DTEX t) { return DEPTH_NEAR / t.r; }
 #endif
+vec3 normalOf(ivec2 p) { return texelFetch(u_normal, cl(p), 0).xyz * 2.0 - 1.0; }
+// The point a texel shows, from the eye, at its depth d.
+vec3 pointAt(ivec2 p, float d) { return d * (u_rays * vec3((vec2(p) + 0.5) / vec2(gsize) * 2.0 - 1.0, 1.0)); }
 
 // Smooth ink (r_inkaa) at the canvas's own render scale, where a line is a staircase of
 // whole texels (at any other scale the ink is filtered between texels): a pixel off the
@@ -1060,7 +1065,10 @@ float tone(vec2 frag, float dark, float size, vec2 turn, float far) {
 // across a pair of samples round it their mean equals the pixel's; in a corner they are
 // nearer, their mean above it. Two pairs, across and up, HATCH_REACH units round in the
 // world; a pair with something much nearer (an object in front, not a corner) or another
-// kind of surface counts for nothing (it would print a halo round every figure and crate).
+// kind of surface counts for nothing (it would print a halo round every figure and crate),
+// and so does one where the pixel lies behind a sample's plane: an edge standing in front
+// of the floor or wall beyond it, little nearer near its foot (in an inside corner each
+// surface lies in front of the other's plane; a wall's or crate's side was hatched beside it).
 // Per canvas pixel (in the ink pass, at the G-buffer's 4 texels a pixel of the default
 // supersampling, it doubled that pass).
 float cornerAt(ivec2 p, uint fl, float dP) {
@@ -1075,7 +1083,12 @@ float cornerAt(ivec2 p, uint fl, float dP) {
     if (((flagsOf(a) | flagsOf(b)) & (G_SKY | G_FLAT | G_VIEW | G_CHAR | G_SCREEN)) != 0u) continue;
     float da = depthOf(a), db = depthOf(b);
     if (dP - min(da, db) > range) continue;
-    sum += max(1.0 / da + 1.0 / db - 2.0 * wP, 0.0) / wP;
+    float c = 1.0 / da + 1.0 / db - 2.0 * wP;
+    if (c <= 0.0) continue;
+    vec3 P = pointAt(p, dP);
+    float tol = 2.0 + 0.003 * dP; // units: the half-float depth and the 8-bit normals
+    if (dot(normalOf(p + o), P - pointAt(p + o, da)) < -tol || dot(normalOf(p - o), P - pointAt(p - o, db)) < -tol) continue;
+    sum += c / wP;
   }
   return smoothstep(0.015, 0.12, sum * 0.5) * (1.0 - smoothstep(1200.0 * u_zoom, 2400.0 * u_zoom, dP));
 }
