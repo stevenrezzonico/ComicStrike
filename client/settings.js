@@ -11,6 +11,11 @@ const OLD_CONFIG_KEY = 'webcs.config.cfg'; // saved before the rename to ComicSt
 const NEW_BINDS = ['messagemode', 'messagemode2', 'noclip', 'save_pos', 'load_pos', 'bot_place', 'radio1', 'radio2', 'radio3',
   'player_ping'];
 const SAVE_DELAY_MS = 500;
+// The config's first line; a config saved under another one (before the defaults below
+// changed) takes those defaults once, as it loads.
+const CONFIG_HEADER = '// ComicStrike config 2 (host_writeconfig)';
+// shortcut: one generation of changed defaults; on the next change, key a list of them by the header's number.
+const CHANGED_DEFAULTS = 'r_halftone 0; r_crosshair_clearzone 0; r_dynres 0';
 
 export function createConsole(print) {
   const con = new Console(print);
@@ -23,7 +28,7 @@ export function createConsole(print) {
   };
   const writeConfig = () => {
     try {
-      localStorage.setItem(CONFIG_KEY, ['// ComicStrike config (host_writeconfig)', ...con.archive(), ...binds.archive()].join('\n'));
+      localStorage.setItem(CONFIG_KEY, [CONFIG_HEADER, ...con.archive(), ...binds.archive()].join('\n'));
       return true;
     } catch {
       return false; // storage blocked (private window): settings last for this page only
@@ -139,6 +144,9 @@ export function createConsole(print) {
   if (saved) {
     loading = true;
     con.exec(saved, { print: () => {} });
+    // Every archived cvar is saved, so an old config holds the old defaults (dots, automatic resolution).
+    const old = !saved.startsWith(CONFIG_HEADER);
+    if (old) con.exec(CHANGED_DEFAULTS, { print: () => {} });
     loading = false;
     // The wheel used to jump by default; a config that still has that gets the new default
     // (weapon cycling, CS:GO's), saved.
@@ -150,6 +158,7 @@ export function createConsole(print) {
     if (binds.adopt(NEW_BINDS)) save();
     // The gamepad's keys (added later too) on their defaults where the config leaves them free.
     if (binds.adoptKeys(PAD_NAMES)) save();
+    if (old) writeConfig();
   }
   return { con, binds, cv, save };
 }
