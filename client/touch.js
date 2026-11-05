@@ -4,7 +4,7 @@
 // dragging anywhere else, buttons included, and presses the buttons laid out round where
 // it rests: a big FIRE where the thumb lands (held, a drag still turns the view, so a
 // target can be tracked while firing), the right mouse button beside it, named by what it
-// does with the weapon in hand (SCOPE, BURST, SILENCER, FAN, STAB, LOB; gone otherwise), JUMP on the edge above, DUCK under
+// does with the weapon in hand (SCOPE, BURST, SILENCER, FAN, STAB, LOB; gone otherwise), DUCK on the edge above, JUMP under
 // that in the corner, RELOAD and NEXT either side of the ammo at the bottom (tapping the
 // ammo itself is NEXT too), USE and BUY small along the top, and a second FIRE on the left
 // above the stick for the left thumb while the right one tracks. The buttons are
@@ -67,8 +67,8 @@ export function altLabel(w) {
 export const BUTTONS = [
   { name: 'fire', label: 'FIRE', cmd: '+attack', cls: 'fire', d: 88, right: 146, bottom: 97, look: true },
   { name: 'aim', label: 'AIM', cmd: '+attack2', cls: 'aim small', d: 60, right: 216, bottom: 157, look: true },
-  { name: 'jump', label: 'JUMP', cmd: '+jump', cls: '', d: 64, right: 46, bottom: 179, look: true },
-  { name: 'duck', label: 'DUCK', cmd: '+duck', cls: '', d: 56, right: 46, bottom: 85, look: true, toggle: true },
+  { name: 'jump', label: 'JUMP', cmd: '+jump', cls: '', d: 64, right: 46, bottom: 85, look: true },
+  { name: 'duck', label: 'DUCK', cmd: '+duck', cls: '', d: 56, right: 46, bottom: 179, look: true, toggle: true },
   { name: 'reload', label: 'RELOAD', cmd: '+reload', cls: 'small', d: 52, mid: 100, bottom: 36, look: true },
   { name: 'next', label: 'NEXT', cmd: 'invnext', cls: 'small', d: 44, mid: -100, bottom: 36 },
   { name: 'use', label: 'USE', cmd: '+use', cls: 'small', d: 48, right: 38, top: 38, look: true },
