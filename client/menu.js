@@ -445,7 +445,7 @@ export class Menu {
   renderWelcome(body) {
     body.append(el('h2', '', 'A comic strip you can shoot in'));
     body.append(el('p', 'menu-tagline', 'CS:GO’s movement, guns and economy on the classic CS 1.6 maps, ' +
-      'printed live as a comic: flat colors, ink lines, halftone dots. Nothing to install: it runs in this tab.'));
+      'printed live as a comic: flat colors and ink lines. Nothing to install: it runs in this tab.'));
     const feats = el('ul', 'menu-features');
     for (const t of [
       'Play online against others, or practice against bots in your browser.',

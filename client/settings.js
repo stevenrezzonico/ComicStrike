@@ -80,7 +80,7 @@ export function createConsole(print) {
   add('cl_radar_always_centered', 1, '0: the radar stops at the map edges (when it does not turn)', 0, 1);
   add('cl_hud_radar_scale', 1, 'Radar size', 0.8, 1.3);
   // The comic print (client/gl/renderer.js).
-  add('r_comic', 1, '1: ink lines and halftone dots, 0: plain lit colors', 0, 1);
+  add('r_comic', 1, '1: the comic print (ink lines, shade in flat tones or halftone dots), 0: plain lit colors', 0, 1);
   add('r_inkwidth', 1, 'Ink line width, relative to the screen height (0: no lines)', 0, 4);
   add('r_halftone', 0, 'Halftone dot size, relative to the screen height (0: flat tones)', 0, 4);
   add('r_shadebands', 0, 'Light printed in this many flat bands (0: smooth)', 0, 8);

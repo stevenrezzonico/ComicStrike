@@ -1057,10 +1057,10 @@ float dots(vec2 frag, float dark, float size, vec2 turn) {
   return 1.0 - smoothstep(r - aa, r + aa, d);
 }
 // ... turning into its own average (flat) tone with distance (where it has turned all the
-// way, the dots are not computed).
+// way, or with the dots off, r_halftone 0, the dots are not computed).
 float tone(vec2 frag, float dark, float size, vec2 turn, float far) {
   float cov = 1.13 * clamp(dark, 0.0, 1.0);
-  return far >= 1.0 ? cov : mix(dots(frag, dark, size, turn), cov, far);
+  return far >= 1.0 || u_dot < 1.0 ? cov : mix(dots(frag, dark, size, turn), cov, far);
 }
 const vec2 TURN_SHADE = vec2(0.70738827, 0.70682518); // 45 degrees (0.785 rad)
 const vec2 TURN_SKY = vec2(0.96638998, 0.25708055);   // 0.26 rad
@@ -1099,14 +1099,14 @@ void main() {
   // Round the crosshair the dots melt into their own average tone (same brightness, no
   // pattern for it to get lost in).
   float calm = u_calm.z > 0.0 ? 1.0 - smoothstep(u_calm.z * 0.55, u_calm.z, distance(frag, u_calm.xy)) : 0.0;
-  float far = u_dot < 1.0 ? 1.0 : max(smoothstep(500.0 * u_zoom, 1300.0 * u_zoom, dP), calm);
+  float far = max(smoothstep(500.0 * u_zoom, 1300.0 * u_zoom, dP), calm);
   // A character past 300-800 units: flat colors sooner, and its shade printed in its own
   // color with the darkness capped (the shade tone's ink and its full coverage turned a
   // navy uniform into a black blob at that size).
   float farChar = (fl & G_CHAR) != 0u ? smoothstep(300.0 * u_zoom, 800.0 * u_zoom, dP) : 0.0;
   far = max(far, farChar);
   if ((fl & G_SKY) != 0u) {
-    col = mix(alb, alb * vec3(0.43, 0.71, 0.89), tone(frag, 1.0 - light, size * 1.15, TURN_SKY, u_dot < 1.0 ? 1.0 : calm));
+    col = mix(alb, alb * vec3(0.43, 0.71, 0.89), tone(frag, 1.0 - light, size * 1.15, TURN_SKY, calm));
   } else if ((fl & G_FLAT) != 0u) {
     col = alb * (0.62 + 0.38 * light);
   } else {
@@ -1125,7 +1125,7 @@ void main() {
   // view (its depth is cleared before it draws) and its ink stay, the sky goes.
   if (u_smoke > 0.0 && (fl & G_VIEW) == 0u) {
     float fog = u_smoke * ((fl & G_SKY) != 0u ? 1.0 : 1.0 - exp(-dP / SMOKE_SIGHT));
-    vec3 smoke = mix(SMOKE_TONE, SMOKE_TONE * vec3(0.52, 0.53, 0.62), tone(frag, 0.15, size, TURN_SHADE, u_dot < 1.0 ? 1.0 : 0.0));
+    vec3 smoke = mix(SMOKE_TONE, SMOKE_TONE * vec3(0.52, 0.53, 0.62), tone(frag, 0.15, size, TURN_SHADE, 0.0));
     col = mix(col, smoke, fog);
     edge *= 1.0 - fog;
   }
