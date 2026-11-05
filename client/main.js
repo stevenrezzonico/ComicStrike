@@ -2824,7 +2824,7 @@ async function start() {
   const team = { spec: 1, t: 2, ct: 3 }[params.get('team')] || 0;
   const map = params.get('map') || 'de_dust2';
   if (params.has('practice')) {
-    return await startPractice(map, team, { mode: params.get('mode') || 'competitive',
+    return await startPractice(map, team, { mode: params.get('mode') || 'deathmatch',
       players: +(params.get('players') ?? 10), difficulty: +(params.get('difficulty') ?? 1), armoury: params.get('armoury') !== '0' });
   }
   if (!params.has('offline')) {

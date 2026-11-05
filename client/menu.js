@@ -203,12 +203,12 @@ export class Menu {
     this.inGame = false; // pause menu (in a game) or start menu
     this.online = false; // in game: on a remote server (else practice or the sandbox)
     this.server = false; // in game: server rules (online or practice), so spectating works
-    this.practiceMode = 'competitive';
+    this.practiceMode = 'deathmatch';
     this.practicePlayers = 10; // bot_quota fill: bots make up the rest
     this.demoPlayers = 0; // the demo: no bots unless asked for (targets)
     this.practiceDifficulty = 1;
     this.practiceArmoury = true; // the map's own weapons laid out (armoury_entity, the fy_ maps)
-    this.panel = ''; // open panel: '', 'play', 'practice', 'demo', 'own', 'recordings', 'team', 'settings'
+    this.panel = ''; // open panel: '', 'play', 'practice', 'own', 'recordings', 'team', 'settings'
     this.room = ''; // a room's code (a hosted map, server/rooms.js): Play joins it
     this.roomGone = false; // the room's code did not answer (it closed)
     this.ownMap = ''; // the map file picked in Your map (its name; the page holds the bytes)
@@ -428,7 +428,6 @@ export class Menu {
     } else {
       item('Play', 'play');
       item('Practice', 'practice');
-      item('Demo', 'demo');
       item('Your map', 'own');
       item('Recordings', 'recordings');
       item('Map editor', '', () => open('/client/editor.html', '_blank'));
@@ -441,7 +440,6 @@ export class Menu {
     body.innerHTML = '';
     if (this.panel === 'play') this.renderPlay(body);
     else if (this.panel === 'practice') this.renderPractice(body);
-    else if (this.panel === 'demo') this.renderPractice(body, 'demo');
     else if (this.panel === 'own') this.renderPractice(body, 'own');
     else if (this.panel === 'recordings') this.renderRecordings(body);
     else if (this.panel === 'team') this.renderTeam(body, (team) => this.onTeam(team));
@@ -624,15 +622,11 @@ export class Menu {
     if (this.ownError) body.append(el('p', 'menu-hint menu-error', this.ownError));
   }
 
-  // Practice, (demo) the demo mode: the same panel without the mode choice, bots optional
-  // (targets), or (own) a map of the player's own: a file instead of the list of maps.
+  // Practice, or (own) a map of the player's own: a file instead of the list of maps. The
+  // demo mode is one of the modes, its bots optional (targets, counted apart).
   renderPractice(body, kind = 'practice') {
-    const demo = kind === 'demo', own = kind === 'own';
-    body.append(el('h2', '', demo ? 'Demo' : own ? 'Your map' : 'Practice'));
-    if (demo) {
-      body.append(el('p', 'menu-hint', 'Try everything out: buy anything for free, anywhere, infinite ammo and ' +
-        'grenades, you cannot die, plant and defuse the bomb yourself. Targets are enemy bots that respawn.'));
-    }
+    const own = kind === 'own', demo = this.practiceMode === 'demo';
+    body.append(el('h2', '', own ? 'Your map' : 'Practice'));
     if (own) {
       this.renderOwn(body);
       if (!this.ownMap) return;
@@ -641,10 +635,6 @@ export class Menu {
     if (!maps.length) {
       body.append(el('p', 'menu-hint', this.maps ? 'No maps found in maps/.' : 'Loading maps...'));
       return;
-    }
-    if (demo && !this.demoMapPicked && maps.includes('de_playground')) { // the demo opens on its playground
-      this.practiceMap = 'de_playground';
-      this.demoMapPicked = true;
     }
     if (!own && !maps.includes(this.practiceMap)) this.practiceMap = maps.includes('de_dust2') ? 'de_dust2' : maps[0];
     const grid = el('div', 'menu-maps');
@@ -685,14 +675,16 @@ export class Menu {
       row.append(opts);
       body.append(row);
     };
-    if (!demo) {
-      choice('Mode', [['casual', 'Casual'], ['competitive', 'Competitive'], ['wingman', 'Wingman'],
-        ['deathmatch', 'Deathmatch'], ['armsrace', 'Arms Race'], ['demolition', 'Demolition'], ['retakes', 'Retakes']],
-        this.practiceMode, (v) => {
-        this.practiceMode = v;
-      });
+    choice('Mode', [['casual', 'Casual'], ['competitive', 'Competitive'], ['wingman', 'Wingman'],
+      ['deathmatch', 'Deathmatch'], ['armsrace', 'Arms Race'], ['demolition', 'Demolition'], ['retakes', 'Retakes'],
+      ['demo', 'Demo']], this.practiceMode, (v) => {
+      this.practiceMode = v;
+    });
+    if (demo) {
+      body.append(el('p', 'menu-hint', 'Try everything out: buy anything for free, anywhere, infinite ammo and ' +
+        'grenades, you cannot die, plant and defuse the bomb yourself. Targets are enemy bots that respawn.'));
     }
-    const [botLabel, botOpts] = botOptions(demo ? 'demo' : this.practiceMode);
+    const [botLabel, botOpts] = botOptions(this.practiceMode);
     let players = demo ? this.demoPlayers : this.practicePlayers;
     if (!botOpts.some(([v]) => v === players)) { // the mode changed under a count it has not
       players = botOpts[botOpts.length - 1][0];
@@ -708,7 +700,7 @@ export class Menu {
         this.practiceDifficulty = v;
       });
     }
-    const mode = demo ? 'demo' : this.practiceMode;
+    const mode = this.practiceMode;
     if (mode !== 'armsrace' && mode !== 'demolition') { // the gun games arm by level: never laid out
       choice('Map weapons', [[true, 'Laid out'], [false, 'None']], this.practiceArmoury, (v) => {
         this.practiceArmoury = v;
