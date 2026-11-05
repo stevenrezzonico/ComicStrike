@@ -1,5 +1,5 @@
 // Start and pause menu, CS:GO style: a column of actions on the left and the open panel
-// beside it. Outside a game: Play (join the server on a team), Practice (a map offline),
+// beside it. Outside a game: Play Online (join the server on a team), Play Offline (a map offline),
 // Settings. In a game, when the mouse is released: Resume, Choose team, Settings,
 // Disconnect. Settings edit the client cvars and binds through the console (so the
 // console and the menu always agree, and every change is saved with the config).
@@ -176,7 +176,7 @@ const KEY_COLUMNS = 3; // a keyboard key, a mouse button, a gamepad button
 // server runs in a worker) and edit maps.
 const hasWebTransport = () => typeof WebTransport !== 'undefined';
 const NO_WEBTRANSPORT = 'This browser cannot play online: it has no WebTransport (Chrome, Edge and Firefox have it, ' +
-  'Safari from 26.4). Practice and the map editor work here.';
+  'Safari from 26.4). Play Offline and the map editor work here.';
 
 const CONFIG_MAX_BYTES = 1 << 20; // an imported settings file (the saved config is ~10 KB)
 
@@ -430,8 +430,8 @@ export class Menu {
       item('Settings', 'settings');
       item(this.online ? 'Disconnect' : 'Quit practice', '', () => this.onLeave());
     } else {
-      item('Play', 'play');
-      item('Practice', 'practice');
+      item('Play Online', 'play');
+      item('Play Offline', 'practice');
       item('Your map', 'own');
       item('Recordings', 'recordings');
       item('Map editor', '', () => open('/client/editor.html', '_blank'));
@@ -488,7 +488,7 @@ export class Menu {
   }
 
   renderPlay(body) {
-    body.append(el('h2', '', this.room && !this.roomGone ? `Room ${this.room}` : 'Play online'));
+    body.append(el('h2', '', this.room && !this.roomGone ? `Room ${this.room}` : 'Play Online'));
     if (this.room) {
       body.append(el('p', 'menu-hint', this.roomGone
         ? `Room ${this.room} has closed (rooms close once nobody plays in them). This is the server's own game.`
@@ -630,7 +630,7 @@ export class Menu {
   // demo mode is one of the modes, its bots optional (targets, counted apart).
   renderPractice(body, kind = 'practice') {
     const own = kind === 'own', demo = this.practiceMode === 'demo';
-    body.append(el('h2', '', own ? 'Your map' : 'Practice'));
+    body.append(el('h2', '', own ? 'Your map' : 'Play Offline'));
     if (own) {
       this.renderOwn(body);
       if (!this.ownMap) return;
