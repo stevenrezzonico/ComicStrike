@@ -3,9 +3,9 @@
 // kind's color, kept TRAIL_KEEP seconds after it lands, with a ring where it landed;
 // `sv_showimpacts` draws our own bullets' impacts (the predicted ones) as small red boxes
 // for IMPACT_KEEP seconds. TrajectoryLog and ImpactLog keep the points (pure, tested);
-// PracticeMarks draws them into the G-buffer as an overlay: the lines flat and on top of
-// everything (through walls, as CS:GO's), outlined by the ink like any object; the boxes
-// with the debris cube shader.
+// PracticeMarks draws them into the G-buffer as an overlay: the lines thin and flat with a
+// thin rim of their own, on top of everything (through walls, as CS:GO's); the boxes with
+// the debris cube shader.
 
 import { program } from './program.js';
 import { TRAIL_VS, TRAIL_FS, DEBRIS_VS, DEBRIS_FS } from './shaders.js';
@@ -18,7 +18,8 @@ export const IMPACT_KEEP = 2; // seconds an impact box stays
 export const MAX_IMPACTS = 64;
 const RING_R = 12, RING_SEGS = 16; // where a grenade landed
 const MAX_SEGMENTS = 4096;
-const LINE_PX = 8; // line width, canvas pixels at 1080 lines (scaled with the canvas height): wide enough for its color to show inside the ink outline
+const LINE_PX = 4; // line width, canvas pixels at 1080 lines (scaled with the canvas height), the rim included
+const RIM_PX = 1; // at 1080 lines
 const BOX = 2.5; // impact box size (units)
 const BOX_COLOR = [0.9, 0.16, 0.1];
 
@@ -126,7 +127,7 @@ export class PracticeMarks {
     this.screen = new Float32Array(2); // canvas pixels
     // Lines: one instance a segment (its two ends and color), a quad made in TRAIL_VS.
     this.seg = new Float32Array(MAX_SEGMENTS * 9);
-    this.lineProg = program(gl, TRAIL_VS, TRAIL_FS, ['u_viewProj', 'u_screen', 'u_width']);
+    this.lineProg = program(gl, TRAIL_VS, TRAIL_FS, ['u_viewProj', 'u_screen', 'u_width', 'u_rim']);
     this.lineVao = gl.createVertexArray();
     gl.bindVertexArray(this.lineVao);
     this.lineVbo = gl.createBuffer();
@@ -215,7 +216,8 @@ export class PracticeMarks {
         gl.useProgram(this.lineProg.p);
         gl.uniformMatrix4fv(this.lineProg.loc.u_viewProj, false, viewProj);
         gl.uniform2fv(this.lineProg.loc.u_screen, this.screen);
-        gl.uniform1f(this.lineProg.loc.u_width, Math.max(5, LINE_PX * this.screen[1] / 1080));
+        gl.uniform1f(this.lineProg.loc.u_width, Math.max(2.5, LINE_PX * this.screen[1] / 1080));
+        gl.uniform1f(this.lineProg.loc.u_rim, Math.max(0.6, RIM_PX * this.screen[1] / 1080));
         gl.bindBuffer(gl.ARRAY_BUFFER, this.lineVbo);
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.seg, 0, n * 9);
         gl.bindVertexArray(this.lineVao);

@@ -1,11 +1,11 @@
 // Bullet tracers: a thin yellow streak running from the muzzle to where the bullet hit,
 // TRACER_LEN long at TRACER_SPEED, drawn with the practice arcs' screen-space line shader
 // (TRAIL_VS: a quad a segment) but behind what is nearer, with a thin ink rim of its own
-// (TRACER_FS: the ink pass's outline was thicker than the streak). A pool of MAX_TRACERS,
+// (TRAIL_FS: the ink pass's outline was thicker than the streak). A pool of MAX_TRACERS,
 // the oldest replaced; nothing allocated per frame.
 
 import { program } from './program.js';
-import { TRAIL_VS, TRACER_FS } from './shaders.js';
+import { TRAIL_VS, TRAIL_FS } from './shaders.js';
 
 const MAX_TRACERS = 32;
 const TRACER_SPEED = 6000; // units a second (approx.)
@@ -23,7 +23,7 @@ export class Tracers {
     this.t = new Float32Array(MAX_TRACERS * F).fill(-1e9);
     this.next = 0;
     this.seg = new Float32Array(MAX_TRACERS * 9);
-    this.prog = program(gl, TRAIL_VS, TRACER_FS, ['u_viewProj', 'u_screen', 'u_width', 'u_rim']);
+    this.prog = program(gl, TRAIL_VS, TRAIL_FS, ['u_viewProj', 'u_screen', 'u_width', 'u_rim']);
     this.vao = gl.createVertexArray();
     gl.bindVertexArray(this.vao);
     this.vbo = gl.createBuffer();

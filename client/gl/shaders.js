@@ -548,10 +548,9 @@ void main() {
   gbuffer(v_col, d > 0.2 ? 1.0 : d > -0.3 ? 0.6 : 0.35, n, v_id, v_w, 0u);
 }`;
 
-// Practice lines (client/gl/practice.js: grenade arcs, landing rings): a segment a
-// instance, a quad u_width canvas pixels wide around it with square ends, made in screen
-// space (the part behind the eye clipped off), printed flat in its color with an id of its
-// own, so the ink outlines it.
+// Thin lines (client/gl/practice.js: grenade arcs, landing rings; client/gl/tracers.js): a
+// segment an instance, a quad u_width canvas pixels wide around it with square ends, made
+// in screen space (the part behind the eye clipped off); TRAIL_FS prints it.
 export const TRAIL_VS = `#version 300 es
 layout(location=0) in vec3 a_a;
 layout(location=1) in vec3 a_b;
@@ -561,7 +560,7 @@ uniform vec2 u_screen; // canvas pixels
 uniform float u_width; // canvas pixels
 out vec3 v_col;
 out float v_w;
-out float v_across; // -1..1 across the quad (TRACER_FS's rim)
+out float v_across; // -1..1 across the quad (TRAIL_FS's rim)
 void main() {
   vec4 ca = u_viewProj * vec4(a_a, 1.0), cb = u_viewProj * vec4(a_b, 1.0);
   v_col = a_col;
@@ -582,20 +581,11 @@ void main() {
   v_w = c.w;
 }`;
 
-export const TRAIL_FS = `#version 300 es
-precision highp float;
-precision highp int;
-in vec3 v_col;
-in float v_w;
-${GBUFFER}
-void main() {
-  gbuffer(v_col, 1.0, vec3(0.0, 0.0, 1.0), 125u, v_w, G_FLAT);
-}`;
 
-// Bullet tracers (client/gl/tracers.js): TRAIL_VS's quad, flat in its color with a thin ink
-// rim of its own, flagged see-through (G_SCREEN) so the ink pass draws no line round it
-// (its 2-3 px a side made a thin streak a thick black bar).
-export const TRACER_FS = `#version 300 es
+// TRAIL_VS's quad, flat in its color with a thin ink rim of its own, flagged see-through
+// (G_SCREEN) so the ink pass draws no line round it (its 2-3 px a side made a thin line a
+// thick black bar: tracers, grenade arcs).
+export const TRAIL_FS = `#version 300 es
 precision highp float;
 precision highp int;
 in vec3 v_col;
