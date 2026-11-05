@@ -144,6 +144,7 @@ export class Host {
     num('bot_quota', 0, 'Bots on the server (bot_add / bot_kick change it)', 0, MAX_PLAYERS);
     con.cvar('bot_quota_mode', 'normal', { help: 'normal: bot_quota bots; fill: bots fill up to bot_quota players',
       onChange: apply });
+    num('bot_join_after_player', 0, 'Bots join only once a human plays, and leave with the last one (cfg/server.cfg: 1)', 0, 1);
     num('bot_difficulty', 1, 'New bots: 0 easy, 1 normal, 2 hard, 3 expert', 0, 3);
     con.cvar('bot_join_team', 'any', { help: 'Team new bots join: any, t, ct', onChange: apply });
     num('bot_stop', 0, 'Bots stand still', 0, 1);
@@ -305,6 +306,7 @@ export class Host {
       armouryEntities: v('mp_armoury_entities') !== 0,
       botQuota: v('bot_quota'),
       botQuotaMode: this.con.get('bot_quota_mode').value === 'fill' ? 'fill' : 'normal',
+      botJoinAfterPlayer: v('bot_join_after_player') !== 0,
       botDifficulty: v('bot_difficulty'),
       botJoinTeam: this.con.get('bot_join_team').value.toLowerCase(),
       botStop: v('bot_stop') !== 0,

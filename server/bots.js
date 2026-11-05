@@ -309,13 +309,15 @@ export class Bots {
     return c.name;
   }
 
-  // bot_quota: how many bots there should be (fill: bots + humans on teams).
+  // bot_quota: how many bots there should be (fill: bots + humans on teams; with
+  // bot_join_after_player, none while no human plays: an empty server runs no game).
   maintain() {
     const r = this.game.rules;
     let humans = 0;
     for (const c of this.game.clients) if (c && c.joined && !c.bot && c.playing) humans++;
     let want = Math.max(0, r.botQuotaMode === 'fill' ? r.botQuota - humans : r.botQuota);
     if (r.teamSizeMax) want = Math.min(want, Math.max(0, 2 * r.teamSizeMax - humans)); // Wingman: 2 a side
+    if (r.botJoinAfterPlayer && !humans) want = 0;
     if (this.list.length < want) this.add(teamFor(r.botJoinTeam), -1);
     else if (this.list.length > want) this.kick(null, this.largerTeam());
   }

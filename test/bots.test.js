@@ -73,7 +73,7 @@ function setup(map, cfg = '') {
       g.step();
     }
   };
-  return { host, g, join, run };
+  return { host, g, join, run, humans };
 }
 
 function teleport(c, x, y, z) {
@@ -142,6 +142,22 @@ Deno.test({ name: 'bots: bot_add / bot_kick / bot_quota fill', ignore: !dust2, f
   assert.equal(g.bots.list.length, 0);
   assert.equal(host.con.get('bot_quota').number, 1, 'fill: the human alone');
 } });
+
+Deno.test('bots: the server fills up with bots once someone plays, one leaving for each who joins', () => {
+  const { g, join, run, humans } = setup('de_playground',
+    'game_type 1; game_mode 2; bot_quota 10; bot_quota_mode fill; bot_join_after_player 1'); // cfg/server.cfg's
+  run(64);
+  assert.equal(g.bots.list.length, 0, 'no game on an empty server');
+  join('first', TEAM_T);
+  run(200);
+  assert.equal(g.bots.list.length, 9, 'the first player and 9 bots');
+  join('second', TEAM_CT);
+  run(40);
+  assert.equal(g.bots.list.length, 8, 'a bot left for the second');
+  for (const c of humans.splice(0)) g.disconnect(c);
+  run(200);
+  assert.equal(g.bots.list.length, 0, 'gone with the last player');
+});
 
 Deno.test({ name: 'bots: a T walks from its spawn to a bomb site', ignore: !dust2, fn: () => {
   const { host, g, run } = setup('de_dust2');

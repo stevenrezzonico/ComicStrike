@@ -254,6 +254,7 @@ export const DEFAULT_RULES = {
   // Bots (server/bots.js).
   botQuota: 0, // bot_quota
   botQuotaMode: 'normal', // bot_quota_mode: normal (that many bots) or fill (bots + humans)
+  botJoinAfterPlayer: false, // bot_join_after_player: no bots while no human plays
   botDifficulty: 1, // bot_difficulty 0 easy .. 3 expert
   botJoinTeam: 'any', // bot_join_team: any, t, ct
   botStop: false, // bot_stop: they stand still
