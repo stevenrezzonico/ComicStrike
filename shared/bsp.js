@@ -413,3 +413,29 @@ export function parseVec3(str, out, o = 0) {
   out[o + 2] = +p[2] || 0;
   return out;
 }
+
+// A point entity's yaw in degrees: its `angles` yaw, else `fallback` (its `angle` key).
+export const entityYaw = (e, fallback = +(e.angle || 0)) => (e.angles ? +e.angles.trim().split(/\s+/)[1] || 0 : fallback);
+
+// The team spawns, { 1: T, 2: CT } (TEAM_T, TEAM_CT), each [[x, y, z, yaw], ...] in entity order.
+export function teamSpawns(bsp) {
+  const spawns = { 1: [], 2: [] }, o = new Float32Array(3);
+  for (const e of bsp.entities) {
+    const team = e.classname === 'info_player_deathmatch' ? 1 : e.classname === 'info_player_start' ? 2 : 0;
+    if (!team) continue;
+    parseVec3(e.origin, o);
+    spawns[team].push([o[0], o[1], o[2], entityYaw(e)]);
+  }
+  return spawns;
+}
+
+// A brush entity's world box [minx, miny, minz, maxx, maxy, maxz] (its model's bounds moved
+// by its origin), null for a point entity. o: a Float32Array(3) to parse the origin into.
+export function modelBox(bsp, e, o) {
+  const m = entityModelIndex(e);
+  if (m <= 0) return null;
+  const f = bsp.modelsF;
+  parseVec3(e.origin, o);
+  return [f[m * 16] + o[0], f[m * 16 + 1] + o[1], f[m * 16 + 2] + o[2], f[m * 16 + 3] + o[0], f[m * 16 + 4] + o[1],
+    f[m * 16 + 5] + o[2]];
+}

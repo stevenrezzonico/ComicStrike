@@ -86,7 +86,6 @@ export class View2D {
     this.drag = null; // the gesture under way
     this.fitBox = null; // what fit() framed, until the user pans or zooms
     this.userMoved = false;
-    this.mouse = null; // last pointer position on the canvas [x, y]
     this.hover = null; // the item under the pointer
     this.guides = []; // snap lines to draw: ['u' | 'v', world value]
     this.measures = []; // tappable measure labels: { x, y, w, h, axis, value }
@@ -107,7 +106,6 @@ export class View2D {
     c.addEventListener('pointerup', (e) => this.up(e));
     c.addEventListener('pointercancel', (e) => this.up(e, true));
     c.addEventListener('pointerleave', () => {
-      this.mouse = null;
       this.coords.textContent = '';
       if (this.hover) {
         this.hover = null;
@@ -601,7 +599,6 @@ export class View2D {
       }
     }
     const [wu, wv] = this.toWorld(x, y);
-    this.mouse = [x, y];
     const { u, v } = this.ax;
     const L = 'xyz';
     this.coords.textContent = `${L[u]} ${Math.round(wu)}  ${L[v]} ${Math.round(wv)}`;

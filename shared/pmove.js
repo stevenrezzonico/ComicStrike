@@ -464,8 +464,9 @@ function waterMove(buttons) {
 
 // Ladder volumes are func_ladder brushes; touching = player center inside the hull-expanded volume.
 function findLadder() {
-  const ents = W.ents;
-  for (let i = 1; i < ents.length; i++) {
+  const ents = W.ents, ladders = W.ladders;
+  for (let k = 0; k < ladders.length; k++) {
+    const i = ladders[k];
     if (ents[i].kind === ENT_LADDER && entityContents(W, i, hull, M.ox, M.oy, M.oz) !== CONTENTS_EMPTY) return i;
   }
   return -1;

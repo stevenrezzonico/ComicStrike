@@ -61,6 +61,20 @@ export function cubeInstances(gl, count) {
   return { vao, vbo };
 }
 
+// Draws `count` instances (I floats each, from `inst`) of a cubeInstances' cube with `prog`,
+// culling off.
+export function drawCubes(gl, prog, vao, vbo, inst, count, viewProj) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, inst, 0, count * I);
+  gl.useProgram(prog.p);
+  gl.uniformMatrix4fv(prog.loc.u_viewProj, false, viewProj);
+  gl.bindVertexArray(vao);
+  gl.disable(gl.CULL_FACE);
+  gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, count);
+  gl.enable(gl.CULL_FACE);
+  gl.bindVertexArray(null);
+}
+
 export class Debris {
   constructor(gl, capacity = 384) {
     this.gl = gl;
@@ -246,16 +260,7 @@ export class Debris {
       d[p + 10] = s[o + 16];
       d[p + 11] = s[o + 17];
     }
-    const gl = this.gl;
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, d, 0, this.count * I);
-    gl.useProgram(this.prog.p);
-    gl.uniformMatrix4fv(this.prog.loc.u_viewProj, false, viewProj);
-    gl.bindVertexArray(this.vao);
-    gl.disable(gl.CULL_FACE);
-    gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.count);
-    gl.enable(gl.CULL_FACE);
-    gl.bindVertexArray(null);
+    drawCubes(this.gl, this.prog, this.vao, this.vbo, d, this.count, viewProj);
   }
 }
 

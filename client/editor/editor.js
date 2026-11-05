@@ -17,6 +17,7 @@ import { View2D } from './view2d.js';
 import { textureRecord } from '../texcolors.js';
 import { putHandoff } from '../handoff.js';
 import { Tour } from './tour.js';
+import { downloadFile } from '../demostore.js';
 
 const STORE_KEY = 'comicstrike.editor';
 const CLIP_KEY = 'comicstrike.editor.clipboard';
@@ -680,7 +681,7 @@ class Editor {
       });
     });
     $('save').addEventListener('click', () => {
-      this.download(new Blob([JSON.stringify(this.project, null, 1)], { type: 'application/json' }), `${this.project.name}.cmap.json`);
+      downloadFile(`${this.project.name}.cmap.json`, JSON.stringify(this.project, null, 1), 'application/json');
     });
     $('undo').addEventListener('click', () => this.undo());
     $('redo').addEventListener('click', () => this.undo(true));
@@ -1115,16 +1116,6 @@ class Editor {
     } catch { /* not kept: Save still writes a file */ }
   }
 
-  download(blob, name) {
-    const a = el('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  }
-
   // --- Compiling, preview, play --------------------------------------------------------
 
   compile(light, vis = false) {
@@ -1184,7 +1175,7 @@ class Editor {
     const r = await this.compile('full', true); // with its visibility: the map that ships
     if (r.error) return this.status(r.error, true);
     const bytes = await withProject(new Uint8Array(r.bytes), this.project);
-    this.download(new Blob([bytes], { type: 'application/octet-stream' }), `${this.project.name}.bsp`);
+    downloadFile(`${this.project.name}.bsp`, bytes);
     this.status(`Exported ${this.project.name}.bsp (${Math.round(bytes.length / 1024)} KB)`);
   }
 

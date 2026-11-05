@@ -3,7 +3,7 @@
 // CS:GO rules of thumb: running is heard, walking (shift) and crouching are silent;
 // every gun has its own report; reloads click at the magazine's moments.
 
-import { GUN_SOUNDS } from './audio.js';
+import { GUN_SOUNDS, STEP_RANGE } from './audio.js';
 import { clock } from './clock.js';
 import {
   WEAPONS, WEV_FIRE, WEV_MELEE, WEV_MELEE2, WEV_DRYFIRE, WEV_RELOAD, WEV_SHELL, WEV_DEPLOY, WEV_ZOOM, WEV_MODE, WEV_PIN,
@@ -123,8 +123,8 @@ export class SoundScape {
           this.stepDist[id] += d;
           if (this.stepDist[id] >= STEP_LENGTH) {
             this.stepDist[id] = 0;
-            const fz = feet(rows, r);
-            s.step(this.surfaceKind(x, y, fz), x, y, fz);
+            const fz = feet(rows, r), ex = x - s.lx, ey = y - s.ly, ez = fz - s.lz;
+            if (ex * ex + ey * ey + ez * ez <= STEP_RANGE * STEP_RANGE) s.step(this.surfaceKind(x, y, fz), x, y, fz); // the surface look-up is the cost
           }
         }
       }

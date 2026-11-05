@@ -24,7 +24,7 @@ export const DIST_EPSILON = 0.03125;
 // players collide, stand on each other and ride a moving teammate, the run boost). They
 // are packed every tick by player id (`setBody`), so a client's prediction and the server
 // agree on the ground entity's index; only the player hull traces see them
-// (`tracePlayer`), bullets never (the hit groups do players). A body the trace starts
+// (`tracePlayerA`), bullets never (the hit groups do players). A body the trace starts
 // inside is passed through: two players left overlapping walk out of each other.
 export const MAX_BODIES = 64; // slots (player ids)
 export const BODY_FIELDS = 8; // x, y, z (hull center), half height (0: no body), vx, vy, vz, team
@@ -83,6 +83,14 @@ export class CollisionWorld {
     this.cnPlane = cnPlane;
     this.cnChild = cnChild;
     this.ents = [];
+    // World bounds of every entity, 6 a row (min x y z, max x y z): each entity's `amin` /
+    // `amax` are views into it, so the broadphase reads one flat array instead of every
+    // entity object. Grown (and the views moved over) by addEntity.
+    this.bounds = new Float64Array(6 * 16);
+    // Indices of the entities created as water and ladders: pointContents and findLadder walk
+    // only these (still checking `kind`, which breakables and doors change at run time).
+    this.water = [];
+    this.ladders = [];
     this.surfaces = null; // SurfaceMap, attached by whoever loads the map (bullet penetration)
     this.bodies = new Float32Array(MAX_BODIES * BODY_FIELDS); // see BODY_FIELDS
     this.bodyCount = 0; // slots in use (by player id, so holes are bodies of half height 0)
@@ -94,6 +102,21 @@ export class CollisionWorld {
   // heads: hull 0..3 root nodes (or contents when negative); bounds in model space.
   // push: base velocity given to players standing on it (func_conveyor).
   addEntity(kind, heads, ox, oy, oz, mins, maxs, push = null) {
+    const i = this.ents.length, j = i * 6;
+    if (j + 6 > this.bounds.length) {
+      const b = new Float64Array(this.bounds.length * 2);
+      b.set(this.bounds);
+      this.bounds = b;
+      for (let k = 0; k < i; k++) {
+        this.ents[k].amin = b.subarray(k * 6, k * 6 + 3);
+        this.ents[k].amax = b.subarray(k * 6 + 3, k * 6 + 6);
+      }
+    }
+    const B = this.bounds;
+    B[j] = mins[0] + ox; B[j + 1] = mins[1] + oy; B[j + 2] = mins[2] + oz;
+    B[j + 3] = maxs[0] + ox; B[j + 4] = maxs[1] + oy; B[j + 5] = maxs[2] + oz;
+    if (i > 0 && kind === ENT_WATER) this.water.push(i); // from 1, as the loops these replace (0 is the world)
+    if (i > 0 && kind === ENT_LADDER) this.ladders.push(i);
     this.ents.push({
       kind,
       heads: Int32Array.from(heads),
@@ -106,10 +129,10 @@ export class CollisionWorld {
       bspEntity: -1,
       slot: 0, // world vertex slot (shared/breakables.js, shared/doors.js): decals sit on it
       rot: null, // model -> world rotation (columns forward, left, up), null = none
-      amin: new Float64Array([mins[0] + ox, mins[1] + oy, mins[2] + oz]), // world bounds
-      amax: new Float64Array([maxs[0] + ox, maxs[1] + oy, maxs[2] + oz]),
+      amin: B.subarray(j, j + 3), // world bounds (views into this.bounds)
+      amax: B.subarray(j + 3, j + 6),
     });
-    return this.ents.length - 1;
+    return i;
   }
 
   // Moves entity `i` (doors): origin and rotation (a Float64Array(9) from
@@ -490,13 +513,12 @@ export function traceHullA(world, hull, A, out) {
   traceEntityA(world, 0, hull, A, out);
   if (out.fraction !== 1 || out.startsolid) out.ent = 0;
 
-  const ents = world.ents;
-  for (let i = 1; i < ents.length; i++) {
-    const e = ents[i];
-    if (e.kind !== ENT_SOLID) continue;
-    // Broadphase: swept box vs model bounds.
-    if (bminx > e.amax[0] || bmaxx < e.amin[0] || bminy > e.amax[1] || bmaxy < e.amin[1] ||
-      bminz > e.amax[2] || bmaxz < e.amin[2]) continue;
+  const ents = world.ents, B = world.bounds;
+  for (let i = 1, j = 6; i < ents.length; i++, j += 6) {
+    // Broadphase: swept box vs model bounds, from the flat array before touching the entity.
+    if (bminx > B[j + 3] || bmaxx < B[j] || bminy > B[j + 4] || bmaxy < B[j + 1] ||
+      bminz > B[j + 5] || bmaxz < B[j + 2]) continue;
+    if (ents[i].kind !== ENT_SOLID) continue;
 
     traceEntityA(world, i, hull, A, entTrace);
     if (entTrace.allsolid || entTrace.startsolid || entTrace.fraction < out.fraction) {
@@ -535,10 +557,6 @@ export function clearBodies(world) {
 // against the player bodies: each body's box grown by the hull's extents, the ray
 // through the slabs, the end backed off DIST_EPSILON like the BSP trace. A box the
 // start lies inside is skipped, a box touched exactly is not entered by a move along it.
-export function traceBodies(world, hull, sx, sy, sz, ex, ey, ez, out) {
-  return traceBodiesA(world, hull, setTA(sx, sy, sz, ex, ey, ez), out);
-}
-
 export function traceBodiesA(world, hull, A, out) {
   const sx = A[0], sy = A[1], sz = A[2], ex = A[3], ey = A[4], ez = A[5];
   const n = world.bodyCount;
@@ -602,10 +620,6 @@ export function traceBodiesA(world, hull, A, out) {
 }
 
 // A player's movement trace: the world, the brush entities, then the other players.
-export function tracePlayer(world, hull, sx, sy, sz, ex, ey, ez, out) {
-  return tracePlayerA(world, hull, setTA(sx, sy, sz, ex, ey, ez), out);
-}
-
 export function tracePlayerA(world, hull, A, out) {
   traceHullA(world, hull, A, out);
   return traceBodiesA(world, hull, A, out);
@@ -623,8 +637,9 @@ export function entityContents(world, entIndex, hull, x, y, z) {
 export function pointContents(world, x, y, z) {
   const c = entityContents(world, 0, HULL_POINT, x, y, z);
   if (c !== CONTENTS_EMPTY) return c;
-  const ents = world.ents;
-  for (let i = 1; i < ents.length; i++) {
+  const ents = world.ents, water = world.water;
+  for (let k = 0; k < water.length; k++) {
+    const i = water[k];
     if (ents[i].kind === ENT_WATER && entityContents(world, i, HULL_POINT, x, y, z) !== CONTENTS_EMPTY) {
       return -3; // CONTENTS_WATER
     }

@@ -7,7 +7,7 @@
 //
 // Values marked (approx.) are estimates of CS:GO behavior not found in its data files.
 
-import { entityModelIndex, parseVec3 } from './bsp.js';
+import { parseVec3, entityYaw, modelBox } from './bsp.js';
 
 export const MAX_HOSTAGES = 4;
 export const HOSTAGES_PER_ROUND = 2; // mp_hostages_max
@@ -28,14 +28,10 @@ export class RescueZones {
   // ctSpawns: [[x, y, z, yaw], ...] for maps with no rescue entities.
   constructor(bsp, ctSpawns = []) {
     this.boxes = []; // [minx, miny, minz, maxx, maxy, maxz]
-    const o = new Float32Array(3), f = bsp.modelsF;
+    const o = new Float32Array(3);
     for (const e of bsp.entities) {
-      if (e.classname !== 'func_hostage_rescue') continue;
-      const m = entityModelIndex(e);
-      if (m <= 0) continue;
-      parseVec3(e.origin, o);
-      this.boxes.push([f[m * 16] + o[0], f[m * 16 + 1] + o[1], f[m * 16 + 2] + o[2], f[m * 16 + 3] + o[0],
-        f[m * 16 + 4] + o[1], f[m * 16 + 5] + o[2]]);
+      const box = e.classname === 'func_hostage_rescue' && modelBox(bsp, e, o);
+      if (box) this.boxes.push(box);
     }
     if (this.boxes.length) return;
     const points = bsp.entities.filter((e) => e.classname === 'info_hostage_rescue').map((e) => {
@@ -60,8 +56,7 @@ export class Hostages {
       for (const e of bsp.entities) {
         if (e.classname !== 'hostage_entity') continue;
         parseVec3(e.origin, o);
-        const yaw = e.angles ? +e.angles.trim().split(/\s+/)[1] || 0 : +(e.angle || 0);
-        this.spots.push([o[0], o[1], o[2], yaw]);
+        this.spots.push([o[0], o[1], o[2], entityYaw(e)]);
       }
     }
     this.count = 0;

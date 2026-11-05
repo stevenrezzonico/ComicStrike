@@ -22,13 +22,11 @@
 // Messages out: ready { rcon, names: the server console's catalog() } | failed { error },
 //               an ArrayBuffer (the session id, then each datagram after its length; little-endian), close { id, reason }
 
-import { Host, GAME_MODES } from '../server/host.js';
+import { Host, GAME_MODES, runDue, TICK_MS } from '../server/host.js';
 import { parseBSP, parseUntrustedBSP } from '../shared/bsp.js';
-import { TICK_RATE } from '../shared/constants.js';
 import { Ring, SLOT, TO_WORKER_SLOTS, TO_PAGE_SLOTS, ringBytes } from './ring.js';
 
 const CFGS = Object.values(GAME_MODES).map((name) => `gamemode_${name}.cfg`);
-const TICK_MS = 1000 / TICK_RATE;
 
 let host = null;
 let players = 0; // bot_quota (fill) once the player is in
@@ -122,26 +120,17 @@ async function start({ map, mode, players: n, difficulty, armoury = true, bytes 
 
 // Drift-free fixed-rate loop on the monotonic clock (as server/main.js). Paused, it keeps
 // the epoch with the tick, so no ticks are owed when the game goes on.
-let epoch = 0;
 let paused = false;
 function loop() {
-  epoch = performance.now();
+  const clock = { host, epoch: performance.now() };
   const step = () => {
-    const game = host.game;
     drainRings();
     if (paused) {
-      epoch = performance.now() - game.tick * TICK_MS;
+      clock.epoch = performance.now() - host.game.tick * TICK_MS;
       setTimeout(step, 50);
       return;
     }
-    const due = Math.floor((performance.now() - epoch) / TICK_MS);
-    let ran = 0;
-    while (game.tick < due && ran < 8) {
-      host.step(game);
-      ran++;
-    }
-    if (game.tick < due) epoch = performance.now() - game.tick * TICK_MS; // fell behind: resync
-    setTimeout(step, Math.max(0, epoch + (game.tick + 1) * TICK_MS - performance.now()));
+    setTimeout(step, Math.max(0, runDue(clock, performance.now()) - performance.now()));
   };
   step();
 }

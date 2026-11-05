@@ -239,7 +239,7 @@ export class Renderer {
     gl.uniform1i(w.loc.u_lightmap, 0);
     gl.uniform4uiv(w.loc.u_broken, this.broken);
     gl.uniform1ui(w.loc.u_moverBase, this.movers ? this.movers.slotBase : 255);
-    if (this.movers) gl.uniform4fv(w.loc.u_movers, this.movers.matrix);
+    if (this.movers) gl.uniform4fv(w.loc.u_movers, this.movers.matrix, 0, this.movers.count * 12); // the movers there are
     const f = this.flashes;
     gl.uniform1i(w.loc.u_flashN, f.count);
     if (f.count) {

@@ -9,7 +9,7 @@
 
 import { program } from './program.js';
 import { TRAIL_VS, TRAIL_FS, DEBRIS_VS, DEBRIS_FS } from './shaders.js';
-import { cubeInstances } from './debris.js';
+import { cubeInstances, drawCubes } from './debris.js';
 import { WEAPON_ID } from '../../shared/weapons.js';
 
 export const TRAIL_KEEP = 3; // seconds a landed grenade's arc stays
@@ -198,16 +198,7 @@ export class PracticeMarks {
     if (this.showImpacts) {
       this.boxCount = 0;
       this.impacts.each(this.now, this.addBox);
-      if (this.boxCount) {
-        gl.useProgram(this.boxProg.p);
-        gl.uniformMatrix4fv(this.boxProg.loc.u_viewProj, false, viewProj);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.boxVbo);
-        gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.inst, 0, this.boxCount * I);
-        gl.bindVertexArray(this.boxVao);
-        gl.disable(gl.CULL_FACE); // drawn with culling off (cubeInstances)
-        gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.boxCount);
-        gl.enable(gl.CULL_FACE);
-      }
+      if (this.boxCount) drawCubes(gl, this.boxProg, this.boxVao, this.boxVbo, this.inst, this.boxCount, viewProj);
     }
     if (this.showTrails) {
       this.trails.expire(this.now);

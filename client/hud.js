@@ -23,7 +23,9 @@ export class Hud {
     this.elBanner = $('banner');
     this.elPanel = $('roundpanel');
     this.panelTitle = ''; // the round-end banner text, shown in the panel instead
-    this.panelKey = '';
+    this.panelOn = false;
+    this.panelAt = new Float64Array(7); // what the panel shows: see roundPanel
+    this.panelAtTitle = '';
     this.elScore = $('scoreboard');
     this.elMenu = $('buymenu');
     this.elBomb = $('hud-bomb');
@@ -133,17 +135,26 @@ export class Hud {
   roundPanel(rs, net, selfId) {
     const show = !!rs && !!net && rs.phase === PHASE_OVER && !(rs.mode & GAME_DEMO);
     if (!show) {
-      if (this.panelKey) {
-        this.panelKey = '';
+      if (this.panelOn) {
+        this.panelOn = false;
         this.elPanel.classList.remove('on');
       }
       return;
     }
     const matchEnd = reasonOf(rs.info) === END_MATCH, report = net.report && net.report.round === rs.round ? net.report : null;
-    const key = `${rs.serial}|${rs.info}|${rs.mvp}|${rs.scoreCT}|${rs.scoreT}|${this.panelTitle}|${report ? report.rows.length : -1}|` +
-      `${matchEnd ? net.names.join() + net.kills.join() + net.deaths.join() + net.mvps.join() : net.names[rs.mvp] || ''}`;
-    if (key === this.panelKey) return;
-    this.panelKey = key;
+    // (Numbers compared, not a key string: this runs every frame of a round's end.)
+    const K = this.panelAt, rows = report ? report.rows.length : -1;
+    if (this.panelOn && K[0] === rs.serial && K[1] === rs.info && K[2] === rs.mvp && K[3] === rs.scoreCT &&
+      K[4] === rs.scoreT && K[5] === rows && K[6] === net.infoVersion && this.panelAtTitle === this.panelTitle) return;
+    this.panelOn = true;
+    K[0] = rs.serial;
+    K[1] = rs.info;
+    K[2] = rs.mvp;
+    K[3] = rs.scoreCT;
+    K[4] = rs.scoreT;
+    K[5] = rows;
+    K[6] = net.infoVersion;
+    this.panelAtTitle = this.panelTitle;
     this.fillPanel(rs, net, selfId, matchEnd, report);
   }
 

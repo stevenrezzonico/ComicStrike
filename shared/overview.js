@@ -54,8 +54,6 @@ export class Overview {
       zLo = Math.min(zLo, z);
       zHi = Math.max(zHi, z);
     }
-    this.minZ = zLo;
-    this.maxZ = zHi;
     this.rgba = paint(top, this.width, this.height, zLo, zHi);
 
     // The levels: altitude ranges [zMin, zMax), each drawn from its own highest floors.
@@ -98,8 +96,8 @@ export class Overview {
   // What the radar draws from, as plain data (client/overviewworker.js sends it to the
   // page): the levels' images and ranges, the scale and placement; not the floor grid.
   data() {
-    const { scale, width, height, minX, maxY, minZ, maxZ, cuts } = this;
-    return { scale, width, height, minX, maxY, minZ, maxZ, cuts, levels: this.levels.map(({ zMin, zMax, rgba }) => ({ zMin, zMax, rgba })) };
+    const { scale, width, height, minX, maxY, cuts } = this;
+    return { scale, width, height, minX, maxY, cuts, levels: this.levels.map(({ zMin, zMax, rgba }) => ({ zMin, zMax, rgba })) };
   }
 
   // An overview from data(): px, py and levelOf work; floorAt needs the grid it left behind.

@@ -24,7 +24,7 @@
 // same bytes.
 
 import { sunEntity } from './sun.js';
-import { computeVis } from './bspvis.js';
+import { computeVis, dot as dot3, cross, boxOf as boundsOf } from './bspvis.js';
 
 export const CONTENTS_EMPTY = -1, CONTENTS_SOLID = -2, CONTENTS_WATER = -3;
 
@@ -124,8 +124,6 @@ export const brushPlanes = (br) => br.planes || boxPlanes(br.b, br.tex);
 
 // --- Geometry --------------------------------------------------------------------------
 
-const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm = (v) => {
   const l = Math.hypot(v[0], v[1], v[2]);
   return [v[0] / l, v[1] / l, v[2] / l];
@@ -165,17 +163,6 @@ export function brushPolygons(planes) {
     return poly;
   });
 }
-
-const boundsOf = (points) => {
-  const b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
-  for (const p of points) {
-    for (let k = 0; k < 3; k++) {
-      b[k] = Math.min(b[k], p[k]);
-      b[k + 3] = Math.max(b[k + 3], p[k]);
-    }
-  }
-  return b;
-};
 
 // A convex cell: its face polygons (vertex loops, any winding) and its vertices.
 function boxCell(b) {

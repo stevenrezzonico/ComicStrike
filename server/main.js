@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { ensureCert } from './cert.js';
 import { staticPath } from './static.js';
 import { listen } from './transport.js';
-import { Host, GAME_MODES, AddressCounts } from './host.js';
+import { Host, GAME_MODES, AddressCounts, runDue } from './host.js';
 import { Rooms, RoomError } from './rooms.js';
 import { parseBSP } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
@@ -138,23 +138,9 @@ listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key
   };
 });
 
-// Fixed-rate loops on the monotonic clock, one per game (the server's own and each room's):
-// each wakeup runs every tick that is due, so timer jitter never accumulates into drift.
-// After a long stall a game skips ahead.
-const TICK_MS = 1000 / TICK_RATE;
+// Fixed-rate loops (runDue), one per game: the server's own and each room's.
 const main = { host, epoch: performance.now() };
 let sweptAt = 0;
-function runDue(entry, now) {
-  const game = entry.host.game;
-  const due = Math.floor((now - entry.epoch) / TICK_MS);
-  let ran = 0;
-  while (game.tick < due && ran < 8) {
-    entry.host.step(game);
-    ran++;
-  }
-  if (game.tick < due) entry.epoch = performance.now() - game.tick * TICK_MS; // fell behind: resync
-  return entry.epoch + (game.tick + 1) * TICK_MS;
-}
 function loop() {
   const now = performance.now();
   let next = runDue(main, now);

@@ -15,6 +15,8 @@
 // (low noise [low-pass Hz, level, seconds]), boom (low sine [Hz, level, seconds] or null),
 // rise (s to swell in), tail (s of low rumble). Tuned by measuring rise time and spectral
 // centroid of offline renders, then by ear.
+export const STEP_RANGE = 1300; // units: footsteps farther off are not heard
+
 export const GUN_SOUNDS = {
   pistol: { pow: [520, 170, 0.09, 0.7], puff: [900, 0.4, 0.08], boom: [110, 0.3, 0.1], rise: 0.01, tail: 0.2 },
   heavy: { pow: [380, 110, 0.13, 0.8], puff: [700, 0.55, 0.14], boom: [80, 0.55, 0.18], rise: 0.012, tail: 0.4 },
@@ -318,7 +320,7 @@ export class Sounds {
   // sounds like a hammer) and no repeated note, which is what tires the ear. Wood adds a
   // faint hollow knock, metal a faint ring. `stepVolume` is the snd_footstep_volume cvar.
   step(kind, x = null, y = 0, z = 0, volume = 1) {
-    const v = this.voice(x, y, z, volume * this.stepVolume * 0.45, 220, 1300);
+    const v = this.voice(x, y, z, volume * this.stepVolume * 0.45, 220, STEP_RANGE);
     if (!v) return;
     const r = 0.85 + Math.random() * 0.3;
     if (kind === 'water' || kind === 'wade') return this.splash(v.out, v.t, kind === 'wade' ? 1 : 0.4, r);

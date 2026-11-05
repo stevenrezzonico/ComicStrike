@@ -1,7 +1,7 @@
 // CS:GO rounds and economy: competitive timings, money rules, the buy menu and buy
 // zones. Shared so the server enforces exactly what the client's buy menu shows.
 
-import { entityModelIndex, parseVec3 } from './bsp.js';
+import { parseVec3, modelBox } from './bsp.js';
 import { WEAPONS, WEAPON_ID, giveWeapon, canCarryGrenade, WS_SLOTS } from './weapons.js';
 import { TEAM_T, TEAM_CT } from './player.js';
 
@@ -141,14 +141,11 @@ export class BuyZones {
     this.zones = []; // [minx, miny, minz, maxx, maxy, maxz, teamMask]
     const o = new Float32Array(3);
     for (const e of bsp.entities) {
-      if (e.classname !== 'func_buyzone') continue;
-      const m = entityModelIndex(e);
-      if (m <= 0) continue;
-      parseVec3(e.origin, o);
+      const box = e.classname === 'func_buyzone' && modelBox(bsp, e, o);
+      if (!box) continue;
       const team = +(e.team || 0); // 0 both, 1 T, 2 CT
-      const f = bsp.modelsF;
-      this.zones.push([f[m * 16] + o[0], f[m * 16 + 1] + o[1], f[m * 16 + 2] + o[2], f[m * 16 + 3] + o[0],
-        f[m * 16 + 4] + o[1], f[m * 16 + 5] + o[2], team === 1 ? 1 : team === 2 ? 2 : 3]);
+      box.push(team === 1 ? 1 : team === 2 ? 2 : 3);
+      this.zones.push(box);
     }
     if (this.zones.length) return;
     const r = SPAWN_ZONE_RADIUS;

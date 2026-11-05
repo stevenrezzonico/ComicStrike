@@ -14,6 +14,7 @@ import { Items } from '../shared/items.js';
 import { Grenades } from '../shared/grenades.js';
 
 const HELLO_RETRY_MS = 250;
+const JOIN_POLL_MS = 10; // the WELCOME is looked for this often (practice answers within a tick)
 const KEEPALIVE_MS = 1000; // hidden tabs stop ticking; keep the server from timing us out
 const JOIN_TIMEOUT_MS = 5000;
 const QUEUE = 256; // datagrams buffered between polls (4 s: hidden tabs poll at 1 Hz)
@@ -65,6 +66,7 @@ export class NetClient {
     this.pings = []; // teammates' pings { sender, x, y, z } (S2C_PING), likewise
     this.items = new Items(); // weapons on the ground (S2C_ITEMS)
     this.itemsVersion = 0; // bumps on every items message
+    this.infoVersion = 0; // bumps when the roster (INFO) changes
     this.grenades = new Grenades(); // newest grenade lists (S2C_GRENADES)
     this.grenadeScratch = new Grenades();
     this.grenadeTick = 0;
@@ -79,7 +81,6 @@ export class NetClient {
     this.gaps = new Float32Array(128); // ms between arriving datagrams (net_graph), a ring
     this.gapCount = 0;
     this.lastPacketAt = 0;
-    this.arrival = 0; // performance.now() when the newest snapshot arrived
     // Demos (client/demo.js): the newest datagrams a recording starting now needs besides
     // the snapshot ring (the WELCOME, INFO, items and hostages lists), kept as they arrived
     // (references: nothing writes into a datagram).
@@ -312,12 +313,17 @@ export class NetClient {
   // Sends HELLO until the server answers. Resolves with the WELCOME.
   async join(team, primary, secondary, name) {
     const start = performance.now();
+    let sentAt = -Infinity;
     while (!this.welcome) {
       if (this.rejected) throw new Error(`server rejected us: ${this.rejected}`);
       if (this.closed) throw new Error(`connection closed: ${this.closeReason}`);
-      if (performance.now() - start > JOIN_TIMEOUT_MS) throw new Error('no answer from the server');
-      this.send(writeHello(this.nextWriter(), team, primary, secondary, name, this.room));
-      await new Promise((r) => setTimeout(r, HELLO_RETRY_MS));
+      const now = performance.now();
+      if (now - start > JOIN_TIMEOUT_MS) throw new Error('no answer from the server');
+      if (now - sentAt >= HELLO_RETRY_MS) {
+        this.send(writeHello(this.nextWriter(), team, primary, secondary, name, this.room));
+        sentAt = now;
+      }
+      await new Promise((r) => setTimeout(r, JOIN_POLL_MS));
       this.poll();
     }
     return this.welcome;
@@ -374,7 +380,6 @@ export class NetClient {
           const t = this.own;
           this.own = this.scratch;
           this.scratch = t;
-          this.arrival = performance.now();
           fresh = true;
         }
       } else if (type === S2C_WELCOME) {
@@ -384,8 +389,14 @@ export class NetClient {
         }
       } else if (type === S2C_REJECT) {
         this.rejected = r.str();
-      } else if (type === S2C_INFO) {
-        this.keep.info = bytes.slice(from, to);
+      } else if (type === S2C_INFO) { // resent every second, mostly the same
+        const prev = this.keep.info;
+        let same = prev !== null && prev.length === to - from;
+        for (let i = 0; same && i < prev.length; i++) same = prev[i] === bytes[from + i];
+        if (!same) {
+          this.keep.info = bytes.slice(from, to);
+          this.infoVersion++;
+        }
         readInfo(r, this.names, this.teams, this.kills, this.deaths, this.scores, this.mvps);
       } else if (type === S2C_REPORT) {
         this.report = readReport(r);

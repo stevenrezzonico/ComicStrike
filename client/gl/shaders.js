@@ -831,13 +831,11 @@ void main() {
   o_color = vec4(texelFetch(u_img, ivec2(gl_FragCoord.xy), 0).rgb, u_alpha);
 }`;
 
-// The ink and the composite share the G-buffer readers: a depth texel (DTEX) with its
-// flags, depth and 1 / depth, the normal texel, and the terms of the line tests.
-const INK_COMMON = `
+// The ink and the composite share the depth readers: a depth texel (DTEX) with its flags,
+// its depth, and 1 / depth up to a constant (the silhouette test only compares them).
+const DEPTH_READ = `
 ivec2 gsize;
 ivec2 cl(ivec2 p) { return clamp(p, ivec2(0), gsize - 1); }
-// A depth texel (DTEX): its flags, its depth, and 1 / depth up to a constant (the
-// silhouette test only compares them).
 #ifdef DEPTH_PACKED
 #define DTEX uvec4
 DTEX dtex(ivec2 p) { return uvec4(texelFetch(u_depth, cl(p), 0) * 255.0 + 0.5); }
@@ -851,6 +849,12 @@ uint flagsOf(DTEX t) { return uint(t.g); }
 float depthOf(DTEX t) { return DEPTH_NEAR / t.r; }
 float invOf(DTEX t) { return t.r; }
 #endif
+`;
+
+// The ink's G-buffer readers: the depth readers, the normal texel, and the terms of the
+// line tests.
+const INK_COMMON = `
+${DEPTH_READ}
 vec4 ntex(ivec2 p) { return texelFetch(u_normal, cl(p), 0); }
 
 uint fc;  // flags at the line sample
@@ -1015,21 +1019,7 @@ const float SMOKE_SIGHT = 28.0; // units: the fog's e-fold; about arm's length s
 const float INK_CORNER = 0.35; // smoothInk: the ink a step's inside corner takes
 ${GBUFFER_CONSTS}
 ${NOISE}
-
-ivec2 gsize;
-ivec2 cl(ivec2 p) { return clamp(p, ivec2(0), gsize - 1); }
-#ifdef DEPTH_PACKED
-#define DTEX uvec4
-DTEX dtex(ivec2 p) { return uvec4(texelFetch(u_depth, cl(p), 0) * 255.0 + 0.5); }
-uint flagsOf(DTEX t) { return t.a; }
-float depthOf(DTEX t) { return float((t.r << 16u) | (t.g << 8u) | t.b) * (DEPTH_FAR / 16777215.0); }
-#else
-#define DTEX vec2
-DTEX dtex(ivec2 p) { return texelFetch(u_depth, cl(p), 0).rg; }
-uint flagsOf(DTEX t) { return uint(t.g); }
-float depthOf(DTEX t) { return DEPTH_NEAR / t.r; }
-#endif
-
+${DEPTH_READ}
 // Smooth ink (r_inkaa) at the canvas's own render scale, where a line is a staircase of
 // whole texels (at any other scale the ink is filtered between texels): a pixel off the
 // line in the inside corner of a step (ink on two sides at right angles) takes INK_CORNER

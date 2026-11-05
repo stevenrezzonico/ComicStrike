@@ -14,6 +14,7 @@ import {
   mapNameOf, faceFirstEdge, faceNumEdges, faceTexinfo, faceSide, facePlane, modelFirstFace, modelNumFaces,
 } from '../../shared/bsp.js';
 import { planeSquare, clip } from '../../shared/bspwriter.js';
+import { dot, sub, cross } from '../../shared/bspvis.js';
 import { FORMAT, VERSION, TEXTURES, KINDS, POINTS, makeBrush } from './project.js';
 
 const EPS = 0.01;
@@ -22,10 +23,6 @@ const PALETTE = new Set(TEXTURES.map(([n]) => n));
 const AS_WORLD = new Set(['func_wall', 'func_wall_toggle']);
 const SPAWNS = new Set(['info_player_deathmatch', 'info_player_start']);
 const DROP_KEYS = new Set(['classname', 'model', 'origin']);
-
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 
 // The project made from parsed (and checked: parseUntrustedBSP) map `bsp` from file `fileName`:
 // { project, report: { shapes, boxes, points, dropped: { classname: count } } }.

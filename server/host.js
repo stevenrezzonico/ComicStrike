@@ -7,6 +7,7 @@ import { writeChangelevel, cleanName, MAX_PLAYERS } from '../shared/protocol.js'
 import { TEAM_NAMES, TEAM_T, TEAM_CT } from '../shared/player.js';
 import { PHASE_WARMUP } from '../shared/economy.js';
 import { Game, DEFAULT_RULES } from './game.js';
+import { TICK_RATE } from '../shared/constants.js';
 
 const PHASE_NAMES = ['warmup', 'freeze time', 'live', 'round over'];
 const CHANGELEVEL_CLOSE_MS = 500;
@@ -75,12 +76,30 @@ export class AddressCounts {
   }
 }
 
+// A game's fixed-rate loop on the monotonic clock (the server's games, the practice worker's):
+// each wakeup runs every tick due at `now` since `entry.epoch` (the ms tick 0 was due), so
+// timer jitter never accumulates into drift; after a long stall the game skips ahead. entry:
+// { host, epoch }. Returns when the next tick is due.
+export const TICK_MS = 1000 / TICK_RATE;
+export function runDue(entry, now) {
+  const game = entry.host.game;
+  const due = Math.floor((now - entry.epoch) / TICK_MS);
+  let ran = 0;
+  while (game.tick < due && ran < 8) {
+    entry.host.step(game);
+    ran++;
+  }
+  if (game.tick < due) entry.epoch = performance.now() - game.tick * TICK_MS; // fell behind: resync
+  return entry.epoch + (game.tick + 1) * TICK_MS;
+}
+
 export class Host {
   // opts: loadMap(name) -> parsed BSP (throws if missing), listMaps() -> names,
   //       readCfg(name) -> text or null, quit(), print(text), rules (test overrides),
   //       defer(fn, ms) (default setTimeout), now() -> ms (default performance.now)
   constructor(opts) {
     this.opts = opts;
+    this.now = opts.now || (() => performance.now());
     this.game = null;
     // Bad rcon passwords by the sender's address (sessions without one share a key):
     // counted here, not per player, so reconnecting does not reset them, and kept across
@@ -114,8 +133,8 @@ export class Host {
     // Game modes (cfg/gamemode_*.cfg set these).
     con.cvar('game_type', 0, { help: 'Game type (0 classic, 1 gun game family); applies on the next map', min: 0, max: 3 });
     con.cvar('game_mode', 1, {
-      help: 'Game mode (game_type/game_mode: 0/0 casual, 0/1 competitive, 0/2 wingman, 1/0 arms race, 1/1 demolition, ' +
-        '1/2 deathmatch, 2/0 demo); applies on the next map',
+      help: 'Game mode (game_type/game_mode: 0/0 casual, 0/1 competitive, 0/2 wingman, 0/3 retakes, 1/0 arms race, ' +
+        '1/1 demolition, 1/2 deathmatch, 2/0 demo); applies on the next map',
       min: 0, max: 3,
     });
     num('mp_teammates_are_enemies', 0, 'Everyone is an enemy (free for all)', 0, 1);
@@ -187,7 +206,7 @@ export class Host {
 
     con.command('bot_place', (a, ctx) => {
       const r = this.rules();
-      if (!r.cheats && !r.demo) return con.out(ctx, 'bot_place: needs sv_cheats 1 (or the demo mode)');
+      if (!r.cheats) return con.out(ctx, 'bot_place: needs sv_cheats 1 (or the demo mode)');
       con.out(ctx, this.game.placeBots(ctx && ctx.client, (a[1] || '').toLowerCase() === 'all'));
     }, 'bot_place [all]: puts the next bot (all: every bot, in a row) where you look, facing you (bot_stop 1 keeps them there)');
     con.command('map', (a, ctx) => this.changeLevel(a[1], ctx), 'map <name>: switches to another map');
@@ -223,7 +242,8 @@ export class Host {
     con.hint('bot_quota_mode', [['normal', 'bot_quota bots'], ['fill', 'bots fill up to bot_quota players']]);
     con.hint('bot_difficulty', levels.map((l, i) => [String(i), l]));
     con.hint('game_type', [['0', 'classic'], ['1', 'gun game, deathmatch'], ['2', 'demo']]);
-    con.hint('game_mode', [['0', 'casual / arms race / demo'], ['1', 'competitive / demolition'], ['2', 'wingman / deathmatch']]);
+    con.hint('game_mode', [['0', 'casual / arms race / demo'], ['1', 'competitive / demolition'], ['2', 'wingman / deathmatch'],
+      ['3', 'retakes']]);
     const mapNames = (i) => (i === 1 ? opts.listMaps() : []);
     con.hint('map', mapNames);
     con.hint('changelevel', mapNames);
@@ -275,7 +295,7 @@ export class Host {
       startMoney: v('mp_startmoney'),
       maxMoney: v('mp_maxmoney'),
       warmupTime: v('mp_warmuptime'),
-      cheats: v('sv_cheats') !== 0,
+      cheats: v('sv_cheats') !== 0 || this.modeName === 'demo', // the demo allows the cheat commands
       talkEnemyDead: v('sv_talk_enemy_dead') !== 0,
       talkEnemyLiving: v('sv_talk_enemy_living') !== 0,
       deathmatch: this.modeName === 'deathmatch',
@@ -331,7 +351,7 @@ export class Host {
   changeLevel(name, ctx) {
     if (!name || !/^[\w-]+$/.test(name)) return this.con.out(ctx, 'map <name>');
     if (ctx && ctx.source === 'rcon') {
-      const now = this.opts.now ? this.opts.now() : performance.now();
+      const now = this.now();
       if (now - this.mapChangedAt < RCON_MAP_GAP_MS) return this.con.out(ctx, 'map: too soon after the last change');
       this.mapChangedAt = now;
     }
@@ -374,7 +394,7 @@ export class Host {
       game.step();
     } catch (err) {
       this.failedTicks++;
-      const now = this.opts.now ? this.opts.now() : performance.now();
+      const now = this.now();
       if (now - this.failReportAt < 1000) return;
       this.failReportAt = now;
       const more = this.failedTicks > 1 ? ` (${this.failedTicks} failed ticks since the last report)` : '';
@@ -388,7 +408,7 @@ export class Host {
   rcon(c, password, command) {
     const pw = this.password.value;
     if (!pw) return 'rcon is disabled on this server (no rcon_password)';
-    const now = this.opts.now ? this.opts.now() : performance.now();
+    const now = this.now();
     const key = addressKey(c.session && c.session.address);
     let g = this.rconGuard.get(key);
     if (g && now < g.blockedUntil) return 'rcon: too many bad passwords, try later';

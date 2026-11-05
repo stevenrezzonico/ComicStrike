@@ -29,6 +29,8 @@ export const TEAM_T = 1;
 export const TEAM_CT = 2;
 export const TEAM_SPECTATOR = 3; // watches, never spawns (CS:GO's team 1; jointeam 1)
 export const TEAM_NAMES = ['', 'T', 'CT', 'SPEC'];
+// A CS:GO team number (jointeam, the menus: 1 spectators, 2 T, 3 CT) as ours; 0 for any other.
+export const teamOfJoin = (n) => (n === 1 ? TEAM_SPECTATOR : n === 2 ? TEAM_T : n === 3 ? TEAM_CT : 0);
 
 export class Player {
   constructor() {

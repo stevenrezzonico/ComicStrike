@@ -5,7 +5,7 @@
 // kill events) every tick. Transport-agnostic: sessions only need send(bytes) and
 // close(reason).
 
-import { parseVec3, BSP_LIMITS } from '../shared/bsp.js';
+import { parseVec3, BSP_LIMITS, entityYaw, teamSpawns } from '../shared/bsp.js';
 import { TICK_RATE, TICK_DT } from '../shared/constants.js';
 import { ARMS_RACE, DEMOLITION, armLevel } from '../shared/progression.js';
 import { CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, HULL_STAND, HULL_POINT } from '../shared/trace.js';
@@ -32,7 +32,7 @@ import {
   BOMB_DEFUSED, BOMB_EXPLODED,
 } from '../shared/bomb.js';
 import {
-  Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT, TEAM_SPECTATOR, TEAM_NAMES,
+  Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT, TEAM_SPECTATOR, TEAM_NAMES, teamOfJoin,
 } from '../shared/player.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import { Items, THROW_SPEED, LET_GO_SPEED, MAX_ITEMS } from '../shared/items.js';
@@ -62,6 +62,9 @@ const CMD_BANK = 8; // commands a client may run ahead of server time (absorbs j
 const MAX_CMDS_PER_TICK = 8;
 const TIMEOUT_TICKS = 30 * TICK_RATE; // clients in hidden tabs send a 1 Hz keepalive
 const INFO_INTERVAL = TICK_RATE; // roster resent every second (datagrams can be lost)
+// Ticks the grenade list still goes out every tick after the last grenade or effect went, so
+// a lost datagram leaves none drawn on a client; quiet, it goes out once a second.
+const GRENADES_TAIL = 16;
 // Console commands a client may send in a second, and the least time (250 ms) between its
 // name or team changes: each resends the roster to everyone and logs a line, so one tiny packet a
 // tick made ~500 times its size in traffic and flooded the log.
@@ -221,7 +224,7 @@ export const DEFAULT_RULES = {
   startMoney: START_MONEY,
   maxMoney: MAX_MONEY,
   warmupTime: 0, // seconds of warmup once both teams have players (0: start at once)
-  cheats: false, // sv_cheats: setpos for testing
+  cheats: false, // sv_cheats, or the demo: setpos, noclip, bot_place
   // Chat (say / say_team). CS:GO's defaults are 0 for both; a community server shows all
   // chat between the teams unless its owner turns it off.
   talkEnemyDead: true, // sv_talk_enemy_dead: the living see dead enemies' all chat
@@ -283,15 +286,8 @@ export class Game {
     this.hurtBlocked = (i, dmg) => this.hurtBy(this.doorClients[i], dmg, null, 0);
     this.blastOut = []; // slots a blast broke
     this.buyZones = new BuyZones(bsp);
-    this.spawns = { [TEAM_T]: [], [TEAM_CT]: [] };
+    this.spawns = teamSpawns(bsp);
     const o = new Float32Array(3);
-    for (const e of bsp.entities) {
-      const team = e.classname === 'info_player_deathmatch' ? TEAM_T : e.classname === 'info_player_start' ? TEAM_CT : 0;
-      if (!team) continue;
-      parseVec3(e.origin, o);
-      const yaw = e.angles ? +e.angles.trim().split(/\s+/)[1] || 0 : +(e.angle || 0);
-      this.spawns[team].push([o[0], o[1], o[2], yaw]);
-    }
     // The map's weapons lying out (CS 1.6's armoury_entity: fy_ maps): placed at each round
     // start, MAX_ITEMS in all (the ground holds no more; a crafted map's 8000 of them traced
     // their floors for 244 ms at every round start, on the thread every game shares).
@@ -302,7 +298,7 @@ export class Game {
       const weapon = WEAPON_ID[ARMOURY_ITEMS[+(e.item || 0)] || ''];
       if (!weapon) continue; // kevlar, or a weapon we do not have
       parseVec3(e.origin, o);
-      const yaw = e.angles ? +e.angles.trim().split(/\s+/)[1] || 0 : (this.armoury.length * 73) % 360;
+      const yaw = entityYaw(e, (this.armoury.length * 73) % 360);
       const count = Math.max(1, Math.min(32, MAX_ITEMS - laid, +(e.count || 1) || 1));
       laid += count;
       this.armoury.push({ weapon, count, x: o[0], y: o[1], z: o[2], yaw });
@@ -367,6 +363,7 @@ export class Game {
 
     // Grenades, and what they act on: the clients (index = player id).
     this.grenades = new Grenades();
+    this.grenadesUntil = 0; // the tick the grenade list stops going out every tick
     this.bots = new Bots(this);
     this.grenadeWriter = new Writer();
     const live = (i) => this.clients[i] && this.clients[i].joined && this.clients[i].alive;
@@ -734,7 +731,8 @@ export class Game {
     if (this.rosterDirty || this.tick % INFO_INTERVAL === 0) this.sendInfo();
     if (this.itemsDirty || this.tick % INFO_INTERVAL === 0) this.sendItems();
     this.sendSnapshots();
-    this.sendGrenades();
+    if (this.grenades.count || this.grenades.fxCount) this.grenadesUntil = this.tick + GRENADES_TAIL;
+    if (this.tick <= this.grenadesUntil || this.tick % INFO_INTERVAL === 0) this.sendGrenades();
     if (this.hostages.count && (this.hostagesDirty || this.tick % INFO_INTERVAL === 0)) this.sendHostages();
   }
 
@@ -1374,7 +1372,7 @@ export class Game {
       const err = this.takeOver(c, +args[1]);
       if (err) this.print(c, `takeover: ${err}`);
     } else if (name === 'noclip') { // CS:GO: fly through walls (sv_cheats; the demo allows it)
-      if (!this.rules.cheats && !this.rules.demo) {
+      if (!this.rules.cheats) {
         this.print(c, `Can't use cheat command noclip in multiplayer, unless the server has sv_cheats set to 1.`);
       } else if (c.alive) {
         const i = c.player.ps.i;
@@ -1382,7 +1380,7 @@ export class Game {
         this.print(c, `noclip ${i[PS_FLAGS] & FL_NOCLIP ? 'ON' : 'OFF'}`);
       }
     } else if (name === 'setpos') { // CS:GO: setpos x y z puts the feet there (sv_cheats; the demo allows it)
-      if (!this.rules.cheats && !this.rules.demo) {
+      if (!this.rules.cheats) {
         this.print(c, `Can't use cheat command setpos in multiplayer, unless the server has sv_cheats set to 1.`);
       } else if (c.alive && args.length >= 4 && args.slice(1, 4).every((v) => Math.abs(+v) <= 2 * BSP_LIMITS.coord)) { // 1e39 was Infinity as a float32
         const f = c.player.ps.f;
@@ -1408,7 +1406,7 @@ export class Game {
   // CS:GO jointeam: 1 = spectators, 2 = T, 3 = CT. Switching while alive costs the life
   // (no death counted); you play from the next round (at once in warmup or freeze time).
   joinTeam(c, n) {
-    const team = n === 1 ? TEAM_SPECTATOR : n === 2 ? TEAM_T : n === 3 ? TEAM_CT : 0;
+    const team = teamOfJoin(n);
     if (!team) return this.print(c, 'jointeam 1 (Spectators), 2 (Terrorists) or 3 (Counter-Terrorists)');
     if (team === c.team) return;
     if (this.tick - c.lastTeamChange < ROSTER_CHANGE_TICKS) return this.print(c, 'jointeam: too soon after the last change');
@@ -1542,7 +1540,7 @@ export class Game {
   // and reserve, `count` of them in a short row (CS 1.6 restocks them every round); not in
   // the gun game modes, which arm everyone by level.
   placeArmoury() {
-    if (!this.rules.armouryEntities || this.rules.armsRace || this.rules.demolition) return;
+    if (!this.rules.armouryEntities || this.progression()) return;
     for (const a of this.armoury) {
       const w = WEAPONS[a.weapon], r = a.yaw * Math.PI / 180;
       for (let k = 0; k < a.count; k++) {
@@ -1843,21 +1841,18 @@ export class Game {
 
   sendHostages() {
     this.hostagesDirty = false;
-    const bytes = writeHostages(this.hostageWriter, this.hostages).slice();
-    for (const c of this.clients) if (c && c.joined) c.session.send(bytes);
+    this.sendAll(writeHostages(this.hostageWriter, this.hostages).slice());
   }
 
-  // Every tick (a few bytes when there are none): grenades lost with a datagram come
+  // Every tick while any flies or burns (GRENADES_TAIL): grenades lost with a datagram come
   // back on the next one.
   sendGrenades() {
-    const bytes = writeGrenades(this.grenadeWriter, this.tick, this.grenades).slice();
-    for (const c of this.clients) if (c && c.joined) c.session.send(bytes);
+    this.sendAll(writeGrenades(this.grenadeWriter, this.tick, this.grenades).slice());
   }
 
   sendItems() {
     this.itemsDirty = false;
-    const bytes = writeItems(this.itemsWriter, this.items).slice();
-    for (const c of this.clients) if (c && c.joined) c.session.send(bytes);
+    this.sendAll(writeItems(this.itemsWriter, this.items).slice());
   }
 
   plantBomb(c) {
@@ -2087,7 +2082,11 @@ export class Game {
   sendInfo() {
     this.rosterDirty = false;
     const roster = this.clients.map((c) => (c && c.joined ? c : null));
-    const bytes = writeInfo(this.infoWriter, roster).slice();
+    this.sendAll(writeInfo(this.infoWriter, roster).slice());
+  }
+
+  // To every joined client (bots have no session).
+  sendAll(bytes) {
     for (const c of this.clients) if (c && c.joined) c.session.send(bytes);
   }
 

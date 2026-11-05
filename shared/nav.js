@@ -122,6 +122,7 @@ export class Nav {
     this.stamp = new Int32Array(n); // search number that touched the node
     this.closed = new Int32Array(n);
     this.search = 0;
+    this.inBoxes = new WeakMap(); // box -> { inside: nodes, near }: random()'s fallback, once a box
     this.heap = new Int32Array(m + n);
     this.prio = new Float32Array(m + n);
   }
@@ -161,7 +162,11 @@ export class Nav {
     if (a < 0 || b < 0) return 0;
     const st = ++this.search, G = this.g, P = this.parent, S = this.stamp, C = this.closed;
     const heap = this.heap, prio = this.prio, X = this.x, Y = this.y, Z = this.z;
-    const h = (k) => Math.hypot(X[k] - X[b], Y[k] - Y[b], Z[k] - Z[b]);
+    const bx = X[b], by = Y[b], bz = Z[b];
+    const h = (k) => { // (not hypot: twice as slow, and a path search is the bots' biggest cost)
+      const dx = X[k] - bx, dy = Y[k] - by, dz = Z[k] - bz;
+      return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    };
     let size = 0;
     const push = (k, p) => { // binary heap of (node, priority), lowest first
       let i = size++;
@@ -259,15 +264,19 @@ export class Nav {
       if (!box || this.inBox(k, box)) return k;
     }
     if (!box) return -1;
-    const inside = [], cx = (box[0] + box[3]) / 2, cy = (box[1] + box[4]) / 2;
-    let near = -1, nearD = Infinity;
-    for (let k = 0; k < this.count; k++) {
-      if (this.inBox(k, box)) inside.push(k);
-      else if (!inside.length) {
-        const d = Math.hypot(this.x[k] - cx, this.y[k] - cy, this.z[k] - box[2]);
-        if (d < nearD) [near, nearD] = [k, d];
+    let c = this.inBoxes.get(box); // a scan of every node: once a box (a bomb site's is asked often)
+    if (!c) {
+      const inside = [], cx = (box[0] + box[3]) / 2, cy = (box[1] + box[4]) / 2;
+      let near = -1, nearD = Infinity;
+      for (let k = 0; k < this.count; k++) {
+        if (this.inBox(k, box)) inside.push(k);
+        else if (!inside.length) {
+          const d = Math.hypot(this.x[k] - cx, this.y[k] - cy, this.z[k] - box[2]);
+          if (d < nearD) [near, nearD] = [k, d];
+        }
       }
+      this.inBoxes.set(box, (c = { inside, near }));
     }
-    return inside.length ? inside[Math.floor(rand() * inside.length)] : near;
+    return c.inside.length ? c.inside[Math.floor(rand() * c.inside.length)] : c.near;
   }
 }

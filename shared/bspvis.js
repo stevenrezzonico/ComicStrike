@@ -19,9 +19,9 @@
 const EPS = 0.01;
 const MAX_DEPTH = 16; // portals in a chain before the rest in reach counts as seen
 
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+export const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+export const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+export const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 
 // The part of a convex polygon in front of plane (n, d) (n·p >= d), or null.
 function chop(w, n, d) {
@@ -76,9 +76,9 @@ function overlap(a, b, n) {
   return w && areaOf(w) > 1 ? w : null;
 }
 
-const boxOf = (w) => {
+export const boxOf = (points) => {
   const b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
-  for (const p of w) for (let k = 0; k < 3; k++) (b[k] = Math.min(b[k], p[k])), (b[k + 3] = Math.max(b[k + 3], p[k]));
+  for (const p of points) for (let k = 0; k < 3; k++) (b[k] = Math.min(b[k], p[k])), (b[k + 3] = Math.max(b[k + 3], p[k]));
   return b;
 };
 const boxesMeet = (a, b) => a[0] <= b[3] + EPS && b[0] <= a[3] + EPS && a[1] <= b[4] + EPS && b[1] <= a[4] + EPS &&

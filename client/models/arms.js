@@ -9,7 +9,7 @@
 // never pass through it. A held object's center sits HAND_GRIP ahead of the wrist and
 // HAND_GRIP_IN in from the palm's axis (client/anim/viewanim.js places hands by these).
 
-import { MeshBuilder, FINISH, finish } from '../gl/meshkit.js';
+import { MeshBuilder, FINISH, finish, shade } from '../gl/meshkit.js';
 import { ARMS_SKELETON as A } from '../anim/skeleton.js';
 import { LOOKS, SKIN } from './players.js';
 
@@ -38,9 +38,6 @@ const bind = (name) => {
   const i = A.bone(name);
   return [A.bind[i * 3], A.bind[i * 3 + 1], A.bind[i * 3 + 2]];
 };
-
-// A lighter or darker print of a color (folds, the rolled sleeve end): its own ink outline.
-const shade = (c, k) => c.map((v) => Math.min(1, v * k));
 
 // The finger and thumb joints of a right hand holding `curl`, in the hand frame:
 // { fingers: [[knuckle, a, b, tip] per finger], thumb: [base, mid, tip], radius per finger }.

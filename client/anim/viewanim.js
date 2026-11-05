@@ -111,7 +111,7 @@ export function bump(t, a, b, c, d) {
 }
 
 // Column-major rotation + translation from quaternion q (at qo).
-function matrix(m, q, qo, tx, ty, tz) {
+export function matrix(m, q, qo, tx, ty, tz) {
   const x = q[qo], y = q[qo + 1], z = q[qo + 2], w = q[qo + 3];
   m[0] = 1 - 2 * (y * y + z * z); m[1] = 2 * (x * y + z * w); m[2] = 2 * (x * z - y * w); m[3] = 0;
   m[4] = 2 * (x * y - z * w); m[5] = 1 - 2 * (x * x + z * z); m[6] = 2 * (y * z + x * w); m[7] = 0;
@@ -228,8 +228,7 @@ export class ViewAnimator {
     const busy = deploying || reloadEnd > 0 || since < 0.3 || f[WS_ACTION] !== 0 ||
       (this.swingStart >= 0 && time - this.swingStart < STAB_TIME);
     if (busy && this.inspectStart >= 0 && time > this.inspectStart) this.inspectStart = -1;
-    const name = w.name;
-    const pumpGun = pts.pump, boltAction = name === 'awp' || name === 'ssg08';
+    const pumpGun = pts.pump, boltAction = w.boltAction;
 
     // Draw: up from below, then rack the slide / bolt.
     if (deploying) {

@@ -1,7 +1,7 @@
 // CS:GO bomb rules shared by client and server: bomb sites from the map, the bomb's
 // state as the snapshot carries it, and the explosion's damage.
 
-import { entityModelIndex, parseVec3 } from './bsp.js';
+import { parseVec3, modelBox } from './bsp.js';
 
 export const PLANT_TIME = 3; // C4 arming time (s)
 export const DEFUSE_TIME = 10;
@@ -52,15 +52,12 @@ export class BombSites {
     this.names = []; // per box: its letter (A, B, ... in entity order, approx.)
     this.radius = DEFAULT_BOMB_RADIUS;
     const o = new Float32Array(3);
-    const f = bsp.modelsF;
     for (const e of bsp.entities) {
       if (e.classname === 'info_map_parameters' && +e.bombradius > 0) this.radius = +e.bombradius;
       if (e.classname === 'func_bomb_target') {
-        const m = entityModelIndex(e);
-        if (m <= 0) continue;
-        parseVec3(e.origin, o);
-        this.boxes.push([f[m * 16] + o[0], f[m * 16 + 1] + o[1], f[m * 16 + 2] + o[2], f[m * 16 + 3] + o[0],
-          f[m * 16 + 4] + o[1], f[m * 16 + 5] + o[2]]);
+        const box = modelBox(bsp, e, o);
+        if (!box) continue;
+        this.boxes.push(box);
         this.targets.push(e.target || '');
         this.names.push(String.fromCharCode(65 + this.names.length));
       } else if (e.classname === 'info_bomb_target') {

@@ -12,10 +12,10 @@ import { WEAPONS, WEAPON_ID } from '../shared/weapons.js';
 import { downloadFile } from './demostore.js';
 
 const ESCAPE_GRACE_MS = 300; // the Escape that released the mouse must not resume at once
-// Game mode names (server/host.js GAME_MODES) as shown.
+// Game mode names (server/host.js GAME_MODES) as shown, in the Mode row's order.
 const MODE_LABELS = {
-  casual: 'Casual', competitive: 'Competitive', wingman: 'Wingman', armsrace: 'Arms Race', demolition: 'Demolition',
-  deathmatch: 'Deathmatch', demo: 'Demo', retakes: 'Retakes',
+  casual: 'Casual', competitive: 'Competitive', wingman: 'Wingman', deathmatch: 'Deathmatch', armsrace: 'Arms Race',
+  demolition: 'Demolition', retakes: 'Retakes', demo: 'Demo',
 };
 
 // The Bots row of the practice panel by mode: [label, [[bot_quota, text], ...]]. Team modes
@@ -191,6 +191,26 @@ const button = (text, onClick, cls = '') => {
   b.type = 'button';
   b.addEventListener('click', onClick);
   return b;
+};
+// A file drop zone: a file dropped on it or picked by a click goes to take(file).
+const dropZone = (accept, text, take) => {
+  const pick = el('label', 'menu-drop');
+  const input = el('input');
+  input.type = 'file';
+  input.accept = accept;
+  input.addEventListener('change', () => take(input.files[0]));
+  pick.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    pick.classList.add('over');
+  });
+  pick.addEventListener('dragleave', () => pick.classList.remove('over'));
+  pick.addEventListener('drop', (e) => {
+    e.preventDefault();
+    pick.classList.remove('over');
+    take(e.dataTransfer.files[0]);
+  });
+  pick.append(input, el('span', '', text));
+  return pick;
 };
 
 export class Menu {
@@ -546,26 +566,9 @@ export class Menu {
     body.append(el('p', 'menu-hint', 'In a game, type record <name> in the console (`) to record it as a demo, and stop ' +
       'to end it. A demo plays back as a spectator: fly freely, or jump to watch through a player\'s eyes. ' +
       'demo_pause and demo_timescale control it.'));
-    const pick = el('label', 'menu-drop');
-    const input = el('input');
-    input.type = 'file';
-    input.accept = '.csdemo';
-    const take = (file) => {
+    body.append(dropZone('.csdemo', 'Drop a .csdemo file here, or click to choose one', (file) => {
       if (file) this.onDemoFile(file);
-    };
-    input.addEventListener('change', () => take(input.files[0]));
-    pick.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      pick.classList.add('over');
-    });
-    pick.addEventListener('dragleave', () => pick.classList.remove('over'));
-    pick.addEventListener('drop', (e) => {
-      e.preventDefault();
-      pick.classList.remove('over');
-      take(e.dataTransfer.files[0]);
-    });
-    pick.append(input, el('span', '', 'Drop a .csdemo file here, or click to choose one'));
-    body.append(pick);
+    }));
     if (this.demoError) body.append(el('p', 'menu-hint menu-error', this.demoError));
     const list = el('div', 'menu-demos');
     list.append(el('p', 'menu-hint', 'Loading...'));
@@ -595,11 +598,8 @@ export class Menu {
     body.append(el('p', 'menu-hint', 'Play any GoldSrc map (CS 1.6, BSP version 30) you have: alone against bots, ' +
       'all in this page, or host it for friends. Hosting sends the file to this server, which keeps it in memory ' +
       'only while people play.'));
-    const pick = el('label', 'menu-drop');
-    const input = el('input');
-    input.type = 'file';
-    input.accept = '.bsp';
-    const take = (file) => {
+    const pick = dropZone('.bsp', this.ownMap ? `${this.ownMap}.bsp (drop or click for another)` :
+      'Drop a .bsp file here, or click to choose one', (file) => {
       if (!file) return;
       this.ownError = '';
       pick.classList.add('busy');
@@ -608,20 +608,7 @@ export class Menu {
       }, (err) => {
         this.ownError = err.message || String(err);
       }).finally(() => this.render());
-    };
-    input.addEventListener('change', () => take(input.files[0]));
-    pick.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      pick.classList.add('over');
     });
-    pick.addEventListener('dragleave', () => pick.classList.remove('over'));
-    pick.addEventListener('drop', (e) => {
-      e.preventDefault();
-      pick.classList.remove('over');
-      take(e.dataTransfer.files[0]);
-    });
-    pick.append(input, el('span', '', this.ownMap ? `${this.ownMap}.bsp (drop or click for another)` :
-      'Drop a .bsp file here, or click to choose one'));
     body.append(pick);
     if (this.ownError) body.append(el('p', 'menu-hint menu-error', this.ownError));
   }
@@ -679,9 +666,7 @@ export class Menu {
       row.append(opts);
       body.append(row);
     };
-    choice('Mode', [['casual', 'Casual'], ['competitive', 'Competitive'], ['wingman', 'Wingman'],
-      ['deathmatch', 'Deathmatch'], ['armsrace', 'Arms Race'], ['demolition', 'Demolition'], ['retakes', 'Retakes'],
-      ['demo', 'Demo']], this.practiceMode, (v) => {
+    choice('Mode', Object.entries(MODE_LABELS), this.practiceMode, (v) => {
       this.practiceMode = v;
     });
     if (demo) {

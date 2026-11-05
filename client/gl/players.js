@@ -3,7 +3,7 @@
 
 import { program } from './program.js';
 import { DEBRIS_VS, DEBRIS_FS } from './shaders.js';
-import { cubeInstances } from './debris.js';
+import { cubeInstances, drawCubes } from './debris.js';
 import { TEAM_CT } from '../../shared/player.js';
 import { BOX_DATA, BOX_STRIDE, HITGROUP_HEAD, feetOffset, crouchScale } from '../../shared/hitgroups.js';
 import {
@@ -56,16 +56,6 @@ export class Players {
   }
 
   draw(viewProj) {
-    if (!this.count) return;
-    const gl = this.gl;
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.inst, 0, this.count * I);
-    gl.useProgram(this.prog.p);
-    gl.uniformMatrix4fv(this.prog.loc.u_viewProj, false, viewProj);
-    gl.bindVertexArray(this.vao);
-    gl.disable(gl.CULL_FACE);
-    gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.count);
-    gl.enable(gl.CULL_FACE);
-    gl.bindVertexArray(null);
+    if (this.count) drawCubes(this.gl, this.prog, this.vao, this.vbo, this.inst, this.count, viewProj);
   }
 }

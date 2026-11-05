@@ -12,7 +12,7 @@
 // &offline&map=de_dust2 opens the sandbox.
 // Keys are CS:GO binds (client/binds.js); ` opens the console (client/settings.js).
 
-import { parseBSP, parseUntrustedBSP, parseVec3, mapNameOf } from '../shared/bsp.js';
+import { parseBSP, parseUntrustedBSP, mapNameOf, teamSpawns } from '../shared/bsp.js';
 import { sunOf } from '../shared/sun.js';
 import {
   TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED, IN_SCORE,
@@ -39,7 +39,7 @@ import { HitTargets, feetOffset } from '../shared/hitgroups.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import {
   Player, spawnPlayer, runCommand, resolveShots, applyDamage, ImpactList, TEAM_T, TEAM_CT, TEAM_SPECTATOR, TEAM_NAMES,
-  inBombSite, canReachBomb,
+  inBombSite, canReachBomb, teamOfJoin,
 } from '../shared/player.js';
 import { Grenades, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE, FX_BLAST } from '../shared/grenades.js';
 import { HITGROUP_CHEST, HITGROUP_LEGS } from '../shared/hitgroups.js';
@@ -228,8 +228,7 @@ const ws = player.ws;
 const shots = new ShotList();
 const impacts = new ImpactList();
 let tickCount = 1;
-let lastButtons = 0;
-let lastUseButtons = 0; // buttons of the last tick (the sandbox's +use edge)
+let lastButtons = 0; // buttons of the last tick (the +use edge)
 let world = null;
 const lightSample = new Float32Array(3), lightTarget = new Float32Array(3);
 let itemsVersion = -1; // last weapons-on-the-ground list handed to the models
@@ -479,6 +478,12 @@ async function loadMap(name) {
     buffer = await res.arrayBuffer();
     untrusted = !!room;
   }
+  // The radar's overview comes from a worker (it was most of the load: cs_polaris 2 of 2.4 s),
+  // started first so it works while the page builds the rest; the radar shows once it is there.
+  const job = ++overviewJob, copy = buffer.slice(0);
+  overviewWorker ||= new Worker(new URL('./overviewworker.js', import.meta.url), { type: 'module' });
+  overviewWorker.onmessage = null; // set below, once the bomb sites are known
+  overviewWorker.postMessage({ id: job, buffer: copy, untrusted }, [copy]);
   const t0 = performance.now(), steps = [];
   const step = (what) => steps.push(`${what} ${(performance.now() - (steps.t || t0)).toFixed(0)}`) && (steps.t = performance.now());
   const bsp = untrusted ? parseUntrustedBSP(buffer) : parseBSP(buffer);
@@ -510,18 +515,13 @@ async function loadMap(name) {
   world.surfaces = new SurfaceMap(bsp);
   world.bombSites = new BombSites(bsp);
   step('world');
-  // The radar's overview comes from a worker (it was most of the load: cs_polaris 2 of 2.4 s);
-  // the radar shows once it is there.
   radar.setMap(null, world.bombSites);
-  const job = ++overviewJob, sites = world.bombSites;
-  overviewWorker ||= new Worker(new URL('./overviewworker.js', import.meta.url), { type: 'module' });
+  const sites = world.bombSites;
   overviewWorker.onmessage = (e) => {
-    if (e.data.id !== overviewJob) return; // a map loaded since
+    if (e.data.id !== job || job !== overviewJob) return; // a map loaded since
     if (e.data.error) console.warn(`overview: ${e.data.error}`);
     else radar.setMap(Overview.from(e.data.data), sites);
   };
-  const copy = buffer.slice(0);
-  overviewWorker.postMessage({ id: job, buffer: copy, untrusted }, [copy]);
   breakables = new Breakables(bsp, world);
   breakableColors = mesh.breakableColors;
   doors = new Doors(bsp, world, breakables.count);
@@ -537,15 +537,7 @@ async function loadMap(name) {
   console.log(`${name}: ${mesh.numVerts} verts, ${(mesh.opaqueCount + mesh.cutoutCount + mesh.skyCount + mesh.transCount) / 3} tris, ` +
     `lightmap ${mesh.lightmap.width}x${mesh.lightmap.height}, ${world.ents.length} collision ents, ` +
     `${breakables.count} breakables, ${doors.count} movers, built in ${ms} ms (${steps.join(', ')}; fetched in ${(t0 - tf).toFixed(0)})`);
-
-  const o = new Float32Array(3);
-  spawns[TEAM_T].length = spawns[TEAM_CT].length = 0;
-  for (const e of bsp.entities) {
-    const team = e.classname === 'info_player_deathmatch' ? TEAM_T : e.classname === 'info_player_start' ? TEAM_CT : 0;
-    if (!team) continue;
-    parseVec3(e.origin, o);
-    spawns[team].push([o[0], o[1], o[2], e.angles ? +e.angles.trim().split(/\s+/)[1] || 0 : +(e.angle || 0)]);
-  }
+  Object.assign(spawns, teamSpawns(bsp));
 }
 
 function resetView(yaw) {
@@ -697,7 +689,7 @@ function calmRadius(height) {
 }
 // Can we take control of player `id` (a living bot of our team, mid-round, not deathmatch)?
 function canTakeOver(id) {
-  if (!net || id < 0 || (gameMode() & (GAME_DM | GAME_DEMO))) return false;
+  if (!net || id < 0 || (gameMode() & (GAME_DM | GAME_DEMO | GAME_ARMSRACE))) return false; // respawning: the server says not now
   const phase = net.own.round.phase, r = id * E_FIELDS;
   return (phase === PHASE_FREEZE || phase === PHASE_LIVE) && interp[r + E_HEALTH] > 0 &&
     interp[r + E_TEAM] === player.team && (net.names[id] || '').startsWith('BOT ');
@@ -1033,11 +1025,8 @@ function lockedSounds(buttons) { // (every tick: no closure in it, whose context
     const k = doors.ofEnt(touched[i]);
     if (k >= 0 && doors.rattlesOnTouch(k)) rattle(k, now);
   }
-  if ((buttons & IN_USE) && !(lastUseButtons & IN_USE)) {
-    const f = ps.f, cp = Math.cos(angles[0] * DEG);
-    const k = doors.findUse(world, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2], f[PS_ORIGIN], f[PS_ORIGIN + 1],
-      f[PS_ORIGIN + 2] + eyeOffset(ps), cp * Math.cos(angles[1] * DEG), cp * Math.sin(angles[1] * DEG),
-      -Math.sin(angles[0] * DEG));
+  if ((buttons & IN_USE) && !(lastButtons & IN_USE)) {
+    const k = usedMover();
     if (k >= 0 && doors.lockedSound[k]) {
       lockedTry = k;
       lockedTryAt = now;
@@ -1055,12 +1044,17 @@ function sandboxTouches(t, buttons) {
     if (k >= 0) doors.touch(k, t, sandboxAct);
   }
   if (!(buttons & IN_USE)) return;
-  const held = (lastUseButtons & IN_USE) !== 0; // only a wheel keeps turning
+  const held = (lastButtons & IN_USE) !== 0; // only a wheel keeps turning
+  const k = usedMover();
+  if (k >= 0 && (!held || doors.continuous(k))) doors.use(k, t, sandboxAct);
+}
+
+// The mover (door, button) our +use reaches along the view, else -1.
+function usedMover() {
   const f = ps.f, cp = Math.cos(angles[0] * DEG);
-  const k = doors.findUse(world, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2], f[PS_ORIGIN], f[PS_ORIGIN + 1],
+  return doors.findUse(world, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2], f[PS_ORIGIN], f[PS_ORIGIN + 1],
     f[PS_ORIGIN + 2] + eyeOffset(ps), cp * Math.cos(angles[1] * DEG), cp * Math.sin(angles[1] * DEG),
     -Math.sin(angles[0] * DEG));
-  if (k >= 0 && (!held || doors.continuous(k))) doors.use(k, t, sandboxAct);
 }
 
 // Other players' shots and the kill feed.
@@ -1275,7 +1269,6 @@ function tick() {
   const buttons = input.sampleButtons();
   let select = input.sampleSelect();
   if (select === SELECT_LAST) select = ws.f[WS_LAST_SLOT];
-  lastButtons = buttons;
   const t = tickCount;
   const alive = player.health > 0;
 
@@ -1293,7 +1286,7 @@ function tick() {
     if (died && !net) offlineRespawn();
   }
   if (alive && !noclip) lockedSounds(buttons);
-  lastUseButtons = buttons;
+  lastButtons = buttons;
   moverSounds();
   if (shots.count) {
     // Free for all: bullets stop at everyone (team 0 skips nobody), as on the server.
@@ -2563,7 +2556,7 @@ async function startOnline(team) {
   if (playing) leaveGame();
   resetSession();
   try {
-    await joinServer(team === 3 ? TEAM_CT : team === 2 ? TEAM_T : team === 1 ? TEAM_SPECTATOR : 0);
+    await joinServer(teamOfJoin(team));
   } catch (err) {
     if (net) net.close('failed');
     net = null;
@@ -2653,7 +2646,7 @@ async function startPractice(map, team, { mode = 'competitive', players = 10, di
   }
   worker.onmessage = worker.onerror = null;
   localWorker = worker;
-  await joinServer(team === 3 ? TEAM_CT : team === 2 ? TEAM_T : team === 1 ? TEAM_SPECTATOR : 0);
+  await joinServer(teamOfJoin(team));
   conWin.print(`practice: ${currentMap} (${mode}); rcon works without a password (bot_add, map ...)`);
   enterGame();
 }

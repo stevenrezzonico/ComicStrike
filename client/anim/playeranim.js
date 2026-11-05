@@ -20,7 +20,7 @@ import * as Q from './quat.js';
 import { HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4, HOLD_TIED } from '../models/players.js';
 import { WEAPONS, WEAPON_ID, SLOT_SECONDARY, SLOT_KNIFE, SLOT_C4 } from '../../shared/weapons.js';
 import { ANIM_RELOAD, ANIM_PLANT, ANIM_DEFUSE } from '../../shared/protocol.js';
-import { ramp } from './viewanim.js'; // (bump written out as ramps: as a call, not inlined, its double argument was boxed)
+import { ramp, matrix } from './viewanim.js'; // (bump written out as ramps: as a call, not inlined, its double argument was boxed)
 
 const PELVIS = S.bone('pelvis'), SPINE1 = S.bone('spine_1'), SPINE2 = S.bone('spine_2'), SPINE3 = S.bone('spine_3');
 const NECK = S.bone('neck_0'), HEAD = S.bone('head_0');
@@ -84,14 +84,10 @@ export function gunInHand(pose, m, q) {
   const h = HAND_R;
   Q.conj(q, 4, handTurn[1], 0);
   Q.mul(q, 0, pose.wrot, h * 4, q, 4);
-  const x = q[0], y = q[1], z = q[2], w = q[3];
-  m[0] = 1 - 2 * (y * y + z * z); m[1] = 2 * (x * y + z * w); m[2] = 2 * (x * z - y * w); m[3] = 0;
-  m[4] = 2 * (x * y - z * w); m[5] = 1 - 2 * (x * x + z * z); m[6] = 2 * (y * z + x * w); m[7] = 0;
-  m[8] = 2 * (x * z + y * w); m[9] = 2 * (y * z - x * w); m[10] = 1 - 2 * (x * x + y * y); m[11] = 0;
+  matrix(m, q, 0, 0, 0, 0);
   m[12] = pose.wpos[h * 3] + m[0] * PALM;
   m[13] = pose.wpos[h * 3 + 1] + m[1] * PALM;
   m[14] = pose.wpos[h * 3 + 2] + m[2] * PALM;
-  m[15] = 1;
   return m;
 }
 
@@ -542,7 +538,7 @@ export class PlayerAnimator {
     const dx = sel[0], dy = sel[1];
     const u = Math.min(1, t / FLY), travel = 1 - Math.pow(1 - u, 1.6);
     const spread = ramp(t, 0, 0.14); // the arms fling out wide
-    const flat = smoothstep(0, 0.8, u); // upright .. lying flat on the back
+    const flat = ramp(u, 0, 0.8); // upright .. lying flat on the back
     const land = ramp(t, FLY, FLY + 0.22); // the hands and feet come down on the ground
     const slide = ramp(t, FLY, FLY + 0.3);
     const bounce = ramp(t, FLY, FLY + 0.07) * (1 - ramp(t, FLY + 0.07, FLY + 0.28));
@@ -550,7 +546,7 @@ export class PlayerAnimator {
     const h = PELVIS_Z - CROUCH_DROP * c;
     const px = dx * R, py = dy * R;
     const pz = h * (1 - u) + LYING * u + FLY_ARC * Math.sin(Math.PI * u) * Math.min(1, this.deathDist / 30) -
-      this.deathDrop * smoothstep(0.4, 1, u) + 3 * bounce;
+      this.deathDrop * ramp(u, 0.4, 1) + 3 * bounce;
     p.pos[PELVIS * 3] = px;
     p.pos[PELVIS * 3 + 1] = py;
     p.pos[PELVIS * 3 + 2] = pz;
@@ -649,9 +645,4 @@ function setPoint(R, v) {
   R.x = v[0];
   R.y = v[1];
   R.z = v[2];
-}
-
-function smoothstep(a, b, x) {
-  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
 }

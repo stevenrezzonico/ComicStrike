@@ -606,9 +606,8 @@ export class Doors {
     return ms !== undefined && !ms.on;
   }
 
-  // Someone used mover k (a player's +use, or a target fired by the map). `value`: a
-  // momentary door's position (its wheel sends it).
-  use(k, tick, act, value = 1) {
+  // Someone used mover k (a player's +use, or a target fired by the map).
+  use(k, tick, act) {
     if (this.dead[k] || this.locked(k)) return;
     const kind = this.kind[k];
     if (kind === MOVER_BUTTON) {
@@ -635,7 +634,7 @@ export class Doors {
       return;
     }
     if (kind === MOVER_MOMENTARY) {
-      this.moveTo(k, tick, value);
+      this.moveTo(k, tick, 1);
       return;
     }
     if (kind === MOVER_WHEEL) {

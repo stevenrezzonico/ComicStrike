@@ -145,6 +145,10 @@ export class Writer {
   u32v(v) { this.dv.setUint32(this.pos, v >>> 0, true); this.pos += 4; }
   f32v(v) { this.dv.setFloat32(this.pos, v, true); this.pos += 4; }
   f64v(v) { this.dv.setFloat64(this.pos, v, true); this.pos += 8; }
+  // Saturating: a value past the type's range is written as its end (a DataView wraps it).
+  u8c(v) { this.u8v(Math.min(Math.max(v, 0), 255)); }
+  u16c(v) { this.u16v(Math.min(Math.max(v, 0), 65535)); }
+  i16c(v) { this.dv.setInt16(this.pos, Math.min(Math.max(v, -32768), 32767), true); this.pos += 2; }
 
   bytes(src) {
     this.u8.set(src, this.pos);
@@ -296,7 +300,7 @@ export function writeInfo(w, players) {
     w.u8v(p.team);
     w.u16v(p.kills);
     w.u16v(p.deaths);
-    w.u16v(Math.min(Math.max(p.score, 0), 65535));
+    w.u16c(p.score);
     w.u8v(Math.min(p.mvps || 0, 255));
     w.str(p.name);
     n++;
@@ -402,7 +406,7 @@ export function writeHostages(w, h) {
   for (let k = 0; k < h.count; k++) {
     w.u8v(h.state[k]);
     w.i8v(h.carrier[k]);
-    w.u8v(Math.min(Math.max(Math.ceil(h.health[k]), 0), 255));
+    w.u8c(Math.ceil(h.health[k]));
     w.f32v(h.x[k]);
     w.f32v(h.y[k]);
     w.f32v(h.z[k]);
@@ -510,10 +514,9 @@ export function writePing(w, sender, x, y, z) {
   w.reset();
   w.u8v(S2C_PING);
   w.u8v(sender);
-  for (const v of [x, y, z]) {
-    w.dv.setInt16(w.pos, Math.min(Math.max(Math.round(v), -32768), 32767), true);
-    w.pos += 2;
-  }
+  w.i16c(Math.round(x));
+  w.i16c(Math.round(y));
+  w.i16c(Math.round(z));
   return w.view();
 }
 
@@ -886,7 +889,7 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
     w.f32v(bomb.x);
     w.f32v(bomb.y);
     w.f32v(bomb.z);
-    w.u16v(Math.min(Math.max(bomb.ticksLeft, 0), 65535));
+    w.u16c(bomb.ticksLeft);
   }
   const p = own.player;
   const moversAt = w.pos;
@@ -918,20 +921,20 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
     w.u8[moversAt] = n;
   }
 
-  w.u8v(Math.min(Math.max(Math.ceil(p.health), 0), 255));
+  w.u8c(Math.ceil(p.health));
   w.u8v(Math.min(p.armor, 127) | (p.helmet ? 128 : 0));
   w.u8v(p.spawnCount);
   w.u8v(p.team);
   w.f32v(own.spawnYaw);
-  w.u16v(Math.min(Math.max(p.money, 0), 65535));
+  w.u16c(p.money);
   w.u8v((own.canBuy ? OWN_CAN_BUY : 0) | (p.defuser ? OWN_DEFUSER : 0) | (p.carrying ? OWN_CARRYING : 0) |
     (own.immune ? OWN_IMMUNE : 0) | (own.hurtRecent ? OWN_HURT : 0));
-  w.u8v(Math.min(Math.max(Math.round((own.flashLeft || 0) * 32), 0), 255));
-  w.u8v(Math.min(Math.max(Math.round((own.flashTotal || 0) * 32), 0), 255));
-  w.u8v(Math.min(Math.max(Math.round((own.useProgress || 0) * 255), 0), 255));
+  w.u8c(Math.round((own.flashLeft || 0) * 32));
+  w.u8c(Math.round((own.flashTotal || 0) * 32));
+  w.u8c(Math.round((own.useProgress || 0) * 255));
   if (own.hurtRecent) {
     w.u8v(own.hurtSerial);
-    for (let i = 0; i < 3; i++) w.dv.setInt16((w.pos += 2) - 2, Math.min(Math.max(Math.round(own.hurtFrom[i]), -32768), 32767), true);
+    for (let i = 0; i < 3; i++) w.i16c(Math.round(own.hurtFrom[i]));
   }
   w.bytes(p.psBytes);
   writeWeaponState(w, p.ws.f);

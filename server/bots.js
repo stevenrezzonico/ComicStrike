@@ -1082,8 +1082,11 @@ class Bot {
         if (nx < d.mins[k * 3] - 24 || nx > d.maxs[k * 3] + 24 || ny < d.mins[k * 3 + 1] - 24 || ny > d.maxs[k * 3 + 1] + 24) continue;
         if (nz < d.mins[k * 3 + 2] - 40 || nz > d.maxs[k * 3 + 2]) continue;
         const b = bd.button;
-        const node = this.bots.nearestNode((d.mins[b * 3] + d.maxs[b * 3]) / 2, (d.mins[b * 3 + 1] + d.maxs[b * 3 + 1]) / 2,
-          (d.mins[b * 3 + 2] + d.maxs[b * 3 + 2]) / 2 - 36, 80);
+        if (bd.node === undefined) { // a scan of every node: once a map (a button stays where it is)
+          bd.node = this.bots.nearestNode((d.mins[b * 3] + d.maxs[b * 3]) / 2, (d.mins[b * 3 + 1] + d.maxs[b * 3 + 1]) / 2,
+            (d.mins[b * 3 + 2] + d.maxs[b * 3 + 2]) / 2 - 36, 80);
+        }
+        const node = bd.node;
         if (node < 0) continue;
         this.pressButton = b;
         this.pressDoor = k;
