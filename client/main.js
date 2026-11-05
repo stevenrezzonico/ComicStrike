@@ -1329,6 +1329,10 @@ function tick() {
 let last = performance.now();
 let lastDraw = last; // when the last frame was drawn (fps_max, r_frames_ahead skip frames)
 let ticksSinceDraw = 0; // the ticks run since, held frames included (the benchmark's frame kinds)
+// The time since the last drawn frame, for the animations draw() advances by dt: a held frame
+// (fps_max, r_frames_ahead) adds its own, else the deaths, strides and view kick ran slow by
+// the held share (with the browser's frame limiter off, half the frames: slow motion).
+let drawDt = 0;
 let accumulator = 0;
 let frames = 0;
 let fpsTime = last;
@@ -1541,6 +1545,7 @@ function frame(now) {
   input.applyMouse(angles);
   const t0 = performance.now();
   accumulator += elapsed;
+  drawDt += elapsed;
   if (serverClock >= 0) serverClock += Math.min(elapsed, 0.25) * TICK_RATE;
   let ticks = 0;
   while (accumulator >= TICK_DT && ticks < MAX_TICKS_PER_FRAME) {
@@ -1601,7 +1606,8 @@ function frame(now) {
     bench.gpu += renderer.timer.frameMs;
     bench.gpuN++;
   }
-  draw(now, accumulator / TICK_DT, Math.min(elapsed, 0.1));
+  draw(now, accumulator / TICK_DT, Math.min(drawDt, 0.1));
+  drawDt = 0;
   renderer.timer.endFrame();
   if (previewEdit) previewEdit.draw();
   // r_drawrepeat: the same frame again (no time passing), for the GPU readout.
