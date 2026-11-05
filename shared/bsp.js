@@ -246,11 +246,13 @@ export function validateBSP(b, L = BSP_LIMITS) {
     const mt = b.texinfoI[i * 10 + 8];
     if (mt < 0 || mt >= b.numTextures) fail(`texinfo ${i} texture`);
   }
+  let corners = 0; // faces own their surfedges: 1.2 M faces of 256 corners shared 24 MB of them
   for (let f = 0; f < b.numFaces; f++) {
     const first = faceFirstEdge(b, f), n = faceNumEdges(b, f), ti = faceTexinfo(b, f);
     if (facePlane(b, f) >= b.numPlanes) fail(`face ${f} plane`);
     if (n < 3 || n > L.faceEdges || first < 0 || first + n > nse) fail(`face ${f} edges`);
     if (ti < 0 || ti >= b.numTexinfo) fail(`face ${f} texinfo`);
+    if ((corners += n) > nse) fail('faces share surfedges');
     let smin = Infinity, smax = -Infinity, tmin = Infinity, tmax = -Infinity;
     for (let i = 0; i < n; i++) {
       const v = faceVertex(b, f, i) * 3;
@@ -281,10 +283,11 @@ export function validateBSP(b, L = BSP_LIMITS) {
   // parent (the client walks every child of a visible node each frame, so a node shared by
   // two stacked 24 deep was 2^24 visits a frame); compilers do share clipnodes.
   const parents = new Uint8Array(b.numNodes);
+  let nodeFaces = 0; // each face hangs on one node (findFace scans a node's range per impact)
   for (let i = 0; i < b.numNodes; i++) {
     if (b.nodesI32[i * 6] < 0 || b.nodesI32[i * 6] >= b.numPlanes) fail(`node ${i} plane`);
     const ff = b.nodesI16[i * 12 + 10] & 0xffff, nf = b.nodesI16[i * 12 + 11] & 0xffff;
-    if (ff + nf > b.numFaces) fail(`node ${i} faces`);
+    if (ff + nf > b.numFaces || (nodeFaces += nf) > b.numFaces) fail(`node ${i} faces`);
     for (let k = 0; k < 2; k++) {
       const c = b.nodesI16[i * 12 + 2 + k];
       if (c >= b.numNodes || (c < 0 && -c - 1 >= b.numLeaves)) fail(`node ${i} child`);

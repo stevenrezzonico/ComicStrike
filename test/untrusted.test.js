@@ -38,6 +38,12 @@ Deno.test('broken indices, cycles, deep trees and far coordinates are turned awa
     'tabbed vector': (b) => { b.entities.push({ classname: 'info_player_start', origin: '0\t1e39\t0' }); },
     'model named twice': (b) => { b.entities.push({ classname: 'func_wall', model: '*1' }); },
     'leaf faces': (b) => { b.leavesI16[1 * 14 + 11] = b.marksurfaces.length + 1; },
+    'shared surfedges': (b) => {
+      for (let f = 0; f < b.numFaces; f++) { b.facesI32[f * 5 + 1] = 0; b.facesI16[f * 10 + 4] = 200; }
+    },
+    'overlapping node faces': (b) => {
+      for (let i = 0; i < 2; i++) { b.nodesI16[i * 12 + 10] = 0; b.nodesI16[i * 12 + 11] = b.numFaces; }
+    },
     'model 0 leaf count': (b) => { b.modelsI[13] = b.numLeaves; },
   };
   assert.doesNotThrow(() => validateBSP(fresh()));

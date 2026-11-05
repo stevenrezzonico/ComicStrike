@@ -92,6 +92,9 @@ export function parse(text) {
 // deno-lint-ignore no-control-regex
 export const quote = (s) => `"${String(s).replaceAll('"', "'").replace(/[\u0000-\u001f\u007f]/g, ' ')}"`;
 
+// A room's uploader holds its rcon password: aliases are kept for good.
+export const MAX_ALIASES = 256;
+
 export class Console {
   // print(text): where output goes unless a call passes ctx.print.
   constructor(print = (s) => console.log(s)) {
@@ -118,6 +121,8 @@ export class Console {
         for (const [k, v] of this.aliases) this.out(ctx, `${k} : ${v}`);
       } else if (a.length === 2) {
         this.out(ctx, this.aliases.has(a[1].toLowerCase()) ? this.aliases.get(a[1].toLowerCase()) : 'no such alias');
+      } else if (!this.aliases.has(a[1].toLowerCase()) && this.aliases.size >= MAX_ALIASES) {
+        this.out(ctx, 'too many aliases');
       } else {
         this.aliases.set(a[1].toLowerCase(), a.slice(2).join(' '));
       }

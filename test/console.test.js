@@ -5,6 +5,7 @@ import {
   Writer, Reader, writeCommand, printChunks, S2C_PRINT, S2C_CHANGELEVEL, S2C_REJECT,
   MAX_TEXT, S2C_CHAT, readChat, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC,
 } from '../shared/protocol.js';
+import { Console, MAX_ALIASES } from '../shared/cvars.js';
 import { Host, AddressCounts } from '../server/host.js';
 import { TICK_RATE } from '../shared/constants.js';
 import { loadMap, joinClient, sendCmd } from './harness.js';
@@ -373,4 +374,12 @@ Deno.test('rcon: a server-wide cap on bad passwords a minute', async (t) => {
   clock.ms += 60000;
   admin.command('rcon hunter2 status');
   assert.match(admin.prints().at(-1), /admin/);
+});
+
+Deno.test('alias: new names are refused past the cap, redefining works', () => {
+  const con = new Console(() => {});
+  for (let i = 0; i < MAX_ALIASES + 5; i++) con.exec(`alias a${i} "echo ${i}"`);
+  assert.equal(con.aliases.size, MAX_ALIASES);
+  con.exec('alias a0 "echo x"');
+  assert.equal(con.aliases.get('a0'), 'echo x');
 });
