@@ -332,38 +332,42 @@ export class Sounds {
   }
 
   // A cartoon splash into `out`, `size` 0.4 (a step in shallow water: "splish") to 1
-  // (wading: "sploosh") or more (landing): noise through a band-pass sweeping down from
-  // bright to dull, swelling in like every step, and two or three bubbles, quick rising
-  // sine "plips", at random moments in it. `r` varies the pitch from step to step.
+  // (wading: "sploosh") or more (landing): noise through a low-pass sweeping down from
+  // ~900 to ~200 Hz, swelling in over 35 ms (a 1.5 kHz band-pass with a 20 ms attack was
+  // a hiss, too sharp for a landing), then a tail of low bubbles, rising sine chirps at
+  // 250-450 Hz, over up to 0.4 s (more and later the bigger the splash). `r` varies the
+  // pitch from step to step.
   splash(out, t, size, r) {
-    const ctx = this.ctx, src = ctx.createBufferSource(), bp = ctx.createBiquadFilter(), g = ctx.createGain();
-    const len = 0.1 + 0.15 * size;
+    const ctx = this.ctx, src = ctx.createBufferSource(), lp = ctx.createBiquadFilter(), g = ctx.createGain();
+    const rise = 0.035, len = 0.1 + 0.15 * size;
     src.buffer = this.noise;
     src.loop = true;
-    bp.type = 'bandpass';
-    bp.Q.value = 1.2;
-    bp.frequency.setValueAtTime(1500 * r, t);
-    bp.frequency.exponentialRampToValueAtTime(450 * r, t + len);
+    lp.type = 'lowpass';
+    lp.Q.value = 0.8;
+    lp.frequency.setValueAtTime(900 * r, t);
+    lp.frequency.exponentialRampToValueAtTime(200 * r, t + rise + len);
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.3 + 0.25 * size, t + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.02 + len);
-    src.connect(bp).connect(g).connect(out);
+    g.gain.linearRampToValueAtTime(0.35 + 0.3 * size, t + rise);
+    g.gain.exponentialRampToValueAtTime(0.001, t + rise + len);
+    src.connect(lp).connect(g).connect(out);
     src.start(t, Math.random() * 0.5);
-    src.stop(t + len + 0.05);
-    const n = 2 + Math.floor(Math.random() * 2);
+    src.stop(t + rise + len + 0.05);
+    const big = size > 1, n = big ? 4 + Math.floor(Math.random() * 3) : 1 + Math.floor(Math.random() * 2);
+    const spread = big ? 0.35 : 0.15 * size;
     for (let i = 0; i < n; i++) {
-      const f = (500 + Math.random() * 400) * (1 - 0.25 * Math.min(size, 1.4));
-      this.tone(out, t, f, f * 1.6, 0.04 + 0.03 * size, 0.035, 0.03 + Math.random() * len, 'sine', 0.006);
+      const f = (250 + Math.random() * 200) * r;
+      this.tone(out, t, f, f * 1.5, 0.03 + 0.02 * Math.min(size, 1), 0.05, 0.04 + Math.random() * spread, 'sine', 0.01);
     }
   }
 
-  // Landing from a jump or fall; in water (`kind` 'water' / 'wade') a big splash.
+  // Landing from a jump or fall; in water (`kind` 'water' / 'wade') a big splash over a
+  // low "whoomp" falling 160 -> 60 Hz.
   land(volume = 1, kind = 'hard') {
     const v = this.voice(null, 0, 0, volume * 0.5);
     if (!v) return;
     if (kind === 'water' || kind === 'wade') {
       this.splash(v.out, v.t, 1.4, 0.9 + Math.random() * 0.2);
-      this.tone(v.out, v.t, 220, 120, 0.25, 0.12, 0, 'sine', 0.015); // "bloop"
+      this.tone(v.out, v.t, 160, 60, 0.4, 0.2, 0, 'sine', 0.03);
       return;
     }
     this.burst(v.out, v.t, 40, 400, 0.8, 0.14, 0, 0.02);
