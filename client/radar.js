@@ -232,7 +232,7 @@ export class Radar {
   place(x, y, clamp) {
     const dx = x - this.cx, dy = y - this.cy, k = this.k;
     let px = k * (dx * this.ca - dy * this.sa), py = -k * (dx * this.sa + dy * this.ca);
-    const d = Math.hypot(px, py), max = this.R * 0.9;
+    const d = Math.sqrt(px * px + py * py), max = this.R * 0.9; // (hypot allocates its result)
     if (d > max) {
       if (!clamp) return false;
       px *= max / d;

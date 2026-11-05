@@ -3,7 +3,9 @@
 // grenades) shows a red arc with an ink outline on a ring round the middle of the screen,
 // pointing at that place as the view turns, at full strength for HOLD seconds and fading out
 // by HURT_FADE. A pool of SLOTS SVG arcs is made once; update() touches the DOM only while
-// one shows, and only when what it shows changed.
+// one shows, and only when its angle changed by a degree. The fade is a compositor animation
+// started with the hit (50 opacity writes an arc, each a style recalculation on that frame,
+// were the busiest DOM writer in a fight: 20 a second).
 
 export const HURT_FADE = 1.5; // seconds an arc lasts
 const HOLD = 0.4; // at full strength first
@@ -43,8 +45,15 @@ export class HurtIndicator {
       svg.innerHTML = `<path d="${d}"/>`;
       svg.style.display = 'none';
       root.appendChild(svg);
-      this.slots.push({ el: svg, on: false, x: 0, y: 0, at: 0, angle: NaN, alpha: NaN });
+      this.slots.push({ el: svg, on: false, x: 0, y: 0, at: 0, angle: NaN, fade: null });
     }
+  }
+
+  // The fade, from the hit: full for HOLD, then out by HURT_FADE (a new hit restarts it).
+  fade(slot) {
+    if (slot.fade) slot.fade.cancel();
+    slot.fade = slot.el.animate([{ opacity: 1, offset: 0 }, { opacity: 1, offset: HOLD / HURT_FADE }, { opacity: 0 }],
+      { duration: HURT_FADE * 1000, fill: 'forwards' });
   }
 
   // A hit from (x, y) at time `now` (seconds).
@@ -63,6 +72,7 @@ export class HurtIndicator {
       slot.on = true;
       slot.el.style.display = '';
     }
+    this.fade(slot);
     this.active = true;
   }
 
@@ -75,26 +85,26 @@ export class HurtIndicator {
       if (!s.on) continue;
       const age = now - s.at;
       if (age >= HURT_FADE || !show) {
-        s.on = false;
-        s.el.style.display = 'none';
-        s.angle = s.alpha = NaN;
+        this.hide(s);
         continue;
       }
       any = true;
-      const angle = Math.round(hurtAngle(s.x, s.y, ex, ey, yaw) * 2) / 2;
-      const alpha = age < HOLD ? 1 : Math.round((1 - (age - HOLD) / (HURT_FADE - HOLD)) * 50) / 50;
+      const angle = Math.round(hurtAngle(s.x, s.y, ex, ey, yaw));
       if (angle !== s.angle) s.el.style.transform = `rotate(${s.angle = angle}deg)`;
-      if (alpha !== s.alpha) s.el.style.opacity = s.alpha = alpha;
     }
     this.active = any;
   }
 
+  hide(s) {
+    s.on = false;
+    s.el.style.display = 'none';
+    s.angle = NaN;
+    if (s.fade) s.fade.cancel();
+    s.fade = null;
+  }
+
   clear() {
-    for (const s of this.slots) {
-      s.on = false;
-      s.el.style.display = 'none';
-      s.angle = s.alpha = NaN;
-    }
+    for (const s of this.slots) this.hide(s);
     this.active = false;
   }
 }

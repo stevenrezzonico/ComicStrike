@@ -201,7 +201,7 @@ export class Debris {
           s[o + 9 + a] *= 0.5;
         }
         // Settled on a floor: stop simulating it.
-        if (t.nz > 0.7 && Math.hypot(s[o + 3], s[o + 4], s[o + 5]) < 40) {
+        if (t.nz > 0.7 && s[o + 3] * s[o + 3] + s[o + 4] * s[o + 4] + s[o + 5] * s[o + 5] < 40 * 40) {
           s[o + 19] = 1;
           s[o + 6] = Math.round(s[o + 6] / Math.PI) * Math.PI; // lie flat
           s[o + 7] = Math.round(s[o + 7] / Math.PI) * Math.PI;

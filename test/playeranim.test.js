@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { buildPlayer, HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4 } from '../client/models/players.js';
-import { PlayerAnimator, holdOf, gunInHand } from '../client/anim/playeranim.js';
+import { PlayerAnimator, holdOf, gunInHand, primeAnimator } from '../client/anim/playeranim.js';
 import { PLAYER_SKELETON as S } from '../client/anim/skeleton.js';
 import { MESH_STRIDE } from '../client/gl/meshkit.js';
 import { WEAPON_ID, WEAPONS } from '../shared/weapons.js';
@@ -50,6 +50,18 @@ Deno.test('player models: every leg part rides the bone whose span it covers', (
       assert.ok(z <= top && z >= bottom, `${team}: a ${name} vertex at z ${z.toFixed(1)} is outside its span`);
     }
   }
+});
+
+// The priming run at load (the optimizer's type feedback) goes through every state without
+// a gun's points and with them; it must leave the shared animator code with sane poses.
+Deno.test('player animation: the priming run goes through every state', () => {
+  primeAnimator(null);
+  const points = [];
+  for (const name of ['ak47', 'nova', 'revolver']) points[WEAPON_ID[name]] = { support: [10, 0, 0], mag: [2, 0, -3], magDir: [0, 0, -1], bolt: [-3, 0, 2], port: [0, 0, -1], cylinder: [1, 0, 1] };
+  primeAnimator(points);
+  const a = new PlayerAnimator();
+  a.update(1 / 60, 0, 0, 0, 0, 0, 0, true, HOLD_RIFLE, 0, 0, true);
+  assert.ok(a.pose.skin.every((v) => Number.isFinite(v)), 'a fresh animator poses after the priming');
 });
 
 Deno.test('player animation: same inputs, same matrices', () => {

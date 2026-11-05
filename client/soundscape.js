@@ -116,7 +116,7 @@ export class SoundScape {
       this.anim[id] = anim;
       // Footsteps from how fast they move.
       if (!Number.isNaN(this.px[id]) && dt > 0) {
-        const d = Math.hypot(x - this.px[id], y - this.py[id]);
+        const dx = x - this.px[id], dy = y - this.py[id], d = Math.sqrt(dx * dx + dy * dy); // (hypot allocates)
         const flags = rows[r + E_FLAGS];
         if (d / dt > STEP_SPEED && d < 64 && (flags & FL_ONGROUND) && !(flags & FL_DUCKING)) {
           this.stepDist[id] += d;

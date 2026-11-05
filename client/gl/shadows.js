@@ -7,7 +7,8 @@ import { program } from './program.js';
 import { SHADOW_VS, SHADOW_FS } from './shaders.js';
 import { CLIP_ALL } from './mat4.js';
 
-const F = 5; // floats per disc: x, y, floor height, radius, darkness
+export const SHADOW_FLOATS = 5; // floats per disc: x, y, floor height, radius, darkness (PlayerModels writes them)
+const F = SHADOW_FLOATS;
 
 export class FloorShadows {
   constructor(gl, capacity = 64) {

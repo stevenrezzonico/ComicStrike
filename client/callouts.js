@@ -10,8 +10,10 @@ import { RADIO, RADIO_MENUS } from '../shared/protocol.js';
 export const BALLOON_MS = 2500, PING_MS = 3000;
 const BALLOONS = 6, PINGS = 4;
 
-// A world point on the screen in CSS pixels into out, or false behind the camera.
-function toScreen(m, x, y, z, out) {
+// The world point o (its x, y, z) on the screen in CSS pixels into out, or false behind the
+// camera. (The point as an object: three doubles as arguments were boxed at every call.)
+function toScreen(m, o, out) {
+  const x = o.x, y = o.y, z = o.z;
   const X = m[0] * x + m[4] * y + m[8] * z + m[12], Y = m[1] * x + m[5] * y + m[9] * z + m[13];
   const W = m[3] * x + m[7] * y + m[11] * z + m[15];
   if (W < 1) return false;
@@ -62,8 +64,8 @@ export class Callouts {
   // Every frame: speakers' heads from headOf(id, out) (false: not to be shown).
   update(now, viewProj, headOf, show) {
     const pt = this.pt;
-    for (const b of this.balloons) this.place(b, show && b.until > now && headOf(b.id, b) && toScreen(viewProj, b.x, b.y, b.z, pt));
-    for (const p of this.pings) this.place(p, show && p.until > now && toScreen(viewProj, p.x, p.y, p.z, pt));
+    for (const b of this.balloons) this.place(b, show && b.until > now && headOf(b.id, b) && toScreen(viewProj, b, pt));
+    for (const p of this.pings) this.place(p, show && p.until > now && toScreen(viewProj, p, pt));
   }
 
   place(o, on) {

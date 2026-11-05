@@ -53,6 +53,12 @@ export function fromEuler(out, oo, pitch, yaw, roll) {
   return out;
 }
 
+// fromEuler with the angles read from e (at eo): no doubles cross the call (passed as
+// arguments they are boxed, an allocation each, when the caller is not inlined).
+export function fromEulerAt(out, oo, e, eo) {
+  return fromEuler(out, oo, e[eo], e[eo + 1], e[eo + 2]);
+}
+
 export function normalize(q, o) {
   const l = Math.sqrt(q[o] * q[o] + q[o + 1] * q[o + 1] + q[o + 2] * q[o + 2] + q[o + 3] * q[o + 3]) || 1; // (hypot allocates)
   q[o] /= l;

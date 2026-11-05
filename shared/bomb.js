@@ -24,9 +24,13 @@ export const BOMB_EXPLODED = 5;
 export class BombState {
   constructor() {
     this.state = BOMB_NONE;
-    this.x = 0; // where it lies (dropped / planted): its bottom center
-    this.y = 0;
-    this.z = 0;
+    // Where it lies (dropped / planted): its bottom center. -0: a double from the start, so
+    // the first drop, minutes into a match, does not change the fields' representation from
+    // integer, which deoptimized every function that had read the bomb (the client's tick,
+    // draw, snapshot apply, HUD and radar at once: seconds of slower, garbage-heavy frames).
+    this.x = -0;
+    this.y = -0;
+    this.z = -0;
     this.ticksLeft = 0; // planted: server ticks until it explodes
   }
 

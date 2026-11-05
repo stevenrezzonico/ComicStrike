@@ -372,7 +372,7 @@ const jingleCues = new JingleCues();
 let lastOwnTeam = 0; // our team in the last snapshot (a swap at a round start is the half-time)
 const replayShots = new ShotList();
 const smooth = new Float32Array(3); // visual offset hiding prediction corrections
-const netStats = { rtt: 0, compared: 0, corrected: 0, lastErr: 0 };
+const netStats = { rtt: -0, compared: 0, corrected: 0, lastErr: -0 }; // (-0: doubles from the start, see BombState)
 
 // Other players, interpolated between snapshots around renderTick.
 let serverClock = -1; // estimated newest server tick (fractional), advanced every frame
@@ -1422,7 +1422,7 @@ function benchmarkReport() {
     return `median ${quantile(list, 0.5).toFixed(2)} ms (${(list.length / bench.seconds).toFixed(0)}/s)`;
   };
   const kinds = `by kind: plain ${ofKind((k) => k === 0)} · with ticks ${ofKind((k) => k & 1)}, ` +
-    `${(bench.parts[0] / Math.max(1, bench.ticks)).toFixed(2)} ms a tick · with DOM writes ${ofKind((k) => k & 2)}`;
+    `${(bench.parts[0] / Math.max(1, bench.ticks)).toFixed(2)} ms a tick · with DOM writes and no tick ${ofKind((k) => k === 2)}`;
   const writers = [...bench.domBy].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, n]) => `${k} ${n}`).join(', ');
   const dom = `dom writes: ${[...bench.domBy.values()].reduce((a, b) => a + b, 0)}${writers ? ` (${writers})` : ''}`;
   const garbage = performance.memory
@@ -2397,9 +2397,11 @@ document.addEventListener('keydown', (e) => {
 });
 canvas.addEventListener('touchstart', () => document.body.classList.remove('keysonly'), { passive: true });
 document.getElementById('pausebtn').addEventListener('click', () => input.unlock());
-// The pause button sits beside the round bar: its width goes to CSS as the bar's text changes.
+// The pause button sits beside the round bar: its width goes to CSS as the bar's text changes
+// (on the button itself: set on body, each write restyled the whole page, 102 elements in
+// 1-1.8 ms, once a second as the clock's text changed width).
 new ResizeObserver((entries) => {
-  document.body.style.setProperty('--roundbar-w', `${entries[entries.length - 1].borderBoxSize?.[0]?.inlineSize ??
+  document.getElementById('pausebtn').style.setProperty('--roundbar-w', `${entries[entries.length - 1].borderBoxSize?.[0]?.inlineSize ??
     entries[entries.length - 1].target.offsetWidth}px`);
 }).observe(document.getElementById('roundbar'));
 // The overlay is decided once the lock request settles: asked at once, the mouse was not

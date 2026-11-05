@@ -95,6 +95,7 @@ export class Pose {
     // reachGoal's target (0-2) and pole (3-5): hot callers write them here, as floating-point
     // arguments to a call that is not inlined are boxed (reach's six were ~3 KB a frame).
     this.goal = new Float64Array(6);
+    this.eul = new Float64Array(skel.count * 3); // turnAll(): a frame's Euler turns, degrees, 3 a bone
     this.reset();
   }
 
@@ -115,6 +116,21 @@ export class Pose {
   turn(i, pitch, yaw, roll) {
     Q.fromEuler(tmpQ, 0, pitch, yaw, roll);
     Q.mul(this.rot, i * 4, tmpQ, 0, this.rot, i * 4);
+    return this;
+  }
+
+  // turn() for every bone with angles in `eul` (zeros skip), which is then cleared: the
+  // angles go as array elements, since turn's three doubles are boxed at every call the
+  // optimizer does not inline (15 turns a player a frame, 9 players: 2 KB of garbage).
+  turnAll() {
+    const e = this.eul;
+    for (let i = 0; i < this.skel.count; i++) {
+      const o = i * 3;
+      if (e[o] === 0 && e[o + 1] === 0 && e[o + 2] === 0) continue;
+      Q.fromEulerAt(tmpQ, 0, e, o);
+      Q.mul(this.rot, i * 4, tmpQ, 0, this.rot, i * 4);
+      e[o] = e[o + 1] = e[o + 2] = 0;
+    }
     return this;
   }
 

@@ -149,8 +149,8 @@ Deno.test('de_dust2: almost every bullet hit finds the face (and texture) it lan
     traceHull(world, HULL_POINT, x, y, z + 20, x + dx * 4096, y + dy * 4096, z + 20 + dz * 4096, tr);
     if (tr.fraction >= 1 || tr.startsolid || tr.ent !== 0) continue;
     hits++;
-    const f = map.findFace(0, tr.endx - dx * 4, tr.endy - dy * 4, tr.endz - dz * 4, tr.endx + dx * 4, tr.endy + dy * 4,
-      tr.endz + dz * 4);
+    const f = map.findFace(0, [tr.endx - dx * 4, tr.endy - dy * 4, tr.endz - dz * 4],
+      [tr.endx + dx * 4, tr.endy + dy * 4, tr.endz + dz * 4]);
     if (f >= 0) {
       found++;
       kinds.add(map.surfaceAt(world, 0, tr.endx, tr.endy, tr.endz, dx, dy, dz)[0]);

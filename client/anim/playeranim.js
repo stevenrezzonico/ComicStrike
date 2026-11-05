@@ -18,7 +18,7 @@
 import { Pose, PLAYER_SKELETON as S } from './skeleton.js';
 import * as Q from './quat.js';
 import { HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4, HOLD_TIED } from '../models/players.js';
-import { WEAPONS, SLOT_SECONDARY, SLOT_KNIFE, SLOT_C4 } from '../../shared/weapons.js';
+import { WEAPONS, WEAPON_ID, SLOT_SECONDARY, SLOT_KNIFE, SLOT_C4 } from '../../shared/weapons.js';
 import { ANIM_RELOAD, ANIM_PLANT, ANIM_DEFUSE } from '../../shared/protocol.js';
 import { ramp, bump } from './viewanim.js';
 
@@ -102,11 +102,13 @@ export function holdOf(weaponId) {
 const tq = new Float32Array(4);
 const tv = new Float32Array(6);
 const t3 = new Float32Array(3); // a rotated offset
+const te = new Float64Array(3); // Euler angles for Q.fromEulerAt (no doubles boxed at the call)
 
 export class PlayerAnimator {
   constructor() {
     this.pose = new Pose(S);
     this.reload = { take: 0, roll: 0, drop: 0, x: 0, y: 0, z: 0 }; // reloadPose's result
+    this.in = new Float64Array(7); // step(): dt, x, y, z, yaw, pitch, duck
     this.deathDir = new Float32Array(2); // die(): the shot's direction in the world
     this.footAlong = new Float32Array(2); // the stride cycle this frame: each foot's offset along
     this.footLift = new Float32Array(2); // the movement and its height
@@ -147,6 +149,15 @@ export class PlayerAnimator {
   // support, mag / magDir, bolt, port, cylinder), or null for the hold's defaults;
   // weapon: its id (reload timing).
   update(dt, x, y, z, yaw, pitch, duck, onGround, hold, anim, shots, alive, pts = null, weapon = 0) {
+    const i = this.in;
+    i[0] = dt; i[1] = x; i[2] = y; i[3] = z; i[4] = yaw; i[5] = pitch; i[6] = duck;
+    return this.step(onGround, hold, anim, shots, alive, pts, weapon);
+  }
+
+  // update() with its seven numbers already in `in` (dt, x, y, z, yaw, pitch, duck): the
+  // models write them there, since as arguments they were boxed, 7 a player a frame.
+  step(onGround, hold, anim, shots, alive, pts = null, weapon = 0) {
+    const i = this.in, dt = i[0], x = i[1], y = i[2], z = i[3], yaw = i[4], pitch = i[5], duck = i[6];
     this.time += dt;
     // Velocity from positions, smoothed; teleports (spawns) start over.
     const jx = x - this.px, jy = y - this.py, jz = z - this.pz;
@@ -173,10 +184,12 @@ export class PlayerAnimator {
     const fwd = this.vx * cy + this.vy * sy, left = -this.vx * sy + this.vy * cy;
     const speed = Math.sqrt(fwd * fwd + left * left);
     this.stride = Math.min(20, 5 + speed * 0.06) * (1 - 0.35 * duck);
-    const run = smoothstep(70, 230, speed), duty = DUTY_WALK - (DUTY_WALK - DUTY_RUN) * run;
+    // (smoothstep written out: a call boxes its double and its result when not inlined)
+    const sr = Math.max(0, Math.min(1, (speed - 70) / 160)), run = sr * sr * (3 - 2 * sr);
+    const duty = DUTY_WALK - (DUTY_WALK - DUTY_RUN) * run;
     // A planted foot covers 2 strides in `duty` of the cycle at the ground's speed.
     if (onGround) this.phase = (this.phase + speed * dt * duty / (2 * this.stride)) % 1;
-    const walk = smoothstep(10, 70, speed) * (1 - this.air);
+    const sw = Math.max(0, Math.min(1, (speed - 10) / 60)), walk = sw * sw * (3 - 2 * sw) * (1 - this.air);
     const dirF = speed > 1 ? fwd / speed : 1, dirL = speed > 1 ? left / speed : 0;
     // The movement's direction in the body frame, degrees, kept within a quarter turn
     // (backpedalling runs the same cycle backwards with the feet still forward).
@@ -230,7 +243,8 @@ export class PlayerAnimator {
     p.pos[PELVIS * 3 + 1] = SWAY * Math.sin(this.time * 0.94) * rest;
     p.pos[PELVIS * 3 + 2] = PELVIS_Z - CROUCH_DROP * c - (drop + KNEE_SOFT) * (1 - c);
     const hipYaw = -RIFLE_BLADE * blade - HIP_SWING * stride + HIP_TURN * moveYaw;
-    p.turn(PELVIS, MOVE_LEAN * dirF * walk, hipYaw, -MOVE_LEAN * dirL * walk);
+    const E = p.eul; // the turns, applied together by turnAll() (see Pose.turnAll)
+    E[PELVIS * 3] = MOVE_LEAN * dirF * walk; E[PELVIS * 3 + 1] = hipYaw; E[PELVIS * 3 + 2] = -MOVE_LEAN * dirL * walk;
 
     // Spine: crouch lean, the ready lean, aim pitch (down-positive), rifle twist, the
     // shoulders taking back two thirds of the hips' swing and turn, breathing, fire kick;
@@ -240,13 +254,13 @@ export class PlayerAnimator {
     const twist = -RIFLE_TWIST * blade + (HIP_SWING * stride - HIP_TURN * moveYaw) * (2 / 9);
     const unturn = -(hipYaw + 3 * twist) * 0.5 - 3 * blade;
     const breath = BREATH * Math.sin(this.time * 1.57);
-    p.turn(SPINE1, lean * 0.5 + aimP * 0.15, twist, 0);
-    p.turn(SPINE2, lean * 0.3 + aimP * 0.15 + breath, twist, 0);
+    E[SPINE1 * 3] = lean * 0.5 + aimP * 0.15; E[SPINE1 * 3 + 1] = twist;
+    E[SPINE2 * 3] = lean * 0.3 + aimP * 0.15 + breath; E[SPINE2 * 3 + 1] = twist;
     const swing = this.toss > 0 ? Math.sin(Math.PI * this.toss) : 0; // the throw's arm swing, out and back
-    p.turn(SPINE3, lean * 0.2 + aimP * 0.15 - this.kick * 5 + swing * 6, twist + swing * 10, 0);
-    p.turn(NECK, -lean * 0.4 + aimP * 0.2 - breath * 0.5, unturn, 0);
-    p.turn(HEAD, -lean * 0.6 + aimP * 0.35 + this.kick * 5 - breath * 0.5, unturn, 0);
-    p.solve();
+    E[SPINE3 * 3] = lean * 0.2 + aimP * 0.15 - this.kick * 5 + swing * 6; E[SPINE3 * 3 + 1] = twist + swing * 10;
+    E[NECK * 3] = -lean * 0.4 + aimP * 0.2 - breath * 0.5; E[NECK * 3 + 1] = unturn;
+    E[HEAD * 3] = -lean * 0.6 + aimP * 0.35 + this.kick * 5 - breath * 0.5; E[HEAD * 3 + 1] = unturn;
+    p.turnAll().solve();
 
     // Legs: feet under the hips, apart at rest (the right one back when bladed), the
     // cycle laid along the movement direction, the knees bending toward it. Soles flat,
@@ -260,7 +274,8 @@ export class PlayerAnimator {
       goal[4] = dirL * back * walk + SIDE[s] * 0.25;
       goal[5] = 0;
       p.reachGoal(HIP[s], KNEE[s], ANKLE[s]);
-      Q.fromEuler(tq, 0, 0, SIDE[s] * TOES_OUT * (1 - this.air) + FOOT_TURN * moveYaw, 0);
+      te[0] = 0; te[1] = SIDE[s] * TOES_OUT * (1 - this.air) + FOOT_TURN * moveYaw; te[2] = 0;
+      Q.fromEulerAt(tq, 0, te, 0);
       p.setWorldRotation(ANKLE[s], tq, 0);
     }
 
@@ -318,7 +333,8 @@ export class PlayerAnimator {
       goal[4] = SIDE[s] * 0.6;
       goal[5] = -1;
       p.reachGoal(ARM[s], ELBOW[s], HAND[s]);
-      Q.fromEuler(tv, 0, grip.aimed || kneel ? handP : 0, 0, s === 1 && grip.aimed ? reload.roll : 0);
+      te[0] = grip.aimed || kneel ? handP : 0; te[1] = 0; te[2] = s === 1 && grip.aimed ? reload.roll : 0;
+      Q.fromEulerAt(tv, 0, te, 0);
       Q.mul(tq, 0, tv, 0, handTurn[s], 0);
       p.setWorldRotation(HAND[s], tq, 0);
     }
@@ -448,12 +464,13 @@ export class PlayerAnimator {
     p.pos[PELVIS * 3 + 2] = pz;
     Q.fromEuler(tv, 0, 30 * fwd * f, twist * f, -side * 85 * f);
     for (let k = 0; k < 4; k++) p.rot[PELVIS * 4 + k] = tv[k];
-    p.turn(SPINE1, 22 * fold, 0, 0);
-    p.turn(SPINE2, 22 * fold, 0, 0);
-    p.turn(SPINE3, 18 * fold, 0, 0);
-    p.turn(NECK, 15 * fold, 0, 0);
-    p.turn(HEAD, 25 * fold, side * 10 * f, 0);
-    p.solve();
+    const E = p.eul;
+    E[SPINE1 * 3] = E[SPINE2 * 3] = 22 * fold;
+    E[SPINE3 * 3] = 18 * fold;
+    E[NECK * 3] = 15 * fold;
+    E[HEAD * 3] = 25 * fold;
+    E[HEAD * 3 + 1] = side * 10 * f;
+    p.turnAll().solve();
     for (let s = 0; s < 2; s++) {
       const goal = p.goal;
       const ax = 2 * c0 + 1 - 5 * buckle, ay = SIDE[s] * (4.5 + c0); // planted, the toes dragging back as he kneels
@@ -505,11 +522,10 @@ export class PlayerAnimator {
     Q.fromAxisAngle(tv, 0, -dy, dx, 0, (92 * flat) * Math.PI / 180); // over about the axis across the shot
     for (let k = 0; k < 4; k++) p.rot[PELVIS * 4 + k] = tv[k];
     const arch = -8 * spread * (1 - land); // the chest thrown back; flat once down
-    p.turn(SPINE1, arch, 0, 0);
-    p.turn(SPINE2, arch, 0, 0);
-    p.turn(SPINE3, arch, 0, 0);
-    p.turn(HEAD, -50 * bump(t, 0, 0.06, 0.1, 0.35) - 18 * spread * (1 - land), 0, 0);
-    p.solve();
+    const E = p.eul;
+    E[SPINE1 * 3] = E[SPINE2 * 3] = E[SPINE3 * 3] = arch;
+    E[HEAD * 3] = -50 * bump(t, 0, 0.06, 0.1, 0.35) - 18 * spread * (1 - land);
+    p.turnAll().solve();
     const goal = p.goal;
     for (let s = 0; s < 2; s++) {
       // Legs: nearly straight, swung a little ahead of the body and apart (the knees
@@ -562,6 +578,38 @@ export class PlayerAnimator {
 }
 
 // R.x / y / z = v (no destructuring: an iterator per call in unoptimized code).
+// Runs step() through what a match reaches later (running, crouching, kneeling, in the
+// air, reloading a rifle, a shotgun and a revolver, dying both ways) with one animator, so
+// the optimizer's type feedback, shared by every animator, holds fractions from the start.
+// A site that had only seen whole numbers (duck 0, run 0 while everyone stood) was compiled
+// for integers and deoptimized at the first crouch or run, which threw the function back
+// to baseline code for seconds (3× the garbage, slower frames), once per such site, ~10 of
+// them in a match's first minute. points: the guns' points by weapon id (GunMeshes), or null.
+export function primeAnimator(points) {
+  const a = new PlayerAnimator(), i = a.in;
+  const run = (x, yaw, pitch, duck, onGround, hold, anim, alive, weapon = 0, frames = 3, dt = 1 / 60) => {
+    for (let n = 0; n < frames; n++) {
+      i[0] = dt; i[1] = x + 4.5 * n; i[2] = 0.5 * n; i[3] = 0.25 * n; i[4] = yaw + n; i[5] = pitch; i[6] = duck;
+      a.step(onGround, hold, anim, n & 1, alive, (points && points[weapon]) || null, weapon);
+    }
+  };
+  run(0, 30.5, 10.5, 0, true, HOLD_RIFLE, 0, true, 0, 40); // a run: 40 frames reach the stride's flight
+  run(0, 30.5, -20.5, 0.5, true, HOLD_PISTOL, 0, true, 0, 40);
+  run(0, 30.5, 0, 1, true, HOLD_C4, ANIM_PLANT, true);
+  run(0, 30.5, 5.5, 0.3, false, HOLD_KNIFE, 0, true, 0, 40);
+  a.throwArm();
+  run(0, 30.5, 0, 0, true, HOLD_KNIFE, 0, true, 0, 20);
+  for (const name of ['ak47', 'nova', 'revolver']) {
+    run(0, 30.5, 0, 0, true, WEAPONS[WEAPON_ID[name]].slot === SLOT_SECONDARY ? HOLD_PISTOL : HOLD_RIFLE, ANIM_RELOAD, true,
+      WEAPON_ID[name], 12, 0.3);
+  }
+  a.die(0.6, 0.8, false, 0, 0, 5);
+  run(0, 30.5, 0, 0.2, true, HOLD_RIFLE, 0, false, 0, 10, 0.15);
+  a.reset();
+  a.die(0.6, 0.8, true, 60, 8, 3);
+  run(0, 30.5, 0, 0, true, HOLD_RIFLE, 0, false, 0, 10, 0.15);
+}
+
 function setPoint(R, v) {
   R.x = v[0];
   R.y = v[1];

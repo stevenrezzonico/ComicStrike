@@ -66,11 +66,19 @@ export class Gamepads {
     this.state = { buttons: new Float32Array(16), axes: new Float32Array(AXES) };
     this.vec = [0, 0];
     this.failed = false; // getGamepads threw (an iframe without the permission): no pads
+    // getGamepads() makes a new array at every call (200 bytes of garbage a frame): not
+    // asked until the browser has announced a pad (gamepadconnected, on its first press).
+    this.any = false;
+    if (typeof addEventListener === 'function') {
+      addEventListener('gamepadconnected', () => {
+        this.any = true;
+      });
+    }
   }
 
   // The browser's pads, or none where the API is missing or refused.
   list() {
-    if (this.failed || typeof navigator === 'undefined' || !navigator.getGamepads) return null;
+    if (!this.any || this.failed || typeof navigator === 'undefined' || !navigator.getGamepads) return null;
     try {
       return navigator.getGamepads();
     } catch {

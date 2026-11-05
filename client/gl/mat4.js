@@ -81,7 +81,16 @@ export function invert(out, m) {
 // Whether a sphere (center x y z, radius r) reaches into the view volume of the
 // view-projection matrix m (column-major, GL clip space): it lies inside or within r of
 // each of the six clip planes (rows 3 + and - rows 0, 1, 2). Allocates nothing.
+const SPHERE = new Float64Array(4);
 export function sphereInView(m, x, y, z, r) {
+  SPHERE[0] = x; SPHERE[1] = y; SPHERE[2] = z; SPHERE[3] = r;
+  return sphereInViewAt(m, SPHERE);
+}
+
+// sphereInView with the sphere in s (x, y, z, r): no doubles cross the call (as arguments
+// they are boxed, an allocation each, when the caller is not inlined: 30 calls a frame).
+export function sphereInViewAt(m, s) {
+  const x = s[0], y = s[1], z = s[2], r = s[3];
   for (let i = 0; i < 3; i++) {
     for (let s = -1; s <= 1; s += 2) {
       const a = m[3] + s * m[i], b = m[7] + s * m[4 + i], c = m[11] + s * m[8 + i], d = m[15] + s * m[12 + i];

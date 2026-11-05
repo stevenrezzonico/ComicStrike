@@ -10,6 +10,7 @@
 // sees() asks the same of a box (players, items, shadows: client/gl/playermodels.js).
 
 const MARGIN = 32; // frustum slack (units): a face's leaf box may sit just outside the view
+const BOX = new Float64Array(6); // sees(): its box for seesBox
 
 export class WorldVis {
   // mesh: buildMapMesh's result (indices, worldOpaqueCount, faceFirst, faceCount).
@@ -149,7 +150,15 @@ export class WorldVis {
   // update)? Walks the tree down to the leaves the box touches (SV_FindTouchedLeafs), only
   // through marked nodes. True whenever the last update drew everything.
   sees(x0, y0, z0, x1, y1, z1) {
+    BOX[0] = x0; BOX[1] = y0; BOX[2] = z0; BOX[3] = x1; BOX[4] = y1; BOX[5] = z1;
+    return this.seesBox(BOX);
+  }
+
+  // sees() with the box in `box` (x0, y0, z0, x1, y1, z1): no doubles cross the call (as
+  // arguments the six were boxed, an allocation each, at every call not inlined).
+  seesBox(box) {
     if (!this.on) return true;
+    const x0 = box[0], y0 = box[1], z0 = box[2], x1 = box[3], y1 = box[4], z1 = box[5];
     const b = this.b, pf = b.planesF, n16 = b.nodesI16, v = this.visframe, stack = this.stack;
     let sp = 0;
     stack[sp++] = b.modelsI[9];

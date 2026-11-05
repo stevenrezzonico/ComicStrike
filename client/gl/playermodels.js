@@ -7,11 +7,11 @@ import { SkinnedRenderer, SkinnedMesh, SkinnedShadows, IDENTITY_SKIN, modelLight
 import { G_FLAGS } from './shaders.js';
 import { buildPlayer, HOLD_TIED } from '../models/players.js';
 import { MAX_HOSTAGES, HS_IDLE, HS_CARRIED, HS_DEAD } from '../../shared/hostages.js';
-import { PlayerAnimator, holdOf, gunInHand } from '../anim/playeranim.js';
+import { PlayerAnimator, holdOf, gunInHand, primeAnimator } from '../anim/playeranim.js';
 import { PLAYER_SKELETON as S, MAX_BONES } from '../anim/skeleton.js';
 import { GUN_MAG, GUN_BOLT } from '../models/guns.js';
-import { multiply, sphereInView, CLIP_ALL } from './mat4.js';
-import { FloorShadows } from './shadows.js';
+import { multiply, sphereInViewAt, CLIP_ALL } from './mat4.js';
+import { FloorShadows, SHADOW_FLOATS } from './shadows.js';
 import { TEAM_CT } from '../../shared/player.js';
 import { WEAPON_ID } from '../../shared/weapons.js';
 import { MAX_ITEMS } from '../../shared/items.js';
@@ -64,6 +64,8 @@ export class PlayerModels {
     this.far = new Uint8Array(MAX_PLAYERS + MAX_HOSTAGES); // drawn coarse (with hysteresis)
     this.farLod = FAR_LOD; // r_lod_dist (0: always coarse)
     this.eye = new Float32Array(3);
+    this.sph = new Float64Array(4); // inSight(): the sphere asked about (x, y, z, r)
+    this.box = new Float64Array(6); // and its box for the PVS
     this.weapon = new Int16Array(MAX_PLAYERS); // weapon id in hand (0: none drawn)
     this.silenced = new Uint8Array(MAX_PLAYERS);
     this.gunModel = new Float32Array(MAX_PLAYERS * 16);
@@ -133,6 +135,7 @@ export class PlayerModels {
     this.hostageLight = Array.from({ length: MAX_HOSTAGES }, () => new Float32Array([1, 1, 1]));
     this.hostageShown = new Uint8Array(MAX_HOSTAGES);
     this.carryM = new Float32Array(16);
+    primeAnimator(guns.points); // the animator's type feedback, before the optimizer compiles it
   }
 
   // Hostages (shared/hostages.js list): standing with their hands tied, falling when
@@ -199,11 +202,15 @@ export class PlayerModels {
       const x = ents[r + E_X], y = ents[r + E_Y], z = ents[r + E_Z] - feetOffset(flags);
       const yaw = dequantizeYaw(ents[r + E_YAW]);
       const weapon = ents[r + E_WEAPON];
-      const seen = !this.haveView || this.inSight(this.lastViewProj, x, y, z + BODY_MID, BODY_R);
+      const sph = this.sph;
+      sph[0] = x; sph[1] = y; sph[2] = z + BODY_MID; sph[3] = BODY_R;
+      const seen = !this.haveView || this.inSight(this.lastViewProj);
       if (!seen && ((this.frameNo + id) & 1)) this.owedDt[id] += dt;
       else {
-        a.update(dt + this.owedDt[id], x, y, z, yaw, dequantizePitch(ents[r + E_PITCH]), ents[r + E_DUCK] / 255,
-          (flags & FL_ONGROUND) !== 0, holdOf(weapon), ents[r + E_ANIM], ents[r + E_SHOTS], alive,
+        const i = a.in; // the animator's numbers go as array elements, not boxed arguments
+        i[0] = dt + this.owedDt[id]; i[1] = x; i[2] = y; i[3] = z; i[4] = yaw;
+        i[5] = dequantizePitch(ents[r + E_PITCH]); i[6] = ents[r + E_DUCK] / 255;
+        a.step((flags & FL_ONGROUND) !== 0, holdOf(weapon), ents[r + E_ANIM], ents[r + E_SHOTS], alive,
           this.guns.points[weapon] || null, weapon);
         this.owedDt[id] = 0;
       }
@@ -232,7 +239,8 @@ export class PlayerModels {
 
       // Light: the lightmap under the chest, eased so crossing faces does not pop.
       this.floorLight[id] = 1;
-      if (surfaces && surfaces.lightAt(this.lm, x, y, z + 36)) {
+      sph[0] = x; sph[1] = y; sph[2] = z + 36; // (the point as an array: three boxed doubles a call else)
+      if (surfaces && surfaces.lightAtP(this.lm, sph)) {
         this.floorLight[id] = printedLight(this.lm);
         modelLight(this.tmpLight, this.lm);
         const k = 1 - Math.exp(-dt * 8);
@@ -344,16 +352,28 @@ export class PlayerModels {
 
   // In the view and in the camera's PVS (`vis`, the renderer's WorldVis): a figure, its
   // shadows, an item behind the walls is neither drawn nor posed every frame.
-  inSight(m, x, y, z, r) {
-    return sphereInView(m, x, y, z, r) && (!this.vis || this.vis.sees(x - r, y - r, z - r, x + r, y + r, z + r));
+  // The sphere in `sph` (x, y, z, r), written by the caller: as arguments the four doubles
+  // were boxed at every call, 30 a frame (see Performance, Consistent frame times).
+  inSight(m) {
+    const s = this.sph;
+    if (!sphereInViewAt(m, s)) return false;
+    if (!this.vis) return true;
+    const b = this.box, r = s[3];
+    b[0] = s[0] - r; b[1] = s[1] - r; b[2] = s[2] - r; b[3] = s[0] + r; b[4] = s[1] + r; b[5] = s[2] + r;
+    return this.vis.seesBox(b);
   }
 
   addShadow(viewProj, m, floor) {
     const h = m[14] - floor; // feet above the floor (NaN: none)
     if (!(h > -2 && h < SHADOW_FADE)) return;
-    const rad = SHADOW_R * (1 + Math.max(h, 0) / 150);
-    if (!this.inSight(viewProj, m[12], m[13], floor, rad)) return;
-    this.shadows.add(m[12], m[13], floor, rad, SHADOW_DARK * (1 - Math.max(h, 0) / SHADOW_FADE));
+    const rad = SHADOW_R * (1 + Math.max(h, 0) / 150), sph = this.sph;
+    sph[0] = m[12]; sph[1] = m[13]; sph[2] = floor; sph[3] = rad;
+    if (!this.inSight(viewProj)) return;
+    const sh = this.shadows; // the disc written in place (FloorShadows.add boxed its five doubles)
+    if (sh.count === sh.capacity) return;
+    const d = sh.data, o = sh.count++ * SHADOW_FLOATS;
+    d[o] = m[12]; d[o + 1] = m[13]; d[o + 2] = floor; d[o + 3] = rad;
+    d[o + 4] = SHADOW_DARK * (1 - Math.max(h, 0) / SHADOW_FADE);
   }
 
   // The map's sun (shared/sun.js sunOf: toward it), or null: no sun shadows.
@@ -378,8 +398,9 @@ export class PlayerModels {
       if (!(player ? this.sunlit[slot] : this.hostageSunlit[k])) continue;
       // Its bounds: from the feet to the head's shadow, away from the sun.
       const ax = this.sun[0] / this.sun[2], ay = this.sun[1] / this.sun[2];
-      const reach = (BODY_MID + Math.max(h, 0)) * Math.sqrt(ax * ax + ay * ay);
-      if (!this.inSight(viewProj, m[12] - ax * BODY_MID, m[13] - ay * BODY_MID, floor, 40 + reach)) continue;
+      const reach = (BODY_MID + Math.max(h, 0)) * Math.sqrt(ax * ax + ay * ay), sph = this.sph;
+      sph[0] = m[12] - ax * BODY_MID; sph[1] = m[13] - ay * BODY_MID; sph[2] = floor; sph[3] = 40 + reach;
+      if (!this.inSight(viewProj)) continue;
       if (!begun) {
         this.sunShadows.begin(viewProj, gbuf);
         begun = true;
@@ -438,10 +459,12 @@ export class PlayerModels {
     let begun = false;
     eyeOf(this.eye, viewProj);
     r.flags = G_FLAGS.CHAR; // players and hostages (G_CHAR: far away their colors show)
+    const sph = this.sph;
     for (let id = 0; id < MAX_PLAYERS; id++) {
       if (!this.visible[id]) continue;
       const model = this.modelOf[id];
-      if (!this.inSight(viewProj, model[12], model[13], model[14] + BODY_MID, BODY_R)) continue;
+      sph[0] = model[12]; sph[1] = model[13]; sph[2] = model[14] + BODY_MID; sph[3] = BODY_R;
+      if (!this.inSight(viewProj)) continue;
       if (!begun) {
         r.begin(viewProj);
         begun = true;
@@ -458,7 +481,8 @@ export class PlayerModels {
     }
     for (let k = 0; k < MAX_HOSTAGES; k++) {
       const hm = this.hostageModel[k];
-      if (!this.hostageShown[k] || !this.inSight(viewProj, hm[12], hm[13], hm[14] + BODY_MID, BODY_R)) continue;
+      sph[0] = hm[12]; sph[1] = hm[13]; sph[2] = hm[14] + BODY_MID; sph[3] = BODY_R;
+      if (!this.hostageShown[k] || !this.inSight(viewProj)) continue;
       if (!begun) r.begin(viewProj);
       begun = true;
       r.draw(this.lod(MAX_PLAYERS + k, this.bodyH, hm), hm, this.hostageAnim[k].pose.skin, this.hostageLight[k]);
@@ -468,13 +492,15 @@ export class PlayerModels {
     for (let i = 0; i < this.itemCount; i++) {
       const mesh = this.guns.mesh[this.itemWeapon[i]];
       const im = this.itemOf[i];
-      if (!mesh || this.itemHidden[i] || !this.inSight(viewProj, im[12], im[13], im[14], ITEM_R)) continue;
+      sph[0] = im[12]; sph[1] = im[13]; sph[2] = im[14]; sph[3] = ITEM_R;
+      if (!mesh || this.itemHidden[i] || !this.inSight(viewProj)) continue;
       if (!begun) r.begin(viewProj);
       begun = true;
       r.draw(mesh, im, IDENTITY_SKIN, this.itemLightOf[i]);
     }
     const b = this.bomb;
-    if (b.show && this.inSight(viewProj, b.model[12], b.model[13], b.model[14], BOMB_R)) {
+    sph[0] = b.model[12]; sph[1] = b.model[13]; sph[2] = b.model[14]; sph[3] = BOMB_R;
+    if (b.show && this.inSight(viewProj)) {
       if (!begun) r.begin(viewProj);
       begun = true;
       r.draw(b.led ? this.guns.mesh[C4_ID] : this.guns.c4Off, b.model, IDENTITY_SKIN, b.light, 0);

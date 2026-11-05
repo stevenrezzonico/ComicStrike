@@ -14,6 +14,9 @@ import {
 import { toLocal } from './trace.js';
 
 const la = new Float64Array(3), lb = new Float64Array(3);
+// findFace's stack of crossings waiting for their far side: a node and side, the crossing
+// point and the segment's end (the trees are at most BSP_LIMITS.depth 256 deep).
+const FF_SEG = new Float64Array(512 * 6), FF_NODE = new Int32Array(512 * 2);
 
 // CS:GO game materials (CHAR_TEX_*) that HandleBulletPenetration special-cases.
 export const GM_GLASS = 89; // 'Y'
@@ -115,29 +118,50 @@ export class SurfaceMap {
   }
 
   // Face index under the segment a -> b (model-space), or -1.
-  findFace(node, ax, ay, az, bx, by, bz) {
-    const b = this.bsp;
-    while (node >= 0) {
-      const p = b.nodesI32[node * 6] * 5;
-      const nx = b.planesF[p], ny = b.planesF[p + 1], nz = b.planesF[p + 2], d = b.planesF[p + 3];
-      const front = nx * ax + ny * ay + nz * az - d;
-      const back = nx * bx + ny * by + nz * bz - d;
-      const side = front < 0 ? 1 : 0;
-      const c0 = b.nodesI16[node * 12 + 2 + side];
-      if ((back < 0 ? 1 : 0) === side) { // both on one side
+  // a, b: the segment's ends (x, y, z each, arrays: six doubles as arguments were boxed at
+  // every call, and the recursion into the near side at every level, 2 KB a frame under the
+  // players; so the far side waits on a stack instead).
+  findFace(node, a, b) {
+    const bsp = this.bsp, S = FF_SEG, N = FF_NODE;
+    let ax = a[0], ay = a[1], az = a[2], bx = b[0], by = b[1], bz = b[2], sp = 0;
+    for (;;) {
+      while (node >= 0) {
+        const p = bsp.nodesI32[node * 6] * 5;
+        const nx = bsp.planesF[p], ny = bsp.planesF[p + 1], nz = bsp.planesF[p + 2], d = bsp.planesF[p + 3];
+        const front = nx * ax + ny * ay + nz * az - d;
+        const back = nx * bx + ny * by + nz * bz - d;
+        const side = front < 0 ? 1 : 0;
+        const c0 = bsp.nodesI16[node * 12 + 2 + side];
+        if ((back < 0 ? 1 : 0) === side) { // both on one side
+          node = c0;
+          continue;
+        }
+        const frac = front / (front - back);
+        const mx = ax + (bx - ax) * frac, my = ay + (by - ay) * frac, mz = az + (bz - az) * frac;
+        // The near side first, to the crossing; the crossing (its faces, then the far side) waits.
+        const o = sp * 6;
+        S[o] = mx; S[o + 1] = my; S[o + 2] = mz; S[o + 3] = bx; S[o + 4] = by; S[o + 5] = bz;
+        N[sp * 2] = node;
+        N[sp * 2 + 1] = side;
+        sp++;
+        bx = mx;
+        by = my;
+        bz = mz;
         node = c0;
-        continue;
       }
-      const frac = front / (front - back);
-      const mx = ax + (bx - ax) * frac, my = ay + (by - ay) * frac, mz = az + (bz - az) * frac;
-      const r = this.findFace(c0, ax, ay, az, mx, my, mz);
-      if (r >= 0) return r;
+      if (sp === 0) return -1;
+      sp--;
+      const o = sp * 6, cross = N[sp * 2], side = N[sp * 2 + 1];
+      const mx = S[o], my = S[o + 1], mz = S[o + 2];
+      bx = S[o + 3];
+      by = S[o + 4];
+      bz = S[o + 5];
       // Crossing this node's plane: is the crossing point on one of its faces?
-      const first = b.nodesI16[node * 12 + 10] & 0xffff, count = b.nodesI16[node * 12 + 11] & 0xffff;
-      const tf = b.texinfoF;
+      const first = bsp.nodesI16[cross * 12 + 10] & 0xffff, count = bsp.nodesI16[cross * 12 + 11] & 0xffff;
+      const tf = bsp.texinfoF;
       for (let f = first; f < first + count; f++) {
-        if (facePlane(b, f) !== b.nodesI32[node * 6]) continue;
-        const ti = faceTexinfo(b, f) * 10;
+        if (facePlane(bsp, f) !== bsp.nodesI32[cross * 6]) continue;
+        const ti = faceTexinfo(bsp, f) * 10;
         const s = mx * tf[ti] + my * tf[ti + 1] + mz * tf[ti + 2] + tf[ti + 3];
         const t = mx * tf[ti + 4] + my * tf[ti + 5] + mz * tf[ti + 6] + tf[ti + 7];
         const e = f * 4;
@@ -148,22 +172,32 @@ export class SurfaceMap {
           return f;
         }
       }
-      node = b.nodesI16[node * 12 + 2 + (side ^ 1)];
+      node = bsp.nodesI16[cross * 12 + 2 + (side ^ 1)];
       ax = mx;
       ay = my;
       az = mz;
     }
-    return -1;
   }
 
   // Lightmap color (0..255, style 0) of the world under (x, y, z), as GoldSrc's
   // R_LightPoint: the first face straight below within 2048 units. Writes rgb into out
   // and returns false (out = 0) where nothing lit is found. Client only (models).
   lightAt(out, x, y, z) {
+    la[0] = x;
+    la[1] = y;
+    la[2] = z;
+    return this.lightAtP(out, la);
+  }
+
+  // lightAt with the point in p (x, y, z): no doubles cross the call (as arguments they
+  // were boxed, three a figure a frame).
+  lightAtP(out, at) {
     out[0] = out[1] = out[2] = 0;
     this.hitZ = NaN;
     const b = this.bsp;
-    const f = this.findFace(0, x, y, z, x, y, z - 2048);
+    la[0] = at[0]; la[1] = at[1]; la[2] = at[2];
+    lb[0] = at[0]; lb[1] = at[1]; lb[2] = at[2] - 2048;
+    const f = this.findFace(0, la, lb);
     if (f < 0) return false;
     const ofs = faceLightOfs(b, f);
     if (ofs < 0 || faceStyle(b, f, 0) === 255) return false;
@@ -184,7 +218,9 @@ export class SurfaceMap {
   // units, is sky (or there is none): a point the sun along that line reaches. Brush
   // entities are not looked at. Client only (sun shadows).
   skyward(x, y, z, dx, dy, dz) {
-    const f = this.findFace(0, x, y, z, x + dx * 16384, y + dy * 16384, z + dz * 16384);
+    la[0] = x; la[1] = y; la[2] = z;
+    lb[0] = x + dx * 16384; lb[1] = y + dy * 16384; lb[2] = z + dz * 16384;
+    const f = this.findFace(0, la, lb);
     return f < 0 || this.texSky[this.bsp.texinfoI[faceTexinfo(this.bsp, f) * 10 + 8]];
   }
 
@@ -203,7 +239,7 @@ export class SurfaceMap {
       la[0] = x - dx * 4; la[1] = y - dy * 4; la[2] = z - dz * 4;
       lb[0] = x + dx * 4; lb[1] = y + dy * 4; lb[2] = z + dz * 4;
     }
-    const f = this.findFace(head, la[0], la[1], la[2], lb[0], lb[1], lb[2]);
+    const f = this.findFace(head, la, lb);
     if (f < 0) return SURF_DEFAULT;
     return this.texSurface[this.bsp.texinfoI[faceTexinfo(this.bsp, f) * 10 + 8]];
   }
