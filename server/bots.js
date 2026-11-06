@@ -28,6 +28,7 @@ import { GRENADE_GRAVITY, FX_DECOY, FX_FIRE, FIRE_DPS, fireRadius } from '../sha
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { BOMB_DROPPED, BOMB_PLANTED } from '../shared/bomb.js';
 import { HS_IDLE } from '../shared/hostages.js';
+import { MODE } from '../shared/modes.js';
 import { PHASE_LIVE, PHASE_WARMUP, ITEM_ASSAULTSUIT, ITEM_KEVLAR, ITEM_DEFUSER, itemPrice } from '../shared/economy.js';
 import { Nav, NAV_CELL, NODE_CROUCH, EDGE_WALK, EDGE_JUMP, EDGE_LADDER } from '../shared/nav.js';
 import { Writer, writeHello, radioIndex } from '../shared/protocol.js';
@@ -684,7 +685,7 @@ class Bot {
       this.enemy = this.lastEnemy = best;
       if (!again) this.acquiredAt = g.tick;
       const called = this.bots.calledAt;
-      if (!again && !g.rules.deathmatch && g.tick - called[this.c.team] > CALL_GAP * TICK_RATE) {
+      if (!again && g.mode !== MODE.deathmatch && g.tick - called[this.c.team] > CALL_GAP * TICK_RATE) {
         called[this.c.team] = g.tick;
         g.radio(this.c, ENEMY_SPOTTED);
       }
@@ -776,7 +777,7 @@ class Bot {
   // the smoke on the CT side of their site on the way in. True if a throw started.
   considerPlay(x, y, eye) {
     const g = this.game, c = this.c, bomb = g.bomb;
-    if (c.team !== TEAM_T || g.tick < this.nadeAt || g.rules.deathmatch) return false;
+    if (c.team !== TEAM_T || g.tick < this.nadeAt || g.mode === MODE.deathmatch) return false;
     if (bomb.state === BOMB_PLANTED) {
       if (!this.carries(WEAPON_ID.molotov) || Math.hypot(bomb.x - x, bomb.y - y) > MOLLY_BOMB) return false;
       let heard = false;
@@ -934,7 +935,7 @@ class Bot {
   buy() {
     const c = this.c, g = this.game, p = c.player, ct = c.team === TEAM_CT;
     this.bought = c.life;
-    const free = g.rules.deathmatch;
+    const free = g.mode === MODE.deathmatch; // (armor comes with every spawn there: a gun alone)
     const order = [];
     let rifle = WEAPON_ID[ct ? (this.difficulty >= 2 ? 'm4a1_silencer' : 'm4a1') : 'ak47'];
     if (!free && this.difficulty >= 2 && !p.ws.f[WS_SLOTS + SLOT_PRIMARY * 3] && !this.bots.teamHasSniper(c.team)) {
@@ -994,7 +995,7 @@ class Bot {
     this.order = null;
     if (g.phase !== PHASE_LIVE && g.phase !== PHASE_WARMUP) return { node: -1, why: 'wait' };
     const bomb = g.bomb, f = c.player.ps.f;
-    if (!g.rules.deathmatch && g.bombSites.count && (g.rules.giveC4 || g.rules.retakes)) {
+    if (g.mode !== MODE.deathmatch && g.bombSites.count && (g.rules.giveC4 || g.mode === MODE.retakes)) {
       const site = g.bombSites.boxes[this.site % g.bombSites.count];
       if (c.team === TEAM_T) {
         if (carrier) { // the bomb: to the site, then plant
@@ -1022,7 +1023,7 @@ class Bot {
       return { node: keep('hold') >= 0 ? this.goal : nav.random(rnd, held), why: 'hold' };
     }
     const h = g.hostages;
-    if (!g.rules.deathmatch && h.count) {
+    if (g.mode !== MODE.deathmatch && h.count) {
       if (c.team === TEAM_CT) {
         if (c.player.carrying) {
           const box = g.rescue.boxes[0];

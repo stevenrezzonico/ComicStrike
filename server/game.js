@@ -8,7 +8,7 @@
 import { parseVec3, BSP_LIMITS, entityYaw, teamSpawns, CONTENTS_SLIME, CONTENTS_LAVA } from '../shared/bsp.js';
 import { TICK_RATE, TICK_DT } from '../shared/constants.js';
 import { ARMS_RACE, DEMOLITION, armLevel } from '../shared/progression.js';
-import { modeOfRules } from '../shared/modes.js';
+import { modeOfRules, MODE } from '../shared/modes.js';
 import {
   CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, pointContents, HULL_STAND, HULL_POINT,
 } from '../shared/trace.js';
@@ -458,7 +458,7 @@ export class Game {
 
   // The match can be played: free for all needs two players, else both teams.
   ready(t, ct) {
-    if (this.rules.demo) return t + ct > 0; // the demo plays alone
+    if (this.mode === MODE.demo) return t + ct > 0; // the demo plays alone
     return this.rules.teammatesAreEnemies ? t + ct >= 2 : t > 0 && ct > 0;
   }
 
@@ -743,7 +743,7 @@ export class Game {
       if (!c.alive && this.tick >= c.respawnTick && this.phase !== PHASE_OVER) this.respawn(c, false, true);
       this.runCommands(c);
       if (c.alive && c.playing) this.updateLiquid(c);
-      if (this.rules.demo) this.demoHeal(c);
+      if (this.mode === MODE.demo) this.demoHeal(c);
     }
     this.updateBomb();
     this.updateHostages();
@@ -808,7 +808,7 @@ export class Game {
     this.world.bodyTeam = c.team;
     const pf = p.ps.f, speed0 = Math.hypot(pf[PS_VEL], pf[PS_VEL + 1], pf[PS_VEL + 2]); // as it ran into things
     const fell = runCommand(this.world, p, c.buttons, select, c.pitch, c.yaw, t, this.shots, frozen, this.bomb,
-      this.rules.demo);
+      this.mode === MODE.demo);
     const events = p.ws.f[WS_EVENTS];
     if (events & (WEV_FIRE | WEV_MELEE | WEV_THROW)) {
       c.shots = (c.shots + 1) & 255;
@@ -887,7 +887,7 @@ export class Game {
 
   kill(killer, victim, weapon, headshot) {
     const k = killer.player, v = victim.player;
-    if (this.rules.demo && !victim.bot && v.health <= 0) { // the demo: humans take the hit, not the death
+    if (this.mode === MODE.demo && !victim.bot && v.health <= 0) { // the demo: humans take the hit, not the death
       v.health = 1;
       return;
     }
@@ -899,7 +899,7 @@ export class Game {
     const vf = v.ws.f;
     const slot = vf[WS_SLOTS + SLOT_PRIMARY * 3] ? SLOT_PRIMARY : vf[WS_SLOTS + SLOT_SECONDARY * 3] ? SLOT_SECONDARY : -1;
     if (slot >= 0 && this.rules.deathDropGun) this.dropSlot(victim, slot, false);
-    const dm = this.rules.deathmatch;
+    const dm = this.mode === MODE.deathmatch;
     if (killer !== victim) {
       if (!this.isEnemy(killer, victim)) {
         k.kills--;
@@ -912,7 +912,7 @@ export class Game {
         }
         if (this.phase === PHASE_LIVE) {
           killer.roundKills++;
-          if (this.rules.armsRace) this.armsRaceKill(killer, victim, weapon);
+          if (this.mode === MODE.armsrace) this.armsRaceKill(killer, victim, weapon);
         }
         if (killer.bot && !dm) this.bots.killed(killer); // now and then: "Enemy down."
       }
@@ -1069,7 +1069,7 @@ export class Game {
     this.logic.reset(this.tick);
     this.placing = true;
     for (const c of this.clients) if (c) c.placed = false;
-    const demolition = this.rules.demolition, retake = this.rules.retakes ? this.retakeSetup() : null;
+    const demolition = this.mode === MODE.demolition, retake = this.mode === MODE.retakes ? this.retakeSetup() : null;
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
       if (demolition && c.roundKills > 0) c.level = Math.min(c.level + 1, DEMOLITION.length - 1); // a kill: the next weapon
@@ -1085,7 +1085,7 @@ export class Game {
       if (retake) {
         this.respawn(c, false, false, this.retakeSpot(retake, c));
         this.retakeLoadout(c);
-      } else this.respawn(c, !fresh && c.alive && !demolition, this.rules.deathmatch);
+      } else this.respawn(c, !fresh && c.alive && !demolition, this.mode === MODE.deathmatch);
     }
     this.placing = false;
     this.resetBomb();
@@ -1923,7 +1923,7 @@ export class Game {
     const b = this.bomb;
     if (b.state === BOMB_DROPPED && this.tick >= this.pickupTick) {
       for (const c of this.clients) {
-        if (!c || !c.joined || !c.alive || (c.team !== TEAM_T && !this.rules.demo)) continue;
+        if (!c || !c.joined || !c.alive || (c.team !== TEAM_T && this.mode !== MODE.demo)) continue;
         const f = c.player.ps.f;
         const feet = f[PS_ORIGIN + 2] - feetOffset(c.player.ps.i[PS_FLAGS]);
         if (Math.hypot(f[PS_ORIGIN] - b.x, f[PS_ORIGIN + 1] - b.y) > PICKUP_RANGE || Math.abs(feet - b.z) > 40) continue;
@@ -1937,7 +1937,7 @@ export class Game {
       b.ticksLeft = this.explodeTick - this.tick;
       if (b.ticksLeft <= 0) this.explodeBomb();
     }
-    if (this.rules.demo) this.demoBomb();
+    if (this.mode === MODE.demo) this.demoBomb();
   }
 
   // The demo: with no bomb in play (none yet, or DEMO_RESTOCK s after one went off or was

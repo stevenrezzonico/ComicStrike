@@ -27,6 +27,9 @@ export const MODES = [
   row('demo', '2/0', 'Demo', 'demo', GAME_DEMO, { respawns: true, free: true }),
 ];
 const COMPETITIVE = MODES[1];
+// The rows by name, for the server's checks (`game.mode === MODE.demo`): the mode is one
+// value on Game, where the rule flags were read beside it and could disagree.
+export const MODE = Object.fromEntries(MODES.map((m) => [m.name, m]));
 
 // (Index loops, no closures: the client asks every frame.)
 export function modeNamed(name) {
