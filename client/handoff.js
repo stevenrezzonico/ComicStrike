@@ -22,9 +22,10 @@ function request(mode, fn) {
       d.close();
       resolve(r && r.result);
     };
-    tx.onerror = () => {
+    // An abort (QuotaExceededError on a big map) fires no error event: Try it waited forever.
+    tx.onerror = tx.onabort = () => {
       d.close();
-      reject(tx.error);
+      reject(tx.error || new Error('the browser refused to store the map'));
     };
   }));
 }

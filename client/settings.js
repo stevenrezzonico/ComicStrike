@@ -166,6 +166,15 @@ export function createConsole(print) {
     if (binds.adoptKeys(PAD_NAMES)) save();
     if (old) writeConfig();
   }
+  // What a bind from a file may run when its key is pressed: the game's own commands and
+  // settings, nothing that reaches a server (rcon, or a name the client does not know, which
+  // goes to a practice server or our room with its password), deletes a recording or binds and
+  // defines more: a shared file's `bind mouse1 "+attack; demo_delete clutch"` ran on the shot.
+  const BIND_REFUSED = new Set(['rcon', 'demo_delete', 'alias', 'exec', 'bind', 'unbind', 'unbindall', 'binddefaults']);
+  const bindable = (text) => parse(text).every((a) => {
+    const n = a[0].toLowerCase(), cvar = con.cvars.get(n);
+    return !BIND_REFUSED.has(n) && (con.commands.has(n) || con.aliases.has(n) || (cvar && !(cvar.flags & FCVAR_PROTECTED)));
+  });
   // A file from Export settings (or written by hand): only what a config holds, archived
   // cvars and binds, is run; any other command in it is dropped. Returns how many ran.
   const importConfig = (text) => {
@@ -173,6 +182,7 @@ export function createConsole(print) {
     for (const args of parse(text)) {
       const name = args[0].toLowerCase(), cvar = con.cvars.get(name);
       if (name !== 'bind' && name !== 'unbindall' && !(cvar && cvar.flags & FCVAR_ARCHIVE)) continue;
+      if (name === 'bind' && args.length > 2 && !bindable(args.slice(2).join(' '))) continue;
       con.run(args, { print: () => {} });
       n++;
     }

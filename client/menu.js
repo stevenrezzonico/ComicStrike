@@ -10,13 +10,11 @@ import { quote } from '../shared/cvars.js';
 import { LOOK_GUNS, LOOKS, looksOf } from './models/looks.js';
 import { WEAPONS, WEAPON_ID } from '../shared/weapons.js';
 import { downloadFile } from './demostore.js';
+import { MODES } from '../shared/modes.js';
 
 const ESCAPE_GRACE_MS = 300; // the Escape that released the mouse must not resume at once
-// Game mode names (server/host.js GAME_MODES) as shown, in the Mode row's order.
-const MODE_LABELS = {
-  casual: 'Casual', competitive: 'Competitive', wingman: 'Wingman', deathmatch: 'Deathmatch', armsrace: 'Arms Race',
-  demolition: 'Demolition', retakes: 'Retakes', demo: 'Demo',
-};
+// Game mode names as shown, in the Mode row's order (shared/modes.js).
+const MODE_LABELS = Object.fromEntries(MODES.map((m) => [m.name, m.label]));
 
 // The Bots row of the practice panel by mode: [label, [[bot_quota, text], ...]]. Team modes
 // fill both sides (bot_quota_mode fill: the player counts); Wingman is 2 a side

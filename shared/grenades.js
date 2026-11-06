@@ -155,6 +155,13 @@ export class Grenades {
     this.count--;
   }
 
+  // A thrower who left: his grenades and fires go on credited to nobody (-1), else to
+  // whoever takes his slot next (bots fill it within a fraction of a second).
+  forget(owner) {
+    for (let k = 0; k < this.count; k++) if (this.owner[k] === owner) this.owner[k] = -1;
+    for (let k = 0; k < this.fxCount; k++) if (this.fxOwner[k] === owner) this.fxOwner[k] = -1;
+  }
+
   addEffect(kind, weapon, owner, team, x, y, z) {
     if (this.fxCount === MAX_EFFECTS) this.removeEffect(0);
     const k = this.fxCount++;

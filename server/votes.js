@@ -12,13 +12,14 @@ import {
   writeVote, VOTE_KICK, VOTE_CHANGELEVEL, VOTE_RESTART, VOTE_RUNNING, VOTE_PASSED, VOTE_FAILED,
 } from '../shared/protocol.js';
 import { TICK_RATE } from '../shared/constants.js';
+import { addressKey, isLoopback } from './host.js';
 
 const ISSUES = { kick: VOTE_KICK, changelevel: VOTE_CHANGELEVEL, restartgame: VOTE_RESTART };
 const ALLOWED = ['sv_vote_issue_kick_allowed', 'sv_vote_issue_changelevel_allowed', 'sv_vote_issue_restart_game_allowed'];
 const LABELS = ['kick', 'change the map to', 'restart the match'];
 const SEND_TICKS = TICK_RATE / 2; // a running vote goes out twice a second (datagrams can be lost)
 const RESULT_SENDS = 3; // the result goes out on this many ticks
-const FAILED_KEEP = 256; // failed votes remembered (sv_vote_failure_timer)
+const FAILED_KEEP = 256; // failed votes remembered (sv_vote_failure_timer), and callers
 
 export class Votes {
   constructor(host) {
@@ -30,7 +31,9 @@ export class Votes {
     this.result = null; // the last vote, with `state`, while its result goes out
     this.resultSends = 0;
     this.sentTick = -Infinity;
-    this.lastCall = new WeakMap(); // client -> ms of its last call (sv_vote_creation_timer)
+    // Who called (address key; a client on loopback) -> ms of the last call (sv_vote_creation_timer):
+    // by address, as a reconnect is a new client and reset it.
+    this.lastCall = new Map();
     this.failed = new Map(); // 'issue arg' -> ms it failed (sv_vote_failure_timer)
   }
 
@@ -51,16 +54,19 @@ export class Votes {
     if (!this.num(ALLOWED[issue])) return `callvote ${name} is off on this server.`;
     if (this.vote) return 'A vote is already in progress.';
     if (!c.playing) return 'Spectators cannot call votes.';
-    const wait = (this.lastCall.get(c) ?? -Infinity) + this.num('sv_vote_creation_timer') * 1000 - now;
+    const address = c.session && c.session.address, who = !address || isLoopback(address) ? c : addressKey(address);
+    const wait = (this.lastCall.get(who) ?? -Infinity) + this.num('sv_vote_creation_timer') * 1000 - now;
     if (wait > 0) return `You can call another vote in ${Math.ceil(wait / 1000)} s.`;
     const ffa = game.rules.teammatesAreEnemies;
-    let target = null, arg = '';
+    let target = null, arg = '', detail = '';
     if (issue === VOTE_KICK) {
       target = this.host.findClient(args.slice(2).join(' '));
-      if (!target || target.bot) return 'callvote kick <name or #id>: no such player (bots go with bot_kick)';
+      if (!target || target.bot) return 'callvote kick <name or #id>: no such player, or several have that name: status lists the ids (bots go with bot_kick)';
       if (target === c) return 'You cannot vote yourself out.';
       if (!ffa && target.team !== c.team) return 'Only a teammate can be voted out.';
       arg = target.name;
+      // A name others share too: the panel says which one.
+      if (game.clients.some((o) => o && o !== target && o.joined && o.name === arg)) detail = `${arg} (#${target.id})`;
     } else if (issue === VOTE_CHANGELEVEL) {
       arg = (args[2] || '').toLowerCase();
       if (!this.host.opts.listMaps().includes(arg)) return `callvote changelevel <map>: no map "${arg}" here (maps lists them)`;
@@ -74,11 +80,13 @@ export class Votes {
     }
     const needed = Math.max(Math.ceil(this.num('sv_vote_quorum_ratio') * voters.size - 1e-9), issue === VOTE_KICK ? 2 : 1);
     if (voters.size < needed) return 'Not enough players who can vote on that.';
-    this.lastCall.set(c, now);
+    this.lastCall.delete(who); // the newest last: the oldest goes first
+    if (this.lastCall.size >= FAILED_KEEP) this.lastCall.delete(this.lastCall.keys().next().value);
+    this.lastCall.set(who, now);
     voters.set(c, 1);
     this.id = (this.id + 1) & 0xff;
     this.vote = {
-      id: this.id, issue, key, arg, detail: arg, caller: c, target, voters, needed,
+      id: this.id, issue, key, arg, detail: detail || arg, caller: c, target, voters, needed,
       endsAt: now + this.num('sv_vote_timer_duration') * 1000,
     };
     this.result = null;

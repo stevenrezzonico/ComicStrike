@@ -310,6 +310,9 @@ Deno.test('rcon: one line runs a bounded number of commands, maps change at most
   assert.ok(performance.now() - t0 < 1000);
   assert.match(out, /too many commands in one line/);
   assert.ok(out.split('\n').length < 300);
+  const long = host.rcon(who, 'hunter2', Array(200).fill('cvarlist').join(';')); // ~1 MB uncut
+  assert.ok(long.length < 66000, `${long.length} characters`);
+  assert.match(long, /the rest cut/);
   assert.match(host.rcon(who, 'hunter2', 'map de_dust2; map de_dust2'), /changelevel to de_dust2\nmap: too soon/);
   clock.ms += 1000;
   assert.match(host.rcon(who, 'hunter2', 'map de_dust2'), /changelevel to de_dust2/);

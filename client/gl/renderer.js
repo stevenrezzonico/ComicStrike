@@ -150,7 +150,12 @@ export class Renderer {
     for (let k = 0; k < 3; k++) wf[k] = Math.min(1, Math.max(0, grey + (wf[k] - grey) * 1.25));
     const lift = WATER_LIGHT / Math.max(wf[0], wf[1], wf[2], 0.01);
     if (lift > 1) for (let k = 0; k < 3; k++) wf[k] = Math.min(1, wf[k] * lift);
+    // The last map's GPU memory goes now, not whenever garbage collection reaches the
+    // wrappers: the editor's 3D view loads a map 400 ms after every edit.
     if (this.vao) gl.deleteVertexArray(this.vao);
+    if (this.vbo) gl.deleteBuffer(this.vbo);
+    if (this.ibo) gl.deleteBuffer(this.ibo);
+    if (this.lightmapTex) gl.deleteTexture(this.lightmapTex);
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
 
@@ -194,6 +199,8 @@ export class Renderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
     this.vao = vao;
+    this.vbo = vbo;
+    this.ibo = ibo;
     this.lightmapTex = tex;
     this.opaqueCount = mesh.opaqueCount;
     this.cutoutCount = mesh.cutoutCount;

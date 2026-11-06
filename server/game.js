@@ -8,6 +8,7 @@
 import { parseVec3, BSP_LIMITS, entityYaw, teamSpawns, CONTENTS_SLIME, CONTENTS_LAVA } from '../shared/bsp.js';
 import { TICK_RATE, TICK_DT } from '../shared/constants.js';
 import { ARMS_RACE, DEMOLITION, armLevel } from '../shared/progression.js';
+import { modeOfRules } from '../shared/modes.js';
 import {
   CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, pointContents, HULL_STAND, HULL_POINT,
 } from '../shared/trace.js';
@@ -47,7 +48,7 @@ import {
   MAX_ROUNDS, OVERTIME_ROUNDS, OVERTIME_MONEY, WARMUP_RESPAWN, START_MONEY, MAX_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD,
   PLANT_LOSS_BONUS, LOSS_STREAK_MAX, TEAMKILL_PENALTY, END_ELIMINATION, END_TIME, END_DRAW, END_BOMB, END_DEFUSE,
   END_RESCUE, RESCUE_WIN_REWARD, RESCUE_REWARD, HOSTAGE_TOUCH_REWARD, HOSTAGE_HIT_PENALTY, HOSTAGE_KILL_PENALTY,
-  END_MATCH, ROUND_FINAL, matchOver, GAME_FFA, GAME_DM, GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION, GAME_WINGMAN, GAME_GHOST_TEAM, GAME_RETAKES, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
+  END_MATCH, ROUND_FINAL, matchOver, GAME_FFA, GAME_GHOST_TEAM, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, SNAPSHOT_HISTORY, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
@@ -288,6 +289,7 @@ export class Game {
   constructor(mapName, bsp, rules = {}) {
     this.mapName = mapName;
     this.rules = { ...DEFAULT_RULES, ...rules };
+    this.mode = modeOfRules(this.rules); // shared/modes.js: what clients and menus know of it too
     this.bsp = bsp;
     this.world = CollisionWorld.fromBSP(bsp);
     this.world.surfaces = new SurfaceMap(bsp);
@@ -325,7 +327,7 @@ export class Game {
     }
     // Who wins when the round clock runs out: CTs defend bomb sites, Ts hold hostages.
     this.bombSites = new BombSites(bsp);
-    if (this.rules.wingman && this.bombSites.count > 1) this.bombSites.keepOnly(1);
+    if (this.mode.oneSite && this.bombSites.count > 1) this.bombSites.keepOnly(1);
     this.world.bombSites = this.bombSites;
     const hostages = bsp.entities.some((e) => e.classname === 'hostage_entity');
     this.timeWinner = this.bombSites.count ? TEAM_CT : hostages ? TEAM_T : 0;
@@ -500,6 +502,9 @@ export class Game {
     if (this.bombCarrier === c) this.dropBomb(c, false);
     this.dropHostage(c);
     this.clients[c.id] = null;
+    // Whoever takes the slot next must not inherit his fires or his damage in the round's report.
+    this.grenades.forget(c.id);
+    for (const o of this.clients) if (o) o.given[c.id] = o.givenHits[c.id] = o.taken[c.id] = o.takenHits[c.id] = 0;
     this.historyTick.fill(-1, c.id * HISTORY, (c.id + 1) * HISTORY);
     this.rosterDirty = true;
   }
@@ -697,7 +702,7 @@ export class Game {
 
   // Buys `item` for `c` if he may (BUY messages, bots).
   buyItem(c, item) {
-    const free = this.rules.deathmatch || this.rules.demo;
+    const free = this.mode.free;
     if (buyError(c.player, item, this.canBuy(c), free)) return false;
     // A weapon bought into a taken slot throws the old one down (CS:GO; deathmatch: it is
     // gone, and the new one is handed out again at every respawn).
@@ -711,14 +716,14 @@ export class Game {
 
   // The gun game modes' weapon list, or null.
   progression() {
-    return this.rules.armsRace ? ARMS_RACE : this.rules.demolition ? DEMOLITION : null;
+    return this.mode.ladder;
   }
 
   // In a buy zone (or mp_buy_anywhere) in buy time; deathmatch: mp_buytime from each spawn.
   // The gun game modes earn their weapons instead.
   canBuy(c) {
     const ph = this.phase, r = this.rules;
-    if (r.armsRace || r.demolition || r.retakes) return false;
+    if (this.mode.earned) return false;
     if (r.demo) return c.alive && ph !== PHASE_OVER; // anywhere, anytime
     const inTime = r.deathmatch ? ph !== PHASE_OVER && this.tick < c.spawnTick + r.buyTime * TICK_RATE
       : ph === PHASE_WARMUP || ph === PHASE_FREEZE || (ph === PHASE_LIVE && this.tick < this.buyEnd);
@@ -976,9 +981,7 @@ export class Game {
       else this.startWarmup(false);
     }
     const ready = this.ready(t, ct), r = this.rules;
-    rs.mode = (r.teammatesAreEnemies ? GAME_FFA : 0) | (r.deathmatch ? GAME_DM : 0) | (r.demo ? GAME_DEMO : 0) |
-      (r.armsRace ? GAME_ARMSRACE : 0) | (r.demolition ? GAME_DEMOLITION : 0) | (r.wingman ? GAME_WINGMAN : 0) |
-      (r.retakes ? GAME_RETAKES : 0) |
+    rs.mode = (r.teammatesAreEnemies ? GAME_FFA : 0) | this.mode.bit |
       (!r.solidTeammates && !r.teammatesAreEnemies ? GAME_GHOST_TEAM : 0);
     if (rs.phase === PHASE_WARMUP) {
       if (!ready) this.warmupReady = -1;

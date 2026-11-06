@@ -99,7 +99,7 @@ const CONNECTIONS_PER_ADDRESS = 16; // QUIC connections, upgraded or not (transp
 const HELLO_MS = 10000; // a session's first HELLO
 const sessionsByAddress = new AddressCounts(SESSIONS_PER_ADDRESS);
 const connections = new AddressCounts(CONNECTIONS_PER_ADDRESS);
-listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key, connections }, (session) => {
+const transport = listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key, connections }, (session) => {
   let game = null, client = null, refused = false;
   setTimeout(() => { // a session that never says HELLO is let go
     if (!client) session.close('no hello');
@@ -137,6 +137,23 @@ listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key
     },
   };
 });
+
+// The self-signed certificate lives 13 days (browsers pin none valid longer), checked only at
+// startup: a server up longer served an expired one and every Play failed. ensureCert makes a
+// new one 12 days in; it goes to new connections and connect.json.
+if (!TLS_CERT) {
+  setInterval(async () => {
+    try {
+      const fresh = await ensureCert(fileURLToPath(new URL('certs', ROOT)), HOSTNAMES);
+      if (fresh.cert === certInfo.cert) return;
+      Object.assign(certInfo, fresh);
+      transport.renew(fresh.cert, fresh.key);
+      console.log('webtransport: certificate renewed');
+    } catch (err) {
+      console.warn('webtransport: certificate renewal failed:', err.message);
+    }
+  }, 6 * 3600e3);
+}
 
 // Fixed-rate loops (runDue), one per game: the server's own and each room's.
 const main = { host, epoch: performance.now() };

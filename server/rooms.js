@@ -86,6 +86,7 @@ export class Rooms {
       readCfg: (n) => (/^gamemode_[a-z]+(_server)?\.cfg$/.test(n) && this.opts.readCfg ? this.opts.readCfg(n) : null),
       print: (s) => console.log(`[room ${code}] ${s}`),
       now: this.opts.now,
+      mapGapMs: L.cooldownMs,
     });
     const [type, gameMode] = modeKey.split('/');
     host.con.exec(`game_type ${type}; game_mode ${gameMode}; bot_difficulty ${Math.max(0, Math.min(3, difficulty | 0))}; ` +

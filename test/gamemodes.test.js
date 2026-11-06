@@ -11,7 +11,9 @@ import {
   PHASE_OVER, END_MATCH, GAME_ARMSRACE, GAME_DEMOLITION, GAME_WINGMAN, ITEM_KEVLAR,
 } from '../shared/economy.js';
 import { ARMS_RACE, DEMOLITION, levelWeapon, armLevel } from '../shared/progression.js';
-import { mapOrNull, modeServer as setup, lineUp, fireUntil } from './harness.js';
+import { mapOrNull, modeServer as setup, lineUp, fireUntil, loadMap, readCfg, quiet } from './harness.js';
+import { MODES, modeOfBits, modeNamed } from '../shared/modes.js';
+import { Host } from '../server/host.js';
 
 const haveMap = !!mapOrNull('de_dust2');
 
@@ -162,3 +164,27 @@ Deno.test({ name: 'demolition: everyone starts on the first weapon; a round with
   assert.equal(slot(a, SLOT_PRIMARY), WEAPON_ID.famas, 'a kill last round: the next weapon');
   assert.equal(slot(b, SLOT_PRIMARY), WEAPON_ID.ak47, 'no kill: the same');
 } });
+
+// shared/modes.js holds what server, clients and menus each know of a mode: a mode picked by
+// game_type / game_mode runs its cfg and sets its rule, the round block carries its bit, and
+// a client reads the same row (its facts) back from those bits.
+Deno.test('modes: each row runs its cfg and rule; the client reads the same facts back from the round bits', () => {
+  for (const m of MODES) {
+    const host = new Host({ loadMap, listMaps: () => ['de_playground'], readCfg, print: () => {}, defer: (fn) => fn() });
+    const [type, mode] = m.key.split('/');
+    quiet(() => {
+      host.con.exec(`game_type ${type}; game_mode ${mode}`);
+      host.start('de_playground');
+      host.game.step();
+    });
+    assert.equal(host.modeName, m.name);
+    assert.notEqual(readCfg(`gamemode_${m.name}.cfg`), null, `cfg/gamemode_${m.name}.cfg`);
+    assert.equal(host.game.mode, m.rule ? m : modeNamed('competitive')); // casual plays as competitive, by its cfg
+    if (m.rule) assert.equal(host.game.rules[m.rule], true);
+    const back = modeOfBits(host.game.round.mode);
+    assert.equal(back, m.bit ? m : modeNamed('competitive'), m.name);
+    for (const k of ['respawns', 'free', 'earned', 'oneSite', 'ladder']) assert.equal(back[k], m[k], `${m.name}: ${k}`);
+    // The client's bot takeover rule (respawns) and the server's (the mode cfg's respawn cvars).
+    assert.equal(host.game.rules.respawnT && host.game.rules.respawnCT, m.respawns, `${m.name}: respawning`);
+  }
+});

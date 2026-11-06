@@ -11,16 +11,19 @@ import {
   entityModelIndex, faceNumEdges, facePlane, faceSide, faceTexinfo, faceVertex, modelFirstFace, modelNumFaces,
   parseVec3,
 } from './bsp.js';
-import { hullFits, traceHull, Trace, HULL_DUCK, ENT_LADDER, ENT_NONE } from './trace.js';
+import { hullFits, traceHull, Trace, HULL_DUCK, ENT_LADDER, ENT_NONE, NONSOLID } from './trace.js';
 
 export const LAYERS = 6; // floor heights kept per cell (the highest go first when full)
 // The most cells a grid may have: 8 times the largest map here (cs_siege's navigation,
 // 66,700). An uploaded map can span the whole ±16384 world: its navigation at 24 units
 // held 1.7 GB and blocked every game on the server for seconds (server/rooms.js).
 export const MAX_CELLS = 1 << 19;
-// Floor faces covering one cell, on average: real maps reach 2.35. A map of many copies of
+// Floor faces covering one cell, on average: real maps reach 2.85 (rows counted as below). A map of many copies of
 // one big face (20 bytes each) traced every cell again for each copy before any other limit.
+// Each row a face spans counts too, a quarter visit an edge: a face of zero width fills no
+// cell, so its rows went uncounted.
 const RASTER_VISITS = 8;
+const TOO_MANY_FLOORS = 'the map has too many floors for its floor grid';
 export const STAIR = 18; // sv_stepsize: walked up without a jump
 export const CLIMB = 64; // a crouch jump reaches about this high (approx.)
 export const MOVE_WALK = 0; // walk, or fall
@@ -29,8 +32,7 @@ export const MOVE_LADDER = 2; // up a ladder
 const FLOOR_NZ = 0.7; // walkable slope (sv_walkable_normal)
 const TEX_SPECIAL = 1; // texinfo flag: sky / water
 const MERGE = 16; // floors closer than this are one
-const NONSOLID = new Set(['func_illusionary', 'func_ladder', 'func_water', 'func_buyzone', 'func_bomb_target',
-  'func_hostage_rescue', 'func_vip_safetyzone', 'func_escapezone']);
+const NOT_FLOOR = new Set([...NONSOLID, 'func_ladder', 'func_water']); // what players pass through, and volumes
 const DOORS = new Set(['func_door', 'func_door_rotating']);
 const SEEDS = new Set(['info_player_start', 'info_player_deathmatch', 'hostage_entity']);
 
@@ -262,6 +264,7 @@ export class FloorGrid {
     }
     for (let py = Math.max(0, Math.ceil(pyMin - 0.5)); py <= Math.min(this.h - 1, Math.floor(pyMax - 0.5)); py++) {
       const wy = this.maxY - (py + 0.5) * s;
+      if ((this.visits += (n + 3) >> 2) > RASTER_VISITS * this.w * this.h) throw new Error(TOO_MANY_FLOORS);
       let xa = Infinity, xb = -Infinity;
       for (let i = 0; i < n; i++) {
         const ax = xs[i], ay = ys[i], bx = xs[(i + 1) % n], by = ys[(i + 1) % n];
@@ -272,7 +275,7 @@ export class FloorGrid {
       }
       if (xa > xb) continue;
       for (let px = Math.max(0, Math.ceil(this.px(xa) - 0.5)); px <= Math.min(w - 1, Math.floor(this.px(xb) - 0.5)); px++) {
-        if (++this.visits > RASTER_VISITS * this.w * this.h) throw new Error('the map has too many floors for its floor grid');
+        if (++this.visits > RASTER_VISITS * this.w * this.h) throw new Error(TOO_MANY_FLOORS);
         const wx = this.minX + (px + 0.5) * s;
         const z = (d - nx * wx - ny * wy) / nz;
         if (this.hasLayer(py * w + px, z)) continue;
@@ -334,7 +337,7 @@ export function floorFaces(bsp) {
   const o = new Float32Array(3);
   for (const e of bsp.entities) {
     const m = entityModelIndex(e), cls = e.classname || '';
-    if (m <= 0 || !cls.startsWith('func_') || NONSOLID.has(cls)) continue;
+    if (m <= 0 || !cls.startsWith('func_') || NOT_FLOOR.has(cls)) continue;
     parseVec3(e.origin, o);
     models.push([m, o[0], o[1], o[2]]);
   }

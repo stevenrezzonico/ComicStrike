@@ -30,8 +30,9 @@ export const MAX_BODIES = 64; // slots (player ids)
 export const BODY_FIELDS = 8; // x, y, z (hull center), half height (0: no body), vx, vy, vz, team
 export const ENT_BODY_BASE = 1 << 16; // trace.ent of body k is ENT_BODY_BASE + k
 
-// Brush entities that never block movement. Every other func_* brush entity is solid.
-const NONSOLID = new Set([
+// Brush entities that never block movement. Every other func_* brush entity is solid (the
+// floor grid takes the same list: shared/floorgrid.js).
+export const NONSOLID = new Set([
   'func_illusionary', 'func_buyzone', 'func_bomb_target', 'func_hostage_rescue', 'func_escapezone',
   'func_vip_safetyzone', 'func_monsterclip', 'func_mortar_field', 'func_traincontrols', 'func_friction',
 ]);

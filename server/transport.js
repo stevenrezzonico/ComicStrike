@@ -28,16 +28,23 @@ const UPGRADE_MS = 10000; // from the QUIC handshake to a ready WebTransport ses
 // onSession(session) -> { onDatagram(bytes), onClose() }
 // connections: an AddressCounts (server/host.js) bounding the open connections per address,
 // sessions or not: 2,000 that never upgraded were held forever, 45 KB each.
+// Returns { endpoint, renew(cert, key) }: renew swaps the certificate for new connections (a
+// new listener on the same endpoint; the open connections stay).
 export function listen({ hostname = '0.0.0.0', port, cert, key, connections = null }, onSession) {
   const endpoint = new Deno.QuicEndpoint({ hostname, port });
-  const listener = endpoint.listen({ alpnProtocols: ['h3'], cert, key });
+  let listener = endpoint.listen({ alpnProtocols: ['h3'], cert, key });
   let nextId = 1;
 
-  (async () => {
-    for await (const incoming of listener) {
-      handle(incoming).catch((err) => console.warn('transport: session failed:', err.message));
+  const accept = async (l) => {
+    try {
+      for await (const incoming of l) {
+        handle(incoming).catch((err) => console.warn('transport: session failed:', err.message));
+      }
+    } catch (err) {
+      if (l === listener) throw err; // a stopped listener's loop may end with an error
     }
-  })();
+  };
+  accept(listener);
 
   // The address is read off the accepted connection: an incoming one's remoteAddr throws
   // ("Invalid QuicIncoming resource"), and read in the loop above that ended the server.
@@ -93,5 +100,12 @@ export function listen({ hostname = '0.0.0.0', port, cert, key, connections = nu
     end();
   }
 
-  return endpoint;
+  return {
+    endpoint,
+    renew(newCert, newKey) {
+      listener.stop();
+      listener = endpoint.listen({ alpnProtocols: ['h3'], cert: newCert, key: newKey });
+      accept(listener);
+    },
+  };
 }

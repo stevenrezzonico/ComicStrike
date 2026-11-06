@@ -125,3 +125,23 @@ Deno.test('hurt indicator: the own block carries where the last damage came from
   run(1, [a, b]);
   assert.equal(b.lastOwn().flags & OWN_HURT, 0, 'no damage, no arc');
 });
+
+Deno.test('a player who left: his fire burns on credited to nobody, his damage leaves the report', async () => {
+  const { FX_FIRE } = await import('../shared/grenades.js');
+  const { game: g, join } = setup();
+  const t = join('thrower', TEAM_T), ct = join('victim', TEAM_CT);
+  const before = ct.player.health;
+  ct.player.health = before - 30;
+  g.recordDamage(t, ct, before);
+  assert.equal(ct.taken[t.id], 30);
+  const k = g.grenades.addEffect(FX_FIRE, WEAPON_ID.molotov, t.id, TEAM_T, 0, 0, 0);
+  g.disconnect(t);
+  assert.equal(g.grenades.fxOwner[k], -1, 'whoever takes the slot is not its thrower');
+  assert.equal(ct.taken[t.id], 0, 'nor in the report');
+  ct.player.health = 1;
+  const bot = join('BOT newcomer', TEAM_CT);
+  assert.equal(bot.id, t.id, 'the slot is taken at once');
+  g.grenadeHurt(ct, 40, WEAPON_ID.molotov, g.grenades.fxOwner[k], TEAM_T);
+  assert.equal(bot.kills, 0, 'the newcomer is not credited');
+  assert.equal(bot.given[ct.id], 0);
+});

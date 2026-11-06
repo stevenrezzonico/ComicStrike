@@ -953,7 +953,6 @@ class Bot {
     for (const item of order) {
       const price = itemPrice(p, item);
       if (price < 0 || (!free && price > p.money)) continue;
-      if (g.phase !== PHASE_WARMUP && !free && item !== rifle && p.money - price < 0) continue;
       g.buyItem(c, item);
     }
   }

@@ -154,6 +154,10 @@ Deno.test('a map too big for the navigation is refused before the work', () => {
   // cell again: 100 were a second of building, before any other limit. Real maps: 2.35 a cell.
   const faces = floorFaces(bsp), big = faces.reduce((a, f) => (f.xs.length && area(f) > area(a) ? f : a));
   assert.throws(() => new FloorGrid(bsp, world, 24, { faces: [...faces, ...Array(200).fill(big)] }), /too many floors/);
+  // A face of zero width fills no cell, but its every row walks its edges: those rows count.
+  const ys = big.ys.map((_y, i) => (i % 2 ? Math.max(...big.ys) : Math.min(...big.ys)));
+  const thin = { ...big, xs: big.xs.map(() => big.xs[0]), ys };
+  assert.throws(() => new FloorGrid(bsp, world, 24, { faces: [...faces, ...Array(10000).fill(thin)] }), /too many floors/);
 });
 const area = (f) => (Math.max(...f.xs) - Math.min(...f.xs)) * (Math.max(...f.ys) - Math.min(...f.ys));
 
@@ -207,4 +211,15 @@ Deno.test('listed rooms: only those their host listed, each with its connect.jso
   assert.equal(rooms.list()[0].password, true);
   quietly(() => rooms.close(open, 'bye'));
   assert.deepEqual(rooms.list(), []);
+});
+
+Deno.test('a room changes its map by rcon at most once per upload cooldown (each rebuilds the game and navigation)', () => {
+  const { rooms, clock } = makeRooms();
+  const room = quietly(() => rooms.create(PLAYGROUND, { fileName: 'gap.bsp', address: '1.2.3.4' }));
+  const who = { id: 0, name: 'uploader', session: { address: '1.2.3.4' } };
+  assert.match(quietly(() => room.host.rcon(who, room.rcon, 'map gap')), /changelevel to gap/);
+  clock.ms += 5000;
+  assert.match(quietly(() => room.host.rcon(who, room.rcon, 'map gap')), /too soon/);
+  clock.ms += 30000;
+  assert.match(quietly(() => room.host.rcon(who, room.rcon, 'map gap')), /changelevel to gap/);
 });

@@ -1,6 +1,7 @@
 // Self-signed ECDSA certificate management for WebTransport.
 // Browsers accept a self-signed cert via `serverCertificateHashes` only if it is
-// ECDSA and valid for at most 14 days, so we regenerate it before it expires.
+// ECDSA and valid for at most 14 days, so we regenerate it before it expires (at startup,
+// and every 6 hours while running: server/main.js).
 
 const LIFETIME_DAYS = 13;
 const RENEW_AFTER_MS = (LIFETIME_DAYS - 1) * 86400e3;

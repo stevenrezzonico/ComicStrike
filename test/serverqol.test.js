@@ -153,10 +153,52 @@ Deno.test('callvote: a vote fails on time; the same vote and the caller wait; is
   assert.match(said(b), /failed a moment ago: it can be called again in 300 s/);
   cmd(a, 'callvote restartgame');
   assert.match(said(a), /You can call another vote in 135 s/);
+  const back = hello('alpha again', '', '203.0.113.1');
+  cmd(back, 'callvote restartgame');
+  assert.match(said(back), /You can call another vote in 135 s/, 'a reconnect is no new caller');
   host.con.exec('sv_vote_issue_restart_game_allowed 0');
   cmd(b, 'callvote restartgame');
   assert.equal(said(b), 'callvote restartgame is off on this server.');
   host.con.exec('sv_allow_votes 0');
   cmd(b, 'callvote restartgame');
   assert.equal(said(b), 'Voting is off on this server.');
+});
+
+Deno.test('sv_password: a flood of bad guesses keeps new addresses out, not those that got in before; an empty one is no guess', () => {
+  const { host, hello, tick } = server();
+  host.con.exec('sv_password letmein');
+  assert.ok(hello('regular', 'letmein', '198.51.100.1').joined);
+  for (let i = 0; i < 6; i++) assert.equal(hello('curious', '', '198.51.100.9').why, 'this server has a password');
+  tick(32);
+  assert.ok(hello('friend', 'letmein', '198.51.100.9').joined, 'six tries with no password blocked nothing');
+  for (let a = 0; a < 12; a++) {
+    for (let i = 0; i < 5; i++) hello('guess', `g${i}`, `203.0.113.${a + 10}`);
+    tick(32); // the refused sessions close
+  }
+  assert.equal(hello('new', 'letmein', '192.0.2.1').why, 'too many bad passwords, try later', 'sixty in a minute from everyone');
+  assert.ok(hello('regular again', 'letmein', '198.51.100.1').joined, 'an address that got in before still does (a map change rejoins everyone)');
+});
+
+Deno.test('callvote kick: a name several players share goes by #id, and the panel says which', () => {
+  const { host, hello, cmd, said, vote } = server();
+  const a = hello('alpha', '', '203.0.113.1'), p1 = hello('player', '', '203.0.113.2'), p2 = hello('player', '', '203.0.113.3');
+  hello('bravo', '', '203.0.113.4');
+  cmd(a, 'callvote kick player');
+  assert.match(said(a), /several have that name/);
+  assert.equal(host.findClient('player'), null, 'rcon kick likewise');
+  cmd(a, `callvote kick #${p2.c.id}`);
+  assert.equal(vote(a).detail, `player (#${p2.c.id})`);
+  assert.equal(vote(p2).mine, 0, 'the one meant is the target');
+  assert.equal(vote(p1).mine, 1);
+});
+
+Deno.test('callvote kick: no ban while a housemate stays (he would be refused at the next map change)', () => {
+  const { hello, cmd, vote } = server();
+  const a = hello('alpha', '', '203.0.113.1'), b = hello('bravo', '', '203.0.113.2');
+  const d = hello('delta', '', '203.0.113.4'), mate = hello('mate', '', '203.0.113.4');
+  cmd(a, 'callvote kick delta');
+  cmd(b, 'vote option1');
+  assert.equal(vote(a).state, VOTE_PASSED);
+  assert.ok(!d.c.joined && mate.c.joined);
+  assert.ok(hello('mate rejoining', '', '203.0.113.4').joined, 'not banned');
 });

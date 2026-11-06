@@ -14,7 +14,6 @@ import { WEAPONS } from '../../shared/weapons.js';
 export const GUN_ROOT = 0;
 export const GUN_MAG = 1;
 export const GUN_BOLT = 2;
-export const GUN_BONES = 3;
 
 // Finishes (other colors print as polymer).
 const BLACK = finish([0.1, 0.1, 0.11], FINISH.METAL);

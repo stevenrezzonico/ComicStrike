@@ -28,7 +28,8 @@ import {
   SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, SLOT_GRENADE,
   WS_ZOOM, WS_THROWN, WEV_THROW, WEV_FIRE, activeWeapon, silenced, RECOIL, shotKick,
 } from '../shared/weapons.js';
-import { ARMS_RACE, DEMOLITION, levelWeapon } from '../shared/progression.js';
+import { levelWeapon } from '../shared/progression.js';
+import { modeOfBits } from '../shared/modes.js';
 import {
   BombSites, PLANT_TIME, DEFUSE_TIME, DEFUSE_TIME_KIT, C4_TIMER, BOMB_DROPPED, BOMB_PLANTED, BOMB_DEFUSED,
   BOMB_EXPLODED,
@@ -98,7 +99,7 @@ import { NetGraph } from './netgraph.js';
 import { createConsole, watch } from './settings.js';
 import { releaseOf, quote } from '../shared/cvars.js';
 import {
-  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_DM, GAME_DEMO, GAME_WINGMAN, GAME_ARMSRACE, GAME_DEMOLITION, GAME_GHOST_TEAM, GAME_RETAKES, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
+  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_DEMO, GAME_GHOST_TEAM, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
 } from '../shared/economy.js';
 
 const DEG = Math.PI / 180;
@@ -697,7 +698,7 @@ function calmRadius(height) {
 }
 // Can we take control of player `id` (a living bot of our team, mid-round, not deathmatch)?
 function canTakeOver(id) {
-  if (!net || id < 0 || (gameMode() & (GAME_DM | GAME_DEMO | GAME_ARMSRACE))) return false; // respawning: the server says not now
+  if (!net || id < 0 || modeOfBits(gameMode()).respawns) return false; // respawning: the server says not now
   const phase = net.own.round.phase, r = id * E_FIELDS;
   return (phase === PHASE_FREEZE || phase === PHASE_LIVE) && interp[r + E_HEALTH] > 0 &&
     interp[r + E_TEAM] === player.team && (net.names[id] || '').startsWith('BOT ');
@@ -788,15 +789,14 @@ function useHint(off) {
 }
 
 const demo = () => (gameMode() & GAME_DEMO) !== 0;
-const freeBuys = () => (gameMode() & (GAME_DM | GAME_DEMO)) !== 0; // deathmatch and the demo: no money
-const gunGame = () => (gameMode() & (GAME_ARMSRACE | GAME_DEMOLITION | GAME_RETAKES)) !== 0; // weapons handed out: no money
+const freeBuys = () => modeOfBits(gameMode()).free; // deathmatch and the demo: no money
+const gunGame = () => modeOfBits(gameMode()).earned; // weapons handed out: no money
 // Our place in the gun game modes' weapon list for the round bar ('' in the others), rebuilt
 // only when it changes.
 const progressKey = [-1, -1, -1];
 let progressText = '';
 function progress() {
-  const mode = gameMode() & (GAME_ARMSRACE | GAME_DEMOLITION);
-  const list = mode & GAME_ARMSRACE ? ARMS_RACE : mode & GAME_DEMOLITION ? DEMOLITION : null;
+  const m = modeOfBits(gameMode()), list = m.ladder, mode = m.bit;
   const level = list && net && selfId >= 0 ? Math.min(net.scores[selfId] || 0, list.length - 1) : -1;
   const K = progressKey;
   if (K[0] === mode && K[1] === level && K[2] === player.team) return progressText;
@@ -805,7 +805,7 @@ function progress() {
   K[2] = player.team;
   if (level < 0) return (progressText = '');
   const next = level + 1 < list.length ? `next: ${itemLabel(levelWeapon(list, level + 1, player.team === TEAM_CT))}`
-    : mode & GAME_ARMSRACE ? 'the knife: one kill to win' : 'the last weapon';
+    : m.name === 'armsrace' ? 'the knife: one kill to win' : 'the last weapon';
   return (progressText = `level ${level + 1}/${list.length}   ${next}`);
 }
 
@@ -924,7 +924,7 @@ function applySnapshot() {
   }
 
   // Wingman plays one bomb site: predict planting (and draw the radar) with that one only.
-  if ((own.round.mode & GAME_WINGMAN) && world.bombSites.count > 1) {
+  if (modeOfBits(own.round.mode).oneSite && world.bombSites.count > 1) {
     world.bombSites.keepOnly(1);
     radar.setSites(world.bombSites);
   }
@@ -2168,7 +2168,11 @@ for (const [cmd, help] of [['callvote', 'callvote kick <name> | changelevel <map
 }
 con.hint('callvote', (i, a) => {
   if (i === 1) return [['kick', 'vote a teammate out'], ['changelevel', 'vote for another map'], ['restartgame', 'vote to restart the match']];
-  if (i === 2 && a[1] === 'kick' && net) return net.names.filter((n, id) => n && id !== selfId && !/^BOT /.test(n));
+  if (i === 2 && a[1] === 'kick' && net) { // a name several share goes by #id (the server refuses it)
+    const ns = net.names;
+    return ns.flatMap((n, id) => (!n || id === selfId || /^BOT /.test(n) ? []
+      : ns.indexOf(n) !== ns.lastIndexOf(n) ? [[`#${id}`, n]] : [n]));
+  }
   if (i === 2 && a[1] === 'changelevel') return mapNames || [];
   return [];
 });
@@ -2542,6 +2546,9 @@ const secondary = WEAPON_ID[params.get('secondary')] || 0;
 
 async function joinServer(team) {
   menu.busy('Connecting...');
+  // A try that joined and then failed (a map load after a changelevel) is closed before the
+  // next: its keepalive kept a ghost player on the server until the tab closed.
+  if (net && !net.closed && !net.playback) net.close('retry');
   net = new NetClient();
   if (localWorker) net.connectLocal(localWorker, localRcon);
   else {

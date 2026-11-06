@@ -8,6 +8,7 @@ import { TEAM_NAMES, TEAM_T, TEAM_CT } from '../shared/player.js';
 import { PHASE_WARMUP } from '../shared/economy.js';
 import { Game, DEFAULT_RULES } from './game.js';
 import { Votes } from './votes.js';
+import { MODES } from '../shared/modes.js';
 import { TICK_RATE } from '../shared/constants.js';
 
 const PHASE_NAMES = ['warmup', 'freeze time', 'live', 'round over'];
@@ -22,19 +23,22 @@ const RCON_FAILS_PER_MINUTE = 60;
 // and froze the server. A room's uploader holds its rcon password.
 const RCON_BUDGET = 256;
 const RCON_MAP_GAP_MS = 1000; // rcon map changes: each builds a new game (40 in a line were 70 ms)
+// Characters of output one rcon line sends back: a line of `find;find;...` printed ~1 MB,
+// ~1,400 PRINT datagrams encoded on the thread every game shares.
+const RCON_OUTPUT = 65536;
 
-// CS:GO game modes by game_type / game_mode. A mode is a cfg of mode convars run when a
-// map loads (cfg/gamemode_<name>.cfg, then cfg/gamemode_<name>_server.cfg for the
-// server's own overrides, as in CS:GO); deathmatch also switches to free weapons and
-// points instead of money, wingman to one bomb site, arms race and demolition to weapons
-// earned by kills (shared/progression.js).
-export const GAME_MODES = {
-  '0/0': 'casual', '0/1': 'competitive', '0/2': 'wingman', '1/0': 'armsrace', '1/1': 'demolition', '1/2': 'deathmatch',
-  '2/0': 'demo', '0/3': 'retakes',
-};
+// CS:GO game modes by game_type / game_mode (shared/modes.js). A mode is a cfg of mode
+// convars run when a map loads (cfg/gamemode_<name>.cfg, then cfg/gamemode_<name>_server.cfg
+// for the server's own overrides, as in CS:GO), plus its rule flag in the game rules.
+export const GAME_MODES = Object.fromEntries(MODES.map((m) => [m.key, m.name]));
 
 // The part of an address rcon guesses are counted by: an IPv4 address, or an IPv6 address's
 // /64 (one machine gets a whole /64 and can use any address in it).
+// The machine itself: never limited or banned (development plays a browser tab per player).
+export function isLoopback(address) {
+  return /^127\./.test(addressKey(address)) || address === '::1';
+}
+
 export function addressKey(address) {
   if (!address || !address.includes(':')) return address || '';
   const v4 = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address); // IPv4 mapped
@@ -55,8 +59,7 @@ export class AddressCounts {
   }
 
   key(address) {
-    const key = addressKey(address);
-    return /^127\./.test(key) || address === '::1' ? null : key;
+    return isLoopback(address) ? null : addressKey(address);
   }
 
   add(address) {
@@ -98,19 +101,24 @@ export function runDue(entry, now) {
 // address (sessions without one share a key): counted here, not per player, so reconnecting
 // does not reset them, and kept across map changes. RCON_MAX_FAILS from one address block it
 // for RCON_BLOCK_MS; RCON_FAILS_PER_MINUTE from everyone refuse everyone for the rest of the
-// minute.
+// minute, except the addresses that gave the right password before (else anyone with a dozen
+// addresses kept a password server closed to its own players, every map change throwing them
+// out).
+const GOOD_KEEP = 4096; // addresses remembered for having given the right password
 class Guesses {
   constructor(now) {
     this.now = now;
     this.byKey = new Map(); // address key -> { fails, blockedUntil }
     this.since = -Infinity; // the minute the server-wide count is for
     this.fails = 0;
+    this.good = new Set(); // address keys that gave the right password
   }
 
   // Why a guess from `key` is not even tried now: 'address' or 'server'; '' to try it.
   refused(key) {
     const now = this.now(), g = this.byKey.get(key);
     if (g && now < g.blockedUntil) return 'address';
+    if (this.good.has(key)) return '';
     if (now - this.since >= 60000) {
       this.since = now;
       this.fails = 0;
@@ -134,13 +142,18 @@ class Guesses {
 
   ok(key) {
     this.byKey.delete(key);
+    this.good.delete(key); // the newest last: the oldest goes first
+    if (this.good.size >= GOOD_KEEP) this.good.delete(this.good.keys().next().value);
+    this.good.add(key);
   }
 }
 
 export class Host {
   // opts: loadMap(name) -> parsed BSP (throws if missing), listMaps() -> names,
   //       readCfg(name) -> text or null, quit(), print(text), rules (test overrides),
-  //       defer(fn, ms) (default setTimeout), now() -> ms (default performance.now)
+  //       defer(fn, ms) (default setTimeout), now() -> ms (default performance.now),
+  //       mapGapMs (ms between two rcon map changes; rooms: their upload cooldown, as each
+  //       rebuilds the game and its bots' navigation)
   constructor(opts) {
     this.opts = opts;
     this.now = opts.now || (() => performance.now());
@@ -275,7 +288,7 @@ export class Host {
       'Starts a warmup (until mp_warmup_end, or mp_warmuptime seconds)');
     con.command('kick', (a, ctx) => {
       const c = this.findClient(a.slice(1).join(' '));
-      if (!c) return con.out(ctx, 'kick <name or #id>: no such player');
+      if (!c) return con.out(ctx, 'kick <name or #id>: no such player, or several have that name (status lists the ids)');
       this.game.kick(c, 'kicked by the server');
     }, 'kick <name or #id>');
     con.command('say', (a) => this.game.chat(null, a.slice(1).join(' ')), 'say <text>: a chat line from Console to everyone');
@@ -354,12 +367,7 @@ export class Host {
       cheats: v('sv_cheats') !== 0 || this.modeName === 'demo', // the demo allows the cheat commands
       talkEnemyDead: v('sv_talk_enemy_dead') !== 0,
       talkEnemyLiving: v('sv_talk_enemy_living') !== 0,
-      deathmatch: this.modeName === 'deathmatch',
-      demo: this.modeName === 'demo',
-      wingman: this.modeName === 'wingman',
-      armsRace: this.modeName === 'armsrace',
-      demolition: this.modeName === 'demolition',
-      retakes: this.modeName === 'retakes',
+      ...Object.fromEntries(MODES.filter((m) => m.rule).map((m) => [m.rule, this.modeName === m.name])), // deathmatch, demo, ...
       halftime: v('mp_halftime') !== 0,
       overtime: v('mp_overtime_enable') !== 0,
       overtimeRounds: v('mp_overtime_maxrounds'),
@@ -408,7 +416,7 @@ export class Host {
     if (!name || !/^[\w-]+$/.test(name)) return this.con.out(ctx, 'map <name>');
     if (ctx && ctx.source === 'rcon') {
       const now = this.now();
-      if (now - this.mapChangedAt < RCON_MAP_GAP_MS) return this.con.out(ctx, 'map: too soon after the last change');
+      if (now - this.mapChangedAt < (this.opts.mapGapMs ?? RCON_MAP_GAP_MS)) return this.con.out(ctx, 'map: too soon after the last change');
       this.mapChangedAt = now;
     }
     let bsp;
@@ -476,14 +484,22 @@ export class Host {
     this.rconGuesses.ok(key);
     console.log(`rcon from player ${c.id} "${c.name}": ${command}`);
     const out = [];
-    this.con.exec(command, { print: (s) => out.push(s), source: 'rcon', client: c, budget: RCON_BUDGET });
+    let left = RCON_OUTPUT;
+    const print = (s) => {
+      if (left > 0) out.push(s.length <= left ? s : `${s.slice(0, left)}\n(the rest cut: ${RCON_OUTPUT} characters at most)`);
+      left -= s.length + 1; // and its line break
+    };
+    this.con.exec(command, { print, source: 'rcon', client: c, budget: RCON_BUDGET });
     return out.join('\n');
   }
 
+  // A player by `#id` or by name; null when no one, or several, have that name (everyone
+  // who never changed it is "player": the first of them was kicked).
   findClient(q) {
     const g = this.game;
     if (q.startsWith('#')) return g.clients[+q.slice(1)] || null;
-    return g.clients.find((c) => c && c.joined && c.name === q) || null;
+    const named = g.clients.filter((c) => c && c.joined && c.name === q);
+    return named.length === 1 ? named[0] : null;
   }
 
   // sv_password for a joining session: '' to let it in, else why not (its HELLO is refused).
@@ -496,24 +512,28 @@ export class Host {
     }
     const pw = this.joinPassword.value;
     if (!pw) return '';
+    if (!password) return 'this server has a password'; // asks nothing: not counted as a guess
     const refused = this.joinGuesses.refused(key);
     if (refused) return 'too many bad passwords, try later';
     if (password !== pw) {
       this.joinGuesses.fail(key);
       console.log(`bad sv_password from ${key || 'a session'}`);
-      return password ? 'bad password' : 'this server has a password';
+      return 'bad password';
     }
     this.joinGuesses.ok(key);
     return '';
   }
 
-  // A player voted out: his address cannot join for `minutes` (loopback never: development
-  // plays a tab per player).
+  // A player voted out: his address cannot join for `minutes` (loopback never). Not while
+  // another human from that address stays in the game: a housemate would be refused at the
+  // next map change, every player rejoining then.
   ban(c, minutes) {
-    const address = c.session && c.session.address;
-    if (!(minutes > 0) || !address || /^127\./.test(address) || address === '::1') return;
+    const address = c.session && c.session.address, key = addressKey(address);
+    if (!(minutes > 0) || !address || isLoopback(address)) return;
+    const shared = (o) => o && o !== c && o.joined && !o.bot && o.session && addressKey(o.session.address) === key;
+    if (this.game.clients.some(shared)) return console.log(`vote: ${key} not banned, another player shares it`);
     if (this.bans.size >= 4096) this.bans.delete(this.bans.keys().next().value);
-    this.bans.set(addressKey(address), this.now() + minutes * 60000);
+    this.bans.set(key, this.now() + minutes * 60000);
   }
 
   // What the start menu shows before joining (connect.json).
