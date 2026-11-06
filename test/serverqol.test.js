@@ -1,13 +1,17 @@
-// Server conveniences: sv_password.
+// Server conveniences: sv_password, votes (callvote).
 import assert from 'node:assert/strict';
-import { TEAM_T } from '../shared/player.js';
-import { Writer, Reader, writeHello, S2C_REJECT, S2C_WELCOME } from '../shared/protocol.js';
+import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
+import {
+  Writer, Reader, writeHello, writeCommand, readVote, S2C_REJECT, S2C_WELCOME, S2C_PRINT, S2C_VOTE, VOTE_RUNNING,
+  VOTE_PASSED, VOTE_FAILED, VOTE_KICK, VOTE_RESTART,
+} from '../shared/protocol.js';
 import { loadMap, readCfg, quiet } from './harness.js';
 import { Host } from '../server/host.js';
 
-// A server on de_playground with a clock the test moves; `hello(name, password, address)`
-// connects a session and sends its HELLO: the client, the datagrams it got and whether
-// its session was closed.
+// A server on de_playground with a clock the test moves; `hello(name, password, address,
+// team)` connects a session and sends its HELLO: the client, the datagrams it got and whether
+// its session was closed; `cmd(p, text)` a console command from it, `said(p)` its newest
+// console line, `vote(p)` the newest vote it was sent.
 function server() {
   const clock = { ms: 0 };
   const host = new Host({
@@ -15,11 +19,11 @@ function server() {
   });
   quiet(() => host.start('de_playground'));
   const w = new Writer();
-  const hello = (name, password = '', address = '203.0.113.7') => {
+  const hello = (name, password = '', address = '203.0.113.7', team = TEAM_T) => {
     const sent = [];
     const session = { send: (b) => sent.push(b.slice()), close: (why) => (session.closed = why), closed: '', address };
     const c = host.game.connect(session);
-    quiet(() => host.game.receive(c, writeHello(w, TEAM_T, 0, 0, name, '', password).slice()));
+    quiet(() => host.game.receive(c, writeHello(w, team, 0, 0, name, '', password).slice()));
     const reject = sent.find((b) => b[0] === S2C_REJECT);
     let why = '';
     if (reject) {
@@ -29,7 +33,21 @@ function server() {
     }
     return { c, joined: c.joined, welcomed: sent.some((b) => b[0] === S2C_WELCOME), why, session, sent };
   };
-  return { host, hello, clock, w };
+  let cmdId = 0;
+  const cmd = (p, text) => quiet(() => host.game.receive(p.c, writeCommand(w, ++cmdId, text).slice()));
+  const last = (p, type, read) => {
+    const b = p.sent.findLast((x) => x[0] === type);
+    if (!b) return null;
+    const r = new Reader().set(b);
+    r.u8v();
+    return read(r);
+  };
+  const said = (p) => last(p, S2C_PRINT, (r) => r.lstr());
+  const vote = (p) => last(p, S2C_VOTE, readVote);
+  const tick = (n = 1) => quiet(() => {
+    for (let i = 0; i < n; i++) host.step(host.game);
+  });
+  return { host, hello, clock, w, cmd, said, vote, tick };
 }
 
 Deno.test('sv_password: none lets anyone in; set, only the right password joins, guesses limited by address', () => {
@@ -60,4 +78,85 @@ Deno.test('sv_password: none lets anyone in; set, only the right password joins,
   assert.ok(hello('other', 'letmein', '198.51.100.2').joined, 'another address is not');
   clock.ms += 61000;
   assert.ok(hello('later', 'letmein').joined, 'the block runs out');
+});
+
+Deno.test('callvote restartgame: the caller votes yes, it passes at the quorum, everyone sees it', () => {
+  const { host, hello, cmd, said, vote } = server();
+  const a = hello('alpha', '', '203.0.113.1'), b = hello('bravo', '', '203.0.113.2', TEAM_CT);
+  const c = hello('charlie', '', '203.0.113.3'), spec = hello('watcher', '', '203.0.113.4', TEAM_SPECTATOR);
+  cmd(spec, 'callvote restartgame');
+  assert.equal(said(spec), 'Spectators cannot call votes.');
+  cmd(a, 'callvote restartgame');
+  const v = vote(c);
+  assert.equal(v.state, VOTE_RUNNING);
+  assert.equal(v.issue, VOTE_RESTART);
+  assert.equal(v.caller, a.c.id);
+  assert.deepEqual([v.yes, v.no, v.voters, v.needed, v.mine], [1, 0, 3, 2, 1], '3 may vote, 0.6 of them is 2, the caller said yes');
+  assert.equal(v.left, 15);
+  assert.equal(vote(spec).mine, 0, 'a spectator sees it but cannot vote');
+  assert.equal(vote(a).mine, 2, 'the caller voted yes');
+  cmd(b, 'callvote kick charlie');
+  assert.equal(said(b), 'A vote is already in progress.');
+  cmd(spec, 'vote option1');
+  assert.equal(said(spec), 'You cannot vote on this one.');
+  cmd(c, 'vote option2');
+  assert.deepEqual([vote(a).yes, vote(a).no], [1, 1]);
+  assert.equal(host.game.restartAt, 0);
+  cmd(b, 'vote option1');
+  assert.equal(vote(c).state, VOTE_PASSED);
+  assert.ok(host.game.restartAt > host.game.tick, 'the match restarts');
+  assert.match(said(c), /Vote passed: restart the match/);
+});
+
+Deno.test('callvote kick: the team votes, the target left out; passed, the address is kept out for a while', () => {
+  const { hello, clock, cmd, said, vote, tick } = server();
+  const a = hello('alpha', '', '203.0.113.1'), d = hello('delta', '', '203.0.113.4');
+  hello('ct', '', '203.0.113.9', TEAM_CT);
+  cmd(a, 'callvote kick ct');
+  assert.equal(said(a), 'Only a teammate can be voted out.');
+  cmd(a, 'callvote kick delta');
+  assert.equal(said(a), 'Not enough players who can vote on that.', 'the caller alone never kicks');
+  const b = hello('bravo', '', '203.0.113.2'), c = hello('charlie', '', '203.0.113.3');
+  cmd(a, 'callvote kick delta');
+  assert.deepEqual([vote(a).voters, vote(a).needed, vote(a).issue], [3, 2, VOTE_KICK], 'the Ts but delta');
+  assert.equal(vote(a).detail, 'delta');
+  assert.equal(vote(d).mine, 0, 'the target cannot vote');
+  cmd(b, 'vote option2');
+  tick(1);
+  assert.ok(d.c.joined);
+  cmd(c, 'vote option1');
+  assert.equal(vote(b).state, VOTE_PASSED);
+  assert.ok(!d.c.joined, 'kicked');
+  assert.equal(hello('delta again', '', '203.0.113.4').why, 'voted out: you can come back in 15 min');
+  clock.ms += 15 * 60000;
+  assert.ok(hello('delta later', '', '203.0.113.4').joined, 'after sv_vote_kick_ban_duration');
+});
+
+Deno.test('callvote: a vote fails on time; the same vote and the caller wait; issues can be turned off', () => {
+  const { host, hello, clock, cmd, said, vote, tick } = server();
+  const a = hello('alpha', '', '203.0.113.1'), b = hello('bravo', '', '203.0.113.2');
+  hello('charlie', '', '203.0.113.3');
+  cmd(a, 'callvote changelevel de_nowhere');
+  assert.match(said(a), /no map "de_nowhere"/);
+  cmd(a, 'callvote changelevel de_playground');
+  clock.ms += 14000;
+  tick(32); // a running vote goes out twice a second
+  assert.equal(vote(b).state, VOTE_RUNNING);
+  assert.equal(vote(b).left, 1);
+  clock.ms += 1000;
+  tick(1);
+  assert.equal(vote(b).state, VOTE_FAILED, 'one yes of the two needed when the time ran out');
+  tick(3);
+  assert.equal(b.sent.filter((x) => x[0] === S2C_VOTE && readVote(new Reader().set(x.subarray(1))).state === VOTE_FAILED).length, 3,
+    'the result goes out three times');
+  cmd(b, 'callvote changelevel de_playground');
+  assert.match(said(b), /failed a moment ago: it can be called again in 300 s/);
+  cmd(a, 'callvote restartgame');
+  assert.match(said(a), /You can call another vote in 135 s/);
+  host.con.exec('sv_vote_issue_restart_game_allowed 0');
+  cmd(b, 'callvote restartgame');
+  assert.equal(said(b), 'callvote restartgame is off on this server.');
+  host.con.exec('sv_allow_votes 0');
+  cmd(b, 'callvote restartgame');
+  assert.equal(said(b), 'Voting is off on this server.');
 });

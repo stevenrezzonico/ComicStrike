@@ -9,7 +9,7 @@ const CONFIG_KEY = 'comicstrike.config.cfg';
 const OLD_CONFIG_KEY = 'webcs.config.cfg'; // saved before the rename to ComicStrike: read once
 // Defaults added after configs were already being saved.
 const NEW_BINDS = ['messagemode', 'messagemode2', 'noclip', 'save_pos', 'load_pos', 'bot_place', 'radio1', 'radio2', 'radio3',
-  'player_ping'];
+  'player_ping', 'vote option1', 'vote option2'];
 const SAVE_DELAY_MS = 500;
 // The config's first line; a config saved under another one (before the defaults below
 // changed) takes those defaults once, as it loads.

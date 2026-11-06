@@ -7,6 +7,7 @@ import { writeChangelevel, cleanName, MAX_PLAYERS } from '../shared/protocol.js'
 import { TEAM_NAMES, TEAM_T, TEAM_CT } from '../shared/player.js';
 import { PHASE_WARMUP } from '../shared/economy.js';
 import { Game, DEFAULT_RULES } from './game.js';
+import { Votes } from './votes.js';
 import { TICK_RATE } from '../shared/constants.js';
 
 const PHASE_NAMES = ['warmup', 'freeze time', 'live', 'round over'];
@@ -146,6 +147,8 @@ export class Host {
     this.game = null;
     this.rconGuesses = new Guesses(this.now);
     this.joinGuesses = new Guesses(this.now); // sv_password
+    this.bans = new Map(); // address key -> ms: voted out until then (sv_vote_kick_ban_duration)
+    this.votes = new Votes(this);
     this.failedTicks = 0; // ticks that threw since the last report
     this.failReportAt = -Infinity;
     this.mapChangedAt = -Infinity; // the last map change by rcon
@@ -170,6 +173,16 @@ export class Host {
     num('sv_cheats', 0, 'Allow cheat commands (setpos)', 0, 1);
     num('sv_talk_enemy_dead', 1, 'The living see dead enemies\' all chat', 0, 1);
     num('sv_talk_enemy_living', 1, 'The living see living enemies\' all chat', 0, 1);
+    // Votes (server/votes.js), CS:GO's cvars.
+    num('sv_allow_votes', 1, 'Players may call votes (callvote kick, changelevel, restartgame)', 0, 1);
+    num('sv_vote_timer_duration', 15, 'Seconds a vote runs', 5, 120);
+    num('sv_vote_quorum_ratio', 0.6, 'Share of the players who may vote whose yes passes a vote', 0.5, 1);
+    num('sv_vote_creation_timer', 150, 'Seconds before a player may call another vote', 0, 3600);
+    num('sv_vote_failure_timer', 300, 'Seconds before a failed vote may be called again', 0, 3600);
+    num('sv_vote_issue_kick_allowed', 1, 'callvote kick is allowed', 0, 1);
+    num('sv_vote_issue_changelevel_allowed', 1, 'callvote changelevel is allowed', 0, 1);
+    num('sv_vote_issue_restart_game_allowed', 1, 'callvote restartgame is allowed', 0, 1);
+    num('sv_vote_kick_ban_duration', 15, 'Minutes a player voted out cannot come back (0: none)', 0, 1440);
     // Game modes (cfg/gamemode_*.cfg set these).
     con.cvar('game_type', 0, { help: 'Game type (0 classic, 1 gun game family); applies on the next map', min: 0, max: 3 });
     con.cvar('game_mode', 1, {
@@ -320,6 +333,8 @@ export class Host {
     game.rules = { ...game.rules, ...this.roundTimeFor(game) };
     game.rcon = (c, password, command) => this.rcon(c, password, command);
     game.admit = (c, password) => this.admit(c, password);
+    game.voteCommand = (c, args) => this.votes.command(c, args);
+    this.votes.reset();
     return game;
   }
 
@@ -433,6 +448,7 @@ export class Host {
   step(game) {
     try {
       game.step();
+      if (game === this.game) this.votes.step();
     } catch (err) {
       this.failedTicks++;
       const now = this.now();
@@ -473,9 +489,13 @@ export class Host {
   // sv_password for a joining session: '' to let it in, else why not (its HELLO is refused).
   // Guesses are limited like rcon's.
   admit(c, password) {
+    const key = addressKey(c.session && c.session.address), until = this.bans.get(key);
+    if (until !== undefined) {
+      if (this.now() < until) return `voted out: you can come back in ${Math.ceil((until - this.now()) / 60000)} min`;
+      this.bans.delete(key);
+    }
     const pw = this.joinPassword.value;
     if (!pw) return '';
-    const key = addressKey(c.session && c.session.address);
     const refused = this.joinGuesses.refused(key);
     if (refused) return 'too many bad passwords, try later';
     if (password !== pw) {
@@ -485,6 +505,15 @@ export class Host {
     }
     this.joinGuesses.ok(key);
     return '';
+  }
+
+  // A player voted out: his address cannot join for `minutes` (loopback never: development
+  // plays a tab per player).
+  ban(c, minutes) {
+    const address = c.session && c.session.address;
+    if (!(minutes > 0) || !address || /^127\./.test(address) || address === '::1') return;
+    if (this.bans.size >= 4096) this.bans.delete(this.bans.keys().next().value);
+    this.bans.set(addressKey(address), this.now() + minutes * 60000);
   }
 
   // What the start menu shows before joining (connect.json).

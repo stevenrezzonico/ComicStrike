@@ -82,6 +82,7 @@ import { Spectator, SPEC_EYES, SPEC_ROAM, SPEC_DELAY } from './spectate.js';
 import { DeathPanel } from './deathpanel.js';
 import { HurtIndicator } from './hurtdir.js';
 import { Callouts } from './callouts.js';
+import { VotePanel } from './votepanel.js';
 import { ConsoleWindow } from './console.js';
 import { Chat } from './chat.js';
 import { TouchControls, altLabel } from './touch.js';
@@ -166,6 +167,10 @@ const words = new InkWords(document.getElementById('fx'));
 const deathPanel = new DeathPanel(document.getElementById('deathpanel'));
 const hurtDir = new HurtIndicator(document.getElementById('hurtdir'));
 const callouts = new Callouts(document.getElementById('callouts'), document.getElementById('radiomenu'));
+const votePanel = new VotePanel(document.getElementById('vote'), (id) => (net ? net.names[id] : ''), (cmd) => {
+  for (const [key, c] of binds.map) if (c === cmd) return key;
+  return '';
+});
 const radarPings = [];
 // Where a balloon goes over player id: above the head (not ours, not the dead).
 const headOf = (id, out) => {
@@ -1908,6 +1913,7 @@ function draw(now, dt) {
   words.update(now);
   if (hurtDir.active) hurtDir.update(clock.t, eye[0], eye[1], angles[1], !dead && !spectating && !preview);
   callouts.update(now, viewProj, headOf, playing && !preview);
+  if (net) votePanel.update(net.vote, net.voteSerial, net.voteAt, now);
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
   else showFlash(flash.left, flash.total);
   renderer.timer.mark(PASS.OVER);
@@ -2152,6 +2158,21 @@ for (let k = 0; k < 3; k++) {
     if (playing && !menu.visible) callouts.open(k);
   }, `Opens radio menu ${k + 1} (${'ZXC'[k]}): a number key sends a line`);
 }
+// Votes (server/votes.js): the line goes to the server as typed; F1 / F2 answer.
+for (const [cmd, help] of [['callvote', 'callvote kick <name> | changelevel <map> | restartgame: asks the players'],
+  ['vote', 'vote option1 (yes, F1) | option2 (no, F2): answers the vote running']]) {
+  con.command(cmd, (a, ctx) => {
+    if (!net || net.playback) return con.out(ctx, `${cmd}: only on a server`);
+    net.command(a.join(' '));
+  }, help);
+}
+con.hint('callvote', (i, a) => {
+  if (i === 1) return [['kick', 'vote a teammate out'], ['changelevel', 'vote for another map'], ['restartgame', 'vote to restart the match']];
+  if (i === 2 && a[1] === 'kick' && net) return net.names.filter((n, id) => n && id !== selfId && !/^BOT /.test(n));
+  if (i === 2 && a[1] === 'changelevel') return mapNames || [];
+  return [];
+});
+con.hint('vote', [['option1', 'yes (F1)'], ['option2', 'no (F2)']]);
 con.command('player_ping', () => {
   if (net) net.command('player_ping');
 }, 'Marks the place you look at for your team (middle mouse)');
@@ -2545,6 +2566,7 @@ function resetSession() {
   words.clear();
   hurtDir.clear();
   callouts.clear();
+  votePanel.clear();
   blasts.clear();
   chat.clear();
   deathPanel.show(false);

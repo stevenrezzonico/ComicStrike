@@ -62,7 +62,7 @@ import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 import { MAX_MOVERS } from './doors.js';
 
-export const PROTOCOL_VERSION = 20;
+export const PROTOCOL_VERSION = 21;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -85,6 +85,13 @@ export const S2C_HOSTAGES = 18;
 export const S2C_CHAT = 19;
 export const S2C_REPORT = 20; // the round's damage report
 export const S2C_PING = 21; // a teammate's ping
+export const S2C_VOTE = 22; // a vote (server/votes.js): running, or its result
+export const VOTE_RUNNING = 1;
+export const VOTE_PASSED = 2;
+export const VOTE_FAILED = 3;
+export const VOTE_KICK = 0; // issues
+export const VOTE_CHANGELEVEL = 1;
+export const VOTE_RESTART = 2;
 export const NO_MVP = 255;
 export const MAX_TEXT = 900; // bytes of console text per datagram
 export const CHAT_MAX = 127; // characters of one chat line (CS:GO's)
@@ -531,6 +538,27 @@ export function readPing(r) {
     r.pos += 2;
   }
   return { sender, x: p[0], y: p[1], z: p[2] };
+}
+
+// A vote as one player sees it: id (counts votes), state (VOTE_*), issue, the caller's
+// player id, the yes and no votes, how many may vote and how many yes it needs, the seconds
+// left, `mine` (0 cannot vote, 1 not yet, 2 yes, 3 no), detail (the target's name, the map).
+export function writeVote(w, id, state, issue, caller, yes, no, voters, needed, left, mine, detail) {
+  w.reset();
+  w.u8v(S2C_VOTE);
+  for (const v of [id, state, issue, caller, yes, no, voters, needed]) w.u8v(v);
+  w.u8c(left);
+  w.u8v(mine);
+  w.str(detail);
+  return w.view();
+}
+
+// After the type byte.
+export function readVote(r) {
+  return {
+    id: r.u8v(), state: r.u8v(), issue: r.u8v(), caller: r.u8v(), yes: r.u8v(), no: r.u8v(), voters: r.u8v(),
+    needed: r.u8v(), left: r.u8v(), mine: r.u8v(), detail: r.str(),
+  };
 }
 
 // After the type byte.

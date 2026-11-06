@@ -360,6 +360,9 @@ export class Game {
     // admit(client, password) -> '' or why a joining session is refused (sv_password); set
     // by the Host. null: anyone joins.
     this.admit = null;
+    // voteCommand(client, args) -> '' or what to tell it (callvote, vote: server/votes.js); set
+    // by the Host. null: no voting.
+    this.voteCommand = null;
 
     // The bomb.
     this.bomb = new BombState();
@@ -1431,6 +1434,9 @@ export class Game {
         f[PS_ORIGIN + 2] = +args[3] + feetOffset(c.player.ps.i[PS_FLAGS]);
         f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
       }
+    } else if (name === 'callvote' || name === 'vote') {
+      const out = this.voteCommand ? this.voteCommand(c, args) : 'Voting is off on this server.';
+      if (out) this.print(c, out);
     } else if (name === 'rcon') { // the rest of the line, quotes and `;` included, is the command
       const m = /^\s*rcon\s+("[^"]*"|\S+)\s*([^]*)$/i.exec(text);
       this.print(c, this.rconCommand(c, m ? m[1].replace(/^"|"$/g, '') : '', m ? m[2] : ''));

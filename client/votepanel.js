@@ -1,0 +1,61 @@
+// The vote panel (CS:GO's): a running vote (server/votes.js, S2C_VOTE) asks its question with
+// who called it, the yes and no votes against what it needs, the seconds left and the keys
+// to answer while we may (F1 / F2: `vote option1` / `vote option2`); its result shows for
+// RESULT_MS. Every piece of text goes in as textContent. Called every frame: the panel is
+// rebuilt only when a new datagram came or the seconds left changed.
+
+import { VOTE_RUNNING, VOTE_PASSED, VOTE_KICK, VOTE_CHANGELEVEL } from '../shared/protocol.js';
+
+const RESULT_MS = 3000;
+const LOST_MS = 2000; // a running vote whose result never came goes this long after its end
+
+export class VotePanel {
+  // names(id): a player's name; keyOf(command): the key bound to it ('' none).
+  constructor(el, names, keyOf) {
+    this.el = el;
+    this.names = names;
+    this.keyOf = keyOf;
+    this.serial = -1; // of the vote last shown
+    this.secs = -1; // seconds left last shown (0 a result, -1 hidden)
+  }
+
+  // v: the newest vote (net.vote) or null, serial: counts the votes datagrams (net.voteSerial),
+  // at: when the newest came (ms), now: ms.
+  update(v, serial, at, now) {
+    let secs = -1;
+    if (v) {
+      const end = at + v.left * 1000;
+      if (v.state === VOTE_RUNNING) {
+        // (now is the frame's start, which can come before the datagram: never over the server's count)
+        if (now < end + LOST_MS) secs = Math.max(1, Math.min(v.left, Math.ceil((end - now) / 1000)));
+      } else if (now < at + RESULT_MS) secs = 0;
+    }
+    if (serial === this.serial && secs === this.secs) return;
+    this.serial = serial;
+    this.secs = secs;
+    if (secs < 0) return this.clear();
+    const what = v.issue === VOTE_KICK ? `Kick ${v.detail}?` : v.issue === VOTE_CHANGELEVEL
+      ? `Change the map to ${v.detail}?` : 'Restart the match?';
+    const lines = [`Vote: ${what}`, `called by ${this.names(v.caller) || `player${v.caller}`}`,
+      `Yes ${v.yes} · No ${v.no} · ${v.needed} of ${v.voters} needed`];
+    if (!secs) lines.push(v.state === VOTE_PASSED ? 'Vote passed' : 'Vote failed');
+    else {
+      lines.push(`${secs} s`);
+      const key = (cmd, k) => (this.keyOf(cmd) || k).toUpperCase();
+      if (v.mine === 1) lines.push(`${key('vote option1', 'f1')} Yes   ${key('vote option2', 'f2')} No`);
+      else if (v.mine > 1) lines.push(`You voted ${v.mine === 2 ? 'yes' : 'no'}`);
+    }
+    this.el.style.display = 'block';
+    this.el.replaceChildren(...lines.map((line, i) => {
+      const row = document.createElement(i ? 'div' : 'b');
+      row.textContent = line;
+      return row;
+    }));
+  }
+
+  clear() {
+    this.secs = -1;
+    this.el.style.display = 'none';
+    this.el.replaceChildren();
+  }
+}
