@@ -170,7 +170,7 @@ Deno.test({ name: 'demolition: everyone starts on the first weapon; a round with
 // a client reads the same row (its facts) back from those bits.
 Deno.test('modes: each row runs its cfg and rule; the client reads the same facts back from the round bits', () => {
   for (const m of MODES) {
-    const host = new Host({ loadMap, listMaps: () => ['de_playground'], readCfg, print: () => {}, defer: (fn) => fn() });
+    const host = new Host({ loadMap, listMaps: () => ['de_playground'], readCfg, print: () => {} });
     const [type, mode] = m.key.split('/');
     quiet(() => {
       host.con.exec(`game_type ${type}; game_mode ${mode}`);

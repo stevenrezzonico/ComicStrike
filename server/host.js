@@ -12,7 +12,6 @@ import { MODES } from '../shared/modes.js';
 import { TICK_RATE } from '../shared/constants.js';
 
 const PHASE_NAMES = ['warmup', 'freeze time', 'live', 'round over'];
-const CHANGELEVEL_CLOSE_MS = 500;
 const RCON_MAX_FAILS = 5; // bad passwords from one address before it is ignored for a while
 const RCON_BLOCK_MS = 60000;
 // Bad passwords from everyone in a minute, then rcon refuses everyone for the rest of it (the
@@ -153,7 +152,7 @@ class Guesses {
 export class Host {
   // opts: loadMap(name) -> parsed BSP (throws if missing), listMaps() -> names,
   //       readCfg(name) -> text or null, quit(), print(text), rules (test overrides),
-  //       defer(fn, ms) (default setTimeout), now() -> ms (default performance.now),
+  //       now() -> ms (default performance.now),
   //       mapGapMs (ms between two rcon map changes; rooms: their upload cooldown, as each
   //       rebuilds the game and its bots' navigation)
   constructor(opts) {
@@ -427,19 +426,14 @@ export class Host {
     } catch (err) {
       return this.con.out(ctx, `map ${name}: ${err.message}`);
     }
-    // The notice goes out three times (datagrams); the sessions close a moment later so
-    // it is not lost with them (browsers do not see the close reason).
-    const old = this.game;
-    const sessions = [];
-    for (const c of old.clients) {
+    // The notice goes out three times (datagrams), before the sessions close (the transport
+    // lets what was sent go out first: server/transport.js CLOSE_MS).
+    for (const c of this.game.clients) {
       if (!c) continue;
       if (c.joined) for (let i = 0; i < 3; i++) c.session.send(writeChangelevel(c.writer(), name));
       c.joined = false;
-      sessions.push(c.session);
+      c.session.close('changelevel');
     }
-    (this.opts.defer || setTimeout)(() => {
-      for (const s of sessions) s.close('changelevel');
-    }, CHANGELEVEL_CLOSE_MS);
     this.loadMode();
     this.game = this.newGame(name, bsp);
     this.con.out(ctx, `changelevel to ${name}`);

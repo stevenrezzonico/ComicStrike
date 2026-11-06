@@ -4,6 +4,7 @@
 // failed and the menu never showed why the connection did not start.
 import assert from 'node:assert/strict';
 import { NetClient } from '../client/net.js';
+import { Session, CLOSE_MS } from '../server/transport.js';
 
 // connect() with a stand-in fetch, page location and WebTransport whose `ready` is `ready`.
 async function failedConnect(ready, timeoutMs) {
@@ -51,4 +52,24 @@ Deno.test('net: a session that never opens times out', async () => {
   const { n } = await failedConnect(() => new Promise(() => {}), 20);
   assert.equal(n.closeReason, 'connection timed out');
   n.close('disconnect');
+});
+
+// The server's side of a session (server/transport.js): a close stops sending and receiving
+// at once and closes the connection CLOSE_MS later, so a REJECT sent just before it goes out
+// (closed at once, it was lost: a kicked player read "connection lost", not why).
+Deno.test('transport: a closed session sends nothing more and closes its connection a moment later', async () => {
+  const written = [], closes = [];
+  const wt = {
+    datagrams: { writable: { getWriter: () => ({ write: (b) => (written.push(b), Promise.resolve()) }) }, maxDatagramSize: 1200 },
+    close: (o) => closes.push(o.reason),
+  };
+  const s = new Session(1, wt, '203.0.113.1');
+  s.send(new Uint8Array([1]));
+  s.close('kicked');
+  s.send(new Uint8Array([2]));
+  s.close('again');
+  assert.equal(written.length, 1, 'nothing after the close');
+  assert.equal(closes.length, 0, 'the connection stays a moment');
+  await new Promise((r) => setTimeout(r, CLOSE_MS + 50));
+  assert.deepEqual(closes, ['kicked'], 'then closes, once');
 });

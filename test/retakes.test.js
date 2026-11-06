@@ -16,7 +16,7 @@ import { loadMap, readCfg, joinClient, sendCmd } from './harness.js';
 const bsp = loadMap('de_playground');
 
 Deno.test('retakes: the bomb is planted in a site, Ts round it, CTs further off, loadouts and kits', () => {
-  const host = new Host({ loadMap: () => bsp, listMaps: () => ['de_playground'], readCfg, print: () => {}, defer: (fn) => fn() });
+  const host = new Host({ loadMap: () => bsp, listMaps: () => ['de_playground'], readCfg, print: () => {} });
   host.con.exec('game_type 0; game_mode 3');
   host.start('de_playground');
   const game = host.game, w = new Writer(), humans = [];

@@ -65,9 +65,6 @@ import {
 const CMD_BANK = 8; // commands a client may run ahead of server time (absorbs jitter, stops speedhacks)
 const MAX_CMDS_PER_TICK = 8;
 const TIMEOUT_TICKS = 30 * TICK_RATE; // clients in hidden tabs send a 1 Hz keepalive
-// A refused HELLO (sv_password): the session closes this long after the REJECT, which a close
-// at once lost (the player read "connection lost", not why).
-const REFUSE_CLOSE_TICKS = TICK_RATE / 2;
 const INFO_INTERVAL = TICK_RATE; // roster resent every second (datagrams can be lost)
 // Ticks the grenade list still goes out every tick after the last grenade or effect went, so
 // a lost datagram leaves none drawn on a client; quiet, it goes out once a second.
@@ -131,8 +128,6 @@ class Client {
     this.bank = 2;
     this.ackSeq = 0; // newest snapshot the client has decoded
     this.lastHeard = 0;
-    this.refused = ''; // why its HELLO was refused (sv_password): closed at refusedTick + REFUSE_CLOSE_TICKS
-    this.refusedTick = 0;
     this.spawnYaw = 0;
     this.respawnTick = Infinity; // while dead in warmup / with respawns: server tick to respawn at
     this.spawnTick = 0; // server tick of the last spawn (deathmatch buy time)
@@ -503,6 +498,7 @@ export class Game {
   }
 
   receive(c, bytes) {
+    if (this.clients[c.id] !== c) return; // dropped (kicked, refused, timed out): its session closes
     const r = this.reader.set(bytes);
     if (r.remaining < 1) return;
     c.lastHeard = this.tick;
@@ -515,12 +511,12 @@ export class Game {
         return;
       }
       if (!c.joined) {
-        // sv_password (server/host.js), asked once a session: the resent HELLOs get the answer again.
-        if (!c.refused && this.admit) {
-          c.refused = this.admit(c, h.password);
-          c.refusedTick = this.tick;
+        const why = this.admit ? this.admit(c, h.password) : ''; // sv_password (server/host.js)
+        if (why) {
+          c.session.send(writeReject(c.writer(), why));
+          c.session.close('refused');
+          return this.disconnect(c);
         }
-        if (c.refused) return c.session.send(writeReject(c.writer(), c.refused));
         this.join(c, h);
       }
       // HELLO is resent until a WELCOME gets through, so answer every one.
@@ -743,11 +739,6 @@ export class Game {
       if (this.tick - c.lastHeard > TIMEOUT_TICKS) {
         console.log(`player ${c.id} timed out`);
         c.session.close('timeout');
-        this.disconnect(c);
-        continue;
-      }
-      if (c.refused && this.tick - c.refusedTick >= REFUSE_CLOSE_TICKS) {
-        c.session.close('refused');
         this.disconnect(c);
         continue;
       }

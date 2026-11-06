@@ -100,19 +100,17 @@ const HELLO_MS = 10000; // a session's first HELLO
 const sessionsByAddress = new AddressCounts(SESSIONS_PER_ADDRESS);
 const connections = new AddressCounts(CONNECTIONS_PER_ADDRESS);
 const transport = listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key, connections }, (session) => {
-  let game = null, client = null, refused = false;
+  let game = null, client = null;
   setTimeout(() => { // a session that never says HELLO is let go
     if (!client) session.close('no hello');
   }, HELLO_MS);
   const refuse = (reason) => {
-    refused = true;
     session.send(writeReject(new Writer(), reason).slice());
     session.close(reason);
   };
   return {
     onDatagram(bytes) {
       if (!client) {
-        if (refused) return;
         const code = helloRoom(bytes);
         if (code === null) return;
         const room = code ? rooms.get(code) : null;
@@ -120,11 +118,7 @@ const transport = listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert,
         if (!sessionsByAddress.add(session.address)) return refuse('too many players from your address');
         game = (room ? room.host : host).game; // a map change replaces the game; this session stays with its own
         client = game.connect(session);
-        if (!client) {
-          sessionsByAddress.remove(session.address);
-          refused = true;
-          return;
-        }
+        if (!client) return sessionsByAddress.remove(session.address); // full: connect closed it
         if (room) rooms.joined(room);
       }
       game.receive(client, bytes);

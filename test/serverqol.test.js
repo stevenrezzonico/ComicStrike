@@ -15,7 +15,7 @@ import { Host } from '../server/host.js';
 function server() {
   const clock = { ms: 0 };
   const host = new Host({
-    loadMap, listMaps: () => ['de_playground'], readCfg, print: () => {}, defer: (fn) => fn(), now: () => clock.ms,
+    loadMap, listMaps: () => ['de_playground'], readCfg, print: () => {}, now: () => clock.ms,
   });
   quiet(() => host.start('de_playground'));
   const w = new Writer();
@@ -59,17 +59,13 @@ Deno.test('sv_password: none lets anyone in; set, only the right password joins,
   const none = hello('none');
   assert.ok(!none.joined && !none.welcomed);
   assert.equal(none.why, 'this server has a password');
-  // The HELLO is resent until an answer comes: each gets the refusal, counted as one guess,
-  // and the session closes half a second later (a close at once lost the REJECT).
+  // The refusal closes the session (the transport sends the REJECT first: server/transport.js
+  // CLOSE_MS) and frees the slot; a HELLO resent meanwhile is not tried.
   const { c, session, sent } = none;
-  host.game.receive(c, writeHello(w, TEAM_T, 0, 0, 'none', '', 'letmein').slice());
-  assert.equal(sent.filter((b) => b[0] === S2C_REJECT).length, 2, 'the second HELLO is refused too, not tried');
-  assert.ok(!c.joined && !session.closed);
-  quiet(() => {
-    for (let i = 0; i < 32; i++) host.game.step();
-  });
   assert.equal(session.closed, 'refused');
   assert.equal(host.game.clients[c.id], null, 'its slot is free');
+  host.game.receive(c, writeHello(w, TEAM_T, 0, 0, 'none', '', 'letmein').slice());
+  assert.ok(!c.joined && sent.filter((b) => b[0] === S2C_REJECT).length === 1, 'the resent HELLO is not tried');
   assert.equal(hello('bad', 'nope').why, 'bad password');
   const ok = hello('good', 'letmein');
   assert.ok(ok.joined && ok.welcomed, 'the right one joins');
@@ -183,15 +179,13 @@ Deno.test('callvote changelevel: a passed vote waits out the gap since the last 
 });
 
 Deno.test('sv_password: a flood of bad guesses keeps new addresses out, not those that got in before; an empty one is no guess', () => {
-  const { host, hello, tick } = server();
+  const { host, hello } = server();
   host.con.exec('sv_password letmein');
   assert.ok(hello('regular', 'letmein', '198.51.100.1').joined);
   for (let i = 0; i < 6; i++) assert.equal(hello('curious', '', '198.51.100.9').why, 'this server has a password');
-  tick(32);
   assert.ok(hello('friend', 'letmein', '198.51.100.9').joined, 'six tries with no password blocked nothing');
   for (let a = 0; a < 12; a++) {
     for (let i = 0; i < 5; i++) hello('guess', `g${i}`, `203.0.113.${a + 10}`);
-    tick(32); // the refused sessions close
   }
   assert.equal(hello('new', 'letmein', '192.0.2.1').why, 'too many bad passwords, try later', 'sixty in a minute from everyone');
   assert.ok(hello('regular again', 'letmein', '198.51.100.1').joined, 'an address that got in before still does (a map change rejoins everyone)');

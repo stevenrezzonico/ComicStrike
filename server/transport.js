@@ -1,6 +1,11 @@
 // WebTransport listener on top of Deno's QUIC API.
 // Everything runtime-specific lives here so the transport can be swapped.
 
+// A closed session's connection closes this much later, so what was sent just before (a
+// REJECT with its reason, a CHANGELEVEL) still goes out: closed at once, it was lost and the
+// player read "connection lost" (browsers do not see the close reason).
+export const CLOSE_MS = 500;
+
 export class Session {
   constructor(id, wt, address) {
     this.id = id;
@@ -16,10 +21,13 @@ export class Session {
     if (this.open) this.writer.write(bytes).catch(() => {});
   }
 
+  // Nothing more goes out or comes in from now; the connection closes CLOSE_MS later.
   close(reason = '') {
     if (!this.open) return;
     this.open = false;
-    try { this.wt.close({ closeCode: 0, reason }); } catch { /* already closed */ }
+    setTimeout(() => {
+      try { this.wt.close({ closeCode: 0, reason }); } catch { /* already closed */ }
+    }, CLOSE_MS);
   }
 }
 
@@ -97,7 +105,7 @@ export function listen({ hostname = '0.0.0.0', port, cert, key, connections = nu
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        handlers.onDatagram(value);
+        if (session.open) handlers.onDatagram(value); // (a closed session's game is done with it)
       }
     } catch { /* connection dropped */ }
     session.close();

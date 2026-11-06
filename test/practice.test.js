@@ -19,7 +19,7 @@ const bsp = loadMap(MAP);
 // A Host on the playground in `mode` (the real cfg files), and a way in for players.
 function setup(mode) {
   const host = new Host({
-    loadMap: () => bsp, listMaps: () => [MAP], print: () => {}, defer: (fn) => fn(), now: () => 0, readCfg,
+    loadMap: () => bsp, listMaps: () => [MAP], print: () => {}, now: () => 0, readCfg,
   });
   host.con.exec(mode === 'demo' ? 'game_type 2; game_mode 0' : 'game_type 0; game_mode 1');
   host.start(MAP);

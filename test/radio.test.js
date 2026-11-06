@@ -17,7 +17,7 @@ import { loadMap, joinClient, sendCmd } from './harness.js';
 const bsp = loadMap('de_playground');
 
 function setup() {
-  const host = new Host({ loadMap: () => bsp, listMaps: () => ['de_playground'], readCfg: () => null, print: () => {}, defer: (fn) => fn() });
+  const host = new Host({ loadMap: () => bsp, listMaps: () => ['de_playground'], readCfg: () => null, print: () => {} });
   host.start('de_playground');
   host.con.exec('mp_warmuptime 0; mp_freezetime 0');
   const w = new Writer(), humans = [];

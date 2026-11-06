@@ -58,7 +58,7 @@ Deno.test('demo: the file reads back, and anything else is refused', () => {
 // A Host on the playground (competitive, no cfg files) and a NetClient joined to it over a
 // practice-style message channel (the worker's role played by `link`).
 async function liveGame() {
-  const host = new Host({ loadMap: () => bsp, listMaps: () => [MAP], print: () => {}, defer: (fn) => fn(), now: () => 0 });
+  const host = new Host({ loadMap: () => bsp, listMaps: () => [MAP], print: () => {}, now: () => 0 });
   host.con.exec('mp_freezetime 0; mp_warmuptime 0');
   host.start(MAP);
   host.con.exec('bot_quota 0; bot_stop 1; bot_add_t');

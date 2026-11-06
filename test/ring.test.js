@@ -29,7 +29,7 @@ Deno.test({
   sanitizeOps: false, sanitizeResources: false, // the NetClient's keepalive timer
   fn: async () => {
     const bsp = parseBSP(Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url)).buffer);
-    const host = new Host({ loadMap: () => bsp, listMaps: () => ['de_playground'], print: () => {}, defer: (fn) => fn(), now: () => 0 });
+    const host = new Host({ loadMap: () => bsp, listMaps: () => ['de_playground'], print: () => {}, now: () => 0 });
     host.con.exec('mp_freezetime 0; mp_warmuptime 0');
     host.start('de_playground');
     host.con.exec('bot_quota 0; bot_stop 1; bot_add_t');

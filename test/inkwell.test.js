@@ -111,7 +111,7 @@ Deno.test('de_inkwell: the radar overview shows both sites and both spawns', () 
 });
 
 function game(cfg, seed) {
-  const host = new Host({ loadMap: () => bsp, listMaps: () => ['de_inkwell'], readCfg, print: () => {}, defer: (fn) => fn() });
+  const host = new Host({ loadMap: () => bsp, listMaps: () => ['de_inkwell'], readCfg, print: () => {} });
   host.start('de_inkwell');
   host.con.exec(cfg);
   host.game.bots.random = seeded(seed);

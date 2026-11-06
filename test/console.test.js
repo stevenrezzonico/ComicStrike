@@ -21,7 +21,7 @@ async function setup(t) {
   const clock = { ms: 0 };
   const host = new Host({
     loadMap, listMaps: () => ['de_dust2', 'fy_buzzkill'], readCfg: () => null, print: (s) => out.push(s),
-    defer: (fn) => fn(), now: () => clock.ms,
+    now: () => clock.ms,
   });
   host.start('de_dust2');
   const w = new Writer();

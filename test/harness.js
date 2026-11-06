@@ -118,7 +118,7 @@ export function teleport(c, x, y, z) {
 
 // A server on de_dust2 in game_type / game_mode `mode` (the real cfgs), `rules` overriding.
 export function modeServer(mode, rules = { immunityTime: 0, freezeTime: 0 }) {
-  const host = new Host({ loadMap, listMaps: () => ['de_dust2'], readCfg, print: () => {}, rules, defer: (fn) => fn() });
+  const host = new Host({ loadMap, listMaps: () => ['de_dust2'], readCfg, print: () => {}, rules });
   host.con.exec(`game_type ${mode[0]}; game_mode ${mode[1]}`);
   host.start('de_dust2');
   const w = new Writer();

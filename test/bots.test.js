@@ -18,7 +18,7 @@ import { loadMap, mapOrNull, readCfg, seeded, joinClient, sendCmd, teleport } fr
 const dust2 = !!mapOrNull('de_dust2'), office = !!mapOrNull('cs_office');
 
 function setup(map, cfg = '') {
-  const host = new Host({ loadMap, listMaps: () => [map], readCfg, print: () => {}, defer: (fn) => fn() });
+  const host = new Host({ loadMap, listMaps: () => [map], readCfg, print: () => {} });
   host.con.exec(cfg);
   host.start(map);
   host.con.exec('mp_freezetime 0; mp_warmuptime 0');

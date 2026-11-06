@@ -1261,13 +1261,14 @@ function tick() {
   if (net) {
     if (net.poll()) applySnapshot();
     drainMessages(false);
-    if (net.playback && (net.changelevel || net.closed)) return leaveGame(`Demo ${demoTitle} ended`);
+    if (net.playback && (net.changelevel || net.closed || net.rejected)) return leaveGame(`Demo ${demoTitle} ended`);
     if (net.changelevel || (net.closed && net.closeReason === 'changelevel')) {
       reconnect();
       return;
     }
     if (synced) applyEvents();
-    if (net.closed) return leaveGame(`Disconnected: ${net.closeReason}`);
+    // A REJECT says why (a kick, a vote, the room closed): the close behind it says nothing.
+    if (net.rejected || net.closed) return leaveGame(`Disconnected: ${net.rejected || net.closeReason}`);
     if (!synced) return;
     viewTick = clk.serverClock - cv.cl_interp_ratio.number;
     if (interpolatePlayers(viewTick, interp)) buildTargets();
