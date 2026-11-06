@@ -105,6 +105,12 @@ import {
 const DEG = Math.PI / 180;
 const FOV_Y = 73.74 * DEG; // CS:GO fov 90 at 4:3, kept vertical (Hor+)
 const ZOOM_RATE = 30; // per second: how fast the view zooms in or out (approximation)
+// Per-game state: what a game leaves behind is reset beside its declaration (onNewGame), and
+// resetSession runs every one of them. Kept as one list far from the state, a reset was
+// missed again and again (phantom shots from the last game's shot counts, a stale hurt
+// serial, the spectator camera, the last map's broken slots).
+const newGameResets = [];
+const onNewGame = (fn) => newGameResets.push(fn);
 // The frame's running numbers, as fields of one object rather than module variables: a
 // double assigned to a module variable was a new heap number every time (a dozen a frame),
 // while a field holding doubles is written in place. Created with -0 so every field holds
@@ -125,6 +131,9 @@ const clk = {
 };
 clk.fov = 90;
 clk.serverClock = -1;
+onNewGame(() => {
+  clk.serverClock = -1;
+});
 const scopeEl = document.getElementById('scope');
 let scopeShown = '';
 const MAX_TICKS_PER_FRAME = 8;
@@ -140,9 +149,15 @@ const killfeed = document.getElementById('killfeed');
 const deathNotice = document.getElementById('death');
 let deathShown = ''; // its display, set only when it changes
 const spectator = new Spectator();
+onNewGame(() => {
+  spectator.synced = -1;
+});
 const specAngles = new Float32Array(2);
 const specTrace = new Trace();
 let deadAt = 0, wasDead = false;
+onNewGame(() => {
+  wasDead = true; // no body to start a free roam camera from
+});
 let wasSpecTeam = false, specFollowing = false; // last frame: on the spectator team / following someone
 // Last frame: dead and not flying free (free roam): the mouse turns nothing, so the dead cannot
 // look round for their team.
@@ -156,6 +171,11 @@ conWin = new ConsoleWindow(con);
 const netGraph = new NetGraph();
 
 const renderer = new Renderer(canvas, cv.r_lowlatency.bool);
+onNewGame(() => {
+  renderer.style.dead = 0;
+  renderer.style.smoke = 0;
+  renderer.style.liquid = 0;
+});
 // A lost context (a GPU reset, a driver update) takes every buffer, texture and program with it,
 // and nothing here rebuilds them: say so, rather than leave a frozen picture.
 let glLost = false;
@@ -169,6 +189,7 @@ const players = new Players(renderer.gl);
 const guns = new GunMeshes(renderer.gl); // every gun model, shared by first and third person
 const models = new PlayerModels(renderer.gl, guns);
 const fx = new GrenadeFx(renderer.gl, guns);
+onNewGame(() => fx.clear());
 models.pass = PASS.MODELS; // its GPU time apart from the effects' (cl_showfps 3)
 const overlays = [decals, debris, players, models, fx];
 const words = new InkWords(document.getElementById('fx'));
@@ -177,7 +198,17 @@ const hurtDir = new HurtIndicator(document.getElementById('hurtdir'));
 const callouts = new Callouts(document.getElementById('callouts'), document.getElementById('radiomenu'));
 const votePanel = new VotePanel(document.getElementById('vote'), (id) => (net ? net.names[id] : ''),
   (cmd) => menu.keysOf(cmd)[0] || '');
+onNewGame(() => {
+  words.clear();
+  deathPanel.show(false);
+  hurtDir.clear();
+  callouts.clear();
+  votePanel.clear();
+});
 const radarPings = [];
+onNewGame(() => {
+  radarPings.length = 0; // the last map's places
+});
 // Where a balloon goes over player id: above the head (not ours, not the dead).
 const headOf = (id, out) => {
   if (id === selfId || id < 0) return false;
@@ -189,6 +220,9 @@ const headOf = (id, out) => {
   return true;
 };
 let hurtSerial = -1; // the own block's last hit seen (OWN_HURT)
+onNewGame(() => {
+  hurtSerial = -1;
+});
 const weaponView = new WeaponView(renderer.gl, FOV_Y, cv, guns);
 const input = new Input(canvas);
 const hud = new Hud((item) => { // a buy from the menu closes it
@@ -197,8 +231,15 @@ const hud = new Hud((item) => { // a buy from the menu closes it
 });
 const menu = new Menu(document.getElementById('menu'), con, cv, binds, { text: configText, load: importConfig });
 const radar = new Radar(document.getElementById('radar'), cv);
+onNewGame(() => {
+  if (hud.menuOpen) {
+    hud.toggleMenu(false);
+    input.clear();
+  }
+});
 let playing = false; // in a game (online or practice); false: the start menu
 const sounds = new Sounds();
+onNewGame(() => sounds.setUnder(false));
 const soundTrace = new Trace();
 // A wall between the listener and a sound muffles it.
 sounds.occluded = (x, y, z) => world !== null &&
@@ -243,6 +284,9 @@ let world = null;
 const lightSample = new Float32Array(3), lightTarget = new Float32Array(3);
 let itemsVersion = -1; // last weapons-on-the-ground list handed to the models
 let grenadesVersion = -1; // last grenade list handed to the effects
+onNewGame(() => {
+  itemsVersion = grenadesVersion = -1;
+});
 
 // Offline, grenades are simulated here, acting on us alone.
 const localGrenades = new Grenades();
@@ -365,11 +409,17 @@ const sandboxHurt = (_i, damage) => { // crushed by a mover, blown up by a break
 const sandboxBroke = []; // slots a blast broke
 const spawns = { [TEAM_T]: [], [TEAM_CT]: [] }; // offline spawn points [x, y, z, yaw]
 let noclip = false;
+onNewGame(() => {
+  noclip = false;
+});
 
 // Online state.
 let net = null;
 let selfId = -1;
 let synced = false; // false until the first snapshot gives us our spawn
+onNewGame(() => {
+  synced = false;
+});
 
 // cl_autowepswitch (CS:GO's): a gun newly in its slot (bought, picked up) that outranks the
 // one in hand is drawn, by CS:GO's weapon weights: primary over pistol over C4 over grenade
@@ -384,6 +434,9 @@ SLOT_RANK[SLOT_KNIFE] = 0;
 const AUTO_SLOTS = [SLOT_PRIMARY, SLOT_SECONDARY];
 const lastSlots = new Float64Array(NUM_SLOTS);
 let lastSpawn = -1;
+onNewGame(() => {
+  lastSpawn = -1; // the first tick is a spawn: no weapon switch from the last game's slots
+});
 function autoSwitch() {
   const respawn = player.spawnCount !== lastSpawn;
   lastSpawn = player.spawnCount;
@@ -399,26 +452,56 @@ const predictedPs = new Uint8Array(HISTORY * PS_SIZE * 4); // our state after ea
 const predictedWs = new Uint8Array(HISTORY * WS_SIZE * 8);
 const predictedTick = new Int32Array(HISTORY).fill(-1);
 const serverBroken = new Uint32Array(8); // breakable mask of the last applied snapshot
+onNewGame(() => {
+  predictedTick.fill(-1);
+  serverBroken.fill(0);
+});
 let roundSerial = -1; // the server's round starts (RoundState.serial) last seen
+onNewGame(() => {
+  roundSerial = -1;
+});
 const jingleCues = new JingleCues();
+onNewGame(() => jingleCues.reset());
 let lastOwnTeam = 0; // our team in the last snapshot (a swap at a round start is the half-time)
+onNewGame(() => {
+  lastOwnTeam = 0;
+});
 const replayShots = new ShotList();
 const smooth = new Float32Array(3); // visual offset hiding prediction corrections
 const netStats = { rtt: -0, compared: 0, corrected: 0, lastErr: -0 }; // (-0: doubles from the start, see BombState)
+onNewGame(() => {
+  smooth.fill(0);
+  netStats.compared = netStats.corrected = 0;
+});
 
 // Other players, interpolated between snapshots around renderTick.
 const interp = new Float32Array(MAX_PLAYERS * E_FIELDS);
 const targets = new HitTargets(MAX_PLAYERS);
+const NO_ITEMS = new Items(), NO_HOSTAGES = new Hostages();
+onNewGame(() => {
+  interp.fill(0);
+  scape.others(interp, -1, 0, null); // forgets the last game's shot counts (else phantom shots on the new map's first frame)
+  players.update(interp, 0, -1, false);
+  models.update(interp, 0, -1, 0, null, false);
+  models.setItems(NO_ITEMS);
+  models.updateHostages(NO_HOSTAGES, 0, null);
+  models.setBomb(false);
+});
 const seenKills = new Int32Array(32).fill(-1);
 let seenKillNext = 0;
 let lastBombState = 0;
 let nextBeep = 0; // ms
 let lastBeep = -1e9;
+onNewGame(() => {
+  seenKills.fill(-1);
+  lastBombState = 0;
+});
 
 const prevOrigin = new Float32Array(3);
 // The camera's own jolt per shot (weapon_recoil_view_punch_extra), decaying every frame:
 // never in the weapon state, so the bullets and the server know nothing of it.
 const viewKick = new Float64Array(2);
+onNewGame(() => viewKick.fill(0));
 const shotKickOut = new Float64Array(2);
 
 const eye = new Float32Array(3);
@@ -429,6 +512,7 @@ const angles = new Float32Array(2); // pitch, yaw (without recoil); f32 like the
 const proj = new Float32Array(16);
 const view = new Float32Array(16);
 const blasts = new Blasts(renderer.gl, view); // explosions: the fire faces this camera
+onNewGame(() => blasts.clear());
 overlays.push(blasts);
 // Bullet tracers, behind what is nearer; casings tink where they land.
 const tracers = new Tracers(renderer.gl);
@@ -460,6 +544,7 @@ function gunShot(ex, ey, ez, pitch, yaw, quiet, count, w, bx, by, bz, side = 1) 
 
 // The demo's and the sandbox's practice marks (grenade arcs, impact boxes), on top of the rest.
 const practice = new PracticeMarks(renderer.gl);
+onNewGame(() => practice.clear());
 overlays.push(practice);
 const viewProj = new Float32Array(16);
 const invViewProj = new Float32Array(16);
@@ -474,9 +559,10 @@ let roomRcon = '', roomNames = null;
 
 let currentMap = '';
 let overviewWorker = null, overviewJob = 0;
+let mapLoads = 0; // loadMap calls: one whose fetch returns after a newer one began stops there
 async function loadMap(name) {
   if (!/^[\w-]+$/.test(name)) throw new Error(`bad map name: ${name}`);
-  currentMap = name;
+  const load = ++mapLoads;
   status.textContent = `loading ${name}...`;
   // Our own file, a room's map (from the server's memory) or the server's maps/; the first
   // two come from outside, so they are checked (parseUntrustedBSP).
@@ -489,6 +575,9 @@ async function loadMap(name) {
     buffer = await res.arrayBuffer();
     untrusted = !!room;
   }
+  // (the Video tab's backdrop load finishing after a game's took the map from under the game)
+  if (load !== mapLoads) throw new Error(`map ${name}: another map's load began`);
+  currentMap = name;
   // The radar's overview comes from a worker (it was most of the load: cs_polaris 2 of 2.4 s),
   // started first so it works while the page builds the rest; the radar shows once it is there.
   const job = ++overviewJob, copy = buffer.slice(0);
@@ -1956,7 +2045,7 @@ let backdrop = false;
 let backdropLoading = false;
 input.canLock = () => !menu.visible; // a click in the window (a hole in the menu) stays a menu click
 menu.onWindow = (open) => {
-  if (playing) return;
+  if (playing || starting) return; // (a game's load takes the map)
   if (!open) {
     backdrop = false;
     return;
@@ -2130,6 +2219,7 @@ const say = (text, team) => {
 };
 const chat = new Chat(document.getElementById('chat'), document.getElementById('chatline'), say,
   (id) => (net ? net.names[id] : cv.name.value), (id) => (net ? net.teams[id] : player.team));
+onNewGame(() => chat.clear());
 chat.onToggle = (open) => {
   if (open) input.clear(); // the held keys let go (the mouse stays captured)
 };
@@ -2274,7 +2364,6 @@ async function playDemo(name, bytes) {
   const welcome = await net.join(TEAM_SPECTATOR, 0, 0, cv.name.value); // the HELLO goes nowhere: the WELCOME is the demo's
   selfId = -1; // nobody is us: the recorder is one of the players
   menu.busy(`Loading ${welcome.map}...`);
-  useOwn = false;
   await loadMap(welcome.map);
   spectator.mode = SPEC_ROAM;
   conWin.print(`playing demo ${name}: ${demo.header.map}, ${(dp.length / 1000).toFixed(1)} s (demo_pause, demo_timescale; jump: eyes, chase, free)`);
@@ -2565,55 +2654,16 @@ async function joinServer(team) {
   await loadMap(welcome.map);
 }
 
-const NO_ITEMS = new Items(), NO_HOSTAGES = new Hostages();
-
-// Forgets everything from the last game (server state, other players, effects).
-function resetSession() {
-  synced = false;
-  practice.clear();
-  roundSerial = -1;
-  jingleCues.reset();
-  lastOwnTeam = 0;
-  words.clear();
-  hurtDir.clear();
-  hurtSerial = -1;
-  spectator.synced = -1;
-  callouts.clear();
-  votePanel.clear();
-  blasts.clear();
-  chat.clear();
-  deathPanel.show(false);
-  renderer.style.dead = 0;
-  renderer.style.smoke = 0;
-  renderer.style.liquid = 0;
-  sounds.setUnder(false);
-  clk.serverClock = -1;
-  predictedTick.fill(-1);
-  serverBroken.fill(0);
-  smooth.fill(0);
-  seenKills.fill(-1);
-  lastBombState = 0;
-  netStats.compared = netStats.corrected = 0;
-  noclip = false;
-  wasDead = true; // no body to start a free roam camera from
-  interp.fill(0);
-  scape.others(interp, -1, 0, null); // forgets the last game's shot counts (else phantom shots on the new map's first frame)
-  players.update(interp, 0, -1, false);
-  models.update(interp, 0, -1, 0, null, false);
-  models.setItems(NO_ITEMS);
-  models.updateHostages(NO_HOSTAGES, 0, null);
-  itemsVersion = grenadesVersion = -1;
-  models.setBomb(false);
-  fx.clear();
-  if (hud.menuOpen) {
-    hud.toggleMenu(false);
-    input.clear();
-  }
+// Forgets everything from the last game (server state, other players, effects): every reset
+// registered with onNewGame. `own`: the next game plays an ownMaps file (Your map, Try it, the
+// editor's preview), not the server's.
+function resetSession(own = false) {
+  useOwn = own;
+  for (let i = 0; i < newGameResets.length; i++) newGameResets[i]();
 }
 
 // Play: join the server on a team (CS:GO numbers: 1 spectators, 2 T, 3 CT; 0 auto).
 async function startOnline(team) {
-  useOwn = false;
   if (playing) leaveGame();
   resetSession();
   try {
@@ -2683,9 +2733,8 @@ function setRoom(code, rcon = '', names = null) {
 // then join it like a server, on `team` (2 T, 3 CT, 1 spectators, 0 auto).
 let localWorker = null, localRcon = '', localPaused = false;
 async function startPractice(map, team, { mode = 'competitive', players = 10, difficulty = 1, armoury = true, own = false } = {}) {
-  useOwn = own;
   if (playing) leaveGame();
-  resetSession();
+  resetSession(own);
   localPaused = false; // the new worker starts running
   menu.busy(`Starting a practice game on ${map}...`);
   const worker = new Worker('/client/localserver.js', { type: 'module' });
@@ -2713,10 +2762,11 @@ async function startPractice(map, team, { mode = 'competitive', players = 10, di
   enterGame();
 }
 
-// The sandbox: a map in the page alone, without game rules (noclip, give), on a team.
-async function startSandbox(map, team) {
+// The sandbox: a map in the page alone, without game rules (noclip, give), on a team; `own`:
+// an ownMaps file (the editor's preview).
+async function startSandbox(map, team, own = false) {
   if (playing) leaveGame();
-  resetSession();
+  resetSession(own);
   menu.busy(`Loading ${map}...`);
   player.team = team === 3 ? TEAM_CT : TEAM_T;
   player.primary = primary;
@@ -2776,7 +2826,7 @@ async function reconnect() {
   stopRecording(); // a demo holds one map
   const team = player.team;
   if (net && !net.closed) net.close('reconnect');
-  resetSession();
+  resetSession(useOwn); // the same game on its next map
   status.textContent = 'reconnecting...';
   status.style.display = '';
   try {
@@ -2833,11 +2883,10 @@ addEventListener('beforeunload', (e) => {
   e.returnValue = ''; // Safari and older Chrome want this one
 });
 async function previewMap(name, bytes) {
-  useOwn = true;
   ownMaps.clear();
   ownMaps.set(name, bytes);
-  if (!playing) {
-    await startSandbox(name, 2);
+  if (!playing) { // (playing: the preview's sandbox, on its own map already)
+    await startSandbox(name, 2, true);
     noclip = true;
     return;
   }
