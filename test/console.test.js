@@ -5,7 +5,8 @@ import {
   Writer, Reader, writeCommand, printChunks, S2C_PRINT, S2C_CHANGELEVEL, S2C_REJECT,
   MAX_TEXT, S2C_CHAT, readChat, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC,
 } from '../shared/protocol.js';
-import { Console, MAX_ALIASES } from '../shared/cvars.js';
+import { Console, MAX_ALIASES, parse } from '../shared/cvars.js';
+import { ConsoleWindow } from '../client/console.js';
 import { Host, AddressCounts } from '../server/host.js';
 import { TICK_RATE } from '../shared/constants.js';
 import { loadMap, joinClient, sendCmd } from './harness.js';
@@ -386,4 +387,15 @@ Deno.test('alias: new names are refused past the cap, redefining works', () => {
   assert.equal(con.aliases.size, MAX_ALIASES);
   con.exec('alias a0 "echo x"');
   assert.equal(con.aliases.get('a0'), 'echo x');
+});
+
+Deno.test('console window: a suggestion taken is one argument, its quotes and ; no commands', () => {
+  // accept() reads only these fields (the window itself needs a DOM): a player named
+  // `x"; disconnect; "` suggested after `kick ` must not run disconnect.
+  const w = { items: [{ text: 'x"; disconnect; "' }], input: { value: 'kick bo', focus() {} }, start: 5, refresh() {} };
+  ConsoleWindow.prototype.accept.call(w, 0);
+  const cmds = parse(w.input.value);
+  assert.equal(cmds.length, 1);
+  assert.equal(cmds[0][0], 'kick');
+  assert.equal(cmds[0].length, 2);
 });
