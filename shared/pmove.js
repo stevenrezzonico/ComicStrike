@@ -511,9 +511,13 @@ function waterJumpMove() {
 
 // Ladder volumes are func_ladder brushes; touching = player center inside the hull-expanded volume.
 function findLadder() {
-  const ents = W.ents, ladders = W.ladders;
+  const ents = W.ents, ladders = W.ladders, B = W.bounds, h = hull * 3;
+  const x0 = M.ox + HULL_MINS[h], y0 = M.oy + HULL_MINS[h + 1], z0 = M.oz + HULL_MINS[h + 2];
+  const x1 = M.ox + HULL_MAXS[h], y1 = M.oy + HULL_MAXS[h + 1], z1 = M.oz + HULL_MAXS[h + 2];
   for (let k = 0; k < ladders.length; k++) {
-    const i = ladders[k];
+    const i = ladders[k], j = i * 6;
+    // The player's box against the volume's bounds first (the hull-expanded volume lies inside).
+    if (x0 > B[j + 3] || x1 < B[j] || y0 > B[j + 4] || y1 < B[j + 1] || z0 > B[j + 5] || z1 < B[j + 2]) continue;
     if (ents[i].kind === ENT_LADDER && entityContents(W, i, hull, M.ox, M.oy, M.oz) !== CONTENTS_EMPTY) return i;
   }
   return -1;

@@ -672,7 +672,10 @@ export function readCmds(r, ring, minTick) {
   for (let i = 0; i < n && r.remaining >= CMD_BYTES; i++) {
     const t = r.u32v(), buttons = r.u32v(), pitch = r.f32v(), yaw = r.f32v(), select = r.i8v();
     const view = r.u32v() / 256;
-    if (t >= minTick && Number.isFinite(pitch) && Number.isFinite(yaw)) ring.put(t, buttons, select, pitch, yaw, view);
+    // Pitch within what clients send (client/input.js stops at 89): 1000 threw a grenade at 4,700 u/s.
+    if (t >= minTick && Number.isFinite(pitch) && Number.isFinite(yaw)) {
+      ring.put(t, buttons, select, Math.max(-89, Math.min(89, pitch)), yaw, view);
+    }
   }
   return ack;
 }

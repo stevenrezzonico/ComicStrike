@@ -1,8 +1,8 @@
 // Maps from outside (a player's own file, a room on the server): validateBSP must turn away
 // every file the engine could not run safely, and a file it lets through must play.
 import assert from 'node:assert/strict';
-import { parseBSP, parseUntrustedBSP, validateBSP, BSP_LIMITS } from '../shared/bsp.js';
-import { Trace, traceHull, HULL_POINT, HULL_STAND } from '../shared/trace.js';
+import { parseBSP, parseUntrustedBSP, validateBSP, BSP_LIMITS, CONTENTS_EMPTY, CONTENTS_WATER } from '../shared/bsp.js';
+import { Trace, traceHull, pointContents, CollisionWorld, HULL_POINT, HULL_STAND } from '../shared/trace.js';
 import { Host } from '../server/host.js';
 
 const MAPS = new URL('../maps/', import.meta.url);
@@ -36,6 +36,7 @@ Deno.test('broken indices, cycles, deep trees and far coordinates are turned awa
     'overflowing key': (b) => { b.entities.push({ classname: 'func_door', speed: '1e999' }); },
     'huge vector': (b) => { b.entities.push({ classname: 'light', origin: '0 1e40 0' }); },
     'tabbed vector': (b) => { b.entities.push({ classname: 'info_player_start', origin: '0\t1e39\t0' }); },
+    'huge fourth word': (b) => { b.entities.push({ classname: 'light', _light: ' 255 255 255 1e39' }); },
     'model named twice': (b) => { b.entities.push({ classname: 'func_wall', model: '*1' }); },
     'leaf faces': (b) => { b.leavesI16[1 * 14 + 11] = b.marksurfaces.length + 1; },
     'shared surfedges': (b) => {
@@ -78,6 +79,40 @@ Deno.test('a tree written children first is held to the depth, and nodes are not
   while (shared.nodesI16[i * 12 + 2] < 0 || shared.nodesI16[i * 12 + 3] < 0) i++; // a node over two nodes
   shared.nodesI16[i * 12 + 3] = shared.nodesI16[i * 12 + 2];
   assert.throws(() => validateBSP(shared), /node \d+ shared/);
+});
+
+// A trace may walk every model whose bounds it meets: 511 models on one 256-deep chain were
+// 131k nodes a trace. Their levels, summed per hull, are held to BSP_LIMITS.heads, and the
+// water volumes are tested by their bounds before their trees.
+Deno.test('model trees too deep together are turned away, and volumes are met by their bounds first', () => {
+  const fresh = () => parseBSP(PLAYGROUND.slice().buffer);
+  const L = { ...BSP_LIMITS, heads: 182 }; // the playground's own most, hulls 1-3
+  assert.doesNotThrow(() => validateBSP(fresh(), L));
+  const shared = fresh();
+  for (let m = 1; m < shared.numModels; m++) shared.modelsI[m * 16 + 10] = shared.modelsI[10]; // hull 1: the world's tree
+  assert.throws(() => validateBSP(shared, L), /hull 1 model trees too deep together/);
+
+  const world = CollisionWorld.fromBSP(parseUntrustedBSP(PLAYGROUND.slice().buffer));
+  const B = world.bounds, j = world.water[0] * 6;
+  let p = null; // a point in the pool, on a 16-unit grid of the volume's bounds
+  for (let x = B[j]; x <= B[j + 3] && !p; x += 16) {
+    for (let y = B[j + 1]; y <= B[j + 4] && !p; y += 16) {
+      for (let z = B[j + 2]; z <= B[j + 5] && !p; z += 16) if (pointContents(world, x, y, z) === CONTENTS_WATER) p = [x, y, z];
+    }
+  }
+  assert.ok(p, 'water in the pool');
+  for (const k of [0, 3]) B[j + k] += 4096; // the bounds moved off: the tree is no longer asked
+  assert.equal(pointContents(world, p[0], p[1], p[2]), CONTENTS_EMPTY);
+});
+
+// Only a value's first words are numbers to the game: a value of millions of them was split
+// and checked word by word (seconds on the server's thread at every room upload).
+Deno.test('a huge entity value is turned away at once', () => {
+  const b = parseBSP(PLAYGROUND.slice().buffer);
+  b.entities.push({ classname: 'info_target', message: '1 '.repeat(4e6) });
+  const t0 = performance.now();
+  assert.throws(() => validateBSP(b), /entity key message too long/);
+  assert.ok(performance.now() - t0 < 100, `${performance.now() - t0} ms`);
 });
 
 // A trace toward an infinite point (setpos 1e39 is Infinity as a float32) gets NaN fractions;

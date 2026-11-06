@@ -7,7 +7,7 @@ import {
 } from './constants.js';
 import {
   createPlayerState, copyPlayerState, playerMove, fallDamage, eyeOffset, PS_ORIGIN, PS_FLAGS, PS_EVENTS, PS_LAND_SPEED,
-  PS_VELMOD, EV_LAND, FL_ONGROUND, FL_DUCKING,
+  PS_VELMOD, PS_WATERLEVEL, EV_LAND, FL_ONGROUND, FL_DUCKING,
 } from './pmove.js';
 import {
   createWeaponState, copyWeaponState, giveWeapon, weaponTick, infiniteAmmo, activeWeapon, weaponStats, removeWeapon, refillAmmo,
@@ -116,7 +116,8 @@ export function runCommand(world, p, buttons, select, pitch, yaw, tick, shots, f
   const w = weaponStats(p.ws); // scoped rifles walk slower
   const maxSpeed = w ? w.maxSpeed : 250;
   playerMove(world, p.ps, moveButtons, pitch, yaw, TICK_DT, p.carrying ? Math.min(maxSpeed, CARRY_SPEED) : maxSpeed);
-  if (p.ps.i[PS_EVENTS] & EV_LAND) p.health -= Math.round(fallDamage(p.ps.f[PS_LAND_SPEED]));
+  // A landing in water hurts nobody (HL's PM_CheckFalling, CS:GO alike).
+  if ((p.ps.i[PS_EVENTS] & EV_LAND) && !p.ps.i[PS_WATERLEVEL]) p.health -= Math.round(fallDamage(p.ps.f[PS_LAND_SPEED]));
   const slot = p.ws.f[WS_ACTIVE], clip = p.ws.f[WS_SLOTS + slot * 3 + 1];
   weaponTick(p.ws, p.ps, buttons, select, pitch, yaw, tick, shots);
   if (demo) infiniteAmmo(p.ws, slot, clip, tick * TICK_DT);

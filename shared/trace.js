@@ -651,9 +651,11 @@ export function entityContents(world, entIndex, hull, x, y, z) {
 export function pointContents(world, x, y, z) {
   const c = entityContents(world, 0, HULL_POINT, x, y, z);
   if (c !== CONTENTS_EMPTY) return c;
-  const ents = world.ents, water = world.water;
+  const ents = world.ents, water = world.water, B = world.bounds;
   for (let k = 0; k < water.length; k++) {
-    const i = water[k];
+    const i = water[k], j = i * 6;
+    // Bounds first: a crafted map's volumes can each hold a deep tree.
+    if (x < B[j] || x > B[j + 3] || y < B[j + 1] || y > B[j + 4] || z < B[j + 2] || z > B[j + 5]) continue;
     if (ents[i].kind === ENT_WATER && entityContents(world, i, HULL_POINT, x, y, z) !== CONTENTS_EMPTY) {
       return ents[i].liquid;
     }

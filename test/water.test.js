@@ -14,6 +14,9 @@ const bsp = yard((map) => {
       box(x, -128, 0, x + 256, 128, 256, { top: W, bottom: null, side: null }),
     ], { contents });
   }
+  map.brushEntity({ classname: 'func_water', skin: String(CONTENTS_WATER) }, [ // a pool 14 deep, the playground's shallow end
+    box(-800, -128, 0, -500, 128, 14, { top: W, bottom: null, side: null }),
+  ], { contents: CONTENTS_WATER });
 });
 const secs = (s) => Math.round(s * TICK_RATE);
 
@@ -47,6 +50,16 @@ Deno.test('water: staying under drowns, a death of the player\'s own', () => {
   assert.ok(t > secs(30) && t < secs(40), `after ${t / TICK_RATE} s`);
   assert.equal(c.player.deaths, 1);
   assert.equal(c.player.kills, 0, 'no kill counted for anyone');
+});
+
+// HL's PM_CheckFalling: no fall damage at a water level over 0, however shallow.
+Deno.test('water: a fall into a shallow pool hurts nobody, the same fall onto sand does', () => {
+  for (const [x, onSand] of [[-650, false], [-300, true]]) {
+    const { c, run, put } = walker(bsp);
+    put(x, 0, 400);
+    run(secs(1.5));
+    assert.equal(c.player.health < 100, onSand, `health ${c.player.health} after the fall at x ${x}`);
+  }
 });
 
 Deno.test('water: slime burns 4 and lava 10 a second per water level', () => {

@@ -224,6 +224,11 @@ export const BSP_LIMITS = {
   entities: 8192,
   entityKeys: 65536, // keys of all entities together (de_torn has the most here: 3,579)
   textures: 8192,
+  // Levels below the model heads, summed per hull: a trace may walk every model whose bounds
+  // it meets, and 511 models sharing one 256-deep chain were 131k nodes a trace (de_piranesi
+  // has the most here, 3,165).
+  heads: 16384,
+  value: 4096, // characters in one entity value (de_inferno's wad list has the most here: 814)
 };
 
 // Throws unless every index in the parsed map points inside its lump, the trees are trees
@@ -296,7 +301,7 @@ export function validateBSP(b, L = BSP_LIMITS) {
       if (c >= 0 && parents[c]++) fail(`node ${c} shared`);
     }
   }
-  checkTree(b.numNodes, (i, k) => b.nodesI16[i * 12 + 2 + k], L.depth, fail, 'node');
+  const nodeLevels = checkTree(b.numNodes, (i, k) => b.nodesI16[i * 12 + 2 + k], L.depth, fail, 'node');
   for (let i = 0; i < b.numClipnodes; i++) {
     if (b.clipnodesI32[i * 2] < 0 || b.clipnodesI32[i * 2] >= b.numPlanes) fail(`clipnode ${i} plane`);
     for (let k = 0; k < 2; k++) {
@@ -304,16 +309,19 @@ export function validateBSP(b, L = BSP_LIMITS) {
       if (c >= b.numClipnodes || c < -15) fail(`clipnode ${i} child`);
     }
   }
-  checkTree(b.numClipnodes, (i, k) => b.clipnodesI16[i * 4 + 2 + k], L.depth, fail, 'clipnode');
+  const clipLevels = checkTree(b.numClipnodes, (i, k) => b.clipnodesI16[i * 4 + 2 + k], L.depth, fail, 'clipnode');
   if (b.numModels > L.models) fail('too many models');
   let modelFaces = 0;
+  const levels = [0, 0, 0, 0]; // per hull, below every model's head (L.heads)
   for (let m = 0; m < b.numModels; m++) {
     for (let k = 0; k < 9; k++) if (!finite(b.modelsF[m * 16 + k], L.coord * 2)) fail(`model ${m} bounds`);
     const h0 = modelHeadnode(b, m, 0);
     if (h0 >= b.numNodes || (h0 < 0 && -h0 - 1 >= b.numLeaves)) fail(`model ${m} head node`);
+    if (h0 >= 0) levels[0] += nodeLevels[h0];
     for (let h = 1; h < 4; h++) {
       const head = modelHeadnode(b, m, h);
       if (head >= b.numClipnodes || head < -15) fail(`model ${m} hull ${h}`);
+      if (head >= 0) levels[h] += clipLevels[head];
     }
     if (modelFirstFace(b, m) < 0 || modelNumFaces(b, m) < 0 || modelFirstFace(b, m) + modelNumFaces(b, m) > b.numFaces) {
       fail(`model ${m} faces`);
@@ -321,6 +329,7 @@ export function validateBSP(b, L = BSP_LIMITS) {
     modelFaces += modelNumFaces(b, m); // overlapping models would each be meshed again
   }
   if (modelFaces > b.numFaces) fail('model faces overlap');
+  for (let h = 0; h < 4; h++) if (levels[h] > L.heads) fail(`hull ${h} model trees too deep together`);
   if (b.entities.length > L.entities) fail('too many entities');
   const named = new Uint8Array(b.numModels); // one entity a model: 8,000 naming one were 8,000 to trace
   for (const e of b.entities) {
@@ -330,8 +339,11 @@ export function validateBSP(b, L = BSP_LIMITS) {
     // Numbers in keys (speeds, damage, delays, vectors) within what a 32-bit float holds:
     // `explodemagnitude 1e39` became Infinity and NaN damage, `speed 1e999` a NaN door
     // position. Mappers write `health 99999999999999999999999` for unbreakable. Words pass.
+    // Only the first four words, all the readers take (`_light`): one 23 MB value of `1 1 1 ...`
+    // was 11.5 M numbers to check, at every room upload.
     for (const k in e) {
-      for (const tok of e[k].split(/\s+/)) { // as parseVec3 reads them: a tab split no number
+      if (e[k].length > L.value) fail(`entity key ${k} too long`);
+      for (const tok of e[k].trim().split(/\s+/, 4)) { // as parseVec3 reads them: a tab split no number
         const v = Number(tok);
         if (!Number.isNaN(v) && !(Math.abs(v) <= 1e38)) fail(`entity key ${k}`);
       }
@@ -373,6 +385,7 @@ function checkTree(n, child, maxDepth, fail, what) {
       }
     }
   }
+  return height; // each node's levels below it
 }
 
 // The map name for a map file from outside: its file name, plain characters only (maps are

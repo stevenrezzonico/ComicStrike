@@ -52,6 +52,17 @@ Deno.test('command redundancy survives dropped datagrams', () => {
   assert.equal(writeCmds(w, 0, client, 40).length, 6 + CMD_REDUNDANCY * 21);
 });
 
+// A pitch of 1000 launched a grenade at ~4,700 u/s (Grenades.throw), where 750 is the most.
+Deno.test('a command\'s pitch is held to what clients send', () => {
+  const client = new CmdRing(), server = new CmdRing(), w = new Writer(), r = new Reader();
+  const pitches = [1000, -1000, 89.5, -89, 33.5];
+  pitches.forEach((p, t) => client.put(t + 1, 0, -1, p, 0));
+  r.set(writeCmds(w, 0, client, pitches.length, pitches.length));
+  r.u8v();
+  readCmds(r, server, 0);
+  assert.deepEqual(pitches.map((_, t) => server.pitch[(t + 1) & server.mask]), [89, -89, 89, -89, 33.5]);
+});
+
 Deno.test('angle quantization round-trips within 0.01 degrees', () => {
   for (const p of [-89, -10.5, 0, 33.3, 89]) assert.ok(Math.abs(dequantizePitch(quantizePitch(p)) - p) < 0.01);
   for (const y of [0, 90, 179.99, 359.99, -45, 725]) {
