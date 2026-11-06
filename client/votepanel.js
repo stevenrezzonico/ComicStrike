@@ -15,23 +15,23 @@ export class VotePanel {
     this.el = el;
     this.names = names;
     this.keyOf = keyOf;
-    this.serial = -1; // of the vote last shown
+    this.shown = null; // the vote datagram last shown
     this.secs = -1; // seconds left last shown (0 a result, -1 hidden)
   }
 
-  // v: the newest vote (net.vote) or null, serial: counts the votes datagrams (net.voteSerial),
-  // at: when the newest came (ms), now: ms.
-  update(v, serial, at, now) {
+  // v: the newest vote (net.vote: a new object for each datagram, `at` when it came) or null,
+  // now: ms.
+  update(v, now) {
     let secs = -1;
     if (v) {
-      const end = at + v.left * 1000;
+      const at = v.at, end = at + v.left * 1000;
       if (v.state === VOTE_RUNNING) {
         // (now is the frame's start, which can come before the datagram: never over the server's count)
         if (now < end + LOST_MS) secs = Math.max(1, Math.min(v.left, Math.ceil((end - now) / 1000)));
       } else if (now < at + RESULT_MS) secs = 0;
     }
-    if (serial === this.serial && secs === this.secs) return;
-    this.serial = serial;
+    if (v === this.shown && secs === this.secs) return;
+    this.shown = v;
     this.secs = secs;
     if (secs < 0) return this.clear();
     const what = v.issue === VOTE_KICK ? `Kick ${v.detail}?` : v.issue === VOTE_CHANGELEVEL

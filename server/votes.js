@@ -12,11 +12,14 @@ import {
   writeVote, VOTE_KICK, VOTE_CHANGELEVEL, VOTE_RESTART, VOTE_RUNNING, VOTE_PASSED, VOTE_FAILED,
 } from '../shared/protocol.js';
 import { TICK_RATE } from '../shared/constants.js';
-import { addressKey, isLoopback } from './host.js';
+import { addressKey, isLoopback, remember } from './host.js';
 
-const ISSUES = { kick: VOTE_KICK, changelevel: VOTE_CHANGELEVEL, restartgame: VOTE_RESTART };
-const ALLOWED = ['sv_vote_issue_kick_allowed', 'sv_vote_issue_changelevel_allowed', 'sv_vote_issue_restart_game_allowed'];
-const LABELS = ['kick', 'change the map to', 'restart the match'];
+// By callvote's word: the issue on the wire, the cvar allowing it, how the console says it.
+const ISSUES = new Map([
+  ['kick', { issue: VOTE_KICK, allowed: 'sv_vote_issue_kick_allowed', label: 'kick' }],
+  ['changelevel', { issue: VOTE_CHANGELEVEL, allowed: 'sv_vote_issue_changelevel_allowed', label: 'change the map to' }],
+  ['restartgame', { issue: VOTE_RESTART, allowed: 'sv_vote_issue_restart_game_allowed', label: 'restart the match' }],
+]);
 const SEND_TICKS = TICK_RATE / 2; // a running vote goes out twice a second (datagrams can be lost)
 const RESULT_SENDS = 3; // the result goes out on this many ticks
 const FAILED_KEEP = 256; // failed votes remembered (sv_vote_failure_timer), and callers
@@ -24,7 +27,7 @@ const FAILED_KEEP = 256; // failed votes remembered (sv_vote_failure_timer), and
 export class Votes {
   constructor(host) {
     this.host = host;
-    // The running vote: { id, issue, key, arg, detail, caller, target, voters: Map(client ->
+    // The running vote: { id, issue, label, key, arg, detail, caller, target, voters: Map(client ->
     // 0 undecided, 1 yes, 2 no), needed, endsAt (ms) }, or null.
     this.vote = null;
     this.id = 0; // counts votes, so a client tells a new vote from the last one's result
@@ -49,9 +52,10 @@ export class Votes {
   call(c, args) {
     const game = this.host.game, now = this.host.now();
     if (!this.num('sv_allow_votes')) return 'Voting is off on this server.';
-    const name = (args[1] || '').toLowerCase(), issue = ISSUES[name];
-    if (issue === undefined) return 'callvote kick <name or #id> | changelevel <map> | restartgame';
-    if (!this.num(ALLOWED[issue])) return `callvote ${name} is off on this server.`;
+    const name = (args[1] || '').toLowerCase(), row = ISSUES.get(name);
+    if (!row) return 'callvote kick <name or #id> | changelevel <map> | restartgame';
+    if (!this.num(row.allowed)) return `callvote ${name} is off on this server.`;
+    const issue = row.issue;
     if (this.vote) return 'A vote is already in progress.';
     if (!c.playing) return 'Spectators cannot call votes.';
     const address = c.session && c.session.address, who = !address || isLoopback(address) ? c : addressKey(address);
@@ -71,7 +75,7 @@ export class Votes {
       arg = (args[2] || '').toLowerCase();
       if (!this.host.opts.listMaps().includes(arg)) return `callvote changelevel <map>: no map "${arg}" here (maps lists them)`;
     }
-    const key = `${name} ${arg}`;
+    const key = arg ? `${name} ${arg}` : name;
     const again = (this.failed.get(key) ?? -Infinity) + this.num('sv_vote_failure_timer') * 1000 - now;
     if (again > 0) return `That vote failed a moment ago: it can be called again in ${Math.ceil(again / 1000)} s.`;
     const voters = new Map();
@@ -80,19 +84,17 @@ export class Votes {
     }
     const needed = Math.max(Math.ceil(this.num('sv_vote_quorum_ratio') * voters.size - 1e-9), issue === VOTE_KICK ? 2 : 1);
     if (voters.size < needed) return 'Not enough players who can vote on that.';
-    this.lastCall.delete(who); // the newest last: the oldest goes first
-    if (this.lastCall.size >= FAILED_KEEP) this.lastCall.delete(this.lastCall.keys().next().value);
-    this.lastCall.set(who, now);
+    remember(this.lastCall, who, now, FAILED_KEEP);
     voters.set(c, 1);
     this.id = (this.id + 1) & 0xff;
     this.vote = {
-      id: this.id, issue, key, arg, detail: detail || arg, caller: c, target, voters, needed,
+      id: this.id, issue, label: row.label, key, arg, detail: detail || arg, caller: c, target, voters, needed,
       endsAt: now + this.num('sv_vote_timer_duration') * 1000,
     };
     this.result = null;
     this.resultSends = 0;
     game.printAll(`${c.name} called a vote: ${this.label(this.vote)}?`);
-    console.log(`vote: ${c.name} called ${key.trim()}`);
+    console.log(`vote: ${c.name} called ${key}`);
     this.send();
     this.decide();
     return '';
@@ -112,7 +114,7 @@ export class Votes {
   }
 
   label(vt) {
-    return `${LABELS[vt.issue]}${vt.detail ? ` ${vt.detail}` : ''}`;
+    return `${vt.label}${vt.detail ? ` ${vt.detail}` : ''}`;
   }
 
   // Ends the vote once it passed, can no longer pass, ran out of time or lost its target.
@@ -138,10 +140,9 @@ export class Votes {
     this.resultSends = RESULT_SENDS - 1;
     this.send(vt);
     game.printAll(`Vote ${passed ? 'passed' : 'failed'}: ${this.label(vt)}`);
-    console.log(`vote: ${vt.key.trim()} ${passed ? 'passed' : 'failed'}`);
+    console.log(`vote: ${vt.key} ${passed ? 'passed' : 'failed'}`);
     if (!passed) {
-      if (this.failed.size >= FAILED_KEEP) this.failed.delete(this.failed.keys().next().value);
-      this.failed.set(vt.key, now);
+      remember(this.failed, vt.key, now, FAILED_KEEP);
     } else if (vt.issue === VOTE_KICK) {
       host.ban(vt.target, this.num('sv_vote_kick_ban_duration'));
       game.kick(vt.target, 'kicked by vote');

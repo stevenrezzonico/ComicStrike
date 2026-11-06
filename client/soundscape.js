@@ -10,7 +10,7 @@ import {
   WEV_THROW, WEV_COCK, SLOT_SECONDARY,
 } from '../shared/weapons.js';
 import {
-  PS_VEL, PS_FLAGS, PS_EVENTS, PS_LAND_SPEED, PS_WATERLEVEL, FL_ONGROUND, FL_DUCKING, EV_LAND, AIR_TIME,
+  PS_VEL, PS_FLAGS, PS_EVENTS, PS_LAND_SPEED, PS_WATERLEVEL, FL_ONGROUND, FL_DUCKING, EV_LAND, AIR_TICKS,
 } from '../shared/pmove.js';
 import { IN_JUMP, IN_SPEED, TICK_RATE } from '../shared/constants.js';
 import {
@@ -47,7 +47,7 @@ const pitchOf = (id) => 0.92 + (id % 5) * 0.04;
 export class SoundScape {
   // sounds: Sounds; surfaceKind(x, y, z): 'soft' | 'metal' | 'wood' | 'hard' under a point,
   // 'water' | 'wade' in water at the feet / above the knees; liquidAt(x, y, z): in water,
-  // slime or lava.
+  // slime or lava (null on a map with none: no look-ups).
   constructor(sounds, surfaceKind, liquidAt) {
     this.s = sounds;
     this.surfaceKind = surfaceKind;
@@ -57,7 +57,7 @@ export class SoundScape {
     this.ownUnder = 0; // ticks with our eyes under water
     this.strokeIn = 0; // ticks to the next swim stroke while jump swims us up
     this.ox = NaN; // where we were last tick (a teleport or spawn makes no splash)
-    this.oy = 0;
+    this.oy = -0; // (a double from the start: see CLAUDE.md, Phase 15b)
     this.wet = new Int8Array(MAX_PLAYERS).fill(-1); // others: the feet in a liquid (1), not (0), unknown (-1)
     this.lastDeploy = -Infinity; // when the last draw click played (ms)
     this.shots = new Int16Array(MAX_PLAYERS).fill(-1); // last E_SHOTS seen per player
@@ -108,7 +108,7 @@ export class SoundScape {
 
   // Our water (HL's PM_PlayWaterSounds and CBasePlayer::WaterMove): a splash going in or
   // coming out, a stroke a second while jump swims us up, bubbles more often as the air
-  // runs out (AIR_TIME: the server's drowning, counted here by ourselves), a breath on
+  // runs out (AIR_TICKS: the server's drowning, counted here by ourselves), a breath on
   // coming up after over GASP_TICKS under. A teleport or a spawn makes none.
   ownWater(level, buttons, x, y) {
     const dx = x - this.ox, dy = y - this.oy, moved = !(dx * dx + dy * dy < 4096); // (NaN: the first tick)
@@ -118,7 +118,7 @@ export class SoundScape {
     this.ownLevel = level;
     if (level === 3) {
       this.ownUnder++;
-      if (Math.random() < (0.2 + 2 * Math.min(1, this.ownUnder / (AIR_TIME * TICK_RATE))) / TICK_RATE) this.s.water('bubbles');
+      if (Math.random() < (0.2 + 2 * Math.min(1, this.ownUnder / AIR_TICKS)) / TICK_RATE) this.s.water('bubbles');
     } else {
       if (this.ownUnder > GASP_TICKS && !moved) this.s.water('gasp');
       this.ownUnder = 0;
@@ -172,7 +172,7 @@ export class SoundScape {
       }
       // Into or out of a liquid (at the feet): a splash, not on a teleport.
       const lx = x - s.lx, ly = y - s.ly;
-      if (lx * lx + ly * ly < WATER_RANGE * WATER_RANGE) {
+      if (this.liquidAt !== null && lx * lx + ly * ly < WATER_RANGE * WATER_RANGE) {
         const fz = feet(rows, r), wet = this.liquidAt(x, y, fz + 2) ? 1 : 0;
         const near = Math.abs(x - this.px[id]) + Math.abs(y - this.py[id]) < 64; // (NaN: false)
         if (near && this.wet[id] >= 0 && wet !== this.wet[id]) s.water(wet ? 'in' : 'out', x, y, fz);

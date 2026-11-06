@@ -210,13 +210,13 @@ Deno.test('kick and map change: clients are told to reconnect, a new game starts
   const a = join('alpha', TEAM_T), b = join('bravo', TEAM_CT);
   host.con.exec('kick bravo');
   assert.ok(b.sent.some((x) => x instanceof Uint8Array && x[0] === S2C_REJECT));
-  assert.equal(host.game.clients[b.id], null);
+  assert.ok(host.game.clients[b.id] === null, 'kicked'); // (a Client in a failure message is the whole game)
   host.con.exec('kick nobody');
   assert.match(out.at(-1), /no such player/);
 
   const old = host.game;
   host.con.exec('map no_such_map');
-  assert.equal(host.game, old);
+  assert.ok(host.game === old, 'no such map: the game stays');
   host.con.exec('map fy_buzzkill');
   assert.notEqual(host.game, old);
   assert.equal(host.game.mapName, 'fy_buzzkill');

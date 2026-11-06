@@ -25,6 +25,8 @@ export const CONTENTS_WATER = -3;
 export const CONTENTS_SLIME = -4;
 export const CONTENTS_LAVA = -5;
 export const CONTENTS_SKY = -6;
+// Water, slime or lava.
+export const isLiquid = (c) => c <= CONTENTS_WATER && c >= CONTENTS_LAVA;
 
 // Record sizes in bytes.
 const PLANE_SIZE = 20;

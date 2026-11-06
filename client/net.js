@@ -64,9 +64,7 @@ export class NetClient {
     this.prints = []; // console text from the server, taken by the game loop
     this.chats = []; // chat lines { sender, flags, text } (S2C_CHAT), taken the same way
     this.pings = []; // teammates' pings { sender, x, y, z } (S2C_PING), likewise
-    this.vote = null; // the newest vote (S2C_VOTE: server/votes.js), voteAt when it came
-    this.voteAt = 0;
-    this.voteSerial = 0; // counts them
+    this.vote = null; // the newest vote (S2C_VOTE: server/votes.js), `at` when it came (ms); a new object each
     this.items = new Items(); // weapons on the ground (S2C_ITEMS)
     this.itemsVersion = 0; // bumps on every items message
     this.infoVersion = 0; // bumps when the roster (INFO) changes
@@ -413,9 +411,8 @@ export class NetClient {
         const v = readVote(r), last = this.vote;
         // A running update overtaken by its own result (datagrams may arrive out of order) is old.
         if (!(last && last.id === v.id && last.state !== VOTE_RUNNING && v.state === VOTE_RUNNING)) {
+          v.at = performance.now();
           this.vote = v;
-          this.voteAt = performance.now();
-          this.voteSerial++;
         }
       } else if (type === S2C_CHANGELEVEL) {
         this.changelevel = r.str();

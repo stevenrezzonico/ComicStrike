@@ -9,6 +9,7 @@
 
 import { TICK_DT } from './constants.js';
 import { Trace, traceHull, pointContents, HULL_POINT } from './trace.js';
+import { isLiquid } from './bsp.js';
 import { WEAPONS, throwStrength } from './weapons.js';
 
 export const MAX_GRENADES = 32; // in flight (the oldest goes)
@@ -21,7 +22,6 @@ export const FIRE_FUSE = 2.0; // molotov_throw_detonate_time: bursts in the air 
 // In water (or slime, lava) a grenade's velocity halves every 0.1 s (HL's CGrenade::TumbleThink),
 // per tick here: it sinks at ~49 u/s.
 const WATER_DRAG = Math.pow(0.5, TICK_DT / 0.1);
-const liquid = (c) => c <= -3 && c >= -5;
 export const FIRE_SLOPE = 0.866; // weapon_molotov_maxdetonateslope 30 degrees: steeper bounces
 export const HE_DAMAGE = 99;
 export const HE_RADIUS = 350;
@@ -271,7 +271,7 @@ export class Grenades {
     if (this.resting[k]) return false;
     const o = k * 3, P = this.pos, V = this.vel, dt = TICK_DT;
     const x = P[o], y = P[o + 1], z = P[o + 2];
-    if (liquid(pointContents(world, x, y, z))) {
+    if (world.liquids && isLiquid(pointContents(world, x, y, z))) {
       if (fire) return true;
       V[o] *= WATER_DRAG;
       V[o + 1] *= WATER_DRAG;
@@ -350,7 +350,7 @@ export class Grenades {
         fz = tr.fraction < 1 && tr.nz >= FIRE_SLOPE ? tr.endz : NaN;
       }
       const doused = Number.isNaN(fz) || this.inSmoke(x, y, fz + 8) ||
-        liquid(pointContents(world, x, y, fz)) || liquid(pointContents(world, x, y, fz + 1));
+        isLiquid(pointContents(world, x, y, fz)) || isLiquid(pointContents(world, x, y, fz + 1));
       if (doused) this.addEffect(FX_FIZZLE, weapon, owner, team, x, y, z);
       else this.addEffect(FX_FIRE, weapon, owner, team, x, y, fz);
     }

@@ -18,7 +18,7 @@ import {
 import { Doors, MapLogic, Killables, BLAST } from '../shared/doors.js';
 import { touched, touchedCount } from '../shared/pmove.js';
 import {
-  PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, PS_GROUNDENT, PS_WATERLEVEL, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, AIR_TIME,
+  PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, PS_GROUNDENT, PS_WATERLEVEL, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, AIR_TICKS,
   eyeOffset,
 } from '../shared/pmove.js';
 import {
@@ -91,7 +91,6 @@ const ARMOURY_ITEMS = [
 ];
 const DEMO_RESTOCK = 2; // the demo: seconds from a bomb going off or being defused to the next one
 const DEMO_HEAL = 2; // the demo: seconds from the last hurt to full health
-export const AIR_TICKS = AIR_TIME * TICK_RATE;
 const DROWN_BACK = 10; // health drowned given back every DROWN_BACK_TICKS once the head is out
 const DROWN_BACK_TICKS = 2 * TICK_RATE;
 const BOT_PLACE_GAP = 40; // bot_place all: units between the bots in a row
@@ -421,18 +420,12 @@ export class Game {
     };
   }
 
-  // HE blasts and fires: friendly fire off (the thrower still hurts himself); HE as a
-  // chest hit (armor helps), fire ignores armor.
+  // HE blasts and fires (hurtBy): HE as a chest hit (armor helps), fire on the legs (armor
+  // does not); the thrower's side is the one at the throw.
   grenadeHurt(victim, damage, weapon, ownerId, ownerTeam, x, y, z) {
-    const owner = this.clients[ownerId];
-    if (victim.team === ownerTeam && victim.id !== ownerId && !this.rules.teammatesAreEnemies) return;
-    if (this.tick < victim.immuneUntil) return;
     const w = WEAPONS[weapon];
-    const before = victim.player.health;
-    applyDamage(victim.player, damage, w, w.grenade === 'fire' ? HITGROUP_LEGS : HITGROUP_CHEST);
-    this.recordDamage(owner && owner.joined ? owner : null, victim, before);
-    if (x !== undefined) this.hurtFrom(victim, before, x, y, z);
-    if (victim.player.health <= 0) this.kill(owner && owner.joined ? owner : victim, victim, weapon, false);
+    this.hurtBy(victim, damage, this.clients[ownerId] || null, weapon, x, y, z, w,
+      w.grenade === 'fire' ? HITGROUP_LEGS : HITGROUP_CHEST, ownerTeam);
   }
 
   // The round's damage report: the health `victim` lost since `before`, credited to
@@ -1653,14 +1646,15 @@ export class Game {
     this.doors.update(this.world, this.tick, bodies, this.fireTarget, this.hurtBlocked);
   }
 
-  // Damage from the map itself (a crushing mover, an exploding breakable): armor as a
-  // chest hit. `by`: the client whose shot set it off (the kill feed's killer), else the
-  // victim's own doing.
-  hurtBy(c, damage, by, weapon, x, y, z) {
+  // Damage from the map itself (a crushing mover, an exploding breakable: armor as a chest
+  // hit) or a grenade (grenadeHurt). `by`: the client whose shot or throw set it off (the
+  // kill feed's killer), else the victim's own doing; `team`: by's side. Friendly fire is
+  // off: a barrel a teammate shot spares us, as his HE does (his own hurts him).
+  hurtBy(c, damage, by, weapon, x, y, z, stats = BLAST, group = HITGROUP_CHEST, team = by ? by.team : 0) {
     if (!c || !c.alive || this.tick < c.immuneUntil) return;
-    if (by && !this.isEnemy(by, c) && by !== c) return; // friendly fire is off: a barrel a teammate shot spares us, as his HE does
+    if (team && team === c.team && by !== c && !this.rules.teammatesAreEnemies) return;
     const before = c.player.health;
-    applyDamage(c.player, damage, BLAST, HITGROUP_CHEST);
+    applyDamage(c.player, damage, stats, group);
     this.recordDamage(by && by.joined ? by : null, c, before);
     if (x !== undefined) this.hurtFrom(c, before, x, y, z); // an explosion's (a crush has no side)
     if (c.player.health <= 0) this.kill(by && by.joined ? by : c, c, weapon, false);
@@ -2000,7 +1994,7 @@ export class Game {
       if (this.hurtSelf(c, c.drownDmg)) return;
     }
     if (level === 0 || t < c.burnAt) return;
-    const f = ps.f, feet = f[PS_ORIGIN + 2] - ((ps.i[PS_FLAGS] & FL_DUCKING) ? 18 : 36) + 1;
+    const f = ps.f, feet = f[PS_ORIGIN + 2] - feetOffset(ps.i[PS_FLAGS]) + 1;
     const kind = pointContents(this.world, f[PS_ORIGIN], f[PS_ORIGIN + 1], feet);
     if (kind !== CONTENTS_SLIME && kind !== CONTENTS_LAVA) return;
     c.burnAt = t + TICK_RATE;

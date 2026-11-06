@@ -5,9 +5,9 @@
 // a PlayerState buffer that is rounded to float32 at the end of every tick.
 
 import {
-  IN_JUMP, IN_DUCK, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_SPEED,
+  IN_JUMP, IN_DUCK, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_SPEED, TICK_RATE,
 } from './constants.js';
-import { CONTENTS_EMPTY, CONTENTS_WATER, CONTENTS_SLIME } from './bsp.js';
+import { CONTENTS_EMPTY, CONTENTS_WATER, CONTENTS_SLIME, isLiquid } from './bsp.js';
 import {
   Trace, tracePlayerA, traceEntity, entityContents, pointContents, hullFits,
   HULL_STAND, HULL_DUCK, HULL_POINT, HULL_MINS, HULL_MAXS, ENT_LADDER, ENT_BODY_BASE, BODY_FIELDS,
@@ -58,6 +58,7 @@ export const MOVE = {
 export const VIEW_STAND = 64;
 export const VIEW_DUCK = 30;
 export const AIR_TIME = 12; // s of air with the eyes under water (HL's AIRTIME): the server drowns, the client bubbles
+export const AIR_TICKS = AIR_TIME * TICK_RATE;
 
 // PlayerState layout: floats then ints over one 64-byte buffer.
 export const PS_ORIGIN = 0; // 0..2, hull center
@@ -423,17 +424,16 @@ function airMove() {
 
 function checkWater() {
   waterLevel = 0;
+  if (!W.liquids) return;
   const feet = M.oz + HULL_MINS[hull * 3 + 2] + 1;
-  let c = pointContents(W, M.ox, M.oy, feet);
-  if (c > -3 || c < -5) return; // not water / slime / lava
+  const c = pointContents(W, M.ox, M.oy, feet);
+  if (!isLiquid(c)) return;
   waterLevel = 1;
   waterType = c;
-  c = pointContents(W, M.ox, M.oy, M.oz);
-  if (c > -3 || c < -5) return;
+  if (!isLiquid(pointContents(W, M.ox, M.oy, M.oz))) return;
   waterLevel = 2;
   const eye = M.oz + (hull === HULL_DUCK ? VIEW_DUCK - 18 : VIEW_STAND - 36);
-  c = pointContents(W, M.ox, M.oy, eye);
-  if (c <= -3 && c >= -5) waterLevel = 3;
+  if (isLiquid(pointContents(W, M.ox, M.oy, eye))) waterLevel = 3;
 }
 
 function waterMove(buttons) {

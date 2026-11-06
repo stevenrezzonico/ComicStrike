@@ -49,6 +49,14 @@ export function addressKey(address) {
   return groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(':') + '::/64';
 }
 
+// Sets `key` in a Map that keeps the newest `max` keys: the key goes last, the oldest out
+// (a flood of new keys pushes out old ones; clearing them all lifted every block).
+export function remember(map, key, value, max) {
+  map.delete(key);
+  if (map.size >= max) map.delete(map.keys().next().value);
+  map.set(key, value);
+}
+
 // Live game sessions per address (addressKey): one machine opening 20 sessions took every
 // player slot. `add(address)` is false when the address has `max` already; loopback is
 // free (development opens a browser tab per player).
@@ -104,14 +112,14 @@ export function runDue(entry, now) {
 // minute, except the addresses that gave the right password before (else anyone with a dozen
 // addresses kept a password server closed to its own players, every map change throwing them
 // out).
-const GOOD_KEEP = 4096; // addresses remembered for having given the right password
+const ADDRESSES_KEEP = 4096; // addresses remembered: guesses, right passwords, bans
 class Guesses {
   constructor(now) {
     this.now = now;
     this.byKey = new Map(); // address key -> { fails, blockedUntil }
     this.since = -Infinity; // the minute the server-wide count is for
     this.fails = 0;
-    this.good = new Set(); // address keys that gave the right password
+    this.good = new Map(); // address keys that gave the right password -> true
   }
 
   // Why a guess from `key` is not even tried now: 'address' or 'server'; '' to try it.
@@ -129,11 +137,7 @@ class Guesses {
   fail(key) {
     this.fails++;
     let g = this.byKey.get(key);
-    if (!g) {
-      // A flood of addresses: the oldest goes (clearing them all lifted every block).
-      if (this.byKey.size >= 4096) this.byKey.delete(this.byKey.keys().next().value);
-      this.byKey.set(key, g = { fails: 0, blockedUntil: 0 });
-    }
+    if (!g) remember(this.byKey, key, g = { fails: 0, blockedUntil: 0 }, ADDRESSES_KEEP);
     if (++g.fails >= RCON_MAX_FAILS) {
       g.fails = 0;
       g.blockedUntil = this.now() + RCON_BLOCK_MS;
@@ -142,9 +146,7 @@ class Guesses {
 
   ok(key) {
     this.byKey.delete(key);
-    this.good.delete(key); // the newest last: the oldest goes first
-    if (this.good.size >= GOOD_KEEP) this.good.delete(this.good.keys().next().value);
-    this.good.add(key);
+    remember(this.good, key, true, ADDRESSES_KEEP);
   }
 }
 
@@ -414,7 +416,7 @@ export class Host {
   // Switches maps: every client is told to reconnect, then a new game starts there.
   changeLevel(name, ctx) {
     if (!name || !/^[\w-]+$/.test(name)) return this.con.out(ctx, 'map <name>');
-    if (ctx && ctx.source === 'rcon') {
+    if (!ctx || ctx.source === 'rcon') { // (a passed vote has none: it is limited alike)
       const now = this.now();
       if (now - this.mapChangedAt < (this.opts.mapGapMs ?? RCON_MAP_GAP_MS)) return this.con.out(ctx, 'map: too soon after the last change');
       this.mapChangedAt = now;
@@ -532,8 +534,7 @@ export class Host {
     if (!(minutes > 0) || !address || isLoopback(address)) return;
     const shared = (o) => o && o !== c && o.joined && !o.bot && o.session && addressKey(o.session.address) === key;
     if (this.game.clients.some(shared)) return console.log(`vote: ${key} not banned, another player shares it`);
-    if (this.bans.size >= 4096) this.bans.delete(this.bans.keys().next().value);
-    this.bans.set(key, this.now() + minutes * 60000);
+    remember(this.bans, key, this.now() + minutes * 60000, ADDRESSES_KEEP);
   }
 
   // What the start menu shows before joining (connect.json).

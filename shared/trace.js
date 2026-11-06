@@ -2,7 +2,10 @@
 // Hull 0 (point) is built from the BSP nodes at load time and appended after the
 // clipnodes, so one recursive routine serves all four hulls. No allocation per trace.
 
-import { CONTENTS_EMPTY, CONTENTS_SOLID, modelHeadnode, entityModelIndex, parseVec3 } from './bsp.js';
+import {
+  CONTENTS_EMPTY, CONTENTS_SOLID, CONTENTS_WATER, CONTENTS_SLIME, CONTENTS_LAVA, isLiquid, modelHeadnode, entityModelIndex,
+  parseVec3,
+} from './bsp.js';
 
 export const HULL_POINT = 0;
 export const HULL_STAND = 1;
@@ -92,6 +95,9 @@ export class CollisionWorld {
     // only these (still checking `kind`, which breakables and doors change at run time).
     this.water = [];
     this.ladders = [];
+    // False once fromBSP found no liquid leaf and no func_water: the water probes (pmove,
+    // grenades, the client's swimming and splashes) are skipped on a dry map.
+    this.liquids = true;
     this.surfaces = null; // SurfaceMap, attached by whoever loads the map (bullet penetration)
     this.bodies = new Float32Array(MAX_BODIES * BODY_FIELDS); // see BODY_FIELDS
     this.bodyCount = 0; // slots in use (by player id, so holes are bodies of half height 0)
@@ -128,7 +134,7 @@ export class CollisionWorld {
       pushY: push ? push[1] : 0,
       pushZ: push ? push[2] : 0,
       bspEntity: -1,
-      liquid: -3, // a func_water's CONTENTS_*: water, or slime / lava by its skin key (GoldSrc's)
+      liquid: CONTENTS_WATER, // a func_water's CONTENTS_*: water, or slime / lava by its skin key (GoldSrc's)
       slot: 0, // world vertex slot (shared/breakables.js, shared/doors.js): decals sit on it
       rot: null, // model -> world rotation (columns forward, left, up), null = none
       amin: B.subarray(j, j + 3), // world bounds (views into this.bounds)
@@ -180,11 +186,13 @@ export class CollisionWorld {
       cnChild[i * 2 + 1] = bsp.clipnodesI16[i * 4 + 3];
     }
     // Hull 0 from render nodes: leaf children become their leaf contents.
+    let wet = false;
     for (let j = 0; j < nn; j++) {
       cnPlane[nc + j] = bsp.nodesI32[j * 6];
       for (let k = 0; k < 2; k++) {
         const c = bsp.nodesI16[j * 12 + 2 + k];
         cnChild[(nc + j) * 2 + k] = c >= 0 ? nc + c : bsp.leavesI32[(-1 - c) * 7];
+        if (c < 0 && isLiquid(cnChild[(nc + j) * 2 + k])) wet = true;
       }
     }
 
@@ -221,8 +229,9 @@ export class CollisionWorld {
       parseVec3(e.origin, origin);
       const i = add(kind, m, origin, cls === 'func_conveyor' ? conveyorPush(e) : null, bspEntity);
       const skin = +e.skin;
-      if (kind === ENT_WATER && (skin === -4 || skin === -5)) world.ents[i].liquid = skin; // slime, lava
+      if (kind === ENT_WATER && (skin === CONTENTS_SLIME || skin === CONTENTS_LAVA)) world.ents[i].liquid = skin;
     });
+    world.liquids = wet || world.water.length > 0;
     return world;
   }
 }

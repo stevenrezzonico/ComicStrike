@@ -12,7 +12,7 @@
 // &offline&map=de_dust2 opens the sandbox.
 // Keys are CS:GO binds (client/binds.js); ` opens the console (client/settings.js).
 
-import { parseBSP, parseUntrustedBSP, mapNameOf, teamSpawns } from '../shared/bsp.js';
+import { parseBSP, parseUntrustedBSP, mapNameOf, teamSpawns, isLiquid, CONTENTS_EMPTY } from '../shared/bsp.js';
 import { sunOf } from '../shared/sun.js';
 import {
   TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED, IN_SCORE,
@@ -171,10 +171,8 @@ const words = new InkWords(document.getElementById('fx'));
 const deathPanel = new DeathPanel(document.getElementById('deathpanel'));
 const hurtDir = new HurtIndicator(document.getElementById('hurtdir'));
 const callouts = new Callouts(document.getElementById('callouts'), document.getElementById('radiomenu'));
-const votePanel = new VotePanel(document.getElementById('vote'), (id) => (net ? net.names[id] : ''), (cmd) => {
-  for (const [key, c] of binds.map) if (c === cmd) return key;
-  return '';
-});
+const votePanel = new VotePanel(document.getElementById('vote'), (id) => (net ? net.names[id] : ''),
+  (cmd) => menu.keysOf(cmd)[0] || '');
 const radarPings = [];
 // Where a balloon goes over player id: above the head (not ours, not the dead).
 const headOf = (id, out) => {
@@ -203,21 +201,19 @@ sounds.occluded = (x, y, z) => world !== null &&
   traceHull(world, HULL_POINT, sounds.lx, sounds.ly, sounds.lz, x, y, z, soundTrace).fraction < 0.97;
 // Footstep surfaces: water (or slime, lava) at the feet splashes, deeper than the knees
 // wades (de_aztec's river); else the texture under the feet (CS:GO material letters).
-const liquid = (x, y, z) => {
-  const c = pointContents(world, x, y, z);
-  return c <= -3 && c >= -5;
-};
+// The liquid look-ups go to the sounds and models only on a map with a liquid (loadMap).
+const liquid = (x, y, z) => isLiquid(pointContents(world, x, y, z));
+const liquidAtP = (p) => liquid(p[0], p[1], p[2]);
 const scape = new SoundScape(sounds, (x, y, z) => {
   if (!world) return 'hard';
-  if (liquid(x, y, z + 2)) return liquid(x, y, z + 24) ? 'wade' : 'water';
+  if (world.liquids && liquid(x, y, z + 2)) return liquid(x, y, z + 24) ? 'wade' : 'water';
   if (!world.surfaces) return 'hard';
   const gm = world.surfaces.surfaceAt(world, 0, x, y, z, 0, 0, -1)[1];
   if (gm === 77 || gm === 71) return 'metal'; // M, G (grates)
   if (gm === 87) return 'wood';
   if (gm === 68 || gm === 75 || gm === 79) return 'soft'; // dirt, snow, foliage
   return 'hard';
-}, (x, y, z) => world !== null && liquid(x, y, z));
-models.liquidAt = (p) => world !== null && liquid(p[0], p[1], p[2]);
+}, null);
 
 // A muzzle flash lights the walls round it for a moment (client/gl/flashes.js); a silencer
 // keeps it small.
@@ -524,6 +520,8 @@ async function loadMap(name) {
   tracers.warm(CLIP_ALL);
   step('warm');
   world = CollisionWorld.fromBSP(bsp);
+  scape.liquidAt = world.liquids ? liquid : null;
+  models.liquidAt = world.liquids ? liquidAtP : null;
   world.surfaces = new SurfaceMap(bsp);
   world.bombSites = new BombSites(bsp);
   step('world');
@@ -782,8 +780,7 @@ function useHint(off) {
   }
   if (k !== hintKey) {
     hintKey = k;
-    let key = 'use';
-    for (const [name, cmd] of binds.map) if (cmd === '+use') key = name.toUpperCase();
+    const key = (menu.keysOf('+use')[0] || 'use').toUpperCase(); // a keyboard key before a pad's
     hintText = k === 0 ? '' : k === 1 ? `Hold ${key}  plant the bomb` : k === 2 ? `Hold ${key}  defuse the bomb`
       : k === 3 ? `Hold ${key}  pick up the hostage`
       : `${key}  ${k & 1 ? 'swap for' : 'pick up'} ${WEAPONS[(k - 4) >> 1].label}`;
@@ -1789,8 +1786,8 @@ function draw(now, dt) {
   // The camera in water (or slime, lava): the print fogs over (Renderer.style.liquid), the
   // world wobbles (GoldSrc's underwater field of view, as Xash3D draws it) and the hearing
   // is muffled.
-  const liquid = world ? pointContents(world, eye[0], eye[1], eye[2]) : -1;
-  const under = liquid <= -3 && liquid >= -5 ? liquid : 0;
+  const medium = world !== null && world.liquids ? pointContents(world, eye[0], eye[1], eye[2]) : CONTENTS_EMPTY;
+  const under = isLiquid(medium) ? medium : 0;
   renderer.style.liquid = under;
   sounds.setUnder(under !== 0);
   perspective(proj, fovY, aspect, 4, 16384);
@@ -1916,7 +1913,7 @@ function draw(now, dt) {
   words.update(now);
   if (hurtDir.active) hurtDir.update(clock.t, eye[0], eye[1], angles[1], !dead && !spectating && !preview);
   callouts.update(now, viewProj, headOf, playing && !preview);
-  if (net) votePanel.update(net.vote, net.voteSerial, net.voteAt, now);
+  if (net) votePanel.update(net.vote, now);
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
   else showFlash(flash.left, flash.total);
   renderer.timer.mark(PASS.OVER);
@@ -2513,17 +2510,12 @@ menu.onPlay = (team) => {
 };
 menu.onMapFile = (file) => addOwnMap(file);
 menu.onHost = (map, team, opts) => run(() => hostRoom(map, team, opts));
-menu.onLeaveRoom = () => {
-  setRoom('');
-  menu.fetchServer();
-};
-menu.onRoom = (code) => { // a listed room picked in the Play panel
+menu.onRoom = (code) => { // a listed room picked in the Play panel, '' the server's own game
   setRoom(code);
   menu.fetchServer();
 };
 menu.room = roomCode;
 menu.onPractice = (map, team, opts) => run(() => startPractice(map, team, opts));
-menu.onPracticeOwn = (map, team, opts) => run(() => startPractice(map, team, { ...opts, own: true }));
 menu.onResume = () => input.lock().catch(() => {}).finally(updateOverlay); // already soft-locked: the menu still goes
 menu.onLeave = () => leaveGame();
 menu.onTeam = (team) => {

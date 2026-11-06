@@ -164,6 +164,24 @@ Deno.test('callvote: a vote fails on time; the same vote and the caller wait; is
   assert.equal(said(b), 'Voting is off on this server.');
 });
 
+// A passed changelevel is a map change like rcon's, so a room's gap between them holds for
+// it too (each rebuilds the game and its bots' navigation).
+Deno.test('callvote changelevel: a passed vote waits out the gap since the last map change', () => {
+  const { host, hello, clock, cmd, said } = server();
+  host.opts.mapGapMs = 30000;
+  host.con.exec('map de_playground', { source: 'rcon', print: () => {} });
+  const first = host.game;
+  const a = hello('alpha', '', '203.0.113.1'), b = hello('bravo', '', '203.0.113.2');
+  cmd(a, 'callvote changelevel de_playground');
+  cmd(b, 'vote option1');
+  assert.match(said(a), /Vote passed/);
+  assert.ok(host.game === first, 'too soon after the last change'); // (a Game in a failure message is the whole game)
+  clock.ms += 30000;
+  cmd(b, 'callvote changelevel de_playground');
+  cmd(a, 'vote option1');
+  assert.ok(host.game !== first, 'changed once the gap is over');
+});
+
 Deno.test('sv_password: a flood of bad guesses keeps new addresses out, not those that got in before; an empty one is no guess', () => {
   const { host, hello, tick } = server();
   host.con.exec('sv_password letmein');

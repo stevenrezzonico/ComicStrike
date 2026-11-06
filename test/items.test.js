@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { IN_DROP, IN_USE } from '../shared/constants.js';
 import { WEAPONS, WEAPON_ID, WS_SLOTS, WS_ACTIVE, SLOT_PRIMARY, SLOT_SECONDARY, grenadeCount } from '../shared/weapons.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
-import { Writer, Reader, writeHello, writeBuy, readItems, S2C_ITEMS } from '../shared/protocol.js';
+import { Writer, Reader, writeBuy, readItems, S2C_ITEMS } from '../shared/protocol.js';
 import { Items, MAX_ITEMS } from '../shared/items.js';
 import { Game } from '../server/game.js';
 import { loadMap, mapOrNull, joinClient, sendCmd } from './harness.js';
@@ -182,8 +181,7 @@ const buzzkill = mapOrNull('fy_buzzkill');
 Deno.test({ name: "weapons on the ground: fy_buzzkill's armoury_entity weapons lie out at every round start", ignore: !buzzkill, fn: () => {
   const game = new Game('fy_buzzkill', buzzkill, { rounds: false });
   const w = new Writer();
-  const c = game.connect({ send: () => {}, close: () => {}, closed: false });
-  game.receive(c, writeHello(w, TEAM_T, 0, 0, 'alpha').slice());
+  joinClient(game, w, 'alpha', TEAM_T);
   game.step();
   const it = game.items, counts = {};
   for (let i = 0; i < it.count; i++) counts[it.weapon[i]] = (counts[it.weapon[i]] || 0) + 1;
@@ -214,7 +212,7 @@ Deno.test({ name: "weapons on the ground: fy_buzzkill's armoury_entity weapons l
 // The ground holds MAX_ITEMS: a crafted map's 8000 armoury_entity points of 32 weapons each
 // traced their floors for 244 ms at every round start. No more than that are laid out.
 Deno.test('armoury weapons: no more than the ground holds', () => {
-  const playground = parseBSP(Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url)).buffer);
+  const playground = loadMap('de_playground');
   const many = Array.from({ length: 8000 }, (_, i) => ({ classname: 'armoury_entity', item: '4', count: '32', origin: `${i % 50} 0 64` }));
   const game = new Game('de_playground', { ...playground, entities: [...playground.entities, ...many] }, { rounds: false });
   assert.equal(game.armoury.reduce((n, a) => n + a.count, 0), MAX_ITEMS);

@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { parseBSP } from '../shared/bsp.js';
 import { IN_FORWARD, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_ATTACK } from '../shared/constants.js';
 import { CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, HULL_POINT, HULL_STAND } from '../shared/trace.js';
 import { Breakables } from '../shared/breakables.js';
@@ -12,7 +11,7 @@ import {
   E_HEALTH, MAX_PLAYERS,
 } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
-import { loadBSP } from './harness.js';
+import { loadBSP, loadMap } from './harness.js';
 
 // A client as the browser runs it, minus rendering: it predicts with the shared
 // simulation and talks to the Game through a fake session.
@@ -333,7 +332,7 @@ Deno.test('a headshot kills; everyone gets the kill; the victim respawns after 2
 // and every shot rewound a second), and never more than ~200 ms older than the shooter's
 // newest snapshot less the interpolation (a modified client could claim a second ago).
 Deno.test('the view tick of a command: unwrapped, and no older than the shooter could see', () => {
-  const game = new Game('de_playground', parseBSP(Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url)).buffer), { rounds: false });
+  const game = new Game('de_playground', loadMap('de_playground'), { rounds: false });
   game.tick = 2 ** 24 + 100;
   assert.equal(game.viewOf({ ackSeq: 0 }, (2 ** 24 + 98) % 2 ** 24), 2 ** 24 + 98);
   assert.equal(game.viewOf({ ackSeq: 0 }, 98.5), 2 ** 24 + 98.5);

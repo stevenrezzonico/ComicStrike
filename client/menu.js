@@ -10,7 +10,7 @@ import { quote } from '../shared/cvars.js';
 import { LOOK_GUNS, LOOKS, looksOf } from './models/looks.js';
 import { WEAPONS, WEAPON_ID } from '../shared/weapons.js';
 import { downloadFile } from './demostore.js';
-import { MODES } from '../shared/modes.js';
+import { MODES, modeNamed } from '../shared/modes.js';
 
 const ESCAPE_GRACE_MS = 300; // the Escape that released the mouse must not resume at once
 // Game mode names as shown, in the Mode row's order (shared/modes.js).
@@ -258,15 +258,13 @@ export class Menu {
     this.comparing = null; // the print cvar values put back when the compare button is released
     // Set by the game.
     this.onPlay = (_team) => {};
-    this.onPractice = (_map, _team) => {};
-    this.onPracticeOwn = (_map, _team) => {};
+    this.onPractice = (_map, _team, _opts) => {}; // opts.own: our own map (Your map)
     this.onResume = () => {};
     this.onLeave = () => {};
     this.onTeam = (_team) => {};
     this.onMapFile = (_file) => Promise.resolve(''); // a map file picked: its name, or rejects with why not
     this.onHost = (_map, _team, _opts) => {};
-    this.onLeaveRoom = () => {};
-    this.onRoom = (_code) => {}; // a listed room picked
+    this.onRoom = (_code) => {}; // a listed room picked ('' the server's own game)
     this.onWindow = (_open) => {}; // the Video tab's window opened or closed
     // Recordings (client/demo.js): the saved demos, and what to do with one.
     this.onDemoList = () => Promise.resolve([]); // [{ name, map, seconds, size, at }]
@@ -417,16 +415,17 @@ export class Menu {
   async fetchServer() {
     const room = this.room;
     try {
-      const [server, maps] = await Promise.all([
+      const [server, maps, rooms] = await Promise.all([
         fetch(room ? `/connect.json?room=${room}` : '/connect.json').then((r) => {
           this.roomGone = !!room && r.status === 404;
           return this.roomGone ? fetch('/connect.json').then((m) => m.json()) : r.json();
         }),
         fetch('/maps.json').then((r) => r.json()),
+        fetch('/rooms.json').then((r) => r.json()).catch(() => []),
       ]);
       this.server = server;
       this.maps = maps;
-      this.listedRooms = await fetch('/rooms.json').then((r) => r.json()).catch(() => []);
+      this.listedRooms = rooms;
     } catch {
       this.server = null;
       this.maps = this.maps || [];
@@ -517,7 +516,7 @@ export class Menu {
       body.append(el('p', 'menu-hint', this.roomGone
         ? `Room ${this.room} has closed (rooms close once nobody plays in them). This is the server's own game.`
         : 'A game on a map someone brought, on this server. Share this page\'s address to invite more players.'));
-      body.append(button(this.roomGone ? 'OK' : 'Play the server\'s own game instead', () => this.onLeaveRoom()));
+      body.append(button(this.roomGone ? 'OK' : 'Play the server\'s own game instead', () => this.onRoom('')));
     }
     const s = this.server;
     body.append(el('p', 'menu-server', s
@@ -539,7 +538,7 @@ export class Menu {
     }
     this.renderTeam(body, (team) => this.onPlay(team), true);
     if (this.room && !this.roomGone) return;
-    const listed = this.listedRooms || [];
+    const listed = this.listedRooms;
     if (!listed.length) return;
     body.append(el('h2', '', 'Rooms'));
     body.append(el('p', 'menu-hint', 'Games on maps players brought, listed by their hosts.'));
@@ -718,7 +717,7 @@ export class Menu {
       });
     }
     const mode = this.practiceMode;
-    if (mode !== 'armsrace' && mode !== 'demolition') { // the gun games arm by level: never laid out
+    if (!modeNamed(mode).ladder) { // the gun games arm by level: never laid out
       choice('Map weapons', [[true, 'Laid out'], [false, 'None']], this.practiceArmoury, (v) => {
         this.practiceArmoury = v;
       }, 'Weapons some maps leave lying at the spawns (the fy_ maps), back every round');
@@ -728,13 +727,15 @@ export class Menu {
         this.roomListed = v;
       }, 'Host for friends: a listed room shows in Play Online for anyone on this server; else only the link brings players in');
     }
-    const opts = { mode, players, difficulty: this.practiceDifficulty, armoury: this.practiceArmoury, listed: this.roomListed };
+    const opts = {
+      mode, players, difficulty: this.practiceDifficulty, armoury: this.practiceArmoury, listed: this.roomListed, own,
+    };
     if (!own) {
       body.append(button('Start', () => this.onPractice(this.practiceMap, this.practiceTeam, opts), 'menu-go'));
       return;
     }
     const go = el('div', 'menu-teams');
-    go.append(button('Play alone', () => this.onPracticeOwn(this.ownMap, this.practiceTeam, opts), 'menu-go'));
+    go.append(button('Play alone', () => this.onPractice(this.ownMap, this.practiceTeam, opts), 'menu-go'));
     const host = button('Host for friends', () => this.onHost(this.ownMap, this.practiceTeam, opts), 'menu-go');
     host.disabled = !this.server || !hasWebTransport();
     if (!this.server) host.title = 'Hosting needs the server, which did not answer';

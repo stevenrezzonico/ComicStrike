@@ -24,6 +24,7 @@
 
 import { Host, GAME_MODES, runDue, TICK_MS } from '../server/host.js';
 import { parseBSP, parseUntrustedBSP } from '../shared/bsp.js';
+import { modeNamed } from '../shared/modes.js';
 import { Ring, SLOT, TO_WORKER_SLOTS, TO_PAGE_SLOTS, ringBytes } from './ring.js';
 
 const CFGS = Object.values(GAME_MODES).map((name) => `gamemode_${name}.cfg`);
@@ -104,7 +105,7 @@ async function start({ map, mode, players: n, difficulty, armoury = true, bytes 
   // The page's console reaches the server with rcon: a password only it knows.
   const rcon = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16)).join('');
   host.password.set(rcon);
-  const [type, gameMode] = Object.keys(GAME_MODES).find((k) => GAME_MODES[k] === mode)?.split('/') || ['0', '1'];
+  const [type, gameMode] = modeNamed(mode).key.split('/'); // (competitive for an unknown name)
   host.con.exec(`game_type ${type}; game_mode ${gameMode}; hostname Practice; bot_difficulty ${difficulty}; ` +
     `mp_armoury_entities ${armoury ? 1 : 0}`);
   host.start(map);

@@ -174,7 +174,7 @@ export function readProject(text) {
         .map((f) => [...f.slice(0, 4).map((x) => Math.round(+x * 1e6) / 1e6), texOf(f[4])]);
       if (faces.length < 4) shape = 'box';
     }
-    const br = makeBrush(out.nextId++, (b.b || []).slice(0, 6).map(coord), tex, kind, keys, {
+    const br = makeBrush(out.nextId++, b.b.slice(0, 6).map(coord), tex, kind, keys, {
       shape, yaw: num(b.yaw) % 360, up: UPS.includes(b.up) ? b.up : 'px',
       sides: SIDE_COUNTS.includes(+b.sides) ? +b.sides : 8, step: Math.max(4, Math.min(64, num(b.step) || 16)),
     });
@@ -183,7 +183,7 @@ export function readProject(text) {
   }
   for (const q of Array.isArray(p.points) ? p.points.slice(0, 4 * LIMITS.points) : []) {
     if (!POINTS[q.kind] || !Array.isArray(q.o) || q.o.length < 3) continue; // a lamp with no height opened the map to the void
-    const pt = { id: out.nextId++, kind: q.kind, o: (q.o || []).slice(0, 3).map(coord), yaw: num(q.yaw) % 360 };
+    const pt = { id: out.nextId++, kind: q.kind, o: q.o.slice(0, 3).map(coord), yaw: num(q.yaw) % 360 };
     if (POINTS[q.kind].keys) {
       pt.keys = { ...POINTS[q.kind].keys };
       for (const [k, v] of Object.entries(q.keys || {})) if (/^\w{1,32}$/.test(k)) pt.keys[k] = String(v).replace(/"/g, "'").slice(0, 128);

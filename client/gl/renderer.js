@@ -11,6 +11,7 @@ import {
 import { VERTEX_STRIDE } from '../mapmesh.js';
 import { withOriginalColor } from '../texcolors.js';
 import { classify } from '../../shared/materials.js';
+import { CONTENTS_WATER, CONTENTS_SLIME, CONTENTS_LAVA } from '../../shared/bsp.js';
 import { program } from './program.js';
 import { GBuffer } from './gbuffer.js';
 import { mapLight } from './skinned.js';
@@ -118,6 +119,10 @@ export class Renderer {
       liquid: 0,
     };
     this.waterFog = [0.2, 0.33, 0.36, WATER_SIGHT, VIEW_TINT]; // set per map (loadMap)
+    // The liquid and smoke the composite's fog uniforms were last given: uploaded only when
+    // they change (NaN: again).
+    this.fogLiquid = NaN;
+    this.fogSmoke = NaN;
     this.novis = false; // r_novis: draw the whole world (no visibility culling)
     this.zoom = 1; // 90 / fov
     // The canvas's size on the page, kept by a ResizeObserver: reading clientWidth every
@@ -144,6 +149,7 @@ export class Renderer {
     // lifted and saturated): its first ! texture's measured color, else the class's teal,
     // brightened to WATER_LIGHT at least (de_playground's !watergreen fogged to near black).
     const wn = (bsp && bsp.textureNames.find((n) => n[0] === '!')) || '!water';
+    this.fogLiquid = NaN;
     const m = withOriginalColor(classify(wn), wn), wf = this.waterFog;
     for (let k = 0; k < 3; k++) wf[k] = Math.pow((k === 0 ? m.r : k === 1 ? m.g : m.b) / 255, 0.8);
     const grey = wf[0] * 0.3 + wf[1] * 0.59 + wf[2] * 0.11;
@@ -429,9 +435,14 @@ export class Renderer {
     gl.uniform3f(c.u_calm, this.canvas.width / 2, h / 2, st.calm);
     gl.uniform1f(c.u_soft, st.soft ? 1 : 0);
     gl.uniform1f(c.u_dead, st.dead);
-    const fog = st.liquid === -3 ? this.waterFog : st.liquid === -4 ? SLIME_FOG : st.liquid === -5 ? LAVA_FOG : SMOKE_FOG;
-    gl.uniform4f(c.u_fog, fog[0], fog[1], fog[2], st.liquid ? 1 : st.smoke);
-    gl.uniform2f(c.u_sight, fog[3], fog[4]);
+    if (st.liquid !== this.fogLiquid || st.smoke !== this.fogSmoke) {
+      this.fogLiquid = st.liquid;
+      this.fogSmoke = st.smoke;
+      const fog = st.liquid === CONTENTS_WATER ? this.waterFog : st.liquid === CONTENTS_SLIME ? SLIME_FOG
+        : st.liquid === CONTENTS_LAVA ? LAVA_FOG : SMOKE_FOG;
+      gl.uniform4f(c.u_fog, fog[0], fog[1], fog[2], st.liquid ? 1 : st.smoke);
+      gl.uniform2f(c.u_sight, fog[3], fog[4]);
+    }
     gl.uniform1f(c.u_inkaa, st.inkaa ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);

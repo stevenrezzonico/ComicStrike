@@ -11,7 +11,8 @@
 
 import { parseUntrustedBSP, mapNameOf } from '../shared/bsp.js';
 import { Writer, writeReject } from '../shared/protocol.js';
-import { Host, GAME_MODES, addressKey } from './host.js';
+import { Host, addressKey } from './host.js';
+import { modeNamed } from '../shared/modes.js';
 
 export const ROOM_LIMITS = {
   rooms: 8, // live rooms on the server
@@ -61,8 +62,8 @@ export class Rooms {
     if (bytes.byteLength > L.bytes) throw new RoomError(`the map is too large (${L.bytes >> 20} MB at most)`, 413);
     this.check(address);
     this.lastUpload.set(key, now);
-    const modeKey = Object.keys(GAME_MODES).find((k) => GAME_MODES[k] === mode);
-    if (!modeKey) throw new RoomError(`unknown mode: ${mode}`);
+    const row = modeNamed(mode);
+    if (row.name !== mode) throw new RoomError(`unknown mode: ${mode}`);
 
     let bsp;
     try {
@@ -88,7 +89,7 @@ export class Rooms {
       now: this.opts.now,
       mapGapMs: L.cooldownMs,
     });
-    const [type, gameMode] = modeKey.split('/');
+    const [type, gameMode] = row.key.split('/');
     host.con.exec(`game_type ${type}; game_mode ${gameMode}; bot_difficulty ${Math.max(0, Math.min(3, difficulty | 0))}; ` +
       `mp_armoury_entities ${armoury ? 1 : 0}`);
     host.hostname.set(`Room ${code}`);
