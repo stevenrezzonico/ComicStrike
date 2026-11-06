@@ -1,8 +1,8 @@
-// Server conveniences: sv_password, votes (callvote).
+// Server conveniences: sv_password, votes (callvote), the console's say.
 import assert from 'node:assert/strict';
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import {
-  Writer, Reader, writeHello, writeCommand, readVote, S2C_REJECT, S2C_WELCOME, S2C_PRINT, S2C_VOTE, VOTE_RUNNING,
+  Writer, Reader, writeHello, writeCommand, readVote, S2C_REJECT, S2C_WELCOME, S2C_PRINT, S2C_VOTE, S2C_CHAT, VOTE_RUNNING,
   VOTE_PASSED, VOTE_FAILED, VOTE_KICK, VOTE_RESTART,
 } from '../shared/protocol.js';
 import { loadMap, readCfg, quiet } from './harness.js';
@@ -161,21 +161,98 @@ Deno.test('callvote: a vote fails on time; the same vote and the caller wait; is
 });
 
 // A passed changelevel is a map change like rcon's, so a room's gap between them holds for
-// it too (each rebuilds the game and its bots' navigation).
+// it too (each rebuilds the game and its bots' navigation); one that did not happen reads failed.
 Deno.test('callvote changelevel: a passed vote waits out the gap since the last map change', () => {
-  const { host, hello, clock, cmd, said } = server();
+  const { host, hello, clock, cmd, said, vote } = server();
   host.opts.mapGapMs = 30000;
   host.con.exec('map de_playground', { source: 'rcon', print: () => {} });
   const first = host.game;
   const a = hello('alpha', '', '203.0.113.1'), b = hello('bravo', '', '203.0.113.2');
   cmd(a, 'callvote changelevel de_playground');
   cmd(b, 'vote option1');
-  assert.match(said(a), /Vote passed/);
+  assert.equal(said(a), 'Vote failed: change the map to de_playground (map: too soon after the last change)');
+  assert.equal(vote(a).state, VOTE_FAILED);
   assert.ok(host.game === first, 'too soon after the last change'); // (a Game in a failure message is the whole game)
   clock.ms += 30000;
   cmd(b, 'callvote changelevel de_playground');
   cmd(a, 'vote option1');
   assert.ok(host.game !== first, 'changed once the gap is over');
+});
+
+// Practice's server (client/localserver.js) has only the running map: its changelevel fetches
+// the map first, then changes. A passed vote calling the Host itself changed nothing there.
+Deno.test('callvote changelevel: through the console\'s changelevel (practice fetches first); a map that never came reads failed', async () => {
+  const { host, hello, cmd, said, vote } = server();
+  host.opts.listMaps = () => ['de_playground', 'de_missing'];
+  const fetched = [];
+  host.con.command('changelevel', (a, ctx) => {
+    fetched.push(a[1]);
+    setTimeout(() => (a[1] === 'de_missing' ? host.con.out(ctx, `map ${a[1]}: HTTP 404`) : quiet(() => host.changeLevel(a[1], ctx))));
+  });
+  const later = () => new Promise((r) => setTimeout(r, 10));
+  const first = host.game;
+  const a = hello('alpha', '', '203.0.113.1'), b = hello('bravo', '', '203.0.113.2');
+  cmd(a, 'callvote changelevel de_missing');
+  cmd(b, 'vote option1');
+  assert.deepEqual(fetched, ['de_missing']);
+  assert.equal(vote(b).state, VOTE_PASSED);
+  await later();
+  assert.equal(vote(b).state, VOTE_FAILED, 'the map never came');
+  assert.equal(said(b), 'Vote failed: change the map to de_missing (map de_missing: HTTP 404)');
+  cmd(b, 'callvote changelevel de_playground');
+  cmd(a, 'vote option1');
+  await later();
+  assert.deepEqual(fetched, ['de_missing', 'de_playground']);
+  assert.ok(host.game !== first, 'changed once fetched');
+  assert.equal(vote(a).state, VOTE_PASSED);
+});
+
+Deno.test('callvote: one voter an address (two tabs of one machine never kick alone); on loopback one a client', () => {
+  const { hello, cmd, said, vote } = server();
+  const a = hello('alpha', '', '203.0.113.1'), a2 = hello('alpha2', '', '203.0.113.1'), d = hello('delta', '', '203.0.113.4');
+  cmd(a, 'callvote kick delta');
+  assert.equal(said(a), 'Not enough players who can vote on that.', 'alpha and his second tab are one voter');
+  const b = hello('bravo', '', '203.0.113.2');
+  cmd(a2, 'callvote kick delta');
+  assert.deepEqual([vote(b).voters, vote(b).needed, vote(b).mine], [2, 2, 1], 'alpha2 (who called) and bravo');
+  cmd(a, 'vote option1');
+  assert.equal(said(a), 'You cannot vote on this one.');
+  assert.ok(d.c.joined);
+  const dev = server(), local = '127.0.0.1';
+  const x = dev.hello('one', '', local);
+  dev.hello('two', '', local);
+  dev.hello('three', '', local);
+  dev.cmd(x, 'callvote restartgame');
+  assert.equal(dev.vote(x).voters, 3, 'development plays a tab per player');
+});
+
+Deno.test('sv_password: over 63 bytes (a HELLO carries no more) is refused with a message; 63 joins', () => {
+  const { host, hello } = server();
+  const admin = hello('admin');
+  host.con.exec('rcon_password secret');
+  assert.equal(quiet(() => host.rcon(admin.c, 'secret', `sv_password ${'é'.repeat(32)}`)), // 64 bytes of UTF-8
+    'sv_password: at most 63 bytes (a HELLO carries no more): unchanged');
+  assert.equal(host.joinPassword.value, '');
+  const most = `${'é'.repeat(31)}x`;
+  assert.equal(quiet(() => host.rcon(admin.c, 'secret', `sv_password ${most}`)), '');
+  assert.equal(hello('friend', 'wrong', '198.51.100.3').why, 'bad password');
+  assert.ok(hello('friend', most, '198.51.100.3').joined, 'the longest a HELLO carries');
+});
+
+// A room's uploader holds its rcon password: one line of `say a;say a;...` was ~160 chat lines.
+Deno.test('say from rcon or the server console: one line every 0.66 s per caller, the rest dropped with one line back', () => {
+  const { host, hello, clock } = server();
+  const admin = hello('admin', '', '203.0.113.1'), p = hello('player', '', '203.0.113.2');
+  host.con.exec('rcon_password secret');
+  const chats = () => p.sent.filter((b) => b[0] === S2C_CHAT).length;
+  const out = quiet(() => host.rcon(admin.c, 'secret', Array(200).fill('say spam').join(';')));
+  assert.equal(chats(), 1);
+  assert.equal(out, 'say: one line every 0.66 s, the rest dropped');
+  host.con.exec('say from the terminal');
+  assert.equal(chats(), 2, 'another caller');
+  clock.ms += 700;
+  quiet(() => host.rcon(admin.c, 'secret', 'say again'));
+  assert.equal(chats(), 3);
 });
 
 Deno.test('sv_password: a flood of bad guesses keeps new addresses out, not those that got in before; an empty one is no guess', () => {

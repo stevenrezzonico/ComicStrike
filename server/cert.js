@@ -47,3 +47,15 @@ export async function ensureCert(dir, hostnames) {
   const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', pemToDer(cert)));
   return { cert, key, hash };
 }
+
+// Puts a new certificate (`fresh`, from ensureCert) into the listener (transport.renew), then
+// into `info`, what connect.json pins: true when it changed. In that order, so a renew that
+// throws leaves `info` as served and the next check tries again (assigned first, connect.json
+// pinned a certificate the listener did not serve and every later check, seeing the same one,
+// returned early: every Play failed until a restart).
+export function renewCert(info, fresh, transport) {
+  if (fresh.cert === info.cert) return false;
+  transport.renew(fresh.cert, fresh.key);
+  Object.assign(info, fresh);
+  return true;
+}

@@ -91,7 +91,7 @@ const DEMO_HEAL = 2; // the demo: seconds from the last hurt to full health
 const DROWN_BACK = 10; // health drowned given back every DROWN_BACK_TICKS once the head is out
 const DROWN_BACK_TICKS = 2 * TICK_RATE;
 const BOT_PLACE_GAP = 40; // bot_place all: units between the bots in a row
-const CHAT_FLOOD_TICKS = Math.round(0.66 * TICK_RATE); // least gap between a player's chat lines (CS:GO's flood check: ~0.75 s)
+export const CHAT_FLOOD_TICKS = Math.round(0.66 * TICK_RATE); // least gap between a player's chat lines (CS:GO's flood check: ~0.75 s)
 // Retakes: the Ts start RETAKE_T units from the planted bomb, the CTs RETAKE_CT, at most
 // RETAKE_RISE above or below it (approx.: CS:GO's retakes maps had hand-placed spawns).
 const RETAKE_T = [150, 700], RETAKE_CT = [1000, 1800], RETAKE_RISE = 300;

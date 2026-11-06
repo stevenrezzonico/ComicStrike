@@ -18,7 +18,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { ensureCert } from './cert.js';
+import { ensureCert, renewCert } from './cert.js';
 import { staticPath } from './static.js';
 import { listen } from './transport.js';
 import { Host, GAME_MODES, AddressCounts, runDue } from './host.js';
@@ -76,10 +76,21 @@ const readText = (url) => {
     return null;
   }
 };
+// The maps in maps/, read again at most every MAP_LIST_MS: a failing `callvote changelevel`
+// and every GET /maps.json read the directory and sorted it.
+const MAP_LIST_MS = 5000;
+let mapList = null, mapListAt = -Infinity;
+const listMaps = () => {
+  if (performance.now() - mapListAt >= MAP_LIST_MS) {
+    mapList = [...Deno.readDirSync(new URL('maps/', ROOT))].map((e) => e.name).filter((n) => n.endsWith('.bsp'))
+      .map((n) => n.slice(0, -4)).sort();
+    mapListAt = performance.now();
+  }
+  return mapList;
+};
 const host = new Host({
   loadMap: (name) => parseBSP(Deno.readFileSync(new URL(`maps/${name}.bsp`, ROOT)).buffer),
-  listMaps: () => [...Deno.readDirSync(new URL('maps/', ROOT))].map((e) => e.name).filter((n) => n.endsWith('.bsp'))
-    .map((n) => n.slice(0, -4)).sort(),
+  listMaps,
   readCfg: (name) => readText(new URL(`cfg/${name}`, ROOT)),
   quit: () => Deno.exit(0),
 });
@@ -139,10 +150,7 @@ if (!TLS_CERT) {
   setInterval(async () => {
     try {
       const fresh = await ensureCert(fileURLToPath(new URL('certs', ROOT)), HOSTNAMES);
-      if (fresh.cert === certInfo.cert) return;
-      Object.assign(certInfo, fresh);
-      transport.renew(fresh.cert, fresh.key);
-      console.log('webtransport: certificate renewed');
+      if (renewCert(certInfo, fresh, transport)) console.log('webtransport: certificate renewed');
     } catch (err) {
       console.warn('webtransport: certificate renewal failed:', err.message);
     }

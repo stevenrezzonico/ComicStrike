@@ -1,6 +1,7 @@
 // Rooms (server/rooms.js): a game on a map a player uploads, held in memory, with limits.
 import assert from 'node:assert/strict';
 import { Rooms, RoomError } from '../server/rooms.js';
+import { Game } from '../server/game.js';
 import { mapNameOf, parseBSP } from '../shared/bsp.js';
 import { CollisionWorld } from '../shared/trace.js';
 import { FloorGrid, MAX_CELLS, floorFaces } from '../shared/floorgrid.js';
@@ -129,6 +130,22 @@ Deno.test('uploads are limited: size, rooms, one per address, a cooldown, real m
   const v6 = makeRooms({ cooldownMs: 0 }).rooms;
   quietly(() => v6.create(PLAYGROUND, { address: '2001:db8:1:2::5' }));
   refused(() => v6.create(PLAYGROUND, { address: '2001:db8:1:2::77' }), /already host/, 429);
+});
+
+// The upload's test tick is the game's own: Host.step logs a tick that throws and goes on.
+Deno.test('a map whose first tick throws is refused at the upload', () => {
+  const { rooms } = makeRooms();
+  const step = Game.prototype.step;
+  Game.prototype.step = () => {
+    throw new Error('a broken map');
+  };
+  try {
+    assert.throws(() => quietly(() => rooms.create(PLAYGROUND, { address: '1.2.3.4' })),
+      (e) => e instanceof RoomError && e.message === 'the map does not run: a broken map');
+  } finally {
+    Game.prototype.step = step;
+  }
+  assert.equal(rooms.rooms.size, 0);
 });
 
 Deno.test('the map file is served gzipped from memory', async () => {

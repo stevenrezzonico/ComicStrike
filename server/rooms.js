@@ -97,7 +97,7 @@ export class Rooms {
     try {
       host.start(name);
       host.game.bots.ensureNav();
-      host.step(host.game);
+      host.game.step(); // not Host.step: it logs a tick that throws and goes on
     } catch (err) {
       throw new RoomError(`the map does not run: ${err.message}`);
     }

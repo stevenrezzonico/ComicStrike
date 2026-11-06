@@ -6,7 +6,7 @@ import { Console, FCVAR_PROTECTED } from '../shared/cvars.js';
 import { writeChangelevel, cleanName, MAX_PLAYERS } from '../shared/protocol.js';
 import { TEAM_NAMES, TEAM_T, TEAM_CT } from '../shared/player.js';
 import { PHASE_WARMUP } from '../shared/economy.js';
-import { Game, DEFAULT_RULES } from './game.js';
+import { Game, DEFAULT_RULES, CHAT_FLOOD_TICKS } from './game.js';
 import { Votes } from './votes.js';
 import { MODES } from '../shared/modes.js';
 import { TICK_RATE } from '../shared/constants.js';
@@ -25,6 +25,9 @@ const RCON_MAP_GAP_MS = 1000; // rcon map changes: each builds a new game (40 in
 // Characters of output one rcon line sends back: a line of `find;find;...` printed ~1 MB,
 // ~1,400 PRINT datagrams encoded on the thread every game shares.
 const RCON_OUTPUT = 65536;
+// sv_password's most: what a HELLO carries (Writer.str, shared/protocol.js). Longer, it never
+// matched, and every try counted as a bad guess.
+const PASSWORD_BYTES = 63;
 
 // CS:GO game modes by game_type / game_mode (shared/modes.js). A mode is a cfg of mode
 // convars run when a map loads (cfg/gamemode_<name>.cfg, then cfg/gamemode_<name>_server.cfg
@@ -166,13 +169,23 @@ export class Host {
     this.failedTicks = 0; // ticks that threw since the last report
     this.failReportAt = -Infinity;
     this.mapChangedAt = -Infinity; // the last map change by rcon
+    this.execCtx = null; // the rcon line running, so a cvar's refusal reaches its caller
+    // Who said (the rcon player; the terminal and cfgs as one: the console) -> ms of the line.
+    this.saidAt = new WeakMap();
     const con = this.con = new Console(opts.print || ((s) => console.log(s)));
     const apply = () => this.applyRules();
     const num = (name, value, help, min, max) => con.cvar(name, value, { help, min, max, onChange: apply });
 
     this.hostname = con.cvar('hostname', 'ComicStrike', { help: 'Server name' });
     this.password = con.cvar('rcon_password', '', { flags: FCVAR_PROTECTED, help: 'Remote console password (empty: rcon off)' });
-    this.joinPassword = con.cvar('sv_password', '', { flags: FCVAR_PROTECTED, help: 'Password to join the server (empty: none)' });
+    this.joinPassword = con.cvar('sv_password', '', {
+      flags: FCVAR_PROTECTED, help: `Password to join the server (empty: none; at most ${PASSWORD_BYTES} bytes)`,
+      onChange: (cv, old) => {
+        if (new TextEncoder().encode(cv.value).length <= PASSWORD_BYTES) return;
+        cv.set(old);
+        con.out(this.execCtx, `sv_password: at most ${PASSWORD_BYTES} bytes (a HELLO carries no more): unchanged`);
+      },
+    });
     num('mp_freezetime', DEFAULT_RULES.freezeTime, 'Freeze time at round start (s)', 0, 60);
     num('mp_roundtime', 1.92, 'Round time (min)', 1, 60);
     num('mp_roundtime_defuse', 1.92, 'Round time on bomb maps (min; 0: mp_roundtime)', 0, 60);
@@ -292,7 +305,18 @@ export class Host {
       if (!c) return con.out(ctx, 'kick <name or #id>: no such player, or several have that name (status lists the ids)');
       this.game.kick(c, 'kicked by the server');
     }, 'kick <name or #id>');
-    con.command('say', (a) => this.game.chat(null, a.slice(1).join(' ')), 'say <text>: a chat line from Console to everyone');
+    // One line per CHAT_FLOOD_TICKS per caller, as the players' chat: a room's uploader holds
+    // its rcon password, and one line of `say a;say a;...` sent ~160 chat lines to everyone.
+    con.command('say', (a, ctx) => {
+      const who = ctx.client || con, now = this.now();
+      if (now - (this.saidAt.get(who) ?? -Infinity) < CHAT_FLOOD_TICKS * TICK_MS) {
+        if (!ctx.saidTooFast) con.out(ctx, `say: one line every ${(CHAT_FLOOD_TICKS / TICK_RATE).toFixed(2)} s, the rest dropped`);
+        ctx.saidTooFast = true;
+        return;
+      }
+      this.saidAt.set(who, now);
+      this.game.chat(null, a.slice(1).join(' '));
+    }, 'say <text>: a chat line from Console to everyone');
     con.command('exec', (a, ctx) => this.execCfg(a[1], ctx), 'exec <file>: runs cfg/<file>.cfg');
     con.command('quit', () => opts.quit && opts.quit(), 'Stops the server');
     con.command('exit', () => opts.quit && opts.quit(), 'Stops the server');
@@ -415,7 +439,7 @@ export class Host {
   // Switches maps: every client is told to reconnect, then a new game starts there.
   changeLevel(name, ctx) {
     if (!name || !/^[\w-]+$/.test(name)) return this.con.out(ctx, 'map <name>');
-    if (!ctx || ctx.source === 'rcon') { // (a passed vote has none: it is limited alike)
+    if (ctx.source === 'rcon' || ctx.source === 'vote') { // (a passed vote is limited alike)
       const now = this.now();
       if (now - this.mapChangedAt < (this.opts.mapGapMs ?? RCON_MAP_GAP_MS)) return this.con.out(ctx, 'map: too soon after the last change');
       this.mapChangedAt = now;
@@ -485,7 +509,12 @@ export class Host {
       if (left > 0) out.push(s.length <= left ? s : `${s.slice(0, left)}\n(the rest cut: ${RCON_OUTPUT} characters at most)`);
       left -= s.length + 1; // and its line break
     };
-    this.con.exec(command, { print, source: 'rcon', client: c, budget: RCON_BUDGET });
+    const ctx = this.execCtx = { print, source: 'rcon', client: c, budget: RCON_BUDGET };
+    try {
+      this.con.exec(command, ctx);
+    } finally {
+      this.execCtx = null;
+    }
     return out.join('\n');
   }
 

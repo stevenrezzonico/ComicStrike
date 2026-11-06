@@ -16,9 +16,11 @@ export class Session {
     this.maxDatagramSize = wt.datagrams.maxDatagramSize || 1200;
   }
 
-  // Fire-and-forget: datagrams are unreliable by design.
+  // Fire-and-forget: datagrams are unreliable by design. A copy goes out: the stream queues
+  // what it cannot write at once, and the game's 8 rotating writers (game.js SEND_BUFFERS)
+  // were overwritten under a burst (~72 PRINTs of long rcon output) before it went out.
   send(bytes) {
-    if (this.open) this.writer.write(bytes).catch(() => {});
+    if (this.open) this.writer.write(bytes.slice()).catch(() => {});
   }
 
   // Nothing more goes out or comes in from now; the connection closes CLOSE_MS later.
@@ -113,9 +115,19 @@ export function listen({ hostname = '0.0.0.0', port, cert, key, connections = nu
   }
 
   return {
+    // The old listener stops first: a second one opened on the endpoint before it took no
+    // connections (Deno 2.9). One that refuses the certificate (it throws) puts the last
+    // certificate back, so connections still come in and connect.json's pin still holds.
     renew(newCert, newKey) {
       listener.stop();
-      open(newCert, newKey);
+      try {
+        open(newCert, newKey);
+      } catch (err) {
+        open(cert, key);
+        throw err;
+      }
+      cert = newCert;
+      key = newKey;
     },
   };
 }

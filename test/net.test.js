@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import { NetClient } from '../client/net.js';
 import { Session, CLOSE_MS } from '../server/transport.js';
+import { renewCert } from '../server/cert.js';
 
 // connect() with a stand-in fetch, page location and WebTransport whose `ready` is `ready`.
 async function failedConnect(ready, timeoutMs) {
@@ -72,4 +73,32 @@ Deno.test('transport: a closed session sends nothing more and closes its connect
   assert.equal(closes.length, 0, 'the connection stays a moment');
   await new Promise((r) => setTimeout(r, CLOSE_MS + 50));
   assert.deepEqual(closes, ['kicked'], 'then closes, once');
+});
+
+// A WritableStream queues what its sink has not taken yet: the buffer the game writes its next
+// datagram into (its rotating writers) must not be what is queued.
+Deno.test('transport: a datagram still queued keeps its bytes when its buffer is written again', async () => {
+  const written = [];
+  const writable = new WritableStream({ write: (b) => void written.push(b[0]) });
+  const s = new Session(1, { datagrams: { writable } }, '203.0.113.1');
+  const buf = new Uint8Array(1);
+  for (let i = 1; i <= 3; i++) {
+    buf[0] = i;
+    s.send(buf);
+  }
+  await s.writer.ready;
+  assert.deepEqual(written, [1, 2, 3]);
+});
+
+// server/main.js's renewal every 6 hours: connect.json pins only what the listener serves.
+Deno.test('transport: a new certificate reaches connect.json only once the listener took it', () => {
+  const info = { cert: 'old', key: 'k0', hash: [0] }, fresh = { cert: 'new', key: 'k1', hash: [1] };
+  assert.throws(() => renewCert(info, fresh, { renew: () => { throw new Error('refused'); } }), /refused/);
+  assert.equal(info.cert, 'old', 'still the one served');
+  const served = [];
+  const listener = { renew: (cert) => served.push(cert) };
+  assert.equal(renewCert(info, fresh, listener), true, 'the next check tries again');
+  assert.deepEqual([info.cert, info.key, info.hash, served], ['new', 'k1', [1], ['new']]);
+  assert.equal(renewCert(info, { ...fresh }, listener), false, 'the same one: nothing to do');
+  assert.equal(served.length, 1);
 });

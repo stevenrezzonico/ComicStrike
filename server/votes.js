@@ -1,6 +1,6 @@
 // Votes (CS:GO's callvote): a player calls a vote to kick a teammate (`callvote kick <name or
 // #id>`), change the map (`callvote changelevel <map>`) or restart the match (`callvote
-// restartgame`); the players who may vote answer with F1 / F2 (`vote option1` / `vote
+// restartgame`); the players who may vote (one an address) answer with F1 / F2 (`vote option1` / `vote
 // option2`) within sv_vote_timer_duration. The caller votes yes. It passes once the yes votes
 // reach sv_vote_quorum_ratio of those who may vote, and fails once it no longer can or the
 // time is up. A kick is voted on by the target's team (everyone in free for all), the target
@@ -23,6 +23,14 @@ const ISSUES = new Map([
 const SEND_TICKS = TICK_RATE / 2; // a running vote goes out twice a second (datagrams can be lost)
 const RESULT_SENDS = 3; // the result goes out on this many ticks
 const FAILED_KEEP = 256; // failed votes remembered (sv_vote_failure_timer), and callers
+
+// Who a client votes and calls as: his address (addressKey), one voter an address (a machine
+// may hold 5 sessions: two tabs passed a kick alone); on loopback the client (development
+// plays a tab per player).
+function voterOf(c) {
+  const address = c.session && c.session.address;
+  return !address || isLoopback(address) ? c : addressKey(address);
+}
 
 export class Votes {
   constructor(host) {
@@ -58,7 +66,7 @@ export class Votes {
     const issue = row.issue;
     if (this.vote) return 'A vote is already in progress.';
     if (!c.playing) return 'Spectators cannot call votes.';
-    const address = c.session && c.session.address, who = !address || isLoopback(address) ? c : addressKey(address);
+    const who = voterOf(c);
     const wait = (this.lastCall.get(who) ?? -Infinity) + this.num('sv_vote_creation_timer') * 1000 - now;
     if (wait > 0) return `You can call another vote in ${Math.ceil(wait / 1000)} s.`;
     const ffa = game.rules.teammatesAreEnemies;
@@ -78,9 +86,13 @@ export class Votes {
     const key = arg ? `${name} ${arg}` : name;
     const again = (this.failed.get(key) ?? -Infinity) + this.num('sv_vote_failure_timer') * 1000 - now;
     if (again > 0) return `That vote failed a moment ago: it can be called again in ${Math.ceil(again / 1000)} s.`;
-    const voters = new Map();
+    const voters = new Map([[c, 0]]), seen = new Set([who]);
     for (const o of game.clients) {
-      if (o && o.joined && !o.bot && o.playing && o !== target && (issue !== VOTE_KICK || ffa || o.team === c.team)) voters.set(o, 0);
+      if (!o || !o.joined || o.bot || !o.playing || o === target || (issue === VOTE_KICK && !ffa && o.team !== c.team)) continue;
+      const k = voterOf(o);
+      if (seen.has(k)) continue; // (another session of an address already in)
+      seen.add(k);
+      voters.set(o, 0);
     }
     const needed = Math.max(Math.ceil(this.num('sv_vote_quorum_ratio') * voters.size - 1e-9), issue === VOTE_KICK ? 2 : 1);
     if (voters.size < needed) return 'Not enough players who can vote on that.';
@@ -147,10 +159,23 @@ export class Votes {
       host.ban(vt.target, this.num('sv_vote_kick_ban_duration'));
       game.kick(vt.target, 'kicked by vote');
     } else if (vt.issue === VOTE_CHANGELEVEL) {
-      host.changeLevel(vt.arg);
+      // Through the console's changelevel: the practice worker's fetches the map first. A
+      // reply while this game still runs says why it did not change (now, or once fetched).
+      host.con.run(['changelevel', vt.arg], { source: 'vote', print: (s) => host.game === game && this.unpass(vt, s) });
     } else {
       game.restartGame(1);
     }
+  }
+
+  // A passed changelevel that did not happen (too soon after the last change, a map that does
+  // not load): everyone is told it failed, and why.
+  unpass(vt, why) {
+    vt.state = VOTE_FAILED;
+    this.host.game.printAll(`Vote failed: ${this.label(vt)} (${why})`);
+    console.log(`vote: ${vt.key} failed: ${why}`);
+    if (this.result !== vt) return; // a newer vote is on the panels
+    this.resultSends = RESULT_SENDS - 1;
+    this.send(vt);
   }
 
   // Each tick (Host.step): the time limit, the running vote twice a second, the result.
