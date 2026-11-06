@@ -93,6 +93,49 @@ export function runDue(entry, now) {
   return entry.epoch + (game.tick + 1) * TICK_MS;
 }
 
+// Bad password guesses (rcon_password, sv_password: one of these each) by the sender's
+// address (sessions without one share a key): counted here, not per player, so reconnecting
+// does not reset them, and kept across map changes. RCON_MAX_FAILS from one address block it
+// for RCON_BLOCK_MS; RCON_FAILS_PER_MINUTE from everyone refuse everyone for the rest of the
+// minute.
+class Guesses {
+  constructor(now) {
+    this.now = now;
+    this.byKey = new Map(); // address key -> { fails, blockedUntil }
+    this.since = -Infinity; // the minute the server-wide count is for
+    this.fails = 0;
+  }
+
+  // Why a guess from `key` is not even tried now: 'address' or 'server'; '' to try it.
+  refused(key) {
+    const now = this.now(), g = this.byKey.get(key);
+    if (g && now < g.blockedUntil) return 'address';
+    if (now - this.since >= 60000) {
+      this.since = now;
+      this.fails = 0;
+    }
+    return this.fails >= RCON_FAILS_PER_MINUTE ? 'server' : '';
+  }
+
+  fail(key) {
+    this.fails++;
+    let g = this.byKey.get(key);
+    if (!g) {
+      // A flood of addresses: the oldest goes (clearing them all lifted every block).
+      if (this.byKey.size >= 4096) this.byKey.delete(this.byKey.keys().next().value);
+      this.byKey.set(key, g = { fails: 0, blockedUntil: 0 });
+    }
+    if (++g.fails >= RCON_MAX_FAILS) {
+      g.fails = 0;
+      g.blockedUntil = this.now() + RCON_BLOCK_MS;
+    }
+  }
+
+  ok(key) {
+    this.byKey.delete(key);
+  }
+}
+
 export class Host {
   // opts: loadMap(name) -> parsed BSP (throws if missing), listMaps() -> names,
   //       readCfg(name) -> text or null, quit(), print(text), rules (test overrides),
@@ -101,12 +144,8 @@ export class Host {
     this.opts = opts;
     this.now = opts.now || (() => performance.now());
     this.game = null;
-    // Bad rcon passwords by the sender's address (sessions without one share a key):
-    // counted here, not per player, so reconnecting does not reset them, and kept across
-    // map changes. Address key -> { fails, blockedUntil }.
-    this.rconGuard = new Map();
-    this.rconFailsSince = -Infinity; // the minute the server-wide count of bad passwords is for
-    this.rconFails = 0;
+    this.rconGuesses = new Guesses(this.now);
+    this.joinGuesses = new Guesses(this.now); // sv_password
     this.failedTicks = 0; // ticks that threw since the last report
     this.failReportAt = -Infinity;
     this.mapChangedAt = -Infinity; // the last map change by rcon
@@ -116,6 +155,7 @@ export class Host {
 
     this.hostname = con.cvar('hostname', 'ComicStrike', { help: 'Server name' });
     this.password = con.cvar('rcon_password', '', { flags: FCVAR_PROTECTED, help: 'Remote console password (empty: rcon off)' });
+    this.joinPassword = con.cvar('sv_password', '', { flags: FCVAR_PROTECTED, help: 'Password to join the server (empty: none)' });
     num('mp_freezetime', DEFAULT_RULES.freezeTime, 'Freeze time at round start (s)', 0, 60);
     num('mp_roundtime', 1.92, 'Round time (min)', 1, 60);
     num('mp_roundtime_defuse', 1.92, 'Round time on bomb maps (min; 0: mp_roundtime)', 0, 60);
@@ -279,6 +319,7 @@ export class Host {
     const game = new Game(mapName, bsp, { ...this.rules(), ...this.opts.rules });
     game.rules = { ...game.rules, ...this.roundTimeFor(game) };
     game.rcon = (c, password, command) => this.rcon(c, password, command);
+    game.admit = (c, password) => this.admit(c, password);
     return game;
   }
 
@@ -408,30 +449,15 @@ export class Host {
   rcon(c, password, command) {
     const pw = this.password.value;
     if (!pw) return 'rcon is disabled on this server (no rcon_password)';
-    const now = this.now();
     const key = addressKey(c.session && c.session.address);
-    let g = this.rconGuard.get(key);
-    if (g && now < g.blockedUntil) return 'rcon: too many bad passwords, try later';
-    if (now - this.rconFailsSince >= 60000) {
-      this.rconFailsSince = now;
-      this.rconFails = 0;
-    }
-    if (this.rconFails >= RCON_FAILS_PER_MINUTE) return 'rcon: too many bad passwords on this server, try later';
+    const refused = this.rconGuesses.refused(key);
+    if (refused) return `rcon: too many bad passwords${refused === 'server' ? ' on this server' : ''}, try later`;
     if (password !== pw) {
-      this.rconFails++;
-      if (!g) {
-        // A flood of addresses: the oldest goes (clearing them all lifted every block).
-        if (this.rconGuard.size >= 4096) this.rconGuard.delete(this.rconGuard.keys().next().value);
-        this.rconGuard.set(key, g = { fails: 0, blockedUntil: 0 });
-      }
-      if (++g.fails >= RCON_MAX_FAILS) {
-        g.fails = 0;
-        g.blockedUntil = now + RCON_BLOCK_MS;
-      }
+      this.rconGuesses.fail(key);
       console.log(`rcon: bad password from player ${c.id} "${c.name}"${key ? ` (${key})` : ''}`);
       return null;
     }
-    this.rconGuard.delete(key);
+    this.rconGuesses.ok(key);
     console.log(`rcon from player ${c.id} "${c.name}": ${command}`);
     const out = [];
     this.con.exec(command, { print: (s) => out.push(s), source: 'rcon', client: c, budget: RCON_BUDGET });
@@ -444,11 +470,28 @@ export class Host {
     return g.clients.find((c) => c && c.joined && c.name === q) || null;
   }
 
+  // sv_password for a joining session: '' to let it in, else why not (its HELLO is refused).
+  // Guesses are limited like rcon's.
+  admit(c, password) {
+    const pw = this.joinPassword.value;
+    if (!pw) return '';
+    const key = addressKey(c.session && c.session.address);
+    const refused = this.joinGuesses.refused(key);
+    if (refused) return 'too many bad passwords, try later';
+    if (password !== pw) {
+      this.joinGuesses.fail(key);
+      console.log(`bad sv_password from ${key || 'a session'}`);
+      return password ? 'bad password' : 'this server has a password';
+    }
+    this.joinGuesses.ok(key);
+    return '';
+  }
+
   // What the start menu shows before joining (connect.json).
   info() {
     return {
       hostname: this.hostname.value, map: this.game.mapName, mode: this.modeName, players: this.game.playerCount,
-      maxPlayers: MAX_PLAYERS,
+      maxPlayers: MAX_PLAYERS, password: !!this.joinPassword.value,
     };
   }
 

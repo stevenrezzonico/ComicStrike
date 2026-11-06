@@ -2523,7 +2523,7 @@ async function joinServer(team) {
     await net.connect(roomCode);
     if (roomCode && roomRcon) net.localRcon = roomRcon; // our room: its console is ours, like practice
   }
-  const welcome = await net.join(team, primary, secondary, cv.name.value);
+  const welcome = await net.join(team, primary, secondary, cv.name.value, cv.password.value);
   selfId = welcome.playerId;
   menu.busy(`Loading ${welcome.map}...`);
   await loadMap(welcome.map);

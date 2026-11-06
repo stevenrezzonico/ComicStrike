@@ -518,10 +518,22 @@ export class Menu {
     }
     const s = this.server;
     body.append(el('p', 'menu-server', s
-      ? `${s.hostname} · ${s.map} · ${MODE_LABELS[s.mode] || s.mode || 'Competitive'} · ${s.players}/${s.maxPlayers} players`
+      ? `${s.hostname} · ${s.map} · ${MODE_LABELS[s.mode] || s.mode || 'Competitive'} · ${s.players}/${s.maxPlayers} players` +
+        (s.password ? ' · password' : '')
       : 'No server answered.'));
     if (!s) return;
     if (!hasWebTransport()) return body.append(el('p', 'menu-hint', NO_WEBTRANSPORT));
+    if (s.password) { // sv_password: the `password` cvar goes in the HELLO
+      const row = el('label', 'menu-row');
+      const pw = el('input');
+      pw.type = 'password';
+      pw.autocomplete = 'off';
+      pw.maxLength = 63;
+      pw.value = this.cv.password.value;
+      pw.addEventListener('input', () => this.cv.password.set(pw.value));
+      row.append(el('span', '', 'Password'), pw);
+      body.append(row);
+    }
     this.renderTeam(body, (team) => this.onPlay(team), true);
   }
 

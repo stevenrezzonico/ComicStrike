@@ -129,6 +129,7 @@ export function createConsole(print) {
   add('cl_interp_ratio', 2, 'Other players are drawn this many ticks behind', 1, 2);
   add('name', 'player', 'Your name');
   add('rcon_password', '', 'Password for rcon commands', undefined, undefined, FCVAR_PROTECTED);
+  add('password', '', 'The server\'s password (its sv_password), sent on joining', undefined, undefined, FCVAR_PROTECTED);
   // Our guns' looks (client/models/looks.js; Settings, Weapons).
   for (const name of LOOK_GUNS) {
     const looks = looksOf(name).map((k, i) => `${i} ${LOOKS[k].label}`).join(', ');

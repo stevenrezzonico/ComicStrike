@@ -310,8 +310,8 @@ export class NetClient {
     return w;
   }
 
-  // Sends HELLO until the server answers. Resolves with the WELCOME.
-  async join(team, primary, secondary, name) {
+  // Sends HELLO until the server answers. Resolves with the WELCOME. password: sv_password.
+  async join(team, primary, secondary, name, password = '') {
     const start = performance.now();
     let sentAt = -Infinity;
     while (!this.welcome) {
@@ -320,7 +320,7 @@ export class NetClient {
       const now = performance.now();
       if (now - start > JOIN_TIMEOUT_MS) throw new Error('no answer from the server');
       if (now - sentAt >= HELLO_RETRY_MS) {
-        this.send(writeHello(this.nextWriter(), team, primary, secondary, name, this.room));
+        this.send(writeHello(this.nextWriter(), team, primary, secondary, name, this.room, password));
         sentAt = now;
       }
       await new Promise((r) => setTimeout(r, JOIN_POLL_MS));

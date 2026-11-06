@@ -62,7 +62,7 @@ import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 import { MAX_MOVERS } from './doors.js';
 
-export const PROTOCOL_VERSION = 19;
+export const PROTOCOL_VERSION = 20;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -234,7 +234,8 @@ export class Reader {
 
 // --- Handshake ---------------------------------------------------------------
 
-export function writeHello(w, team, primary, secondary, name, room = '') {
+// password: the server's sv_password as the player typed it ('' none).
+export function writeHello(w, team, primary, secondary, name, room = '', password = '') {
   w.reset();
   w.u8v(C2S_HELLO);
   w.u16v(PROTOCOL_VERSION);
@@ -243,12 +244,14 @@ export function writeHello(w, team, primary, secondary, name, room = '') {
   w.u8v(secondary);
   w.str(name);
   w.str(room);
+  w.str(password);
   return w.view();
 }
 
 export function readHello(r) { // after the type byte
-  const h = { version: r.u16v(), team: r.u8v(), primary: r.u8v(), secondary: r.u8v(), name: r.str(), room: '' };
+  const h = { version: r.u16v(), team: r.u8v(), primary: r.u8v(), secondary: r.u8v(), name: r.str(), room: '', password: '' };
   if (r.remaining > 0) h.room = r.str();
+  if (r.remaining > 0) h.password = r.str();
   return h;
 }
 
