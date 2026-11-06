@@ -53,9 +53,10 @@ export class Rooms {
 
   // A new room for `bytes` (the map file). opts: fileName, mode (a GAME_MODES name),
   // players (bot_quota fill: bots make up the rest), difficulty, armoury (mp_armoury_entities),
+  // listed (in list(): anyone on the server sees it; else only those with the code),
   // address (the uploader's).
   // Returns the room; throws a RoomError when refused.
-  create(bytes, { fileName = '', mode = 'competitive', players = 0, difficulty = 1, armoury = true, address = '' } = {}) {
+  create(bytes, { fileName = '', mode = 'competitive', players = 0, difficulty = 1, armoury = true, listed = false, address = '' } = {}) {
     const L = this.limits, now = this.now(), key = addressKey(address);
     if (bytes.byteLength > L.bytes) throw new RoomError(`the map is too large (${L.bytes >> 20} MB at most)`, 413);
     this.check(address);
@@ -99,7 +100,7 @@ export class Rooms {
       throw new RoomError(`the map does not run: ${err.message}`);
     }
     const room = {
-      code, name, host, rcon, bytes, gzip: null, address: key, mode,
+      code, name, host, rcon, bytes, gzip: null, address: key, mode, listed: !!listed,
       players: Math.max(0, Math.min(20, players | 0)), // bots come in with the first player
       created: now, emptySince: null, joined: false,
       epoch: performance.now(), // the room's own tick clock (server/main.js)
@@ -147,6 +148,11 @@ export class Rooms {
       room.joined = true;
       if (room.players) room.host.con.exec(`bot_quota_mode fill; bot_quota ${room.players}`);
     }
+  }
+
+  // The listed rooms as the Play panel shows them (/rooms.json): each one's connect.json.
+  list() {
+    return [...this.rooms.values()].filter((r) => r.listed).map((r) => ({ room: r.code, ...r.host.info() }));
   }
 
   humans(room) {

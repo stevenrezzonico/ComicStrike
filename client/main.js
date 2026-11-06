@@ -2489,6 +2489,10 @@ menu.onLeaveRoom = () => {
   setRoom('');
   menu.fetchServer();
 };
+menu.onRoom = (code) => { // a listed room picked in the Play panel
+  setRoom(code);
+  menu.fetchServer();
+};
 menu.room = roomCode;
 menu.onPractice = (map, team, opts) => run(() => startPractice(map, team, opts));
 menu.onPracticeOwn = (map, team, opts) => run(() => startPractice(map, team, { ...opts, own: true }));
@@ -2611,13 +2615,13 @@ const OWN_MAP_MAX = 24 << 20; // the server's room limit (server/rooms.js ROOM_L
 // Host for friends: uploads our own map to the server, which runs a room on it (held in
 // its memory only, server/rooms.js), then joins it. The page's address becomes the
 // invite link.
-async function hostRoom(map, team, { mode = 'competitive', players = 0, difficulty = 1, armoury = true } = {}) {
+async function hostRoom(map, team, { mode = 'competitive', players = 0, difficulty = 1, armoury = true, listed = false } = {}) {
   const bytes = ownMaps.get(map);
   if (!bytes) throw new Error('pick a map file first');
   if (playing) leaveGame();
   menu.busy(`Uploading ${map}...`);
   const q = new URLSearchParams({ file: `${map}.bsp`, mode, players: String(players), difficulty: String(difficulty),
-    armoury: armoury ? '1' : '0' });
+    armoury: armoury ? '1' : '0', listed: listed ? '1' : '0' });
   const res = await fetch(`/rooms?${q}`, { method: 'POST', body: bytes, headers: { 'content-type': 'application/octet-stream' } });
   const out = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(out.error || `the upload failed (HTTP ${res.status})`);

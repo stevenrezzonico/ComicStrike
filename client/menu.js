@@ -232,6 +232,7 @@ export class Menu {
     this.demoPlayers = 0; // the demo: no bots unless asked for (targets)
     this.practiceDifficulty = 1;
     this.practiceArmoury = true; // the map's own weapons laid out (armoury_entity, the fy_ maps)
+    this.roomListed = false; // Host for friends: the room in everyone's Play panel (else the link only)
     this.panel = ''; // open panel: '', 'play', 'practice', 'own', 'recordings', 'team', 'settings'
     this.room = ''; // a room's code (a hosted map, server/rooms.js): Play joins it
     this.roomGone = false; // the room's code did not answer (it closed)
@@ -240,6 +241,7 @@ export class Menu {
     this.tab = 0;
     this.shownAt = 0;
     this.server = null; // connect.json, once fetched
+    this.listedRooms = []; // rooms.json: the server's listed rooms
     this.maps = null; // maps.json
     this.practiceMap = '';
     this.practiceTeam = 2;
@@ -265,6 +267,7 @@ export class Menu {
     this.onMapFile = (_file) => Promise.resolve(''); // a map file picked: its name, or rejects with why not
     this.onHost = (_map, _team, _opts) => {};
     this.onLeaveRoom = () => {};
+    this.onRoom = (_code) => {}; // a listed room picked
     this.onWindow = (_open) => {}; // the Video tab's window opened or closed
     // Recordings (client/demo.js): the saved demos, and what to do with one.
     this.onDemoList = () => Promise.resolve([]); // [{ name, map, seconds, size, at }]
@@ -424,6 +427,7 @@ export class Menu {
       ]);
       this.server = server;
       this.maps = maps;
+      this.listedRooms = await fetch('/rooms.json').then((r) => r.json()).catch(() => []);
     } catch {
       this.server = null;
       this.maps = this.maps || [];
@@ -535,6 +539,18 @@ export class Menu {
       body.append(row);
     }
     this.renderTeam(body, (team) => this.onPlay(team), true);
+    if (this.room && !this.roomGone) return;
+    const listed = this.listedRooms || [];
+    if (!listed.length) return;
+    body.append(el('h2', '', 'Rooms'));
+    body.append(el('p', 'menu-hint', 'Games on maps players brought, listed by their hosts.'));
+    for (const r of listed) {
+      const row = el('div', 'menu-row menu-demo');
+      row.append(el('span', '', r.map), el('span', 'menu-hint',
+        `${MODE_LABELS[r.mode] || r.mode} · ${r.players}/${r.maxPlayers} players${r.password ? ' · password' : ''}`),
+      button('Join', () => this.onRoom(r.room)));
+      body.append(row);
+    }
   }
 
   // Team buttons, CS:GO jointeam numbers: 1 spectators (online only), 2 Terrorists,
@@ -708,7 +724,12 @@ export class Menu {
         this.practiceArmoury = v;
       }, 'Weapons some maps leave lying at the spawns (the fy_ maps), back every round');
     }
-    const opts = { mode, players, difficulty: this.practiceDifficulty, armoury: this.practiceArmoury };
+    if (own) {
+      choice('Room', [[false, 'Link only'], [true, 'Listed']], this.roomListed, (v) => {
+        this.roomListed = v;
+      }, 'Host for friends: a listed room shows in Play Online for anyone on this server; else only the link brings players in');
+    }
+    const opts = { mode, players, difficulty: this.practiceDifficulty, armoury: this.practiceArmoury, listed: this.roomListed };
     if (!own) {
       body.append(button('Start', () => this.onPractice(this.practiceMap, this.practiceTeam, opts), 'menu-go'));
       return;

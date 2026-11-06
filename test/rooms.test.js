@@ -191,3 +191,20 @@ Deno.test('the upload cooldown list is pruned', () => {
   rooms.sweep();
   assert.equal(rooms.lastUpload.size, 0);
 });
+
+Deno.test('listed rooms: only those their host listed, each with its connect.json', () => {
+  const { rooms, clock } = makeRooms();
+  const open = quietly(() => rooms.create(PLAYGROUND, { fileName: 'open.bsp', mode: 'deathmatch', listed: true, address: '1.2.3.4' }));
+  clock.ms += 60000;
+  quietly(() => rooms.create(PLAYGROUND, { fileName: 'hidden.bsp', address: '5.6.7.8' }));
+  const list = rooms.list();
+  assert.equal(list.length, 1, 'the link-only room is not listed');
+  assert.equal(list[0].room, open.code);
+  assert.equal(list[0].map, 'open');
+  assert.equal(list[0].mode, 'deathmatch');
+  assert.equal(list[0].password, false);
+  open.host.con.exec('sv_password x'); // its uploader's rcon
+  assert.equal(rooms.list()[0].password, true);
+  quietly(() => rooms.close(open, 'bye'));
+  assert.deepEqual(rooms.list(), []);
+});

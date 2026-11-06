@@ -41,4 +41,3 @@ The smaller findings of the second audit, each checked in code:
   15, quorum 0.6, `sv_vote_creation_timer` 150, `sv_vote_failure_timer` 300,
   `sv_vote_issue_*_allowed`, `sv_vote_kick_ban_duration` 15 min); `S2C_VOTE` (a protocol
   bump); a client `#vote` panel with F1 / F2 binds.
-- `GET /rooms.json` listing public rooms, with a public checkbox on the upload.

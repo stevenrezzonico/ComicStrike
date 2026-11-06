@@ -244,7 +244,7 @@ async function createRoom(req, url, address) {
     const q = url.searchParams;
     const room = await rooms.upload((max, ms) => readBody(req, max, ms), {
       fileName: q.get('file') || '', mode: q.get('mode') || 'competitive', players: +q.get('players') || 0,
-      difficulty: +(q.get('difficulty') ?? 1), armoury: q.get('armoury') !== '0', address,
+      difficulty: +(q.get('difficulty') ?? 1), armoury: q.get('armoury') !== '0', listed: q.get('listed') === '1', address,
     });
     return Response.json({ code: room.code, map: room.name, rcon: room.rcon, names: room.host.con.catalog() });
   } catch (err) {
@@ -283,6 +283,7 @@ Deno.serve({ hostname: BIND, port: HTTP_PORT, ...tls, onListen: () => {} }, asyn
     }
     return createRoom(req, url, info.remoteAddr.hostname);
   }
+  if (pathname === '/rooms.json') return Response.json(rooms.list());
   const roomMap = /^\/rooms\/([a-z0-9]+)\/map\.bsp$/.exec(pathname);
   if (roomMap) {
     const room = rooms.get(roomMap[1]);
