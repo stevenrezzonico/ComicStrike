@@ -95,6 +95,7 @@ export class Gamepads {
     this.connected = pad !== null;
     if (!pad) {
       if (this.sticks) this.input.setStick(this.sticks = 0);
+      for (let i = 0; i < 16; i++) if (this.down[i]) { this.down[i] = 0; this.onKey(PAD_NAMES[i], false); } // a dropped pad lets go
       return;
     }
     const s = readPad(pad, this.state);

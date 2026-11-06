@@ -158,7 +158,11 @@ const netGraph = new NetGraph();
 const renderer = new Renderer(canvas, cv.r_lowlatency.bool);
 // A lost context (a GPU reset, a driver update) takes every buffer, texture and program with it,
 // and nothing here rebuilds them: say so, rather than leave a frozen picture.
-canvas.addEventListener('webglcontextlost', () => leaveGame('The graphics card was reset (WebGL context lost): reload the page to play again.'));
+let glLost = false;
+canvas.addEventListener('webglcontextlost', () => {
+  glLost = true;
+  leaveGame('The graphics card was reset (WebGL context lost): reload the page to play again.');
+});
 const decals = new Decals(renderer.gl);
 const debris = new Debris(renderer.gl);
 const players = new Players(renderer.gl);
@@ -2164,7 +2168,7 @@ for (const [cmd, help] of [['callvote', 'callvote kick <name> | changelevel <map
   ['vote', 'vote option1 (yes, F1) | option2 (no, F2): answers the vote running']]) {
   con.command(cmd, (a, ctx) => {
     if (!net || net.playback) return con.out(ctx, `${cmd}: only on a server`);
-    net.command(a.join(' '));
+    net.command(a.map((x, i) => (i ? quote(x) : x)).join(' ')); // the server parses it again
   }, help);
 }
 con.hint('callvote', (i, a) => {
@@ -2172,7 +2176,7 @@ con.hint('callvote', (i, a) => {
   if (i === 2 && a[1] === 'kick' && net) { // a name several share goes by #id (the server refuses it)
     const ns = net.names;
     return ns.flatMap((n, id) => (!n || id === selfId || /^BOT /.test(n) ? []
-      : ns.indexOf(n) !== ns.lastIndexOf(n) ? [[`#${id}`, n]] : [n]));
+      : ns.indexOf(n) !== ns.lastIndexOf(n) || /[";]|\/\//.test(n) ? [[`#${id}`, n]] : [n]));
   }
   if (i === 2 && a[1] === 'changelevel') return mapNames || [];
   return [];
@@ -2305,9 +2309,13 @@ con.command('record', (a, ctx) => {
   if (!net || net.playback || !synced) return con.out(ctx, 'record: in a game (online or practice)');
   if (useOwn || net.room) return con.out(ctx, 'record: a room or your own map cannot be played back (the demo keeps only the map name)');
   if (recorder) return con.out(ctx, `record: already recording ${recorder.name} (stop first)`);
-  recorder = net.recorder = new DemoRecorder(net, name, currentMap, performance.now());
-  con.out(ctx, `recording ${name} (stop ends it)`);
-  hud.flash(`Recording ${name}`, 1500, performance.now());
+  listDemos().catch(() => []).then((list) => {
+    if (list.some((d) => d.name === name)) return con.out(ctx, `record: a demo named ${name} exists (demo_delete ${name} first, or pick another name)`);
+    if (recorder || !net || net.playback) return;
+    recorder = net.recorder = new DemoRecorder(net, name, currentMap, performance.now());
+    con.out(ctx, `recording ${name} (stop ends it)`);
+    hud.flash(`Recording ${name}`, 1500, performance.now());
+  });
 }, 'record <name>: records this game as a demo, until stop (playback <name> plays it)');
 con.command('stop', (_a, ctx) => {
   if (!recorder) return con.out(ctx, 'stop: not recording');
@@ -2532,7 +2540,7 @@ async function run(action) {
   try {
     await action();
   } catch (err) {
-    leaveGame(`Could not start: ${err.message || err}`);
+    if (!glLost) leaveGame(`Could not start: ${err.message || err}`); // else its message stands
   }
   starting = false;
 }
@@ -2720,6 +2728,7 @@ async function startSandbox(map, team) {
 }
 
 function enterGame() {
+  if (glLost) return; // the context went during the load: leaveGame said so
   playing = true;
   backdrop = false;
   // Where it settled last time on this window size (else full), judged after the first seconds.

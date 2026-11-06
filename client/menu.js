@@ -611,7 +611,7 @@ export class Menu {
           `${d.map} · ${Math.floor(d.seconds / 60)}:${String(Math.floor(d.seconds % 60)).padStart(2, '0')} · ` +
           `${(d.size / 1048576).toFixed(1)} MB · ${when}`),
         button('Play', () => this.onDemoPlay(d.name)), button('Download', () => this.onDemoDownload(d.name)),
-        button('Delete', () => this.onDemoDelete(d.name).then(() => this.render())));
+        button('Delete', () => confirm(`Delete the recording ${d.name}?`) && this.onDemoDelete(d.name).then(() => this.render())));
         list.append(row);
       }
     }, (err) => {

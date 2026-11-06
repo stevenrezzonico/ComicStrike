@@ -3,6 +3,7 @@
 // value and help, then each command's arguments). Runs commands on a shared Console.
 // The window moves by its title bar and resizes from its corner; where it was is kept in
 // localStorage (a convenience: the console works the same without it).
+import { quote } from '../shared/cvars.js';
 
 const MAX_LINES = 400;
 const HISTORY = 50;
@@ -209,7 +210,7 @@ export class ConsoleWindow {
   accept(i) {
     const it = this.items[i];
     if (!it) return;
-    const text = /[\s;"]/.test(it.text) ? `"${it.text}"` : it.text;
+    const text = /[\s;"]/.test(it.text) ? quote(it.text) : it.text;
     this.input.value = `${this.input.value.slice(0, this.start)}${text} `;
     this.input.focus();
     this.refresh();

@@ -152,10 +152,13 @@ export class TouchButtons {
     const b = this.held.get(id);
     if (!b) return;
     this.held.delete(id);
-    let still = false; // another finger on the same button keeps it
-    for (const o of this.held.values()) if (o === b) still = true;
+    let same = false, still = false; // a finger on a button with the same command keeps it (FIRE and the left FIRE)
+    for (const o of this.held.values()) {
+      if (o === b) same = true;
+      if (o.cmd === b.cmd) still = true;
+    }
+    if (!same) this.show(b, false);
     if (still) return;
-    this.show(b, false);
     const r = releaseOf(b.cmd);
     if (r) this.exec(r);
   }

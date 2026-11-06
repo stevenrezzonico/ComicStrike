@@ -88,6 +88,14 @@ Deno.test('touch buttons: presses and releases, a toggle, two fingers on one but
   tb.release(2);
   assert.deepEqual(ran, ['+attack', '+attack', releaseOf('+attack')]);
   assert.deepEqual(shown, ['fire:1', 'fire:1', 'fire:0']);
+  // The left FIRE runs the same +attack: lifting it while FIRE is held keeps firing.
+  tb.press(7, at('fire').cx, at('fire').cy);
+  tb.press(8, at('fire2').cx, at('fire2').cy);
+  ran.length = 0;
+  tb.release(8);
+  assert.deepEqual(ran, []);
+  tb.release(7);
+  assert.deepEqual(ran, [releaseOf('+attack')]);
   // A tap-only button runs its command once, nothing on lifting.
   ran.length = 0;
   const next = tb.press(3, at('next').cx, at('next').cy);

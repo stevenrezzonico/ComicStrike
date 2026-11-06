@@ -68,8 +68,10 @@ Deno.test('gamepad: buttons press and release once each, triggers with hysteresi
   g.poll([pad], 1 / 60, 3016);
   assert.deepEqual(keys, []);
   assert.equal(g.pressed(), 'x_button');
+  keys.length = 0;
   g.poll([null], 1 / 60, 3032);
   assert.ok(!g.connected);
+  assert.deepEqual(keys, ['x_button:0']); // a pad that drops lets go of what it held
 });
 
 Deno.test('gamepad: the left stick moves in eight directions, walking on a small pull', () => {
