@@ -11,7 +11,7 @@ import {
   entityModelIndex, faceNumEdges, facePlane, faceSide, faceTexinfo, faceVertex, modelFirstFace, modelNumFaces,
   parseVec3,
 } from './bsp.js';
-import { hullFits, traceHull, Trace, HULL_DUCK, ENT_LADDER, ENT_NONE, NONSOLID } from './trace.js';
+import { hullFits, traceHull, Trace, HULL_DUCK, ENT_LADDER, ENT_NONE, solidBrushEntity } from './trace.js';
 
 export const LAYERS = 6; // floor heights kept per cell (the highest go first when full)
 // The most cells a grid may have: 8 times the largest map here (cs_siege's navigation,
@@ -32,7 +32,6 @@ export const MOVE_LADDER = 2; // up a ladder
 const FLOOR_NZ = 0.7; // walkable slope (sv_walkable_normal)
 const TEX_SPECIAL = 1; // texinfo flag: sky / water
 const MERGE = 16; // floors closer than this are one
-const NOT_FLOOR = new Set([...NONSOLID, 'func_ladder', 'func_water']); // what players pass through, and volumes
 const DOORS = new Set(['func_door', 'func_door_rotating']);
 const SEEDS = new Set(['info_player_start', 'info_player_deathmatch', 'hostage_entity']);
 
@@ -336,8 +335,8 @@ export function floorFaces(bsp) {
   const models = [[0, 0, 0, 0]];
   const o = new Float32Array(3);
   for (const e of bsp.entities) {
-    const m = entityModelIndex(e), cls = e.classname || '';
-    if (m <= 0 || !cls.startsWith('func_') || NOT_FLOOR.has(cls)) continue;
+    const m = entityModelIndex(e);
+    if (m <= 0 || !solidBrushEntity(e)) continue; // what the collision world holds solid
     parseVec3(e.origin, o);
     models.push([m, o[0], o[1], o[2]]);
   }

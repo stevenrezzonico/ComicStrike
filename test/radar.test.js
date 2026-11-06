@@ -4,11 +4,13 @@ import { IN_ATTACK } from '../shared/constants.js';
 import { CollisionWorld, hullFits, HULL_STAND } from '../shared/trace.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { Overview } from '../shared/overview.js';
+import { floorFaces } from '../shared/floorgrid.js';
+import { box } from '../shared/bspwriter.js';
 import { Grenades, FX_SMOKE, SMOKE_GROW } from '../shared/grenades.js';
 import { PHASE_LIVE } from '../shared/economy.js';
 import { Writer, E_ANIM, ANIM_SPOTTED_T, ANIM_SPOTTED_CT } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
-import { mapOrNull, joinClient, runInputs, teleport } from './harness.js';
+import { mapOrNull, joinClient, runInputs, teleport, yard } from './harness.js';
 
 import { BombSites } from '../shared/bomb.js';
 
@@ -167,4 +169,16 @@ Deno.test('overview: built in its worker, handed over as data that places and le
   assert.deepEqual(o.levels[0].rgba, original.levels[0].rgba, 'the same pixels');
   for (const z of [-100, 0, 200, 1000]) assert.equal(o.levelOf(z), original.levelOf(z));
   assert.equal(o.px(123), original.px(123));
+});
+
+Deno.test('floor grid: its floors are what the collision world holds solid', () => {
+  // A not-solid conveyor (spawnflags 2) was a floor to the bots and the radar while players
+  // fell through it; a momentary_door, solid, was none.
+  const bsp = yard((map) => {
+    map.brushEntity({ classname: 'func_conveyor', spawnflags: '2' }, [box(-400, -100, 200, -200, 100, 216, 'steel')]);
+    map.brushEntity({ classname: 'momentary_door', targetname: 'd' }, [box(200, -100, 300, 400, 100, 316, 'steel')]);
+  });
+  const tops = floorFaces(bsp).map((f) => f.d / f.nz);
+  assert.ok(!tops.some((z) => Math.abs(z - 216) < 1), 'the conveyor players fall through is no floor');
+  assert.ok(tops.some((z) => Math.abs(z - 316) < 1), 'the momentary door is one');
 });

@@ -223,8 +223,7 @@ export class CollisionWorld {
       let kind;
       if (cls === 'func_ladder') kind = ENT_LADDER;
       else if (cls === 'func_water') kind = ENT_WATER;
-      else if (cls === 'func_conveyor' && (+(e.spawnflags || 0) & SF_CONVEYOR_NOTSOLID)) return;
-      else if ((cls.startsWith('func_') && !NONSOLID.has(cls)) || MOVERS.has(cls)) kind = ENT_SOLID;
+      else if (solidBrushEntity(e)) kind = ENT_SOLID;
       else return;
       parseVec3(e.origin, origin);
       const i = add(kind, m, origin, cls === 'func_conveyor' ? conveyorPush(e) : null, bspEntity);
@@ -241,6 +240,17 @@ const MOVERS = new Set(['momentary_door', 'momentary_rot_button']);
 
 const SF_CONVEYOR_VISUAL = 1; // scrolls but does not push
 const SF_CONVEYOR_NOTSOLID = 2;
+
+// A brush entity that stops players and holds them up (a collision ENT_SOLID): func_* but the
+// passable ones (NONSOLID), the volumes and a not-solid conveyor, plus the momentary movers.
+// The floor grid (bots, the radar) asks the same: it had its own test, where a not-solid
+// conveyor was a floor and a momentary_door none.
+export function solidBrushEntity(e) {
+  const cls = e.classname || '';
+  if (cls === 'func_ladder' || cls === 'func_water') return false;
+  if (cls === 'func_conveyor' && (+(e.spawnflags || 0) & SF_CONVEYOR_NOTSOLID)) return false;
+  return (cls.startsWith('func_') && !NONSOLID.has(cls)) || MOVERS.has(cls);
+}
 
 // Base velocity of a func_conveyor: SetMovedir(angles) * speed (HL SDK CFuncConveyor).
 function conveyorPush(e) {
