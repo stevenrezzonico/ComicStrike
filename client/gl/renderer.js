@@ -25,6 +25,11 @@ import { clock } from '../clock.js';
 // The light that prints fully lit: this share of the map's lit lightmap texels is at or
 // below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
 const LIGHT_FULL_SHARE = 0.75;
+
+// Doubles go to WebGL through these and the *fv forms: as arguments of a call they were each
+// a new heap number (~25 a frame; the per-frame rules in CLAUDE.md, Phase 15b).
+const U1 = new Float32Array(1), U2 = new Float32Array(2), U3 = new Float32Array(3);
+
 const COMPOSITE_UNIFORMS = ['u_albedo', 'u_depth', 'u_ink', 'u_res', 'u_gscale', 'u_line', 'u_dot', 'u_zoom',
   'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft', 'u_dead', 'u_fog', 'u_sight', 'u_inkaa'];
 const INK_UNIFORMS = ['u_normal', 'u_depth', 'u_line', 'u_gscale', 'u_zoom'];
@@ -269,10 +274,14 @@ export class Renderer {
     const gl = this.gl;
     gl.useProgram(w.p);
     gl.uniformMatrix4fv(w.loc.u_viewProj, false, viewProj);
-    gl.uniform1f(w.loc.u_time, time);
-    gl.uniform1f(w.loc.u_zoom, this.zoom);
-    gl.uniform1f(w.loc.u_dot, this.dotSize());
-    gl.uniform1f(w.loc.u_lightFull, mapLight.full);
+    U1[0] = time;
+    gl.uniform1fv(w.loc.u_time, U1);
+    U1[0] = this.zoom;
+    gl.uniform1fv(w.loc.u_zoom, U1);
+    U1[0] = this.dotSize();
+    gl.uniform1fv(w.loc.u_dot, U1);
+    U1[0] = mapLight.full;
+    gl.uniform1fv(w.loc.u_lightFull, U1);
     gl.uniform1i(w.loc.u_lightmap, 0);
     gl.uniform4uiv(w.loc.u_broken, this.broken);
     gl.uniform1ui(w.loc.u_moverBase, this.movers ? this.movers.slotBase : 255);
@@ -292,7 +301,8 @@ export class Renderer {
     gl.uniform3fv(s.loc.u_horizon, this.horizon);
     gl.uniform3fv(s.loc.u_sun, this.sun);
     gl.uniform4fv(s.loc.u_backdrop, this.backdrop);
-    gl.uniform1f(s.loc.u_time, time);
+    U1[0] = time;
+    gl.uniform1fv(s.loc.u_time, U1);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.cloudTex);
     gl.uniform1i(s.loc.u_clouds, 1);
@@ -408,9 +418,12 @@ export class Renderer {
       gl.useProgram(ink.p);
       gl.uniform1i(k.u_normal, 1);
       gl.uniform1i(k.u_depth, 2);
-      gl.uniform1f(k.u_line, line);
-      gl.uniform1f(k.u_gscale, gscale);
-      gl.uniform1f(k.u_zoom, this.zoom);
+      U1[0] = line;
+      gl.uniform1fv(k.u_line, U1);
+      U1[0] = gscale;
+      gl.uniform1fv(k.u_gscale, U1);
+      U1[0] = this.zoom;
+      gl.uniform1fv(k.u_zoom, U1);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
     this.timer.mark(PASS.PRINT);
@@ -425,16 +438,27 @@ export class Renderer {
     gl.uniform1i(c.u_depth, 2);
     gl.uniform1i(c.u_ink, 3);
     gl.uniform2f(c.u_res, this.canvas.width, h);
-    gl.uniform2f(c.u_gscale, gscale, this.gbuf.height / h);
-    gl.uniform1f(c.u_line, line);
-    gl.uniform1f(c.u_dot, this.dotSize());
-    gl.uniform1f(c.u_zoom, this.zoom);
-    gl.uniform1f(c.u_bands, st.bands);
-    gl.uniform1f(c.u_lift, st.lift);
+    U2[0] = gscale;
+    U2[1] = this.gbuf.height / h;
+    gl.uniform2fv(c.u_gscale, U2);
+    U1[0] = line;
+    gl.uniform1fv(c.u_line, U1);
+    U1[0] = this.dotSize();
+    gl.uniform1fv(c.u_dot, U1);
+    U1[0] = this.zoom;
+    gl.uniform1fv(c.u_zoom, U1);
+    U1[0] = st.bands;
+    gl.uniform1fv(c.u_bands, U1);
+    U1[0] = st.lift;
+    gl.uniform1fv(c.u_lift, U1);
     gl.uniform1i(c.u_style, st.comic ? 1 : 0);
-    gl.uniform3f(c.u_calm, this.canvas.width / 2, h / 2, st.calm);
+    U3[0] = this.canvas.width / 2;
+    U3[1] = h / 2;
+    U3[2] = st.calm;
+    gl.uniform3fv(c.u_calm, U3);
     gl.uniform1f(c.u_soft, st.soft ? 1 : 0);
-    gl.uniform1f(c.u_dead, st.dead);
+    U1[0] = st.dead;
+    gl.uniform1fv(c.u_dead, U1);
     if (st.liquid !== this.fogLiquid || st.smoke !== this.fogSmoke) {
       this.fogLiquid = st.liquid;
       this.fogSmoke = st.smoke;

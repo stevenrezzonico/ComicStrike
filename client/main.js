@@ -18,7 +18,7 @@ import {
   TICK_RATE, TICK_DT, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED, IN_SCORE,
   IN_ATTACK, IN_ATTACK2, IN_USE, IN_RELOAD, IN_DROP,
 } from '../shared/constants.js';
-import { CollisionWorld, Trace, traceHull, pointContents, setBody, clearBodies, HULL_POINT } from '../shared/trace.js';
+import { CollisionWorld, Trace, traceHull, pointContents, pointContentsP, setBody, clearBodies, HULL_POINT } from '../shared/trace.js';
 import {
   eyeOffset, PS_ORIGIN, PS_VEL, PS_FLAGS, PS_SIZE, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, noclipMove, touched, touchedCount,
 } from '../shared/pmove.js';
@@ -248,7 +248,7 @@ sounds.occluded = (x, y, z) => world !== null &&
 // wades (de_aztec's river); else the texture under the feet (CS:GO material letters).
 // The liquid look-ups go to the sounds and models only on a map with a liquid (loadMap).
 const liquid = (x, y, z) => isLiquid(pointContents(world, x, y, z));
-const liquidAtP = (p) => liquid(p[0], p[1], p[2]);
+const liquidAtP = (p) => isLiquid(pointContentsP(world, p));
 const scape = new SoundScape(sounds, (x, y, z) => {
   if (!world) return 'hard';
   if (world.liquids && liquid(x, y, z + 2)) return liquid(x, y, z + 24) ? 'wade' : 'water';
@@ -480,7 +480,7 @@ const targets = new HitTargets(MAX_PLAYERS);
 const NO_ITEMS = new Items(), NO_HOSTAGES = new Hostages();
 onNewGame(() => {
   interp.fill(0);
-  scape.others(interp, -1, 0, null); // forgets the last game's shot counts (else phantom shots on the new map's first frame)
+  scape.others(interp, -1, 0); // forgets the last game's shot counts (else phantom shots on the new map's first frame)
   players.update(interp, 0, -1, false);
   models.update(interp, 0, -1, 0, null, false);
   models.setItems(NO_ITEMS);
@@ -613,7 +613,7 @@ async function loadMap(name) {
   tracers.warm(CLIP_ALL);
   step('warm');
   world = CollisionWorld.fromBSP(bsp);
-  scape.liquidAt = world.liquids ? liquid : null;
+  scape.liquidAt = world.liquids ? liquidAtP : null;
   models.liquidAt = world.liquids ? liquidAtP : null;
   world.surfaces = new SurfaceMap(bsp);
   world.bombSites = new BombSites(bsp);
@@ -1877,7 +1877,7 @@ function draw(now, dt) {
   // The camera in water (or slime, lava): the print fogs over (Renderer.style.liquid), the
   // world wobbles (GoldSrc's underwater field of view, as Xash3D draws it) and the hearing
   // is muffled.
-  const medium = world !== null && world.liquids ? pointContents(world, eye[0], eye[1], eye[2]) : CONTENTS_EMPTY;
+  const medium = world !== null && world.liquids ? pointContentsP(world, eye) : CONTENTS_EMPTY;
   const under = isLiquid(medium) ? medium : 0;
   renderer.style.liquid = under;
   sounds.setUnder(under !== 0);
@@ -1895,7 +1895,7 @@ function draw(now, dt) {
   sounds.listen(eye, cam);
   scape.effects(fx.cur, dt);
   if (net && synced) {
-    scape.others(interp, selfId, dt, rowFeet);
+    scape.others(interp, selfId, dt);
   }
   const practicing = !net || demo();
   practice.showTrails = practicing && cv.sv_grenade_trajectory.bool;

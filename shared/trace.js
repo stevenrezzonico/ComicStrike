@@ -440,6 +440,19 @@ export function toLocal(e, x, y, z, out) {
   }
   return out;
 }
+// The same with the point in an array (`out` may be `p`).
+function toLocalP(e, p, out) {
+  const x = p[0] - e.ox, y = p[1] - e.oy, z = p[2] - e.oz;
+  const R = e.rot;
+  if (!R) {
+    out[0] = x; out[1] = y; out[2] = z;
+  } else {
+    out[0] = x * R[0] + y * R[1] + z * R[2];
+    out[1] = x * R[3] + y * R[4] + z * R[5];
+    out[2] = x * R[6] + y * R[7] + z * R[8];
+  }
+  return out;
+}
 
 const ls = new Float64Array(3), le = new Float64Array(3);
 
@@ -651,22 +664,34 @@ export function tracePlayerA(world, hull, A, out) {
 
 // Contents of a point in one entity's hull (CONTENTS_*).
 export function entityContents(world, entIndex, hull, x, y, z) {
+  CPT[0] = x; CPT[1] = y; CPT[2] = z;
+  return entityContentsP(world, entIndex, hull, CPT);
+}
+// The *P forms take the point in an array (p[0..2]): no doubles cross their calls, which
+// Maglev boxes when it does not inline them (a sound's water check was ~2 heap numbers a
+// player a frame, pmove's three a command).
+const CPT = new Float64Array(3);
+function entityContentsP(world, entIndex, hull, p) {
   const e = world.ents[entIndex];
-  toLocal(e, x, y, z, ls);
+  toLocalP(e, p, ls);
   bind(world);
   return hullPointContents(e.heads[hull], ls, 0);
 }
 
 // Point contents for water checks: world hull 0 plus func_water volumes (their liquid).
 export function pointContents(world, x, y, z) {
-  const c = entityContents(world, 0, HULL_POINT, x, y, z);
+  CPT[0] = x; CPT[1] = y; CPT[2] = z;
+  return pointContentsP(world, CPT);
+}
+export function pointContentsP(world, p) {
+  const c = entityContentsP(world, 0, HULL_POINT, p);
   if (c !== CONTENTS_EMPTY) return c;
-  const ents = world.ents, water = world.water, B = world.bounds;
+  const ents = world.ents, water = world.water, B = world.bounds, x = p[0], y = p[1], z = p[2];
   for (let k = 0; k < water.length; k++) {
     const i = water[k], j = i * 6;
     // Bounds first: a crafted map's volumes can each hold a deep tree.
     if (x < B[j] || x > B[j + 3] || y < B[j + 1] || y > B[j + 4] || z < B[j + 2] || z > B[j + 5]) continue;
-    if (ents[i].kind === ENT_WATER && entityContents(world, i, HULL_POINT, x, y, z) !== CONTENTS_EMPTY) {
+    if (ents[i].kind === ENT_WATER && entityContentsP(world, i, HULL_POINT, p) !== CONTENTS_EMPTY) {
       return ents[i].liquid;
     }
   }

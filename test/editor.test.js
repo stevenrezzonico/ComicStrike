@@ -312,3 +312,17 @@ Deno.test('editor: one preview compile at a time, and one more after it when edi
   await tick();
   assert.equal(jobs.length, 2, 'and none after it');
 });
+
+Deno.test('editor: the undo history keeps at most UNDO_CHARS of projects, the newest first', async () => {
+  const { UNDO_CHARS } = await import('../client/editor/editor.js');
+  // Steps of 6 MB of JSON: 64 MB holds 10 of them (it held 200: a decompiled map's edits).
+  const ed = await bareEditor({ undoStack: [], redoStack: [], project: { pad: 'x'.repeat(6 << 20), n: 0 } });
+  for (let i = 0; i < 14; i++) {
+    ed.project.n = i;
+    ed.commit();
+  }
+  const chars = ed.undoStack.reduce((a, s) => a + s.length, 0);
+  assert.ok(chars <= UNDO_CHARS, `${chars} characters kept`);
+  assert.equal(ed.undoStack.length, 10);
+  assert.equal(JSON.parse(ed.undoStack.at(-1)).n, 13, 'the newest step kept');
+});

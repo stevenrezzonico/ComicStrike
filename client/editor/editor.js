@@ -24,6 +24,20 @@ const STALE_KEY = 'comicstrike.editor.stale'; // set while the autosave is older
 const CLIP_KEY = 'comicstrike.editor.clipboard';
 const LAYOUT_KEY = 'comicstrike.editor.layout';
 const UNDO = 200;
+// Characters of JSON the undo (and redo) steps hold together, the newest kept: a decompiled
+// Valve map (~1 MB a step) held ~200 MB after 200 edits, a 16 MB project tens of MB an edit.
+export const UNDO_CHARS = 64 << 20;
+// Drops a history's oldest steps past UNDO steps or UNDO_CHARS characters (the newest stays).
+function trimHistory(stack) {
+  let chars = 0;
+  for (let i = stack.length - 1; i >= 0; i--) {
+    chars += stack[i].length;
+    if (i < stack.length - 1 && (chars > UNDO_CHARS || stack.length - i > UNDO)) {
+      stack.splice(0, i + 1);
+      return;
+    }
+  }
+}
 const GRIDS = [1, 2, 4, 8, 16, 32, 64, 128, 256];
 const SLOTS = [['all', 'All'], ['top', 'Top'], ['side', 'Sides'], ['bottom', 'Bottom']];
 const PREVIEW_DELAY = 400; // ms after the last change before the 3D view is rebuilt
@@ -207,7 +221,7 @@ export class Editor {
   // Remembers the project as it is, before a change (undo).
   commit() {
     this.undoStack.push(JSON.stringify(this.project));
-    if (this.undoStack.length > UNDO) this.undoStack.shift();
+    trimHistory(this.undoStack);
     this.redoStack = [];
   }
 
@@ -231,6 +245,7 @@ export class Editor {
     const from = redo ? this.redoStack : this.undoStack, to = redo ? this.undoStack : this.redoStack;
     if (!from.length) return;
     to.push(JSON.stringify(this.project));
+    trimHistory(to);
     this.project = JSON.parse(from.pop());
     this.selection = new Set([...this.selection].filter((id) => this.byId(id)));
     this.changed();

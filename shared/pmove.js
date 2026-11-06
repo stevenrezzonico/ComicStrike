@@ -9,7 +9,7 @@ import {
 } from './constants.js';
 import { CONTENTS_EMPTY, CONTENTS_WATER, CONTENTS_SLIME, isLiquid } from './bsp.js';
 import {
-  Trace, tracePlayerA, traceEntity, entityContents, pointContents, hullFits,
+  Trace, tracePlayerA, traceEntity, entityContents, pointContentsP, hullFits,
   HULL_STAND, HULL_DUCK, HULL_POINT, HULL_MINS, HULL_MAXS, ENT_LADDER, ENT_BODY_BASE, BODY_FIELDS,
 } from './trace.js';
 
@@ -163,6 +163,8 @@ const M = {
   fx: -0, fy: -0, fz: -0, rx: -0, ry: -0, // forward (with pitch), right (flat)
   fmove: -0, smove: -0, maxspeed: -0,
   cvx: -0, cvy: -0, cvz: -0, // clipVelocity's result
+  ovx: -0, ovy: -0, ovz: -0, // tryPlayerMove's velocity at the start of a bump (clipVelocity's input)
+  timeLeft: -0, allFraction: -0, // tryPlayerMove's (fields: as loop-carried locals Maglev boxed them)
   wdx: -0, wdy: -0, wspeed: -0, // flatWish's
 };
 for (const k in M) M[k] = 0;
@@ -179,11 +181,11 @@ export const touched = new Int32Array(4);
 export let touchedCount = 0;
 const planes = new Float64Array(MAX_CLIP_PLANES * 3);
 
-// The world, the brush entities and the other players (`world.bodies`).
-function trace(sx, sy, sz, ex, ey, ez) {
-  const a = TR; // (the ends as an array: see trace.js, traceHullA)
-  a[0] = sx; a[1] = sy; a[2] = sz; a[3] = ex; a[4] = ey; a[5] = ez;
-  return tracePlayerA(W, hull, a, tr);
+// The world, the brush entities and the other players (`world.bodies`), from TR[0..2] to
+// TR[3..5], which the callers write (the ends as an array: see trace.js, traceHullA; as six
+// arguments of a call Maglev does not inline they were six heap numbers a trace).
+function trace() {
+  return tracePlayerA(W, hull, TR, tr);
 }
 
 function checkVelocity() {
@@ -196,9 +198,10 @@ function checkVelocity() {
   M.vz = M.vz > m ? m : M.vz < -m ? -m : M.vz;
 }
 
-// Clips (vx,vy,vz)-style input against a plane; result in cvx/cvy/cvz.
-function clipVelocity(ix, iy, iz, nx, ny, nz, overbounce) {
-  const backoff = (ix * nx + iy * ny + iz * nz) * overbounce;
+// Clips (M.ovx, M.ovy, M.ovz) against plane k of `planes` (overbounce 1); result in cvx/cvy/cvz.
+function clipVelocity(k) {
+  const ix = M.ovx, iy = M.ovy, iz = M.ovz, nx = planes[k * 3], ny = planes[k * 3 + 1], nz = planes[k * 3 + 2];
+  const backoff = ix * nx + iy * ny + iz * nz;
   M.cvx = ix - nx * backoff;
   M.cvy = iy - ny * backoff;
   M.cvz = iz - nz * backoff;
@@ -214,22 +217,24 @@ function clipVelocity(ix, iy, iz, nx, ny, nz, overbounce) {
 function tryPlayerMove() {
   let blocked = 0;
   let numPlanes = 0;
-  let ovx = M.vx, ovy = M.vy, ovz = M.vz; // velocity at the start of the current bump
+  M.ovx = M.vx; M.ovy = M.vy; M.ovz = M.vz; // velocity at the start of the current bump
   const pvx = M.vx, pvy = M.vy, pvz = M.vz; // primal velocity
-  let allFraction = 0;
-  let timeLeft = M.dt;
+  M.allFraction = 0;
+  M.timeLeft = M.dt;
 
   for (let bump = 0; bump < 4; bump++) {
     if (M.vx === 0 && M.vy === 0 && M.vz === 0) break;
-    trace(M.ox, M.oy, M.oz, M.ox + M.vx * timeLeft, M.oy + M.vy * timeLeft, M.oz + M.vz * timeLeft);
-    allFraction += tr.fraction;
+    TR[0] = M.ox; TR[1] = M.oy; TR[2] = M.oz;
+    TR[3] = M.ox + M.vx * M.timeLeft; TR[4] = M.oy + M.vy * M.timeLeft; TR[5] = M.oz + M.vz * M.timeLeft;
+    trace();
+    M.allFraction += tr.fraction;
     if (tr.allsolid) {
       M.vx = M.vy = M.vz = 0;
       return 4;
     }
     if (tr.fraction > 0) {
       M.ox = tr.endx; M.oy = tr.endy; M.oz = tr.endz;
-      ovx = M.vx; ovy = M.vy; ovz = M.vz;
+      M.ovx = M.vx; M.ovy = M.vy; M.ovz = M.vz;
       numPlanes = 0;
     }
     if (tr.fraction === 1) break;
@@ -237,7 +242,7 @@ function tryPlayerMove() {
 
     if (tr.nz > MOVE.standableNormal) blocked |= 1; // floor
     if (tr.nz === 0) blocked |= 2; // step / wall
-    timeLeft -= timeLeft * tr.fraction;
+    M.timeLeft -= M.timeLeft * tr.fraction;
 
     if (numPlanes >= MAX_CLIP_PLANES) {
       M.vx = M.vy = M.vz = 0;
@@ -249,12 +254,12 @@ function tryPlayerMove() {
     numPlanes++;
 
     if (numPlanes === 1 && !onGround && !(flags & FL_ONLADDER)) {
-      clipVelocity(ovx, ovy, ovz, tr.nx, tr.ny, tr.nz, 1);
-      M.vx = ovx = M.cvx; M.vy = ovy = M.cvy; M.vz = ovz = M.cvz;
+      clipVelocity(0); // (the plane just hit: tr's normal)
+      M.vx = M.ovx = M.cvx; M.vy = M.ovy = M.cvy; M.vz = M.ovz = M.cvz;
     } else {
       let i = 0;
       for (; i < numPlanes; i++) {
-        clipVelocity(ovx, ovy, ovz, planes[i * 3], planes[i * 3 + 1], planes[i * 3 + 2], 1);
+        clipVelocity(i);
         M.vx = M.cvx; M.vy = M.cvy; M.vz = M.cvz;
         let j = 0;
         for (; j < numPlanes; j++) {
@@ -283,7 +288,7 @@ function tryPlayerMove() {
       }
     }
   }
-  if (allFraction === 0) M.vx = M.vy = M.vz = 0;
+  if (M.allFraction === 0) M.vx = M.vy = M.vz = 0;
   return blocked;
 }
 
@@ -345,9 +350,10 @@ function flatWish() {
 }
 
 function stayOnGround() {
-  trace(M.ox, M.oy, M.oz, M.ox, M.oy, M.oz + 2);
-  const sz = tr.endz;
-  trace(M.ox, M.oy, sz, M.ox, M.oy, M.oz - MOVE.stepsize);
+  TR[0] = TR[3] = M.ox; TR[1] = TR[4] = M.oy; TR[2] = M.oz; TR[5] = M.oz + 2;
+  trace();
+  TR[0] = TR[3] = M.ox; TR[1] = TR[4] = M.oy; TR[2] = tr.endz; TR[5] = M.oz - MOVE.stepsize;
+  trace();
   if (tr.fraction > 0 && tr.fraction < 1 && !tr.startsolid && tr.nz >= MOVE.standableNormal) {
     if (Math.abs(M.oz - tr.endz) > 0.5 / 32) {
       M.ox = tr.endx; M.oy = tr.endy; M.oz = tr.endz;
@@ -366,13 +372,15 @@ function stepMove() {
   M.ox = sx; M.oy = sy; M.oz = sz;
   M.vx = svx; M.vy = svy; M.vz = svz;
 
-  trace(M.ox, M.oy, M.oz, M.ox, M.oy, M.oz + MOVE.stepsize + DIST_EPSILON);
+  TR[0] = TR[3] = M.ox; TR[1] = TR[4] = M.oy; TR[2] = M.oz; TR[5] = M.oz + MOVE.stepsize + DIST_EPSILON;
+  trace();
   if (!tr.startsolid && !tr.allsolid) {
     M.ox = tr.endx; M.oy = tr.endy; M.oz = tr.endz;
   }
   tryPlayerMove();
 
-  trace(M.ox, M.oy, M.oz, M.ox, M.oy, M.oz - MOVE.stepsize - DIST_EPSILON);
+  TR[0] = TR[3] = M.ox; TR[1] = TR[4] = M.oy; TR[2] = M.oz; TR[5] = M.oz - MOVE.stepsize - DIST_EPSILON;
+  trace();
   if (!tr.startsolid && !tr.allsolid) {
     M.ox = tr.endx; M.oy = tr.endy; M.oz = tr.endz;
   }
@@ -405,7 +413,8 @@ function walkMove() {
     M.vx = M.bvx; M.vy = M.bvy; M.vz = M.bvz; // net zero once base velocity is pulled back out
     return;
   }
-  trace(M.ox, M.oy, M.oz, M.ox + M.vx * M.dt, M.oy + M.vy * M.dt, M.oz);
+  TR[0] = M.ox; TR[1] = M.oy; TR[2] = TR[5] = M.oz; TR[3] = M.ox + M.vx * M.dt; TR[4] = M.oy + M.vy * M.dt;
+  trace();
   if (tr.fraction === 1) {
     M.ox = tr.endx; M.oy = tr.endy; M.oz = tr.endz;
     stayOnGround();
@@ -422,18 +431,22 @@ function airMove() {
   tryPlayerMove();
 }
 
+const WP = new Float64Array(3); // checkWater's points (pointContentsP: no doubles cross the call)
 function checkWater() {
   waterLevel = 0;
   if (!W.liquids) return;
-  const feet = M.oz + HULL_MINS[hull * 3 + 2] + 1;
-  const c = pointContents(W, M.ox, M.oy, feet);
+  WP[0] = M.ox;
+  WP[1] = M.oy;
+  WP[2] = M.oz + HULL_MINS[hull * 3 + 2] + 1; // the feet
+  const c = pointContentsP(W, WP);
   if (!isLiquid(c)) return;
   waterLevel = 1;
   waterType = c;
-  if (!isLiquid(pointContents(W, M.ox, M.oy, M.oz))) return;
+  WP[2] = M.oz;
+  if (!isLiquid(pointContentsP(W, WP))) return;
   waterLevel = 2;
-  const eye = M.oz + (hull === HULL_DUCK ? VIEW_DUCK - 18 : VIEW_STAND - 36);
-  if (isLiquid(pointContents(W, M.ox, M.oy, eye))) waterLevel = 3;
+  WP[2] = M.oz + (hull === HULL_DUCK ? VIEW_DUCK - 18 : VIEW_STAND - 36); // the eyes
+  if (isLiquid(pointContentsP(W, WP))) waterLevel = 3;
 }
 
 function waterMove(buttons) {
@@ -481,10 +494,12 @@ function checkWaterJump() {
   if (M.vx * fx + M.vy * fy < 0) return; // backing into the water
   const own = hull, low = M.oz + 8, top = M.oz + HULL_MAXS[own * 3 + 2];
   hull = HULL_POINT;
-  trace(M.ox, M.oy, low, M.ox + 24 * fx, M.oy + 24 * fy, low);
+  TR[0] = M.ox; TR[1] = M.oy; TR[2] = TR[5] = low; TR[3] = M.ox + 24 * fx; TR[4] = M.oy + 24 * fy;
+  trace();
   if (tr.fraction < 1 && Math.abs(tr.nz) < 0.1) {
     const nx = tr.nx, ny = tr.ny;
-    trace(M.ox, M.oy, top, M.ox + 24 * fx, M.oy + 24 * fy, top);
+    TR[0] = M.ox; TR[1] = M.oy; TR[2] = TR[5] = top; TR[3] = M.ox + 24 * fx; TR[4] = M.oy + 24 * fy;
+    trace();
     if (tr.fraction === 1) {
       M.vx = -MOVE.waterJumpPush * nx;
       M.vy = -MOVE.waterJumpPush * ny;
@@ -600,7 +615,8 @@ function categorizePosition() {
     setGround(false);
     return;
   }
-  trace(M.ox, M.oy, M.oz, M.ox, M.oy, M.oz - 2);
+  TR[0] = TR[3] = M.ox; TR[1] = TR[4] = M.oy; TR[2] = M.oz; TR[5] = M.oz - 2;
+  trace();
   const grounded = tr.fraction < 1 && !tr.startsolid && tr.nz >= MOVE.standableNormal;
   setGround(grounded, tr.ent);
   // Snap onto the ground we found (GoldSrc PM_CatagorizePosition), so idle players

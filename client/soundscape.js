@@ -18,6 +18,7 @@ import {
   ANIM_SILENCED,
 } from '../shared/protocol.js';
 import { FX_FIRE, FX_DECOY, fireRadius } from '../shared/grenades.js';
+import { feetOffset } from '../shared/hitgroups.js';
 
 const STEP_SPEED = 140; // faster than this on the ground is audible (CS:GO walks at ~130)
 const STEP_LENGTH = 72; // units between footsteps
@@ -46,12 +47,13 @@ const pitchOf = (id) => 0.92 + (id % 5) * 0.04;
 
 export class SoundScape {
   // sounds: Sounds; surfaceKind(x, y, z): 'soft' | 'metal' | 'wood' | 'hard' under a point,
-  // 'water' | 'wade' in water at the feet / above the knees; liquidAt(x, y, z): in water,
+  // 'water' | 'wade' in water at the feet / above the knees; liquidAt(p): in water at p[0..2],
   // slime or lava (null on a map with none: no look-ups).
   constructor(sounds, surfaceKind, liquidAt) {
     this.s = sounds;
     this.surfaceKind = surfaceKind;
     this.liquidAt = liquidAt;
+    this.pt = new Float64Array(3); // a point for liquidAt
     this.ownStep = 0;
     this.ownLevel = 0; // our water level last tick
     this.ownUnder = 0; // ticks with our eyes under water
@@ -133,8 +135,8 @@ export class SoundScape {
 
   // Other players from interpolated rows (E_* layout): shots, reloads, footsteps, a splash
   // going into or out of water.
-  // feet(row): feet height of a row; dt: frame seconds.
-  others(rows, selfId, dt, feet) {
+  // dt: frame seconds.
+  others(rows, selfId, dt) {
     const s = this.s;
     for (let id = 0; id < MAX_PLAYERS; id++) {
       const r = id * E_FIELDS;
@@ -145,7 +147,7 @@ export class SoundScape {
         continue;
       }
       const x = rows[r + E_X], y = rows[r + E_Y], z = rows[r + E_Z], w = WEAPONS[rows[r + E_WEAPON]];
-      const shots = rows[r + E_SHOTS], anim = rows[r + E_ANIM];
+      const shots = rows[r + E_SHOTS], anim = rows[r + E_ANIM], flags = rows[r + E_FLAGS] | 0; // (an int: a double argument is boxed)
       if (this.shots[id] >= 0 && shots !== this.shots[id] && w) {
         if (w.gun) {
           s.gun(gunProfile(w, (anim & ANIM_SILENCED) !== 0), x, y, z + 28, 1, pitchOf(rows[r + E_WEAPON]));
@@ -158,14 +160,14 @@ export class SoundScape {
       }
       this.anim[id] = anim;
       // Footsteps from how fast they move.
-      if (!Number.isNaN(this.px[id]) && dt > 0) {
-        const dx = x - this.px[id], dy = y - this.py[id], d = Math.sqrt(dx * dx + dy * dy); // (hypot allocates)
-        const flags = rows[r + E_FLAGS];
+      const px = this.px[id];
+      if (px === px && dt > 0) { // (not NaN: Number.isNaN is a call, its argument boxed)
+        const dx = x - px, dy = y - this.py[id], d = Math.sqrt(dx * dx + dy * dy); // (hypot allocates)
         if (d / dt > STEP_SPEED && d < 64 && (flags & FL_ONGROUND) && !(flags & FL_DUCKING)) {
           this.stepDist[id] += d;
           if (this.stepDist[id] >= STEP_LENGTH) {
             this.stepDist[id] = 0;
-            const fz = feet(rows, r), ex = x - s.lx, ey = y - s.ly, ez = fz - s.lz;
+            const fz = z - feetOffset(flags), ex = x - s.lx, ey = y - s.ly, ez = fz - s.lz;
             if (ex * ex + ey * ey + ez * ez <= STEP_RANGE * STEP_RANGE) s.step(this.surfaceKind(x, y, fz), x, y, fz); // the surface look-up is the cost
           }
         }
@@ -173,7 +175,11 @@ export class SoundScape {
       // Into or out of a liquid (at the feet): a splash, not on a teleport.
       const lx = x - s.lx, ly = y - s.ly;
       if (this.liquidAt !== null && lx * lx + ly * ly < WATER_RANGE * WATER_RANGE) {
-        const fz = feet(rows, r), wet = this.liquidAt(x, y, fz + 2) ? 1 : 0;
+        const fz = z - feetOffset(flags), pt = this.pt;
+        pt[0] = x;
+        pt[1] = y;
+        pt[2] = fz + 2;
+        const wet = this.liquidAt(pt) ? 1 : 0;
         const near = Math.abs(x - this.px[id]) + Math.abs(y - this.py[id]) < 64; // (NaN: false)
         if (near && this.wet[id] >= 0 && wet !== this.wet[id]) s.water(wet ? 'in' : 'out', x, y, fz);
         this.wet[id] = wet;
