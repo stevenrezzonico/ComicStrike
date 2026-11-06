@@ -34,8 +34,8 @@ import {
   BombSites, PLANT_TIME, DEFUSE_TIME, DEFUSE_TIME_KIT, C4_TIMER, BOMB_DROPPED, BOMB_PLANTED, BOMB_DEFUSED,
   BOMB_EXPLODED,
 } from '../shared/bomb.js';
-import { Breakables, EXPLODE_RANGE, blastDamage } from '../shared/breakables.js';
-import { Doors, MapLogic, Killables, MAX_MOVERS, BLAST } from '../shared/doors.js';
+import { EXPLODE_RANGE, blastDamage } from '../shared/breakables.js';
+import { mapEntities, MAX_MOVERS, BLAST } from '../shared/doors.js';
 import { HitTargets, feetOffset } from '../shared/hitgroups.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import {
@@ -625,11 +625,8 @@ async function loadMap(name) {
     if (e.data.error) console.warn(`overview: ${e.data.error}`);
     else radar.setMap(Overview.from(e.data.data), sites);
   };
-  breakables = new Breakables(bsp, world);
+  ({ breakables, doors, killables, logic: mapLogic } = mapEntities(bsp, world));
   breakableColors = mesh.breakableColors;
-  doors = new Doors(bsp, world, breakables.count);
-  killables = new Killables(bsp, world, breakables.count + doors.count);
-  mapLogic = new MapLogic(bsp, doors, world, breakables, killables);
   mapLogic.onBreak = (slot, act) => { // the sandbox: a breakable fired by name
     if (breakables.setBroken(world, slot, true)) brokeSlot(slot, act);
   };

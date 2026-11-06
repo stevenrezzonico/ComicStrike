@@ -18,6 +18,7 @@ import { TICK_RATE } from './constants.js';
 import { CONTENTS_EMPTY, entityModelIndex, parseVec3 } from './bsp.js';
 import { ENT_NONE, ENT_SOLID, HULL_STAND, HULL_DUCK, rotationFromAngles, entityContents, hullFits } from './trace.js';
 import { PS_ORIGIN, PS_FLAGS, PS_GROUNDENT, FL_DUCKING } from './pmove.js';
+import { Breakables, breakableEntities } from './breakables.js';
 
 export const MAX_MOVERS = 64;
 
@@ -108,6 +109,26 @@ export function killableEntities(bsp, slotBase) {
       !movers.has(bi) && !e.classname.startsWith('trigger_') && slotBase + out.length < 255) out.push(bi);
   });
   return out;
+}
+
+// The map's brush entities in one numbering, the world vertex slots (byte 39) and the
+// snapshot's mask: the breakables from 1, then the movers, then what a killtarget removes.
+// The mesh numbers its vertices by entitySlots (before any collision world exists), the
+// server and the client's sandbox build their state with mapEntities: both from this one
+// order, which was written three times (client/mapmesh.js, client/main.js, server/game.js).
+export function entitySlots(bsp) {
+  const slots = new Map(); // bsp.entities index -> slot
+  const b = breakableEntities(bsp), m = moverEntities(bsp, b.length), base = b.length + m.length;
+  b.forEach((bi, k) => slots.set(bi, k + 1));
+  m.forEach((bi, k) => slots.set(bi, b.length + 1 + k));
+  killableEntities(bsp, base).forEach((bi, k) => slots.set(bi, base + 1 + k));
+  return slots;
+}
+export function mapEntities(bsp, world) {
+  const breakables = new Breakables(bsp, world);
+  const doors = new Doors(bsp, world, breakables.count);
+  const killables = new Killables(bsp, world, breakables.count + doors.count);
+  return { breakables, doors, killables, logic: new MapLogic(bsp, doors, world, breakables, killables) };
 }
 
 // The brush entities a killtarget can remove that are neither movers nor breakables.

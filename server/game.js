@@ -13,9 +13,9 @@ import {
   CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, pointContents, HULL_STAND, HULL_POINT,
 } from '../shared/trace.js';
 import {
-  Breakables, EXPLODE_RANGE, blastDamage, SF_BREAK_TOUCH, SF_BREAK_PRESSURE, MAT_UNBREAKABLE_GLASS,
+  EXPLODE_RANGE, blastDamage, SF_BREAK_TOUCH, SF_BREAK_PRESSURE, MAT_UNBREAKABLE_GLASS,
 } from '../shared/breakables.js';
-import { Doors, MapLogic, Killables, BLAST } from '../shared/doors.js';
+import { mapEntities, BLAST } from '../shared/doors.js';
 import { touched, touchedCount } from '../shared/pmove.js';
 import {
   PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, PS_GROUNDENT, PS_WATERLEVEL, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, AIR_TICKS,
@@ -287,11 +287,8 @@ export class Game {
     this.bsp = bsp;
     this.world = CollisionWorld.fromBSP(bsp);
     this.world.surfaces = new SurfaceMap(bsp);
-    this.breakables = new Breakables(bsp, this.world);
+    ({ breakables: this.breakables, doors: this.doors, killables: this.killables, logic: this.logic } = mapEntities(bsp, this.world));
     this.pressed = new Map(); // breakable slot stood on -> the tick it breaks (SF_BREAK_PRESSURE)
-    this.doors = new Doors(bsp, this.world, this.breakables.count);
-    this.killables = new Killables(bsp, this.world, this.breakables.count + this.doors.count);
-    this.logic = new MapLogic(bsp, this.doors, this.world, this.breakables, this.killables);
     this.logic.onBreak = (slot, act) => this.breakSlot(slot, act);
     this.doorBodies = []; // living players' PlayerStates, refilled every tick
     this.placeTrace = new Trace(); // bot_place

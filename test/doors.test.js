@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { IN_FORWARD, IN_USE, TICK_RATE } from '../shared/constants.js';
 import { CollisionWorld, Trace, traceHull, hullFits, HULL_STAND, HULL_POINT } from '../shared/trace.js';
 import { Breakables } from '../shared/breakables.js';
-import { Doors, MOVER_ROTATING } from '../shared/doors.js';
+import { Doors, MOVER_ROTATING, entitySlots, mapEntities } from '../shared/doors.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
 import { ShotList } from '../shared/weapons.js';
 import { Player, runCommand, TEAM_CT } from '../shared/player.js';
@@ -231,3 +231,21 @@ Deno.test({ name: 'doors: the client predicts walking through an opening door bi
   assert.equal(a.own.lastCmd, a.tick - 1);
   assert.deepEqual(a.c.player.psBytes, a.player.psBytes, 'prediction diverged');
 } });
+
+Deno.test('doors: the mesh numbers the brush entities as the simulations do', () => {
+  // entitySlots (the world vertex slots) and mapEntities (breakables, movers, killables) must
+  // agree slot for slot, or a broken crate hides the wrong part of the map.
+  let checked = 0;
+  for (const name of ['de_playground', 'de_inkwell', 'cs_polaris', 'de_dust2', 'cs_assault', 'de_torn', 'cs_siege', 'de_survivor']) {
+    const bsp = loadMap(name);
+    if (!bsp) continue;
+    const world = CollisionWorld.fromBSP(bsp);
+    const slots = entitySlots(bsp), { breakables: b, doors: d, killables: k } = mapEntities(bsp, world);
+    assert.equal(slots.size, b.count + d.count + k.count, name);
+    for (let s = 1; s <= b.count; s++) if (b.ent[s] >= 0) assert.equal(slots.get(world.ents[b.ent[s]].bspEntity), s, `${name} breakable ${s}`);
+    for (let i = 0; i < d.count; i++) assert.equal(slots.get(d.bspEntity[i]), d.slotBase + 1 + i, `${name} mover ${i}`);
+    for (let i = 0; i < k.count; i++) assert.equal(slots.get(k.bspEntity[i]), k.slot(i), `${name} killable ${i}`);
+    checked += slots.size;
+  }
+  assert.ok(checked > 10, `slots checked: ${checked}`);
+});

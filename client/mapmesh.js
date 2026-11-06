@@ -8,8 +8,8 @@ import {
   faceTexinfo, faceNumEdges, facePlane, faceSide, faceLightOfs, faceStyle,
   faceVertex, modelFirstFace, modelNumFaces, entityModelIndex, parseVec3, BSP_LIMITS,
 } from '../shared/bsp.js';
-import { breakableEntities, MAX_BREAKABLES } from '../shared/breakables.js';
-import { moverEntities, killableEntities } from '../shared/doors.js';
+import { MAX_BREAKABLES } from '../shared/breakables.js';
+import { entitySlots } from '../shared/doors.js';
 import { classify, isSkipped, MAT, FLAG_ALPHATEST, FLAG_ENTITY } from '../shared/materials.js';
 import { withOriginalColor } from './texcolors.js';
 
@@ -76,12 +76,7 @@ export class Atlas {
 function collectModels(bsp) {
   const out = [{ model: 0, ox: 0, oy: 0, oz: 0, alpha: 255, slot: 0, speed: 0 }];
   const origin = new Float32Array(3);
-  const breakables = breakableEntities(bsp);
-  const slotOf = new Map(breakables.map((bi, k) => [bi, k + 1]));
-  const movers = moverEntities(bsp, breakables.length);
-  movers.forEach((bi, k) => slotOf.set(bi, breakables.length + 1 + k));
-  const base = breakables.length + movers.length; // then what a killtarget can remove
-  killableEntities(bsp, base).forEach((bi, k) => slotOf.set(bi, base + 1 + k));
+  const slotOf = entitySlots(bsp);
   for (let ei = 0; ei < bsp.entities.length; ei++) {
     const e = bsp.entities[ei];
     const m = entityModelIndex(e);
