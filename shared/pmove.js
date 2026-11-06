@@ -9,7 +9,7 @@ import {
 } from './constants.js';
 import { CONTENTS_EMPTY, CONTENTS_WATER, CONTENTS_SLIME, isLiquid } from './bsp.js';
 import {
-  Trace, tracePlayerA, traceEntity, entityContents, pointContentsP, hullFits,
+  Trace, tracePlayerA, traceHullA, traceEntity, entityContents, pointContentsP,
   HULL_STAND, HULL_DUCK, HULL_POINT, HULL_MINS, HULL_MAXS, ENT_LADDER, ENT_BODY_BASE, BODY_FIELDS,
 } from './trace.js';
 
@@ -165,6 +165,9 @@ const M = {
   cvx: -0, cvy: -0, cvz: -0, // clipVelocity's result
   ovx: -0, ovy: -0, ovz: -0, // tryPlayerMove's velocity at the start of a bump (clipVelocity's input)
   timeLeft: -0, allFraction: -0, // tryPlayerMove's (fields: as loop-carried locals Maglev boxed them)
+  // Values a branch picks, as fields (a ?: or an if-assigned local of doubles is a new heap
+  // number in Maglev): flatWish's forward, friction's drop, playerMove's speed scale, duck's rise.
+  nfx: -0, nfy: -0, drop: -0, scale: -0, rise: -0,
   wdx: -0, wdy: -0, wspeed: -0, // flatWish's
 };
 for (const k in M) M[k] = 0;
@@ -181,6 +184,13 @@ export const touched = new Int32Array(4);
 export let touchedCount = 0;
 const planes = new Float64Array(MAX_CLIP_PLANES * 3);
 
+// True if the hull `h` fits at TR[0..2] (= TR[3..5]): hullFits without doubles crossing the call.
+const fitTr = new Trace();
+function fitsAt(h) {
+  traceHullA(W, h, TR, fitTr);
+  return !fitTr.startsolid;
+}
+
 // The world, the brush entities and the other players (`world.bodies`), from TR[0..2] to
 // TR[3..5], which the callers write (the ends as an array: see trace.js, traceHullA; as six
 // arguments of a call Maglev does not inline they were six heap numbers a trace).
@@ -193,9 +203,9 @@ function checkVelocity() {
   if (!(M.vx === M.vx)) M.vx = 0; // NaN guard
   if (!(M.vy === M.vy)) M.vy = 0;
   if (!(M.vz === M.vz)) M.vz = 0;
-  M.vx = M.vx > m ? m : M.vx < -m ? -m : M.vx;
-  M.vy = M.vy > m ? m : M.vy < -m ? -m : M.vy;
-  M.vz = M.vz > m ? m : M.vz < -m ? -m : M.vz;
+  M.vx = Math.min(m, Math.max(-m, M.vx)); // (not NaN here: the same as the ?: chains it replaced)
+  M.vy = Math.min(m, Math.max(-m, M.vy));
+  M.vz = Math.min(m, Math.max(-m, M.vz));
 }
 
 // Clips (M.ovx, M.ovy, M.ovz) against plane k of `planes` (overbounce 1); result in cvx/cvy/cvz.
@@ -295,13 +305,9 @@ function tryPlayerMove() {
 function friction() {
   const speed = Math.sqrt(M.vx * M.vx + M.vy * M.vy + M.vz * M.vz);
   if (speed < 0.1) return;
-  let drop = 0;
-  if (onGround) {
-    const control = speed < MOVE.stopspeed ? MOVE.stopspeed : speed;
-    drop = control * MOVE.friction * M.dt;
-  }
-  let newspeed = speed - drop;
-  if (newspeed < 0) newspeed = 0;
+  M.drop = 0;
+  if (onGround) M.drop = Math.max(speed, MOVE.stopspeed) * MOVE.friction * M.dt; // (the control speed)
+  const newspeed = Math.max(0, speed - M.drop); // (speed >= 0.1: never -0)
   if (newspeed !== speed) {
     const s = newspeed / speed;
     M.vx *= s; M.vy *= s; M.vz *= s;
@@ -310,35 +316,38 @@ function friction() {
 
 // CS:GO ground acceleration: scaled by max(250, wishspeed) so slow weapons and
 // walking/ducking still accelerate briskly.
-function accelerate(wx, wy, wz, wishspeed, accel) {
+// Toward flatWish's direction (M.wdx, M.wdy, flat) at M.wspeed: the inputs are fields, as
+// arguments they were heap numbers (Maglev), and the clamps are Math.max / min (?: boxed).
+function accelerate() {
+  const wx = M.wdx, wy = M.wdy, wz = 0, wishspeed = M.wspeed, accel = MOVE.accelerate;
   const current = M.vx * wx + M.vy * wy + M.vz * wz;
   const addspeed = wishspeed - current;
   if (addspeed <= 0) return;
-  let accelspeed = accel * M.dt * (wishspeed > 250 ? wishspeed : 250);
-  if (accelspeed > addspeed) accelspeed = addspeed;
+  const accelspeed = Math.min(accel * M.dt * Math.max(wishspeed, 250), addspeed);
   M.vx += accelspeed * wx;
   M.vy += accelspeed * wy;
   M.vz += accelspeed * wz;
 }
 
-function airAccelerate(wx, wy, wishspeed, accel) {
-  const wishspd = wishspeed > MOVE.airMaxWishspeed ? MOVE.airMaxWishspeed : wishspeed;
+function airAccelerate() {
+  const wx = M.wdx, wy = M.wdy, wishspeed = M.wspeed, accel = MOVE.airaccelerate;
+  const wishspd = Math.min(wishspeed, MOVE.airMaxWishspeed);
   const current = M.vx * wx + M.vy * wy;
   const addspeed = wishspd - current;
   if (addspeed <= 0) return;
-  let accelspeed = accel * wishspeed * M.dt;
-  if (accelspeed > addspeed) accelspeed = addspeed;
+  const accelspeed = Math.min(accel * wishspeed * M.dt, addspeed);
   M.vx += accelspeed * wx;
   M.vy += accelspeed * wy;
 }
 
 // Horizontal wish direction from flattened view axes. Results in wdx/wdy/wspeed.
 function flatWish() {
-  let fxx = M.fx, fyy = M.fy;
-  const fl = Math.sqrt(fxx * fxx + fyy * fyy);
-  if (fl > 0) { fxx /= fl; fyy /= fl; }
-  const wx = fxx * M.fmove + M.rx * M.smove;
-  const wy = fyy * M.fmove + M.ry * M.smove;
+  M.nfx = M.fx;
+  M.nfy = M.fy;
+  const fl = Math.sqrt(M.nfx * M.nfx + M.nfy * M.nfy);
+  if (fl > 0) { M.nfx /= fl; M.nfy /= fl; }
+  const wx = M.nfx * M.fmove + M.rx * M.smove;
+  const wy = M.nfy * M.fmove + M.ry * M.smove;
   M.wspeed = Math.sqrt(wx * wx + wy * wy);
   if (M.wspeed > 0) {
     M.wdx = wx / M.wspeed;
@@ -404,7 +413,7 @@ function stepMove() {
 function walkMove() {
   flatWish();
   M.vz = 0;
-  accelerate(M.wdx, M.wdy, 0, M.wspeed, MOVE.accelerate);
+  accelerate();
   M.vz = 0;
 
   // Ride whatever we stand on; removed again after categorizePosition.
@@ -426,7 +435,7 @@ function walkMove() {
 
 function airMove() {
   flatWish();
-  airAccelerate(M.wdx, M.wdy, M.wspeed, MOVE.airaccelerate);
+  airAccelerate();
   M.vx += M.bvx; M.vy += M.bvy; M.vz += M.bvz;
   tryPlayerMove();
 }
@@ -670,8 +679,10 @@ function duck(buttons) {
   }
 
   if (hull === HULL_DUCK) {
-    const dz = onGround ? 18 : 18 - MOVE.crouchJumpRaise;
-    if (!hullFits(W, HULL_STAND, M.ox, M.oy, M.oz + dz)) {
+    M.rise = 18;
+    if (!onGround) M.rise = 18 - MOVE.crouchJumpRaise;
+    TR[0] = TR[3] = M.ox; TR[1] = TR[4] = M.oy; TR[2] = TR[5] = M.oz + M.rise;
+    if (!fitsAt(HULL_STAND)) {
       M.duckAmount = 1; // no room to stand
       return;
     }
@@ -679,7 +690,7 @@ function duck(buttons) {
     // cannot rise above a ducked hull, so waiting for the amount held it down, then popped it up).
     M.duckAmount = Math.max(0, M.duckAmount - M.dt * M.duckSpeed);
     hull = HULL_STAND;
-    M.oz += dz;
+    M.oz += M.rise;
   } else {
     M.duckAmount = Math.max(0, M.duckAmount - M.dt * M.duckSpeed);
   }
@@ -687,14 +698,16 @@ function duck(buttons) {
 
 // Nudges a stuck player out of solid geometry (GoldSrc PM_CheckStuck, simplified).
 function unstick() {
-  if (hullFits(W, hull, M.ox, M.oy, M.oz)) return;
+  TR[0] = TR[3] = M.ox; TR[1] = TR[4] = M.oy; TR[2] = TR[5] = M.oz;
+  if (fitsAt(hull)) return;
   for (let r = 1; r <= 18; r++) {
     for (let k = 0; k < 7; k++) {
       const dx = k === 1 ? r : k === 2 ? -r : 0;
       const dy = k === 3 ? r : k === 4 ? -r : 0;
       const dz = k === 0 ? r : k === 5 ? -r : 0;
       if (k === 6) continue;
-      if (hullFits(W, hull, M.ox + dx, M.oy + dy, M.oz + dz)) {
+      TR[0] = TR[3] = M.ox + dx; TR[1] = TR[4] = M.oy + dy; TR[2] = TR[5] = M.oz + dz;
+      if (fitsAt(hull)) {
         M.ox += dx; M.oy += dy; M.oz += dz;
         return;
       }
@@ -788,15 +801,16 @@ export function playerMove(world, ps, buttons, pitch, yaw, frametime, maxSpeed) 
 
   duck(buttons);
 
-  let scale = (buttons & IN_SPEED) ? MOVE.walkModifier : 1;
-  if (onGround && M.duckAmount > 0) scale += (MOVE.duckModifier - scale) * M.duckAmount;
+  M.scale = 1;
+  if (buttons & IN_SPEED) M.scale = MOVE.walkModifier;
+  if (onGround && M.duckAmount > 0) M.scale += (MOVE.duckModifier - M.scale) * M.duckAmount;
   // Tagging: being shot caps our speed, recovering over time.
-  let velmod = f[PS_VELMOD] + VELMOD_RECOVERY * M.dt;
-  if (velmod > 1) velmod = 1;
+  const velmod = Math.min(f[PS_VELMOD] + VELMOD_RECOVERY * M.dt, 1);
   f[PS_VELMOD] = velmod;
-  M.maxspeed = maxSpeed * scale * velmod;
+  M.maxspeed = maxSpeed * M.scale * velmod;
 
-  M.ladderCooldown = M.ladderCooldown > M.dt ? M.ladderCooldown - M.dt : 0;
+  if (M.ladderCooldown > M.dt) M.ladderCooldown -= M.dt;
+  else M.ladderCooldown = 0;
   const ladder = M.ladderCooldown > 0 ? -1 : findLadder();
   if (ladder >= 0) {
     flags = (flags | FL_ONLADDER) & ~FL_WATERJUMP;

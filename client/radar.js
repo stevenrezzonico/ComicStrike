@@ -34,10 +34,13 @@ const PT = new Float64Array(2); // place()'s world point
 const q = (v) => (v * SUB) | 0; // pixels to 16ths
 
 export class Radar {
-  constructor(canvas, cv) {
+  // el: the radar's element (#radar: its CSS draws the disc, the clip and the rims), holding
+  // the canvas the map and the markers are drawn on.
+  constructor(el, cv) {
     this.pings = [];
-    this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
+    this.el = el;
+    this.canvas = el.querySelector('canvas');
+    this.ctx = this.canvas.getContext('2d');
     this.cv = cv;
     this.fontPx = 0; // bomb site letters' font, rebuilt when the size changes
     this.font = '';
@@ -88,7 +91,7 @@ export class Radar {
     show = show && !this.hidden && this.overview !== null;
     if (show !== this.shown) {
       this.shown = show;
-      c.style.display = show ? 'block' : 'none';
+      this.el.style.display = show ? 'block' : 'none';
       this.drawnAt = -Infinity;
     }
     const css = show ? Math.max(120, Math.round(innerHeight * SIZE * this.cv.cl_hud_radar_scale.number)) : 0;
@@ -100,7 +103,7 @@ export class Radar {
     const dpr = devicePixelRatio || 1, D = Math.round(css * dpr);
     if (c.width !== D) {
       c.width = c.height = D;
-      c.style.width = c.style.height = `${css}px`;
+      this.el.style.width = this.el.style.height = `${css}px`;
       this.drawnAt = -Infinity;
     }
     // Drawn about 30 times a second (it cost ~0.3 ms a frame), every frame while the view
@@ -131,13 +134,7 @@ export class Radar {
     this.R = R;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, D, D);
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(R, R, R - dpr, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(23, 19, 15, 0.8)';
-    ctx.fill();
-    ctx.clip();
+    ctx.clearRect(0, 0, D, D); // (the dark disc under it, its round clip and the rims are CSS)
     // The overview: pixel (u, v) -> world (minX + s u, maxY - s v) -> radar.
     const s = o.scale, ox = o.minX - cx, oy = o.maxY - cy;
     ctx.setTransform(k * s * ca, -k * s * sa, k * s * sa, k * s * ca, R + k * (ox * ca - oy * sa), R - k * (ox * sa + oy * ca));
@@ -239,17 +236,6 @@ export class Radar {
     PT[0] = selfX;
     PT[1] = selfY;
     if (this.place(true)) this.arrow(team === TEAM_CT ? COLOR[TEAM_CT] : team === TEAM_T ? COLOR[TEAM_T] : '#f2ecd8');
-    ctx.restore();
-    ctx.beginPath();
-    ctx.arc(R, R, R - dpr, 0, Math.PI * 2);
-    ctx.lineWidth = dpr * 3; // an ink rim with a paper edge, like the HUD's panels
-    ctx.strokeStyle = '#17130f';
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(R, R, R - dpr * 3.5, 0, Math.PI * 2);
-    ctx.lineWidth = dpr;
-    ctx.strokeStyle = 'rgba(246, 238, 219, 0.7)';
-    ctx.stroke();
   }
 
   // Faint unless feet at z are on the level drawn.

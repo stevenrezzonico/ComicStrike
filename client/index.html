@@ -63,7 +63,13 @@
     -webkit-text-stroke: 1.5px var(--ink); paint-order: stroke fill; text-shadow: 3px 3px 0 var(--ink);
     pointer-events: none;
   }
-  #radar { position: fixed; left: 10px; top: 10px; display: none; pointer-events: none; }
+  /* The radar's disc, its clip and its rims are the page's (client/radar.js draws the map and
+     the markers alone): an ink rim with a paper edge, like the HUD's panels, over the canvas. */
+  #radar { position: fixed; left: 10px; top: 10px; display: none; pointer-events: none;
+    border-radius: 50%; overflow: hidden; background: rgba(23, 19, 15, 0.8); }
+  #radar canvas { display: block; width: 100%; height: 100%; }
+  #radar::after { content: ''; position: absolute; inset: 0; border-radius: 50%;
+    box-shadow: inset 0 0 0 2.5px #17130f, inset 0 0 0 3.5px rgba(246, 238, 219, 0.7); }
   body.nohud #radar { display: none !important; }
   #debug {
     position: fixed; left: 8px; top: calc(var(--radar, 0px) + 6px); margin: 0; color: var(--paper);
@@ -512,7 +518,7 @@
 <div id="status">loading...</div>
 <div id="scope"></div>
 <div id="flash"><div class="burst"><i class="ring r2"></i><i class="ring"></i><i class="star"></i><i class="core"></i></div><b>FLASH!</b></div>
-<canvas id="radar"></canvas>
+<div id="radar"><canvas></canvas></div>
 <pre id="debug"></pre>
 <div id="killfeed"></div>
 <div id="callouts"></div>
