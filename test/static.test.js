@@ -31,3 +31,19 @@ Deno.test('static: nothing outside them, however the path is encoded', () => {
   // Dot segments the URL parser would have removed, given raw.
   for (const p of ['/client/./gl/renderer.js', '/client/../certs/key.pem']) assert.equal(staticPath(p, DIRS, FILES), null, p);
 });
+
+// The practice worker runs server/host.js in the page: every server file it imports must be
+// in main.js's STATIC_FILES (server/votes.js was not, and practice would not have started).
+Deno.test('practice: every server file host.js imports is served', () => {
+  const main = Deno.readTextFileSync(new URL('../server/main.js', import.meta.url));
+  const seen = new Set(), todo = ['host.js'];
+  while (todo.length) {
+    const f = todo.pop();
+    if (seen.has(f)) continue;
+    seen.add(f);
+    const src = Deno.readTextFileSync(new URL(`../server/${f}`, import.meta.url));
+    for (const m of src.matchAll(/from '\.\/([\w]+\.js)'/g)) todo.push(m[1]);
+  }
+  assert.ok(seen.has('votes.js') && seen.has('game.js'));
+  for (const f of seen) assert.ok(main.includes(`'server/${f}'`), `server/${f} is not in STATIC_FILES`);
+});
