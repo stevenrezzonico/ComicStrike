@@ -594,11 +594,12 @@ Deno.test('bots: throw decoys at the other site, and fall for the other team\'s'
   t.nade = null;
   // The CT: a T decoy popping 600 units off is gunfire to hunt.
   const cf = ct.c.player.ps.f;
-  const k = g.grenades.addEffect(FX_DECOY, WEAPON_ID.decoy, t.c.id, TEAM_T, cf[0] + 600, cf[1], cf[2]);
+  const k = g.grenades.addEffect(FX_DECOY, WEAPON_ID.decoy, t.c.id, TEAM_T, cf[0] + 600, cf[1], cf[2] - 36); // on the floor
   const id = g.grenades.fxId[k], x = cf[0] + 600;
   run(TICK_RATE);
   assert.equal(ct.decoyHeard, id, 'heard it');
   assert.equal(ct.lastX, x, 'and hunts there');
+  assert.equal(ct.lastZ, cf[2], 'at standing height, where the hunt looks for a floor under it');
 });
 
 // Fires: a bot standing in one steps out of it, and paths go round one when there is a way.

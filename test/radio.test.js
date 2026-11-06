@@ -102,4 +102,18 @@ Deno.test('radio: "Follow me." sends the team bots after the speaker', () => {
   run(64 * 6);
   assert.equal(bot.order?.kind, 'follow');
   assert.ok(dist() < Math.min(before - 300, 400), `came along: ${before.toFixed(0)} -> ${dist().toFixed(0)}`);
+  // An order is from a teammate, for one life: not after he changed sides, nor after the bot respawned.
+  a.say('followme');
+  run(2);
+  a.player.team = TEAM_CT; // as a switch in freeze time leaves him: alive, on the other side
+  run(2);
+  assert.equal(bot.order?.kind, undefined, 'not after a side switch'); // (the order itself holds the game: a failure printing it took 15 GB)
+  a.player.team = TEAM_T;
+  run(64); // past the chat's flood check
+  a.say('followme');
+  run(2);
+  assert.equal(bot.order?.kind, 'follow');
+  bot.c.life++; // a new life (the round restarting)
+  run(2);
+  assert.equal(bot.order?.kind, undefined, 'not after a respawn');
 });

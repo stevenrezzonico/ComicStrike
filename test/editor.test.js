@@ -123,15 +123,16 @@ Deno.test('projects read back from JSON, cleaned of what they should not hold', 
   assert.equal(back.name, 'de_test');
   const odd = readProject({
     format: 'comicstrike-map', version: 1, name: '../evil name',
-    brushes: [{ b: [0, 0, 0, 1.4, 64, 64], tex: { top: 'not_a_texture', side: 'crate08' }, kind: 'func_nuke', keys: { 'a"b': 1, ok: 'x"y' } }],
-    points: [{ kind: 'weapon_awp', o: [0, 0, 0] }, { kind: 'hostage_entity', o: [1, 2, 3], yaw: 450 }],
+    brushes: [{ b: [0, 0, 0, 1.4, 64, 64], tex: { top: 'not_a_texture', side: 'crate08' }, kind: 'func_nuke', keys: { 'a"b': 1, ok: 'x"y' } }, { b: [0, 0, 0, 64, 64] }],
+    points: [{ kind: 'weapon_awp', o: [0, 0, 0] }, { kind: 'hostage_entity', o: [1, 2, 3], yaw: 450 }, { kind: 'light', o: [1, 2] }],
   });
   assert.equal(odd.name, '___evil_name');
   assert.deepEqual(odd.brushes[0].b, [0, 0, 0, 1, 64, 64]);
   assert.deepEqual(odd.brushes[0].tex, { top: null, bottom: null, side: 'crate08' });
   assert.equal(odd.brushes[0].kind, 'world');
   assert.deepEqual(odd.brushes[0].keys, { ok: "x'y" });
-  assert.equal(odd.points.length, 1);
+  assert.equal(odd.brushes.length, 1, 'a box with five numbers is left out');
+  assert.equal(odd.points.length, 1, 'and so is a lamp with two (and a kind the editor has no point for)');
   assert.equal(odd.points[0].yaw, 90);
   assert.throws(() => readProject('{"format":"something"}'), /not a ComicStrike map/);
 });

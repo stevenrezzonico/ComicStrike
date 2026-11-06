@@ -8,7 +8,6 @@ import { CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC, CHAT_RADIO, CHAT_MAX } f
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 
 const CHAT_LINES = 8; // lines kept in the box
-const CHAT_MS = 12000; // a line fades out after this
 const TEAM_LABEL = { [TEAM_T]: '(Terrorist)', [TEAM_CT]: '(Counter-Terrorist)' };
 
 export class Chat {
@@ -51,7 +50,7 @@ export class Chat {
     row.append(name, ` : ${text}`);
     this.box.appendChild(row);
     while (this.box.children.length > CHAT_LINES) this.box.firstChild.remove();
-    setTimeout(() => row.remove(), CHAT_MS);
+    row.addEventListener('animationend', () => row.remove()); // its 12 s fade (chatfade in index.html), held while typing
   }
 
   open(team) {

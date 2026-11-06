@@ -1658,6 +1658,7 @@ export class Game {
   // victim's own doing.
   hurtBy(c, damage, by, weapon, x, y, z) {
     if (!c || !c.alive || this.tick < c.immuneUntil) return;
+    if (by && !this.isEnemy(by, c) && by !== c) return; // friendly fire is off: a barrel a teammate shot spares us, as his HE does
     const before = c.player.health;
     applyDamage(c.player, damage, BLAST, HITGROUP_CHEST);
     this.recordDamage(by && by.joined ? by : null, c, before);

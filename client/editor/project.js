@@ -161,6 +161,7 @@ export function readProject(text) {
   }
   const texOf = (name) => (typeof name === 'string' && textureSize(out, name) ? name : null);
   for (const b of Array.isArray(p.brushes) ? p.brushes.slice(0, 4 * LIMITS.brushes) : []) {
+    if (!Array.isArray(b.b) || b.b.length < 6) continue; // a missing corner was NaN in the compiler
     const kind = KINDS[b.kind] ? b.kind : 'world';
     const tex = {};
     for (const s of ['top', 'bottom', 'side']) tex[s] = b.tex ? texOf(b.tex[s]) : null;
@@ -181,7 +182,7 @@ export function readProject(text) {
     out.brushes.push(br);
   }
   for (const q of Array.isArray(p.points) ? p.points.slice(0, 4 * LIMITS.points) : []) {
-    if (!POINTS[q.kind]) continue;
+    if (!POINTS[q.kind] || !Array.isArray(q.o) || q.o.length < 3) continue; // a lamp with no height opened the map to the void
     const pt = { id: out.nextId++, kind: q.kind, o: (q.o || []).slice(0, 3).map(coord), yaw: num(q.yaw) % 360 };
     if (POINTS[q.kind].keys) {
       pt.keys = { ...POINTS[q.kind].keys };

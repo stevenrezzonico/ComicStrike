@@ -7,12 +7,13 @@ import { box, NONE } from '../shared/bspwriter.js';
 import { Trace, traceHull, hullFits, HULL_POINT, HULL_STAND, ENT_NONE, ENT_SOLID } from '../shared/trace.js';
 import { PS_ORIGIN, PS_VEL, PS_GROUNDENT } from '../shared/pmove.js';
 import { IN_USE, IN_ATTACK, IN_FORWARD, TICK_RATE } from '../shared/constants.js';
-import { TEAM_CT } from '../shared/player.js';
+import { TEAM_T, TEAM_CT } from '../shared/player.js';
+import { Writer } from '../shared/protocol.js';
 import { WEAPON_ID, WS_ACTIVE, giveWeapon, SLOT_PRIMARY } from '../shared/weapons.js';
 import { MOVER_PLAT, MOVER_TRAIN, MOVER_BUTTON, MOVER_MOMENTARY, MOVER_WHEEL, MAX_FIRES, MAX_QUEUED } from '../shared/doors.js';
 import { blastDamage } from '../shared/breakables.js';
 import { Game } from '../server/game.js';
-import { W, yard, walker, quiet } from './harness.js';
+import { W, yard, walker, quiet, joinClient } from './harness.js';
 
 const ticksOf = (s) => Math.round(s * TICK_RATE);
 
@@ -333,6 +334,15 @@ Deno.test('breakables: a barrel\'s explosion breaks the crate beside it and hurt
   const hp2 = c.player.health;
   game.breakSlot(1, null);
   assert.equal(c.player.health, hp2, 'the wall shields');
+  // Set off by a teammate it spares us (friendly fire is off, as for his HE); by an enemy it hurts.
+  put(24, 120, 0);
+  run(2);
+  const mate = joinClient(game, new Writer(), 'mate', TEAM_T), foe = joinClient(game, new Writer(), 'foe', TEAM_CT);
+  const hp3 = c.player.health;
+  game.blast(24, 0, 28, 120, 300, mate);
+  assert.equal(c.player.health, hp3, "a teammate's barrel spares us");
+  game.blast(24, 0, 28, 120, 300, foe);
+  assert.ok(c.player.health < hp3, "an enemy's hurts");
 });
 
 Deno.test('breakables: a breakable fires its target when it breaks; one only a trigger breaks goes when its name fires', () => {

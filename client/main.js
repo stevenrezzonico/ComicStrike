@@ -156,6 +156,9 @@ conWin = new ConsoleWindow(con);
 const netGraph = new NetGraph();
 
 const renderer = new Renderer(canvas, cv.r_lowlatency.bool);
+// A lost context (a GPU reset, a driver update) takes every buffer, texture and program with it,
+// and nothing here rebuilds them: say so, rather than leave a frozen picture.
+canvas.addEventListener('webglcontextlost', () => leaveGame('The graphics card was reset (WebGL context lost): reload the page to play again.'));
 const decals = new Decals(renderer.gl);
 const debris = new Debris(renderer.gl);
 const players = new Players(renderer.gl);
@@ -2572,6 +2575,8 @@ function resetSession() {
   lastOwnTeam = 0;
   words.clear();
   hurtDir.clear();
+  hurtSerial = -1;
+  spectator.synced = -1;
   callouts.clear();
   votePanel.clear();
   blasts.clear();
@@ -2591,6 +2596,7 @@ function resetSession() {
   noclip = false;
   wasDead = true; // no body to start a free roam camera from
   interp.fill(0);
+  scape.others(interp, -1, 0, null); // forgets the last game's shot counts (else phantom shots on the new map's first frame)
   players.update(interp, 0, -1, false);
   models.update(interp, 0, -1, 0, null, false);
   models.setItems(NO_ITEMS);

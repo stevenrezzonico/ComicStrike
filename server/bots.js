@@ -416,7 +416,7 @@ class Bot {
     this.pathIdx = 0;
     this.pathFailed = false; // the last search found no way (retried after REPATH_FAIL)
     this.arrivedAt = -1; // tick the path's end was reached, -1 while under way
-    this.holdTicks = 0; // how long to stay at that spot before picking another nearby
+    this.holdTicks = HOLD_MIN * TICK_RATE; // how long to stay at that spot before picking another nearby (0 left the first at once)
     this.goal = -1; // node
     this.goalWhy = ''; // what the goal is for (a new reason makes a new path)
     this.repathAt = 0;
@@ -507,6 +507,7 @@ class Bot {
     this.nade = null;
     this.pressButton = -1;
     this.avertUntil = 0;
+    this.order = null; // a radio order is for one life
   }
 
   // Returns [buttons, weapon slot to select or -1].
@@ -724,7 +725,7 @@ class Bot {
       if (Math.hypot(gr.fxPos[o] - x, gr.fxPos[o + 1] - y, gr.fxPos[o + 2] - z) > HEAR_RANGE) continue;
       this.decoyHeard = gr.fxId[f];
       this.decoyHeardAt = g.tick + DECOY_HEAR_GAP * TICK_RATE;
-      this.heard(gr.fxPos[o], gr.fxPos[o + 1], gr.fxPos[o + 2]);
+      this.heard(gr.fxPos[o], gr.fxPos[o + 1], gr.fxPos[o + 2] + 36); // it lies on the floor; heard wants a hull center
       return;
     }
   }
@@ -983,7 +984,7 @@ class Bot {
     }
     // A teammate's radio order: after him (looked up once a second), or where we stood.
     const o = this.order;
-    if (o && g.tick < o.until && o.who.joined && o.who.alive && !carrier) {
+    if (o && g.tick < o.until && o.who.joined && o.who.alive && o.who.team === c.team && !carrier) {
       const f = o.who.player.ps.f, follow = o.kind === 'follow';
       const tx = follow ? f[PS_ORIGIN] : o.x, ty = follow ? f[PS_ORIGIN + 1] : o.y, tz = follow ? f[PS_ORIGIN + 2] - 36 : o.z;
       if (Math.hypot(tx - x, ty - y) < (follow ? FOLLOW_NEAR : 32)) return { node: -1, why: 'order', stop: true };
