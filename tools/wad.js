@@ -1,6 +1,8 @@
 // Reads GoldSrc miptex textures (WAD3 files and textures embedded in BSPs) as RGBA,
 // for the offline texture analysis in tools/gen_texturedata.js. Never used at runtime.
 
+import { TEXTURE_NAME } from '../client/editor/project.js';
+
 const latin1 = new TextDecoder('latin1');
 
 function cstr(b, p, n) {
@@ -9,11 +11,14 @@ function cstr(b, p, n) {
   return latin1.decode(b.subarray(p, e)).toLowerCase();
 }
 
-// Decodes one miptex at byte offset `p` (mip 0 only). Returns null without pixels.
+// Decodes one miptex at byte offset `p` (mip 0 only). Returns null without pixels, and for
+// a name that is no GoldSrc texture name (TEXTURE_NAME): gen_texturedata.js pastes the names
+// into a quoted string of client/texturedata.js, where a map's quote or backslash was code.
 // '{' textures use palette index 255 as transparent (alpha 0).
 export function readMiptex(buf, p) {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   const name = cstr(buf, p, 16);
+  if (!TEXTURE_NAME.test(name)) return null;
   const w = dv.getUint32(p + 16, true), h = dv.getUint32(p + 20, true);
   const ofs0 = dv.getUint32(p + 24, true), ofs3 = dv.getUint32(p + 36, true);
   if (!ofs0 || !w || !h || w > 4096 || h > 4096) return null;

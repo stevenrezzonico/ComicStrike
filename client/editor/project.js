@@ -112,6 +112,9 @@ export const POINTS = {
 
 export const LIMITS = { coord: 8192, brushes: 3000, points: 256 };
 export const MAX_STAIR_STEPS = 64; // steps one stairs shape is built of (1024 units at 16)
+export const MAX_PIECES = 4 * LIMITS.brushes; // compiled pieces a read project keeps (as many boxes)
+// The steps of a stairs shape: a taller flight gets taller steps (checkProject warns).
+const stepCount = (br) => Math.max(1, Math.min(MAX_STAIR_STEPS, Math.round((br.b[5] - br.b[2]) / (br.step || 16))));
 const HULL = [16, 16, 36]; // standing player: half extents (the origin is the hull center)
 
 // A brush with the shape fields filled in.
@@ -159,7 +162,17 @@ export function readProject(text) {
     if (!TEXTURE_NAME.test(name) || TEXTURE_SIZE.has(name) || !Array.isArray(size) || ++extra > 1024) continue;
     out.textures[name] = [0, 1].map((k) => Math.max(1, Math.min(1024, num(size[k]) || 64)));
   }
-  const texOf = (name) => (typeof name === 'string' && textureSize(out, name) ? name : null);
+  // A name in neither table (pasted from another map's own: the paste carries no sizes, so a
+  // reload dropped those faces) is kept at 64 x 64, the size the compiler gives it too.
+  const texOf = (name) => {
+    if (typeof name !== 'string' || !TEXTURE_NAME.test(name)) return null;
+    if (!textureSize(out, name)) {
+      if (++extra > 1024) return null;
+      out.textures[name] = [64, 64];
+    }
+    return name;
+  };
+  let pieces = 0;
   for (const b of Array.isArray(p.brushes) ? p.brushes.slice(0, 4 * LIMITS.brushes) : []) {
     if (!Array.isArray(b.b) || b.b.length < 6) continue; // a missing corner was NaN in the compiler
     const kind = KINDS[b.kind] ? b.kind : 'world';
@@ -179,6 +192,9 @@ export function readProject(text) {
       sides: SIDE_COUNTS.includes(+b.sides) ? +b.sides : 8, step: Math.max(4, Math.min(64, num(b.step) || 16)),
     });
     if (shape === 'convex') br.faces = faces;
+    // At most MAX_PIECES pieces in all, the shapes past it left out: 12,000 stairs of 64
+    // steps were 768k pieces, and autosaved, they hung the editor at every visit.
+    if ((pieces += shape === 'stairs' ? stepCount(br) : shape === 'ladder' ? 2 : 1) > MAX_PIECES) break;
     out.brushes.push(br);
   }
   for (const q of Array.isArray(p.points) ? p.points.slice(0, 4 * LIMITS.points) : []) {
@@ -212,7 +228,7 @@ export function piecesOf(br) {
     case 'stairs': {
       // Each step reaches from its front edge to the high end (overlaps compile away).
       // At most MAX_STAIR_STEPS (a taller flight gets taller steps; checkProject warns).
-      const n = Math.max(1, Math.min(MAX_STAIR_STEPS, Math.round((z1 - z0) / (br.step || 16))));
+      const n = stepCount(br);
       const lo = br.b[along], hi = br.b[along + 3];
       const out = [];
       for (let i = 0; i < n; i++) {

@@ -123,7 +123,7 @@ Deno.test('projects read back from JSON, cleaned of what they should not hold', 
   assert.equal(back.name, 'de_test');
   const odd = readProject({
     format: 'comicstrike-map', version: 1, name: '../evil name',
-    brushes: [{ b: [0, 0, 0, 1.4, 64, 64], tex: { top: 'not_a_texture', side: 'crate08' }, kind: 'func_nuke', keys: { 'a"b': 1, ok: 'x"y' } }, { b: [0, 0, 0, 64, 64] }],
+    brushes: [{ b: [0, 0, 0, 1.4, 64, 64], tex: { top: 'not a texture', side: 'crate08' }, kind: 'func_nuke', keys: { 'a"b': 1, ok: 'x"y' } }, { b: [0, 0, 0, 64, 64] }],
     points: [{ kind: 'weapon_awp', o: [0, 0, 0] }, { kind: 'hostage_entity', o: [1, 2, 3], yaw: 450 }, { kind: 'light', o: [1, 2] }],
   });
   assert.equal(odd.name, '___evil_name');
@@ -210,10 +210,105 @@ Deno.test('lamps: a lamp point compiles to a light entity with its keys, reads b
 
 // A crafted project hung the editor (and, autosaved first, at every visit): stairs 4e9 units
 // tall were a billion pieces. Coordinates are kept within twice the limit, a stairs shape
-// has at most MAX_STAIR_STEPS steps.
+// has at most MAX_STAIR_STEPS steps, and a project at most as many pieces as 12,000 boxes.
 Deno.test('a crafted project cannot make the editor build millions of pieces', async () => {
   const { piecesOf, LIMITS, MAX_STAIR_STEPS } = await import('../client/editor/project.js');
   const p = readProject({ format: 'comicstrike-map', version: 3, brushes: [{ shape: 'stairs', b: [0, 0, 0, 64, 64, 4e9], step: 4 }] });
   assert.equal(p.brushes[0].b[5], 2 * LIMITS.coord);
   assert.equal(piecesOf(p.brushes[0]).length, MAX_STAIR_STEPS);
+  // 12,000 stairs of 64 steps were 768k pieces: the shapes past the budget are left out.
+  const budget = 4 * LIMITS.brushes;
+  const stairs = Array.from({ length: budget }, () => ({ shape: 'stairs', b: [0, 0, 0, 64, 64, 1024], step: 16 }));
+  const many = readProject({ format: 'comicstrike-map', version: 3, brushes: stairs });
+  assert.equal(many.brushes.length, Math.floor(budget / MAX_STAIR_STEPS));
+  assert.ok(many.brushes.reduce((n, b) => n + piecesOf(b).length, 0) <= budget);
+});
+
+// A shape pasted from an opened map keeps that map's textures through a reload: the paste
+// carries no sizes, and readProject dropped every name in neither table (the faces with it).
+Deno.test('a texture of another map, pasted, survives a reload at a default size', () => {
+  const p = newProject('de_test');
+  p.brushes.push({ ...p.brushes[1], id: 999, tex: { top: '-0wall_mine', bottom: null, side: 'dust_wall9' } });
+  const back = readProject(JSON.stringify(readProject(JSON.stringify(p))));
+  assert.deepEqual(back.brushes.at(-1).tex, { top: '-0wall_mine', bottom: null, side: 'dust_wall9' });
+  assert.deepEqual(back.textures['dust_wall9'], [64, 64]);
+  compileToBsp(back);
+});
+
+// The editor page itself (client/editor/editor.js) without its page: its methods on an object
+// with stubs for the panels, the worker, and the browser's storage and dialogs.
+async function bareEditor(fields = {}) {
+  const { Editor } = await import('../client/editor/editor.js');
+  return Object.assign(Object.create(Editor.prototype), { project: newProject(), selection: new Set(), status() {}, ...fields });
+}
+async function withGlobals(stubs, fn) {
+  const old = Object.keys(stubs).map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)]);
+  for (const [k, v] of Object.entries(stubs)) Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true });
+  try {
+    return await fn();
+  } finally {
+    for (const [k, d] of old) d ? Object.defineProperty(globalThis, k, d) : delete globalThis[k];
+  }
+}
+
+Deno.test('editor: Open asks before replacing a map with shapes, as New and Example do', async () => {
+  const ed = await bareEditor({ commit() {}, changed() {}, fitAll() {} });
+  const before = ed.project, asked = [];
+  const file = { name: 'other.cmap.json', arrayBuffer: () => Promise.resolve(new TextEncoder().encode(JSON.stringify(newProject('other'))).buffer) };
+  await withGlobals({ confirm: (q) => (asked.push(q), false) }, () => ed.openFile(file));
+  assert.equal(asked.length, 1, 'asked');
+  assert.ok(ed.project === before, 'kept when the answer is no');
+  await withGlobals({ confirm: () => true }, () => ed.openFile(file));
+  assert.equal(ed.project.name, 'other');
+});
+
+Deno.test('editor: an autosave past the quota is said once, and the next visit says its map is older', async () => {
+  const store = new Map(), said = [];
+  let full = false;
+  const localStorage = {
+    getItem: (k) => store.get(k) ?? null,
+    setItem: (k, v) => {
+      if (full && v.length > 100) throw new DOMException('the quota is reached', 'QuotaExceededError');
+      store.set(k, String(v));
+    },
+    removeItem: (k) => store.delete(k),
+  };
+  await withGlobals({ localStorage, alert: (m) => said.push(m) }, async () => {
+    const ed = await bareEditor();
+    ed.save();
+    const kept = store.get('comicstrike.editor');
+    full = true;
+    ed.project.brushes.pop();
+    ed.save();
+    ed.save();
+    assert.equal(said.length, 1, 'told once');
+    assert.ok(store.get('comicstrike.editor') === kept, 'the older map stays');
+    const next = await bareEditor();
+    assert.equal(next.load().brushes.length, ed.project.brushes.length + 1);
+    assert.equal(said.length, 2);
+    assert.match(said[1], /older/);
+    full = false;
+    next.save();
+    next.load();
+    assert.equal(said.length, 2, 'a save that fits clears the mark');
+  });
+});
+
+Deno.test('editor: one preview compile at a time, and one more after it when edits came', async () => {
+  const jobs = [], tick = () => new Promise((r) => setTimeout(r, 0));
+  const ed = await bareEditor({
+    previewReady: true, previewNext: 0, jobId: 0,
+    compile() {
+      const id = ++this.jobId;
+      return new Promise((resolve) => jobs.push(() => resolve({ id, error: 'stub' })));
+    },
+  });
+  for (let i = 0; i < 5; i++) ed.updatePreview();
+  assert.equal(jobs.length, 1, 'the edits wait for the compile in the worker');
+  jobs[0]();
+  await tick();
+  assert.equal(jobs.length, 2, 'then one more, of the map as it is then');
+  jobs[1]();
+  await tick();
+  assert.equal(jobs.length, 2, 'and none after it');
 });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { analyze } from '../tools/texanalysis.js';
 import { encodeRecord, textureRecord, withOriginalColor, TF_LINES } from '../client/texcolors.js';
 import { classify, MAT } from '../shared/materials.js';
+import { readMiptex } from '../tools/wad.js';
 
 // Deterministic pseudo-random texel noise.
 function rng(seed) {
@@ -77,4 +78,21 @@ Deno.test('texture colors: records, the generated table, and pattern correction'
   assert.equal(textureRecord('no_such_texture_xyz'), null);
   const plain = withOriginalColor(classify('no_such_brick'), 'no_such_brick');
   assert.equal(plain.mat, MAT.BRICK, 'unknown names keep their class');
+});
+
+// An 8 x 8 miptex named `name` (latin1 bytes, up to 16): the header, the four mips, the
+// palette count and the palette.
+function miptex(name) {
+  const buf = new Uint8Array(40 + 64 + 16 + 4 + 1 + 2 + 768), dv = new DataView(buf.buffer);
+  for (let i = 0; i < Math.min(16, name.length); i++) buf[i] = name.charCodeAt(i);
+  dv.setUint32(16, 8, true);
+  dv.setUint32(20, 8, true);
+  [40, 104, 120, 124].forEach((o, i) => dv.setUint32(24 + i * 4, o, true));
+  return buf;
+}
+
+Deno.test('texture names: only GoldSrc names reach the generated table (a quote was code in it)', () => {
+  assert.equal(readMiptex(miptex('crate08'), 0).name, 'crate08');
+  assert.equal(readMiptex(miptex('{ladder1'), 0).name, '{ladder1');
+  for (const bad of ["a'+eval(x)+'", 'a\\b', 'two words', 'été']) assert.equal(readMiptex(miptex(bad), 0), null, bad);
 });

@@ -20,6 +20,7 @@ import { Tour } from './tour.js';
 import { downloadFile } from '../demostore.js';
 
 const STORE_KEY = 'comicstrike.editor';
+const STALE_KEY = 'comicstrike.editor.stale'; // set while the autosave is older than the map (a failed save)
 const CLIP_KEY = 'comicstrike.editor.clipboard';
 const LAYOUT_KEY = 'comicstrike.editor.layout';
 const UNDO = 200;
@@ -92,7 +93,7 @@ const svgIcon = (d) => {
   return svg;
 };
 
-class Editor {
+export class Editor {
   constructor() {
     this.project = this.load() || newProject();
     this.selection = new Set();
@@ -119,6 +120,9 @@ class Editor {
     this.previewReady = false;
     this.previewTimer = 0;
     this.previewNext = 0; // the job whose map the 3D view shows (later answers replace it)
+    this.previewBusy = false; // a draft compile in the worker
+    this.previewAgain = false; // edits since it was posted: one more after it
+    this.saveWarned = false; // told that the autosave failed
     this.menu = null;
     this.buildChrome();
     this.renderProps();
@@ -1104,16 +1108,31 @@ class Editor {
   load() {
     try {
       const text = localStorage.getItem(STORE_KEY);
-      return text ? readProject(text) : null;
+      const p = text ? readProject(text) : null;
+      if (p && localStorage.getItem(STALE_KEY)) {
+        alert('This is an older copy of your map: its last changes were too large to keep in the browser.');
+      }
+      return p;
     } catch {
       return null;
     }
   }
 
+  // The autosave. Past the browser's storage quota it keeps the last project that fitted:
+  // the user is told once, and STALE_KEY tells the next visit (it restored an older map
+  // without a word).
   save() {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify(this.project));
-    } catch { /* not kept: Save still writes a file */ }
+      localStorage.removeItem(STALE_KEY);
+    } catch {
+      try {
+        localStorage.setItem(STALE_KEY, '1');
+      } catch { /* storage closed */ }
+      if (this.saveWarned) return;
+      this.saveWarned = true;
+      alert('This map is too large to keep in the browser: use Save to keep it as a file.');
+    }
   }
 
   // --- Compiling, preview, play --------------------------------------------------------
@@ -1131,9 +1150,21 @@ class Editor {
     this.previewTimer = setTimeout(() => this.updatePreview(), PREVIEW_DELAY);
   }
 
+  // One draft compile at a time, and one more after it if edits came meanwhile: on an opened
+  // Valve map (5-7 s a draft) an edit a second queued a minute of them, Export and Try it behind.
   async updatePreview() {
     if (!this.previewReady) return;
+    if (this.previewBusy) {
+      this.previewAgain = true;
+      return;
+    }
+    this.previewBusy = true;
     const r = await this.compile('draft');
+    this.previewBusy = false;
+    if (this.previewAgain) {
+      this.previewAgain = false;
+      this.updatePreview();
+    }
     if (r.id < this.previewNext) return; // an older answer than one shown already
     this.previewNext = r.id;
     if (r.error) return this.status(r.error, true);
@@ -1182,6 +1213,7 @@ class Editor {
   // A file picked with Open: a project (.cmap.json), or a map (.bsp, version 30): one the
   // editor exported opens as its project, any other is decompiled in the worker.
   async openFile(f) {
+    if (this.items().length && !confirm(`Open ${f.name}? Save this one first if you want to keep it.`)) return;
     const buf = await f.arrayBuffer();
     if (buf.byteLength < 4 || new DataView(buf).getInt32(0, true) !== 30) return this.openText(f.name, () => new TextDecoder().decode(buf));
     const own = await projectIn(new Uint8Array(buf));
@@ -1316,4 +1348,4 @@ function installTips() {
   addEventListener('blur', hide);
 }
 
-globalThis.editor = new Editor();
+if (globalThis.document) globalThis.editor = new Editor(); // (the tests take the class alone)

@@ -25,6 +25,7 @@
 
 import { sunEntity } from './sun.js';
 import { computeVis, dot as dot3, cross, boxOf as boundsOf } from './bspvis.js';
+import { BSP_LIMITS } from './bsp.js';
 
 export const CONTENTS_EMPTY = -1, CONTENTS_SOLID = -2, CONTENTS_WATER = -3;
 
@@ -467,6 +468,25 @@ const texAxis = (n) => {
   const a = n.map(Math.abs);
   return a[2] >= a[0] - 1e-6 && a[2] >= a[1] - 1e-6 ? 2 : a[0] >= a[1] - 1e-6 ? 0 : 1;
 };
+const unlit = (tex) => tex === 'sky' || tex[0] === '!'; // special: no lightmap
+
+// A lit face wider than a lightmap may be (BSP_LIMITS.lightmap texels of 16 units along a
+// texture axis: validateBSP refuses more, so a 6000-unit floor compiled to a map nobody
+// could load), cut in halves along that axis until each fits.
+const MAX_EXTENT = BSP_LIMITS.lightmap * 16;
+function splitWide(f) {
+  if (unlit(f.tex)) return [f];
+  const axis = texAxis(f.normal);
+  for (let j = 0; j < 2; j++) {
+    const u = TEX_AXES[axis][j], k = j === 0 && f.fit ? f.fit[0] : 1;
+    let lo = Infinity, hi = -Infinity;
+    for (const p of f.poly) [lo, hi] = [Math.min(lo, dot3(p, u)), Math.max(hi, dot3(p, u))];
+    if ((hi - lo) * k <= MAX_EXTENT) continue;
+    const d = Math.round((lo + hi) / 2);
+    return [...splitWide({ ...f, poly: clip(f.poly, u, d) }), ...splitWide({ ...f, poly: clip(f.poly, u, d, true) })];
+  }
+  return [f];
+}
 
 // --- The map ---------------------------------------------------------------------------
 
@@ -677,7 +697,7 @@ export function compileBSP(TEX, models, ents, { light = 'full', vis: withVis = f
     if (!texinfoOf.has(key)) {
       if (!texIndex.has(tex)) throw new Error(`texture ${tex} is not in the texture list`); // (it would print as sky)
       texinfoOf.set(key, texinfos.length);
-      const special = tex === 'sky' || tex[0] === '!' ? 1 : 0;
+      const special = unlit(tex) ? 1 : 0;
       const k = fit ? fit[0] : 1;
       texinfos.push({
         s: TEX_AXES[axis][0].map((x) => x * k), t: TEX_AXES[axis][1], sShift: fit ? fit[1] : 0, miptex: texIndex.get(tex),
@@ -854,7 +874,7 @@ export function compileBSP(TEX, models, ents, { light = 'full', vis: withVis = f
           });
         }
         // Neighbors on one node, side and texture, joined where they make a convex polygon.
-        for (const list of byNode.values()) {
+        for (const [node, list] of byNode) {
           for (let merged = true; merged;) {
             merged = false;
             for (let i = 0; i < list.length && !merged; i++) {
@@ -871,6 +891,7 @@ export function compileBSP(TEX, models, ents, { light = 'full', vis: withVis = f
             }
           }
           for (const f of list) f.poly = simplify(f.poly, f.normal);
+          byNode.set(node, list.flatMap(splitWide));
         }
         heads.push(emitNodes(tree, byNode, model.origin, isWorld));
         if (isWorld && withVis) {

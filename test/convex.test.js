@@ -115,6 +115,15 @@ Deno.test('fuzzed convex brushes compile into maps the game takes, or fail with 
   }
 });
 
+Deno.test('a floor wider than a lightmap (256 texels of 16 units) is cut into faces a map may hold', () => {
+  const map = new MapBuilder(TEX, { message: 'test' });
+  map.world.push(box(-3000, -3000, -32, 3000, 3000, 0, '-0sand'), box(-3000, -3000, 0, -2900, 6000, 64, W));
+  map.point({ classname: 'info_player_deathmatch', origin: '0 0 37', angles: '0 0 0' });
+  const bsp = parseUntrustedBSP(map.compile({ light: 'draft' }).bytes.buffer); // threw "face N lightmap extents"
+  const s = new SurfaceMap(bsp, CollisionWorld.fromBSP(bsp)), out = new Float32Array(3);
+  for (const [x, y] of [[-2890, -2990], [0, 0], [2990, 2990], [2990, -2990]]) assert.ok(s.lightAt(out, x, y, 20), `lit floor at ${x} ${y}`);
+});
+
 // --- Lamps -------------------------------------------------------------------------------
 
 // A closed room 1024 x 512 x 256 (its roof keeps the sun and sky out) with lamps and
