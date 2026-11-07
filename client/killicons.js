@@ -68,6 +68,7 @@ export class KillIcons {
     this.weapons = weapons;
     this.urls = new Array(weapons.length).fill(null);
     this.heights = new Float32Array(weapons.length); // CSS pixels
+    this.widths = new Float32Array(weapons.length);
     this.marks = new Map(); // name -> a parsed SVG, cloned for each use
     this.next = 1; // idle drawing walks the weapons from here
   }
@@ -107,6 +108,7 @@ export class KillIcons {
     c.stroke();
     c.fill();
     this.heights[id] = cv.height / RES;
+    this.widths[id] = cv.width / RES;
     return (this.urls[id] = cv.toDataURL());
   }
 

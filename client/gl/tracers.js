@@ -8,8 +8,11 @@ import { program } from './program.js';
 import { TRAIL_VS, TRAIL_FS } from './shaders.js';
 
 const MAX_TRACERS = 32;
-const TRACER_SPEED = 6000; // units a second (approx.)
-const TRACER_LEN = 150;
+// Units a second (approx.: a rifle bullet is ~900 m/s, ~35,000 here; at 6000 a shot across a
+// site took a quarter second to land and the streak trailed the gunfight), and the streak's
+// length, about what it moves in a 60 fps frame, so it runs as one streak, not dashes.
+const TRACER_SPEED = 20000;
+const TRACER_LEN = 350;
 const LINE_PX = 5; // at 1080 lines, the rim included
 const RIM_PX = 1; // at 1080 lines
 const COLOR = [1, 0.84, 0.3];

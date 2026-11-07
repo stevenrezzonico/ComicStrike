@@ -61,6 +61,7 @@ import { PlayerModels } from './gl/playermodels.js';
 import { GunMeshes } from './gl/gunmeshes.js';
 import { buildGun } from './models/guns.js';
 import { KillIcons } from './killicons.js';
+import { LoadoutPanel } from './loadout.js';
 import { LOOK_GUNS, lookOf } from './models/looks.js';
 import { JingleCues } from './jingles.js';
 import { GrenadeFx } from './gl/grenadefx.js';
@@ -193,6 +194,7 @@ const players = new Players(renderer.gl);
 const guns = new GunMeshes(renderer.gl); // every gun model, shared by first and third person
 const killIcons = new KillIcons((name) => buildGun(name).mesh.positions, WEAPONS); // the kill feed's
 killIcons.prepare();
+const loadout = new LoadoutPanel(document.getElementById('hud-loadout'), killIcons); // the HUD's weapon column
 const models = new PlayerModels(renderer.gl, guns);
 const fx = new GrenadeFx(renderer.gl, guns);
 onNewGame(() => fx.clear());
@@ -2142,9 +2144,11 @@ function draw(now, dt) {
     spectator.syncWeapon(interp, now / 1000, dt, weaponView);
     weaponView.draw(canvas.height, aspect, spectator.ws, spectator.ps, 0, now / 1000, dt,
       interp[target + E_HEALTH], player.armor);
+    loadout.update(spectator.ws, now, cv.cl_showloadout.bool);
   } else if (!preview) { // the editor's 3D view shows the map alone
     weaponView.draw(canvas.height, aspect, ws, ps, lastButtons, simTime, dt, Math.max(player.health, 0),
       player.armor);
+    loadout.update(ws, now, cv.cl_showloadout.bool);
   }
   lap(5);
   // Print the frame, then what goes over it; the flashbang's afterimage is taken from it.
@@ -2341,7 +2345,7 @@ con.command('drop', () => input.pulse(IN_DROP), 'Drop the active weapon (the C4 
 con.command('buymenu', () => {
   if (hud.menuOpen) closeBuyMenu();
   else if (gunGame()) hud.flash('No buying in this mode: kills earn the next weapon', 2500, performance.now());
-  else if (net && !demo() && !teamMayBuy(mapBuy, player.team)) {
+  else if (net && !freeBuys() && !teamMayBuy(mapBuy, player.team)) {
     hud.flash(mapBuy === 3 ? 'No buying on this map: take weapons from the ground' : 'Only the other team buys on this map',
       2500, performance.now());
   }  else if (playing && player.team !== TEAM_SPECTATOR) hud.toggleMenu(true);

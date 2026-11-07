@@ -367,7 +367,7 @@ export class Game {
     this.hurtBlocked = (i, dmg) => this.hurtBy(this.doorClients[i], dmg, null, 0);
     this.blastOut = []; // slots a blast broke
     this.buyZones = new BuyZones(bsp);
-    this.mapBuying = mapBuying(bsp); // info_map_parameters: who may buy on this map (the demo ignores it)
+    this.mapBuying = mapBuying(bsp); // info_map_parameters: who may buy on this map (free buying ignores it)
     this.spawns = teamSpawns(bsp);
     const o = new Float32Array(3);
     // The map's weapons lying out (CS 1.6's armoury_entity: fy_ maps): placed at each round
@@ -802,12 +802,13 @@ export class Game {
 
   // In a buy zone (or mp_buy_anywhere) in buy time; deathmatch: mp_buytime from each spawn.
   // The gun game modes earn their weapons instead, and the map may let only one team or
-  // nobody buy (info_map_parameters: the fy_ maps).
+  // nobody buy (info_map_parameters: the fy_ maps), where buying costs money (deathmatch and
+  // the demo pick their weapons free on any map).
   canBuy(c) {
     const ph = this.phase, r = this.rules;
     if (this.mode.earned) return false;
     if (r.demo) return c.alive && ph !== PHASE_OVER; // anywhere, anytime
-    if (!teamMayBuy(this.mapBuying, c.team)) return false;
+    if (!this.mode.free && !teamMayBuy(this.mapBuying, c.team)) return false;
     const inTime = r.deathmatch ? ph !== PHASE_OVER && this.tick < c.spawnTick + r.buyTime * TICK_RATE
       : ph === PHASE_WARMUP || ph === PHASE_FREEZE || (ph === PHASE_LIVE && this.tick < this.buyEnd);
     const f = c.player.ps.f;

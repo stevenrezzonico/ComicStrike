@@ -72,6 +72,7 @@ export function createConsole(print) {
   add('cl_drawhud', 1, 'Draw the HUD', 0, 1);
   add('cl_autowepswitch', 1, 'Switch to a weapon you buy or pick up when it is better than the one in hand (CS:GO)', 0, 1);
   add('hud_showtargetid', 1, 'Name the player under the crosshair (CS:GO\'s target id; an enemy only in plain sight)', 0, 1);
+  add('cl_showloadout', 1, 'The weapons you carry in a column over the ammo (CS:GO\'s); 0: only for 3 s after a change', 0, 1);
   add('cl_teamid_overhead', 1, 'Marks over your teammates\' heads, through walls (CS:GO\'s team id)', 0, 1);
   add('cl_autobuy', 'm4a1 ak47 famas galilar p90 mp5sd vesthelm vest defuser',
     'autobuy: of these, the first you can afford of each kind (a primary, a pistol, armor, the kit, each grenade)');

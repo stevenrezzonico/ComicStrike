@@ -96,6 +96,7 @@ const TABS = [
     ['toggle', 'cl_autowepswitch', 'Switch weapon on pick up'],
     ['toggle', 'hud_showtargetid', 'Name the player under the crosshair'],
     ['toggle', 'cl_teamid_overhead', 'Marks over teammates'],
+    ['toggle', 'cl_showloadout', 'Always show the weapons carried'],
     ['slider', 'cl_hud_radar_scale', 'Radar size', 0.8, 1.3, 0.05],
     ['slider', 'cl_radar_scale', 'Radar zoom', 0.25, 1, 0.05],
     ['toggle', 'cl_radar_rotate', 'Rotate the radar'],

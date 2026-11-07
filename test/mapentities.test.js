@@ -126,7 +126,7 @@ const shop = (buying) => yard((map) => {
   map.point({ classname: 'game_player_equip', weapon_usp: '1', weapon_knife: '1', ammo_45acp: '4', origin: '0 0 0' });
 });
 
-Deno.test('info_map_parameters buying: 3 nobody, 1 only the CTs, 0 everyone (the demo ignores it)', () => {
+Deno.test('info_map_parameters buying: 3 nobody, 1 only the CTs, 0 everyone (the demo and deathmatch ignore it)', () => {
   assert.equal(mapBuying(shop(3)), 3);
   assert.ok(!teamMayBuy(3, TEAM_T) && !teamMayBuy(3, TEAM_CT));
   assert.ok(!teamMayBuy(1, TEAM_T) && teamMayBuy(1, TEAM_CT));
@@ -140,6 +140,8 @@ Deno.test('info_map_parameters buying: 3 nobody, 1 only the CTs, 0 everyone (the
   }
   const demo = quiet(() => new Game('test', shop(3), { rounds: false, demo: true }));
   assert.ok(demo.canBuy(joinClient(demo, new Writer(), 't', TEAM_T)), 'the demo buys anyway');
+  const dm = quiet(() => new Game('test', shop(3), { rounds: false, deathmatch: true, buyAnywhere: true }));
+  assert.ok(dm.canBuy(joinClient(dm, new Writer(), 't', TEAM_T)), 'deathmatch buys anyway (fy_buzzkill)');
 });
 
 Deno.test('game_player_equip: a spawn gets its weapons instead of the default pistol', () => {

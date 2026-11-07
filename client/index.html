@@ -92,6 +92,27 @@
   #hud-weapon { padding: 4px 9px 2px; background: var(--yellow); color: var(--ink); font-size: 17px;
     border: 2px solid var(--ink); box-shadow: 3px 3px 0 var(--ink); -webkit-text-stroke: 0; text-shadow: none; }
   #hud-weapon:empty { display: none; }
+  /* The weapons carried (client/loadout.js): silhouettes masked from the kill feed's icons,
+     paper with an ink outline, the one in hand yellow, the slot key beside each. */
+  #hud-loadout { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; margin-bottom: 4px;
+    font: 24px/1 var(--display); transition: opacity 0.4s; }
+  #hud-loadout.faded { opacity: 0; }
+  #hud-loadout .lo { display: flex; align-items: center; gap: 6px; opacity: 0.8;
+    filter: drop-shadow(1px 0 0 var(--ink)) drop-shadow(-1px 0 0 var(--ink)) drop-shadow(0 1px 0 var(--ink))
+      drop-shadow(0 -1px 0 var(--ink)) drop-shadow(2px 2px 0 var(--ink)); }
+  #hud-loadout .lo.on { opacity: 1; }
+  #hud-loadout i { display: block; background: var(--paper); mask: center / contain no-repeat;
+    -webkit-mask: center / contain no-repeat; }
+  #hud-loadout .on i { background: var(--yellow); }
+  #hud-loadout b { color: var(--paper); font-size: 0.8em; font-weight: normal; }
+  #hud-loadout .on b { color: var(--yellow); }
+  #hud-loadout kbd { min-width: 0.9em; padding: 2px 4px 0; background: var(--ink); color: var(--paper);
+    font: 0.65em/1 var(--display); text-align: center; }
+  #hud-loadout .on kbd { background: var(--yellow); color: var(--ink); }
+  /* Short screens smaller; touch screens a row over the ammo in the middle, with no keys. */
+  @media (max-height: 560px) { #hud-loadout { font-size: 14px; gap: 3px; } }
+  body.softplay #hud-loadout { flex-direction: row; align-items: flex-end; font-size: 14px; gap: 10px; }
+  body.softplay #hud-loadout kbd { display: none; }
   /* Scopes: ink around a circle, sniper cross lines or the AUG / SG 553 red dot. */
   #scope { position: fixed; inset: 0; display: none; pointer-events: none;
     background: radial-gradient(circle at 50% 50%, transparent calc(47vh - 14px), rgba(23, 19, 15, 0.55) calc(47vh - 4px),
@@ -558,6 +579,7 @@
   <span><small>ARMOR</small><span id="hud-armor"></span></span>
 </div>
 <div id="hud-right" class="hud">
+  <div id="hud-loadout"></div>
   <span id="hud-weapon"></span>
   <span id="hud-ammo"></span>
 </div>
