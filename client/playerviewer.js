@@ -1,7 +1,7 @@
 // The player model viewer (client/players.html): the T, the CT and a hostage animated in place
 // by the game's own animator (client/anim/playeranim.js) and printed by its renderer, for judging
 // the gait, the holds and the shoulders. The toolbar (or ?move=run&gun=ak47&view=side&slow=1)
-// picks how they move, what they hold, the camera, the zoom (2: the chest, 4: the head up close)
+// picks how they move, what they hold, the camera, the zoom (2: the chest, 3: the feet, 4: the head up close)
 // and slow motion; drag turns the camera, a double click puts it back. `viewer` (on the page) lets a script pose them at a stride phase.
 
 import { Renderer } from './gl/renderer.js';
@@ -30,7 +30,7 @@ const state = {
   gun: GUNS.includes(params.get('gun')) ? params.get('gun') : 'ak47',
   view: VIEWS[params.get('view')] ? params.get('view') : 'side',
   slow: params.has('slow') ? +params.get('slow') || 0.25 : 1,
-  zoom: [2, 4].includes(+params.get('zoom')) ? +params.get('zoom') : 1,
+  zoom: [2, 3, 4].includes(+params.get('zoom')) ? +params.get('zoom') : 1,
   focus: ['T', 'CT', 'H'].includes(params.get('focus')) ? params.get('focus') : 'CT', // who the camera centers on
 };
 const canvas = document.getElementById('c');
@@ -97,7 +97,7 @@ const overlay = {
 function draw() {
   const aspect = renderer.resize(1, Math.min(2, devicePixelRatio || 1));
   const [vp, vy] = VIEWS[state.view], pitch = vp + camPitch, yaw = vy + camYaw;
-  const dist = 230 / state.zoom, cp = Math.cos(pitch * DEG), at = state.zoom > 2 ? 63 : state.zoom > 1 ? 54 : 36; // (the chest, the head)
+  const dist = 230 / state.zoom, cp = Math.cos(pitch * DEG), at = [36, 36, 54, 5, 63][state.zoom]; // (2: the chest, 3: the feet, 4: the head)
   const across = state.view === 'front' || state.view === 'back', off = (['T', 'CT', 'H'].indexOf(state.focus) - 1) * SPACING;
   eye[0] = -Math.cos(yaw * DEG) * cp * dist + (across ? 0 : off);
   eye[1] = -Math.sin(yaw * DEG) * cp * dist + (across ? off : 0);
@@ -144,7 +144,7 @@ buttons('move', Object.keys(MOVES));
 buttons('gun', GUNS);
 buttons('view', Object.keys(VIEWS));
 buttons('slow', ['1', '0.25', '0.1']);
-buttons('zoom', ['1', '2', '4']);
+buttons('zoom', ['1', '2', '3', '4']);
 buttons('focus', ['T', 'CT', 'H']);
 sync();
 

@@ -113,6 +113,20 @@ function hairWarp(p) {
   return [x, y, z < edge ? edge - (edge - z) * 0.08 : z];
 }
 
+// The boot's sole under the ball and toe, and its heel, as top-down outlines that follow
+// the foot a little wider (the welt): [x, half width] from the front round one side to the
+// back, mirrored across the foot. The far versions coarser.
+const SOLE = [[6.1, 0], [5.9, 1], [5.4, 1.8], [4.6, 2.3], [3.4, 2.45], [2.2, 2.25], [0.6, 2.05]];
+const SOLE_FAR = [[6.1, 0], [5.4, 1.8], [3.4, 2.45], [0.6, 2.05]];
+const HEEL = [[-0.6, 2], [-1.7, 2.05], [-2.4, 1.6], [-2.75, 0.85], [-2.85, 0]];
+const HEEL_FAR = [[-0.6, 2], [-2.3, 1.8], [-2.85, 0]];
+// An outline's ring of points at y (the foot's middle), scaled by k about x = cx.
+function soleRing(half, y, k = 1, cx = 0) {
+  const pts = half.map(([x, w]) => [cx + (x - cx) * k, y + w * k]);
+  for (let i = half.length - 1; i >= 0; i--) if (half[i][1] > 0) pts.push([cx + (half[i][0] - cx) * k, y - half[i][1] * k]);
+  return pts;
+}
+
 // Torso sections up the spine (width a across, depth b forward, roundness n: 3 a rounded box,
 // 2 an ellipse): a V, narrow at the waist, broad across the chest, then rounder and narrower
 // over the shoulders, sloping into the neck like a trapezius, so the deltoids and the arms
@@ -225,6 +239,7 @@ export function buildPlayer(team, helmet = false, coarse = false) {
     if (fine) m.push().translate(1.4, hy + 0.6, sz + 0.9).rotate(90, 70).capsule(0.6, 2.4, 8, 2).pop();
 
     // Legs, one tube from the hip to the ankle: a full thigh, the calf swelling under the knee.
+    const shoe = team === 'H'; // the hostage's low shoes; the others' boots lace up the shin
     const [, ly] = bind('leg_upper_L');
     m.skin(LEG).color(L.pants).sweep([{ at: [0, ly, 37.5], a: 4.7, b: 4.9 }, { at: [0.2, ly + 0.2, 31], a: 4.4, b: 4.6 },
       { at: [0.2, ly, 24], a: 3.7, b: 3.9 }, { at: [0.3, ly, 20], a: 3.2, b: 3.4 }, { at: [-0.2, ly, 16], a: 3.4, b: 3.7 },
@@ -233,11 +248,37 @@ export function buildPlayer(team, helmet = false, coarse = false) {
       if (team === 'T') m.color(shade(L.pants, 0.88)).rbox(4, 1.6, 4.6, 0.6, 0, ly + 4.3, 27, 1); // cargo pocket
       if (L.pads) m.color(L.pads).rbox(1.6, 4.2, 4.2, 0.7, 3.3, ly, 20, 1); // knee pad
     }
+    // Above the foot: a boot's shaft up the shin (bending with the ankle under it: the leg's
+    // skin), laced up a darker tongue, the T's trousers bloused over its top; the hostage's
+    // trousers down over low shoes instead.
+    if (shoe) {
+      m.color(L.pants).push().translate(0, ly, 0).lathe([[2.8, 2.8], [2.75, 3.6], [2.55, 5.4]], sg(12)).pop(); // the hem
+    } else {
+      m.color(L.boots).push().translate(0.3, ly, 0).lathe([[2.5, 3], [2.85, 8.4], [3, 8.8]], sg(12)).pop();
+      if (fine) {
+        m.color(shade(L.boots, 0.8)).bevel(0).box(0.5, 1.5, 5, 2.75, ly, 6.1); // the tongue
+        m.color(shade(L.boots, 1.5));
+        for (const z of [4.7, 6.1, 7.5]) m.box(0.15, 1.8, 0.22, 3.05, ly, z); // laces across it
+        m.bevel(0.3);
+      }
+      if (team === 'T') m.color(L.pants).push().translate(0, ly, 0).lathe([[3, 7.6], [3.35, 8.6], [3, 9.8]], sg(12)).pop();
+    }
     m.skin();
-    // Boot: a shaft round the ankle, the foot, a thick sole.
-    m.bone(B('ankle_L')).color(L.boots).push().translate(0, ly, 2).lathe([[2.6, 0], [2.5, 4.8]], sg(12)).pop();
-    m.rbox(8.6, 4.4, 3.4, 1.3, 1.8, ly, 2.1, coarse ? 1 : 2);
-    m.color(shade(L.boots, 0.55)).rbox(9.2, 4.7, 0.9, 0.35, 1.9, ly, 0.45, 1);
+    // The foot: a tube from the heel to a rounded toe, high over the instep, low and wide at
+    // the ball (the heel-toe roll turns it about its heel and ball: HEEL, BALL in playeranim.js),
+    // on a darker sole a little wider than it (the welt), its heel a block of its own with a
+    // gap under the arch. The hostage's shoes are lower over the instep.
+    m.bone(B('ankle_L')).color(L.boots).sweep([{ at: [-1, ly, 2], a: 1.95, b: 1.75, n: 2.4 },
+      { at: [1, ly, shoe ? 2 : 2.35], a: 2.15, b: shoe ? 1.6 : 2, n: 2.4 }, { at: [3.2, ly, 1.7], a: 2.3, b: 1.3, n: 2.4 },
+      { at: [5, ly, 1.45], a: 2, b: 1, n: 2.2 }], coarse ? 6 : 10, [0, 0, 1]);
+    // The sole and the heel from the ground up, the bottom edge rounded (a ring a little
+    // inside the outline on the ground), the gap between them under the arch.
+    m.color(shade(L.boots, 0.55));
+    for (const [half, top, cx] of [[coarse ? SOLE_FAR : SOLE, 0.75, 3.35], [coarse ? HEEL_FAR : HEEL, 1.15, -1.7]]) {
+      const ring = soleRing(half, ly);
+      m.loft(coarse ? [{ z: 0, pts: ring }, { z: top, pts: ring }] :
+        [{ z: 0, pts: soleRing(half, ly, 0.9, cx) }, { z: 0.2, pts: ring }, { z: top, pts: ring }]);
+    }
   }, 1, S.mirror);
   return b.build();
 }
