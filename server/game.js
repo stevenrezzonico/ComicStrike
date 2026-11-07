@@ -20,12 +20,13 @@ import { mapEntities, BLAST, SF_EXPLOSION_NODAMAGE, SF_EXPLOSION_NOFIREBALL } fr
 import { touched, touchedCount } from '../shared/pmove.js';
 import {
   PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, PS_GROUNDENT, PS_WATERLEVEL, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, AIR_TICKS,
-  eyeOffset,
+  FL_ONLADDER, eyeOffset,
 } from '../shared/pmove.js';
 import {
   ShotList, WEAPONS, WEAPON_ID, giveWeapon, silenced, canCarryGrenade, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4,
   WEV_PLANTED, WEV_DEFUSED, WEV_DROP, WEV_FIRE, WEV_MELEE, WEV_THROW, WS_RELOAD_END, WS_ACTION, WS_THROWN, ACTION_PLANT,
   ACTION_DEFUSE, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, SLOT_GRENADE, SLOT_TASER, NUM_SLOTS, WS_GRENADES, GRENADE_IDS, removeWeapon,
+  WS_ZOOM, WS_RESUME_ZOOM,
 } from '../shared/weapons.js';
 import { HitTargets, HITGROUP_HEAD, HITGROUP_CHEST, HITGROUP_LEGS, feetOffset } from '../shared/hitgroups.js';
 import { Grenades, FX_BLAST } from '../shared/grenades.js';
@@ -56,7 +57,7 @@ import {
   PROTOCOL_VERSION, SNAPSHOT_HISTORY, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
   SHOT_BLOOD, writePrint, printChunks, writeChat, cleanChat, cleanName, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC, writeReport, NO_MVP,
   CHAT_RADIO, CHAT_MAP, RADIO, radioIndex, writePing,
-  KILL_HEADSHOT, KILL_PENETRATED, KILL_FLASH_ASSIST, NO_ASSIST, KILL_REPEAT_TICKS, HURT_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
+  KILL_HEADSHOT, KILL_PENETRATED, KILL_FLASH_ASSIST, KILL_AIRBORNE, KILL_NOSCOPE, NO_ASSIST, KILL_REPEAT_TICKS, HURT_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
   writeWelcome, writeReject, writeInfo, writeItems, writeGrenades, writeHostages, readCmds, writeSnapshot, quantizePitch,
   quantizeYaw,
   E_ACTIVE, E_X, E_Y, E_Z,
@@ -956,6 +957,11 @@ export class Game {
     const im = this.impacts, ev = this.events;
     const weapon = this.shots.weapon[0];
     const w = WEAPONS[weapon];
+    // The kill feed's marks for this shot: the shooter in the air (not on a ladder), a sniper
+    // rifle fired unscoped (a bolt rifle fired scoped has left the scope for its bolt: resume zoom).
+    const sf = shooter.player.ps.i[PS_FLAGS], swf = shooter.player.ws.f;
+    const marks = (sf & (FL_ONGROUND | FL_ONLADDER) ? 0 : KILL_AIRBORNE) |
+      (w && w.zoomLevels >= 2 && !swf[WS_ZOOM] && !swf[WS_RESUME_ZOOM] ? KILL_NOSCOPE : 0);
     for (let i = 0; i < im.count; i++) {
       const x = im.pos[i * 3], y = im.pos[i * 3 + 1], z = im.pos[i * 3 + 2];
       const nx = im.normal[i * 3], ny = im.normal[i * 3 + 1], nz = im.normal[i * 3 + 2];
@@ -979,12 +985,13 @@ export class Game {
       this.recordDamage(shooter, victim, before);
       const sf = shooter.player.ps.f;
       this.hurtFrom(victim, before, sf[PS_ORIGIN], sf[PS_ORIGIN + 1], sf[PS_ORIGIN + 2] + eyeOffset(shooter.player.ps));
-      if (victim.player.health <= 0) this.kill(shooter, victim, weapon, im.group[i] === HITGROUP_HEAD, im.pen[i] !== 0);
+      if (victim.player.health <= 0) this.kill(shooter, victim, weapon, im.group[i] === HITGROUP_HEAD, im.pen[i] !== 0, marks);
     }
   }
 
-  // `penetrated`: the bullet went through something first (the kill feed's wallbang mark).
-  kill(killer, victim, weapon, headshot, penetrated = false) {
+  // `penetrated`: the bullet went through something first (the kill feed's wallbang mark);
+  // `marks`: more KILL_* flags (in the air, no scope).
+  kill(killer, victim, weapon, headshot, penetrated = false, marks = 0) {
     const k = killer.player, v = victim.player;
     if (this.mode === MODE.demo && !victim.bot && v.health <= 0) { // the demo: humans take the hit, not the death
       v.health = 1;
@@ -1028,7 +1035,7 @@ export class Game {
     } else if (weapon !== WEAPON_ID.c4) k.kills--; // CS's suicide (the kill command, a fall, the world): a kill less
     if (this.phase === PHASE_WARMUP) victim.respawnTick = this.tick + WARMUP_RESPAWN * TICK_RATE;
     else if (this.respawns(victim)) victim.respawnTick = this.tick + DM_RESPAWN * TICK_RATE;
-    const flags = (headshot ? KILL_HEADSHOT : 0) | (penetrated ? KILL_PENETRATED : 0) |
+    const flags = (headshot ? KILL_HEADSHOT : 0) | (penetrated ? KILL_PENETRATED : 0) | (killer !== victim ? marks : 0) |
       (assist !== NO_ASSIST && this.flashAssisted ? KILL_FLASH_ASSIST : 0);
     this.events.addKill(this.nextKillId, killer.id, victim.id, weapon, flags, this.tick, assist);
     this.nextKillId = (this.nextKillId + 1) & 0xffff || 1;

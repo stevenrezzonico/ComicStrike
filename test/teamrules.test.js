@@ -4,10 +4,10 @@
 import assert from 'node:assert/strict';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
-import { Writer, KILL_PENETRATED, KILL_FLASH_ASSIST, NO_ASSIST } from '../shared/protocol.js';
+import { Writer, KILL_PENETRATED, KILL_FLASH_ASSIST, KILL_AIRBORNE, KILL_NOSCOPE, NO_ASSIST } from '../shared/protocol.js';
 import { WEAPONS, WEAPON_ID, giveWeapon, WS_ACTIVE, SLOT_PRIMARY } from '../shared/weapons.js';
 import { HITGROUP_CHEST } from '../shared/hitgroups.js';
-import { IN_ATTACK } from '../shared/constants.js';
+import { IN_ATTACK, IN_ATTACK2 } from '../shared/constants.js';
 import { GAME_FF, ITEM_DEFUSER } from '../shared/economy.js';
 import { Game } from '../server/game.js';
 import { yard, quiet, joinClient, runInputs, teleport } from './harness.js';
@@ -153,6 +153,46 @@ Deno.test('kill feed: a kill through another body is marked penetrated', () => {
   assert.ok(!back.alive, 'the one behind killed');
   assert.ok(g.events.killFlags[g.events.kills - 1] & KILL_PENETRATED);
   assert.ok(Math.abs(back.player.ps.f[PS_ORIGIN] - 160) < 1);
+});
+
+Deno.test('kill feed: a kill fired in the air is marked so; an AWP unscoped is a noscope, scoped not', () => {
+  const { g, join, run } = setup();
+  const a = join('a', TEAM_T), v = join('v', TEAM_CT);
+  const last = () => g.events.killFlags[g.events.kills - 1];
+  const fire = (buttons = IN_ATTACK) => {
+    a.input.buttons = buttons;
+    run(1);
+    a.input.buttons = 0;
+    run(1);
+  };
+  teleport(a, 0, 0, 36);
+  teleport(v, 120, 0, 36);
+  a.input.pitch = 8;
+  run(80);
+  teleport(a, 0, 0, 36 + 40); // 40 up: falling as it fires
+  a.input.pitch = 25;
+  v.player.health = 1;
+  fire();
+  assert.ok(!v.alive && last() & KILL_AIRBORNE && !(last() & KILL_NOSCOPE), 'in the air');
+  const b = join('b', TEAM_CT);
+  run(70); // a down on the ground again
+  giveWeapon(a.player.ws, WEAPON_ID.awp);
+  a.player.ws.f[WS_ACTIVE] = SLOT_PRIMARY;
+  teleport(a, 0, 200, 36);
+  teleport(b, 120, 200, 36);
+  a.input.pitch = 8;
+  run(100);
+  b.player.health = 1;
+  fire();
+  assert.ok(!b.alive && last() & KILL_NOSCOPE && !(last() & KILL_AIRBORNE), 'an AWP from the hip, standing');
+  const c = join('c', TEAM_CT);
+  teleport(c, 120, 200, 36);
+  run(100);
+  fire(IN_ATTACK2); // the scope
+  run(30);
+  c.player.health = 1;
+  fire();
+  assert.ok(!c.alive && !(last() & KILL_NOSCOPE), 'scoped');
 });
 
 Deno.test('team limits: a third T goes CT, a switch that stacks is refused; the round start evens teams out', () => {
