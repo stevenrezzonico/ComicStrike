@@ -69,11 +69,13 @@ const TORSO = (q) => {
   const ay = Math.abs(q[1]), w = 0.5 * Math.min(1, Math.max(0, (ay - 6) / 4)) * Math.min(1, Math.max(0, (q[2] - 53.5) / 3));
   return w > 0 ? [B('spine_3'), B(q[1] > 0 ? 'clavicle_L' : 'clavicle_R'), w] : TORSO_SPINE(q);
 };
-const ARM = chain(1, [[3.5, 'spine_3'], [7, 'clavicle_L'], [10.5, 'arm_upper_L'], [19.75, 'arm_upper_L'],
+// The arm all the upper arm's from just inside its joint (9.75 out): a root blended onto
+// the clavicle past the joint stayed behind when the arm hung down and folded into a corner.
+const ARM = chain(1, [[3.5, 'spine_3'], [7, 'clavicle_L'], [9.2, 'arm_upper_L'], [19.75, 'arm_upper_L'],
   [23.75, 'arm_lower_L'], [31.75, 'arm_lower_L'], [33.75, 'hand_L']], true);
-// The deltoid: a ball on the shoulder joint, half the clavicle's, half the arm's, so the
+// The deltoid: a ball on the shoulder joint, more the arm's than the clavicle's, so the
 // arm's root stays covered however the arm swings.
-const DELTOID = () => [B('clavicle_L'), B('arm_upper_L'), 0.5];
+const DELTOID = () => [B('clavicle_L'), B('arm_upper_L'), 0.65];
 const LEG = chain(2, [[2.5, 'ankle_L'], [5.5, 'leg_lower_L'], [18, 'leg_lower_L'], [22, 'leg_upper_L'],
   [33, 'leg_upper_L'], [38, 'pelvis']]);
 
@@ -82,12 +84,14 @@ function fold(b, at, pitch, yaw, roll, len) {
   b.push().translate(...at).rotate(pitch, yaw, roll).scale(len, 0.13, 0.13).sphere(1, 6, 3).pop();
 }
 
-// Torso sections up the spine (width a across, depth b forward), as rounded boxes: a V,
-// narrow at the waist, broad across the chest to a shoulder shelf that slopes into the neck.
-const TORSO_SECTIONS = [[33.5, 6.6, 4.3], [37, 7.4, 4.8], [41, 6.7, 4.4], [46, 7.0, 4.7], [51, 8.6, 5.4],
-  [55, 10.0, 5.3], [58, 9.6, 4.6], [59.8, 3.6, 2.9]];
+// Torso sections up the spine (width a across, depth b forward, roundness n: 3 a rounded box,
+// 2 an ellipse): a V, narrow at the waist, broad across the chest, then rounder and narrower
+// over the shoulders, sloping into the neck like a trapezius, so the deltoids and the arms
+// make the shoulders' outline (a square shelf 10 across poked out past them like pads).
+const TORSO_SECTIONS = [[33.5, 6.6, 4.3, 3], [37, 7.4, 4.8, 3], [41, 6.7, 4.4, 3], [46, 7.0, 4.7, 3], [51, 8.6, 5.4, 3],
+  [55, 9.6, 5.3, 2.6], [58, 8.2, 4.5, 2.3], [59.8, 3.6, 2.9, 2.2]];
 const torsoAt = (grow = 0, from = 0, to = TORSO_SECTIONS.length) => TORSO_SECTIONS.slice(from, to)
-  .map(([z, a, bb]) => ({ at: [0, 0, z], a: a + grow, b: bb + grow, n: 3 }));
+  .map(([z, a, bb, n]) => ({ at: [0, 0, z], a: a + grow, b: bb + grow, n }));
 
 // team: 'T', 'CT' or 'H' (hostage); helmet: CTs show a helmet only when they own one.
 // coarse: the far version (client/gl/playermodels.js past FAR_LOD): the same tubes and
@@ -166,10 +170,10 @@ export function buildPlayer(team, helmet = false, coarse = false) {
     // Arms (T-pose along +y): the deltoid on the joint, then one tube from inside it to the
     // wrist, a full upper arm, the forearm swelling below the elbow and tapering to the wrist.
     const [, sy, sz] = bind('arm_upper_L'), [, ey] = bind('arm_lower_L'), [, hy] = bind('hand_L');
-    // (its top level with the shoulder shelf: higher, it bulged up by the ears)
-    m.skin(DELTOID).color(L.jacket).push().translate(0.3, sy, sz - 0.7).sphere(3.4, sg(12), coarse ? 2 : 6).pop();
-    m.skin(ARM).sweep([{ at: [0, sy - 0.8, sz], a: 3.5, b: 3.6 }, { at: [0, sy + 2.5, sz], a: 3.3, b: 3.4 },
-      { at: [0, sy + 7, sz], a: 3.0, b: 3.1 }, { at: [0, ey, sz], a: 2.6, b: 2.7 }, { at: [0, ey + 3.2, sz], a: 2.95, b: 2.8 },
+    // (round over the joint, a little in, its top a little over the sloping shelf: the shoulder's cap)
+    m.skin(DELTOID).color(L.jacket).push().translate(0.2, sy - 0.3, sz - 1).sphere(3.35, sg(12), coarse ? 2 : 6).pop();
+    m.skin(ARM).sweep([{ at: [0, sy, sz], a: 3.2, b: 3.3 }, // (its round end centered on the joint: a ball in any turn)
+      { at: [0, sy + 2.5, sz], a: 3.1, b: 3.2 }, { at: [0, sy + 7, sz], a: 2.9, b: 3.0 }, { at: [0, ey, sz], a: 2.6, b: 2.7 }, { at: [0, ey + 3.2, sz], a: 2.95, b: 2.8 },
       { at: [0, ey + 7, sz], a: 2.5, b: 2.4 }, { at: [0, hy - 2.2, sz], a: 2.0, b: 2.05 }], sg(12));
     if (fine) {
       m.color(shade(L.jacket, team === 'H' ? 1.08 : 1.18)).push().translate(0, hy - 3.2, sz).rotate(0, 0, -90)
