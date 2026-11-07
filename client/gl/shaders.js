@@ -1013,6 +1013,7 @@ uniform float u_soft;  // shade dots: 0 bold, 1 soft (a finer screen, a paler pr
 uniform float u_dead;  // 0..1: our death (client/deathpanel.js): a red-brown duotone, a darker vignette
 uniform vec4 u_fog;   // the medium the camera is in (a smoke cloud, water, slime, lava): its tone, how far in (a: 0..1)
 uniform vec2 u_sight; // its e-fold (units), and how much it tints the first-person view
+uniform vec4 u_mapfog; // the map's env_fog: its color and density (GL_EXP2; 0: none)
 uniform float u_inkaa; // 1: smooth the lines at the canvas's own render scale (r_inkaa)
 out vec4 o_color;
 const float INK_CORNER = 0.35; // smoothInk: the ink a step's inside corner takes
@@ -1108,6 +1109,13 @@ void main() {
     vec3 shade = mix(alb * vec3(0.52, 0.53, 0.62), base, 0.3 * u_soft);
     vec3 print = mix(shade, INK, (0.12 + 0.28 * smoothstep(0.5, 0.9, dark)) * (1.0 - 0.6 * u_soft));
     col = mix(base, mix(print, alb * 0.72, farChar), m);
+  }
+  // The map's fog (env_fog): GoldSrc's GL_EXP2 by distance, the ink fading with it; the sky and
+  // the first-person view stay clear, as in GoldSrc.
+  if (u_mapfog.a > 0.0 && (fl & (G_SKY | G_VIEW)) == 0u) {
+    float k = dP * u_mapfog.a, fog = 1.0 - exp(-k * k);
+    col = mix(col, u_mapfog.rgb, fog);
+    edge *= 1.0 - fog;
   }
   // Inside a smoke cloud or under water: the print fogs toward the medium's tone with the
   // pixel's distance, printed with a faint dot screen so it still looks printed; the sky

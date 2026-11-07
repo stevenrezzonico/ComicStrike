@@ -7,7 +7,22 @@
 // object: rebuilding the panel for each was 2 style recalculations a second, 1-1.8 ms each on
 // a laptop, while nothing on it changed).
 
-import { VOTE_RUNNING, VOTE_PASSED, VOTE_KICK, VOTE_CHANGELEVEL } from '../shared/protocol.js';
+import {
+  VOTE_RUNNING, VOTE_PASSED, VOTE_KICK, VOTE_CHANGELEVEL, VOTE_SURRENDER, VOTE_TIMEOUT, VOTE_SCRAMBLE, VOTE_SWAP, VOTE_PAUSE,
+  VOTE_UNPAUSE,
+} from '../shared/protocol.js';
+
+// The question by issue (detail: the target, the map, or a team vote's team).
+const QUESTION = {
+  [VOTE_KICK]: (d) => `Kick ${d}?`,
+  [VOTE_CHANGELEVEL]: (d) => `Change the map to ${d}?`,
+  [VOTE_SURRENDER]: (d) => `Surrender (the ${d})?`,
+  [VOTE_TIMEOUT]: (d) => `Tactical timeout (the ${d})?`,
+  [VOTE_SCRAMBLE]: () => 'Scramble the teams?',
+  [VOTE_SWAP]: () => 'Swap the teams?',
+  [VOTE_PAUSE]: () => 'Pause the match?',
+  [VOTE_UNPAUSE]: () => 'Resume the match?',
+};
 
 const RESULT_MS = 3000;
 const LOST_MS = 2000; // a running vote whose result never came goes this long after its end
@@ -38,8 +53,7 @@ export class VotePanel {
     this.shown = v;
     this.secs = secs;
     if (secs < 0) return this.clear();
-    const what = v.issue === VOTE_KICK ? `Kick ${v.detail}?` : v.issue === VOTE_CHANGELEVEL
-      ? `Change the map to ${v.detail}?` : 'Restart the match?';
+    const what = QUESTION[v.issue] ? QUESTION[v.issue](v.detail) : 'Restart the match?';
     const lines = [`Vote: ${what}`, `called by ${this.names(v.caller) || `player${v.caller}`}`,
       `Yes ${v.yes} · No ${v.no} · ${v.needed} of ${v.voters} needed`];
     if (!secs) lines.push(v.state === VOTE_PASSED ? 'Vote passed' : 'Vote failed');

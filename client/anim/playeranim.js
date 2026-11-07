@@ -18,7 +18,7 @@
 import { Pose, PLAYER_SKELETON as S } from './skeleton.js';
 import * as Q from './quat.js';
 import { HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4, HOLD_TIED } from '../models/players.js';
-import { WEAPONS, WEAPON_ID, SLOT_SECONDARY, SLOT_KNIFE, SLOT_C4 } from '../../shared/weapons.js';
+import { WEAPONS, WEAPON_ID, SLOT_KNIFE, SLOT_C4 } from '../../shared/weapons.js';
 import { ANIM_RELOAD, ANIM_PLANT, ANIM_DEFUSE } from '../../shared/protocol.js';
 import { ramp, matrix } from './viewanim.js'; // (bump written out as ramps: as a call, not inlined, its double argument was boxed)
 
@@ -104,7 +104,7 @@ export function holdOf(weaponId) {
   const w = WEAPONS[weaponId];
   if (!w || w.slot === SLOT_KNIFE || w.grenade) return HOLD_KNIFE; // one hand
   if (w.slot === SLOT_C4) return HOLD_C4;
-  return w.slot === SLOT_SECONDARY ? HOLD_PISTOL : HOLD_RIFLE;
+  return w.pistol ? HOLD_PISTOL : HOLD_RIFLE; // the Zeus too
 }
 
 const tq = new Float32Array(4);
@@ -653,7 +653,7 @@ export function primeAnimator(points) {
   a.throwArm();
   run(0, 30.5, 0, 0, true, HOLD_KNIFE, 0, true, 0, 20);
   for (const name of ['ak47', 'nova', 'revolver']) {
-    run(0, 30.5, 0, 0, true, WEAPONS[WEAPON_ID[name]].slot === SLOT_SECONDARY ? HOLD_PISTOL : HOLD_RIFLE, ANIM_RELOAD, true,
+    run(0, 30.5, 0, 0, true, WEAPONS[WEAPON_ID[name]].pistol ? HOLD_PISTOL : HOLD_RIFLE, ANIM_RELOAD, true,
       WEAPON_ID[name], 12, 0.3);
   }
   a.die(0.6, 0.8, false, 0, 0, 5);

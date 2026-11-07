@@ -598,6 +598,21 @@ function buildRevolver(b) {
     cylinder: [0.3, 0, 0.85] };
 }
 
+// The Zeus x27: a boxy yellow stun gun, a black grip, a black cartridge at the front with
+// two steel electrodes, a sight bump on top. One-shot, so no magazine and no slide.
+const TASER_YELLOW = [0.88, 0.7, 0.12];
+function buildTaser(b) {
+  b.color(TASER_YELLOW).rbox(6.4, 1.2, 1.7, 0.35, 1.8, 0, 1.05); // the body
+  b.color(BLACK).rbox(1.3, 1.4, 1.95, 0.25, 5.4, 0, 1.05); // the cartridge
+  withBevel(b, 0, () => {
+    b.color(STEEL).box(0.4, 0.22, 0.22, 6.2, 0.35, 1.45).box(0.4, 0.22, 0.22, 6.2, -0.35, 1.45); // electrodes
+    b.color(shade(TASER_YELLOW, 0.55)).box(3.2, 1.25, 0.12, 1.4, 0, 0.55); // a dark band along the bottom
+  });
+  b.color(BLACK).rbox(1.2, 0.6, 0.45, 0.12, 2.2, 0, 2.05); // the sight bump
+  grip(b, 3.8, 1.1, POLY, 14, 1.8);
+  return { muzzle: [6.4, 0, 1.45], support: [...PISTOL_SUPPORT], grasp: [...PISTOL_GRASP], gripR: 1.1 / 2 };
+}
+
 function buildKnife(b) {
   b.color(BLACK).box(4.4, 1, 1.2, 0.6, 0, 0); // handle
   b.color(DARK).box(0.5, 1.2, 1.9, 3, 0, 0.1); // guard
@@ -664,6 +679,7 @@ export function buildGun(name, opts = {}) {
   if (name === 'knife') pts = buildKnife(b);
   else if (name === 'molotov' || GRENADES[name]) pts = buildGrenade(b, name);
   else if (name === 'c4') pts = buildC4(b, opts.ledOff ? [0.3, 0.06, 0.05] : LED);
+  else if (name === 'taser') pts = buildTaser(b);
   else if (!g) throw new Error(`no gun model for ${name}`);
   else if (g.revolver) pts = buildRevolver(b);
   else if (g.pistol) {

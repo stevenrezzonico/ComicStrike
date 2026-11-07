@@ -5,12 +5,13 @@
 // kill events) every tick. Transport-agnostic: sessions only need send(bytes) and
 // close(reason).
 
-import { parseVec3, BSP_LIMITS, entityYaw, teamSpawns, CONTENTS_SLIME, CONTENTS_LAVA } from '../shared/bsp.js';
+import { parseVec3, BSP_LIMITS, entityYaw, teamSpawns, CONTENTS_SLIME, CONTENTS_LAVA, CONTENTS_EMPTY } from '../shared/bsp.js';
 import { TICK_RATE, TICK_DT } from '../shared/constants.js';
 import { ARMS_RACE, DEMOLITION, armLevel } from '../shared/progression.js';
 import { modeOfRules, MODE } from '../shared/modes.js';
 import {
-  CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, pointContents, HULL_STAND, HULL_POINT,
+  CollisionWorld, Trace, traceHull, hullFits, setBody, clearBodies, pointContents, entityContents, HULL_STAND, HULL_DUCK,
+  HULL_POINT,
 } from '../shared/trace.js';
 import {
   EXPLODE_RANGE, blastDamage, SF_BREAK_TOUCH, SF_BREAK_PRESSURE, MAT_UNBREAKABLE_GLASS,
@@ -24,7 +25,7 @@ import {
 import {
   ShotList, WEAPONS, WEAPON_ID, giveWeapon, silenced, canCarryGrenade, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4,
   WEV_PLANTED, WEV_DEFUSED, WEV_DROP, WEV_FIRE, WEV_MELEE, WEV_THROW, WS_RELOAD_END, WS_ACTION, WS_THROWN, ACTION_PLANT,
-  ACTION_DEFUSE, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, SLOT_GRENADE, NUM_SLOTS, WS_GRENADES, GRENADE_IDS, removeWeapon,
+  ACTION_DEFUSE, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, SLOT_GRENADE, SLOT_TASER, NUM_SLOTS, WS_GRENADES, GRENADE_IDS, removeWeapon,
 } from '../shared/weapons.js';
 import { HitTargets, HITGROUP_HEAD, HITGROUP_CHEST, HITGROUP_LEGS, feetOffset } from '../shared/hitgroups.js';
 import { Grenades, FX_BLAST } from '../shared/grenades.js';
@@ -40,7 +41,7 @@ import {
 } from '../shared/player.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import { Items, THROW_SPEED, LET_GO_SPEED, MAX_ITEMS } from '../shared/items.js';
-import { IN_USE } from '../shared/constants.js';
+import { IN_USE, IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT } from '../shared/constants.js';
 import { parse } from '../shared/cvars.js';
 import { Bots } from './bots.js';
 import {
@@ -49,7 +50,7 @@ import {
   PLANT_LOSS_BONUS, LOSS_STREAK_MAX, TEAMKILL_PENALTY, END_ELIMINATION, END_TIME, END_DRAW, END_BOMB, END_DEFUSE,
   END_RESCUE, RESCUE_WIN_REWARD, RESCUE_REWARD, HOSTAGE_TOUCH_REWARD, HOSTAGE_HIT_PENALTY, HOSTAGE_KILL_PENALTY,
   END_MATCH, ROUND_FINAL, matchOver, GAME_FFA, GAME_GHOST_TEAM, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
-  mapBuying, teamMayBuy, GAME_FF, ITEM_DEFUSER,
+  mapBuying, teamMayBuy, GAME_FF, ITEM_DEFUSER, END_SURRENDER, GAME_PAUSED, GAME_TIMEOUT,
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, SNAPSHOT_HISTORY, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
@@ -114,6 +115,7 @@ const PING_REACH = 4096; // a ping marks the first thing the view meets within t
 const SPOT_TICKS = 4;
 const SPOT_CONE = 0.5; // cos 60 degrees off the view
 const SHOT_REVEAL_TICKS = TICK_RATE; // firing an unsilenced gun shows the shooter for 1 s
+const PUSH_SPEED = 100; // u/s a player shoves a func_pushable (approx.)
 const DEG = Math.PI / 180;
 // Deathmatch spawns (approx. of CS:GO's): random spots tried, the least distance to an enemy.
 const DM_SPAWN_TRIES = 64;
@@ -314,6 +316,8 @@ export const DEFAULT_RULES = {
   limitTeams: 0,
   autoTeamBalance: false,
   armouryEntities: true, // mp_armoury_entities: the map's weapons lying out at each round start
+  timeoutMax: 1, // mp_team_timeout_max: tactical timeouts a team may call a match
+  timeoutTime: 60, // mp_team_timeout_time (s)
   // Bots (server/bots.js).
   botQuota: 0, // bot_quota
   botQuotaMode: 'normal', // bot_quota_mode: normal (that many bots) or fill (bots + humans)
@@ -412,6 +416,11 @@ export class Game {
     this.warmupReady = -1; // warmup: server tick both teams first had players (-1: not yet)
     this.warmupManual = false; // mp_warmup_start without mp_warmuptime: until mp_warmup_end
     this.restartAt = 0; // mp_restartgame: server tick to restart the match at
+    this.teamChange = ''; // 'swap' or 'scramble' at that restart (mp_swapteams, mp_scrambleteams)
+    this.paused = false; // mp_pause_match: the freeze time holds while on
+    this.timeoutTeam = 0; // a tactical timeout waiting for the next freeze time (the team's)
+    this.timeoutEnd = 0; // tick the running one ends
+    this.timeoutsUsed = { [TEAM_T]: 0, [TEAM_CT]: 0 };
     // rcon(client, password, command) -> output text; set by the Host. null: no rcon.
     this.rcon = null;
     // admit(client, password) -> '' or why a joining session is refused (sv_password); set
@@ -889,6 +898,7 @@ export class Game {
   runCommand(c, t, select, frozen) {
     const p = c.player;
     c.cmdTime = t * TICK_DT;
+    if (this.doors.pushables.length && !frozen) this.pushCrates(c);
     const wf = p.ws.f, held = WS_SLOTS + wf[WS_ACTIVE] * 3;
     const heldId = wf[held], heldClip = wf[held + 1], heldReserve = wf[held + 2]; // what G may drop
     this.world.bodySelf = c.id;
@@ -988,6 +998,7 @@ export class Game {
     const vf = v.ws.f;
     const slot = vf[WS_SLOTS + SLOT_PRIMARY * 3] ? SLOT_PRIMARY : vf[WS_SLOTS + SLOT_SECONDARY * 3] ? SLOT_SECONDARY : -1;
     if (slot >= 0 && this.rules.deathDropGun) this.dropSlot(victim, slot, false);
+    if (this.rules.deathDropGun) this.dropSlot(victim, SLOT_TASER, false); // CS:GO's mp_death_drop_taser 1
     const nade = this.rules.deathDropGrenade ? deathGrenade(vf, this.rules.deathDropGrenade) : 0;
     if (nade) this.spawnItem(victim, nade, 0, 0, false);
     if (v.defuser && this.rules.deathDropDefuser) {
@@ -1014,7 +1025,7 @@ export class Game {
         if (!this.rules.teammatesAreEnemies) assist = this.assisterOf(killer, victim);
         if (assist !== NO_ASSIST) this.clients[assist].player.assists++;
       }
-    }
+    } else if (weapon !== WEAPON_ID.c4) k.kills--; // CS's suicide (the kill command, a fall, the world): a kill less
     if (this.phase === PHASE_WARMUP) victim.respawnTick = this.tick + WARMUP_RESPAWN * TICK_RATE;
     else if (this.respawns(victim)) victim.respawnTick = this.tick + DM_RESPAWN * TICK_RATE;
     const flags = (headshot ? KILL_HEADSHOT : 0) | (penetrated ? KILL_PENETRATED : 0) |
@@ -1080,12 +1091,15 @@ export class Game {
     const rs = this.round;
     if (this.restartAt && this.tick >= this.restartAt) { // mp_restartgame
       this.restartAt = 0;
+      if (this.teamChange) this.changeTeams(this.teamChange);
       if (t && ct && this.rules.rounds) this.startMatch();
       else this.startWarmup(false);
     }
     const ready = this.ready(t, ct), r = this.rules;
     rs.mode = (r.teammatesAreEnemies ? GAME_FFA : 0) | this.mode.bit |
-      (!r.solidTeammates && !r.teammatesAreEnemies ? GAME_GHOST_TEAM : 0) | (r.friendlyFire ? GAME_FF : 0);
+      (!r.solidTeammates && !r.teammatesAreEnemies ? GAME_GHOST_TEAM : 0) | (r.friendlyFire ? GAME_FF : 0) |
+      (this.paused && rs.phase === PHASE_FREEZE ? GAME_PAUSED : 0) | (this.tick < this.timeoutEnd ? GAME_TIMEOUT : 0);
+    if (this.paused && rs.phase === PHASE_FREEZE) this.holdFreeze(1); // its clock stands still
     if (rs.phase === PHASE_WARMUP) {
       if (!ready) this.warmupReady = -1;
       else if (this.warmupReady < 0) this.warmupReady = this.tick;
@@ -1171,6 +1185,7 @@ export class Game {
     this.overtime = 0; // overtime periods started; otScoreT/CT: the scores when the current one began
     this.otScoreT = this.otScoreCT = 0;
     this.lossStreak[TEAM_T] = this.lossStreak[TEAM_CT] = 0;
+    this.timeoutsUsed[TEAM_T] = this.timeoutsUsed[TEAM_CT] = 0;
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
       c.player.money = this.rules.startMoney;
@@ -1186,7 +1201,7 @@ export class Game {
   startRound(fresh) {
     this.breakables.reset(this.world);
     this.pressed.clear();
-    this.doors.reset(this.world);
+    this.doors.reset(this.world, this.tick);
     this.killables.reset(this.world);
     this.logic.reset(this.tick);
     if (this.rules.autoTeamBalance && this.rules.rounds && !this.rules.teammatesAreEnemies && this.mode !== MODE.demo) {
@@ -1242,6 +1257,84 @@ export class Game {
     this.round.mvp = NO_MVP;
     if (demolition) this.rosterDirty = true; // the new levels
     this.setPhase(PHASE_FREEZE, this.rules.freezeTime);
+    if (this.timeoutTeam) this.beginTimeout();
+  }
+
+  // --- Match control (votes and their console commands) -------------------------------
+
+  // The freeze time `ticks` longer (a pause tick, a timeout); a bomb already down (Retakes)
+  // waits as long.
+  holdFreeze(ticks) {
+    this.phaseEnd += ticks;
+    if (this.bomb.state === BOMB_PLANTED) this.explodeTick += ticks;
+  }
+
+  // mp_pause_match / mp_unpause_match (and their votes): the freeze time holds while paused,
+  // the next one if a round is on.
+  pauseMatch(on) {
+    if (this.paused === on) return;
+    this.paused = on;
+    this.printAll(!on ? 'The match is resumed.' : this.phase === PHASE_FREEZE ? 'The match is paused.'
+      : 'The match will pause at the next freeze time.');
+  }
+
+  // Tactical timeouts left to `team` this match (mp_team_timeout_max).
+  timeoutsLeft(team) {
+    return Math.max(0, this.rules.timeoutMax - (this.timeoutsUsed[team] || 0));
+  }
+
+  // CS:GO's tactical timeout (a vote of the team, timeout_terrorist_start / timeout_ct_start):
+  // mp_team_timeout_time seconds more of this freeze time, else of the next one.
+  callTimeout(team) {
+    if (this.timeoutTeam || this.tick < this.timeoutEnd || !this.timeoutsLeft(team)) return false;
+    this.timeoutsUsed[team]++;
+    this.timeoutTeam = team;
+    if (this.phase === PHASE_FREEZE) this.beginTimeout();
+    else this.printAll(`Tactical timeout for the ${TEAM_NAMES[team]}s at the next freeze time.`);
+    return true;
+  }
+
+  beginTimeout() {
+    const ticks = this.rules.timeoutTime * TICK_RATE;
+    this.holdFreeze(ticks);
+    this.timeoutEnd = this.tick + ticks;
+    this.printAll(`Tactical timeout: the ${TEAM_NAMES[this.timeoutTeam]}s (${this.rules.timeoutTime} s).`);
+    this.timeoutTeam = 0;
+  }
+
+  // callvote surrender passed: `team` gives up, the other wins the match now.
+  surrender(team) {
+    const rs = this.round, winner = team === TEAM_T ? TEAM_CT : TEAM_T;
+    if (this.phase === PHASE_WARMUP || !this.rules.rounds) return;
+    this.printAll(`The ${TEAM_NAMES[team]}s surrender.`);
+    if (this.phase === PHASE_OVER) rs.info = winner | (END_SURRENDER << 2); // (the round already counted)
+    else this.endRound(winner, END_SURRENDER);
+    rs.info |= ROUND_FINAL; // the match ends with this round: startMatch after the delay
+  }
+
+  // mp_swapteams / mp_scrambleteams (and their votes): at a restart a second later, everyone
+  // to the other side, or the players shuffled and dealt out to both sides; a fresh match.
+  scheduleTeams(kind) {
+    this.teamChange = kind;
+    this.restartGame(1);
+  }
+
+  changeTeams(kind) {
+    this.teamChange = '';
+    const all = this.clients.filter((c) => c && c.joined && c.playing);
+    if (kind === 'scramble') {
+      for (let i = all.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [all[i], all[j]] = [all[j], all[i]];
+      }
+    }
+    for (let i = 0; i < all.length; i++) {
+      const c = all[i];
+      c.player.team = kind === 'swap' ? (c.team === TEAM_CT ? TEAM_T : TEAM_CT) : i % 2 ? TEAM_CT : TEAM_T;
+      c.teamSince = this.tick;
+    }
+    this.rosterDirty = true;
+    this.printAll(kind === 'swap' ? 'The teams swap sides.' : 'The teams are scrambled.');
   }
 
   // Retakes (CS:GO's, approx.): the site of the round, a planted spot in it from the bots'
@@ -1786,6 +1879,28 @@ export class Game {
   }
 
   // --- Doors ----------------------------------------------------------------------------
+
+  // A player walking into a func_pushable shoves it ahead at PUSH_SPEED (CPushable, approx.:
+  // along the way his keys send him, not his velocity, which the crate stops; not from on top
+  // of it). Server-side: the client sees the crate move with the snapshots, so a pusher's own
+  // movement is corrected as he goes.
+  pushCrates(c) {
+    const ps = c.player.ps, f = ps.f, b = c.buttons;
+    const fwd = (b & IN_FORWARD ? 1 : 0) - (b & IN_BACK ? 1 : 0), side = (b & IN_MOVERIGHT ? 1 : 0) - (b & IN_MOVELEFT ? 1 : 0);
+    if (!fwd && !side) return;
+    const yr = c.yaw * Math.PI / 180, cy = Math.cos(yr), sy = Math.sin(yr);
+    let wx = fwd * cy + side * sy, wy = fwd * sy - side * cy;
+    const len = Math.hypot(wx, wy);
+    wx /= len;
+    wy /= len;
+    const hull = ps.i[PS_FLAGS] & FL_DUCKING ? HULL_DUCK : HULL_STAND, d = this.doors;
+    for (const k of d.pushables) {
+      if (d.dead[k] || ps.i[PS_GROUNDENT] === d.ent[k]) continue;
+      if (entityContents(this.world, d.ent[k], hull, f[PS_ORIGIN] + wx * 2, f[PS_ORIGIN + 1] + wy * 2, f[PS_ORIGIN + 2]) ===
+        CONTENTS_EMPTY) continue;
+      d.shove(this.world, k, wx * PUSH_SPEED * TICK_DT, wy * PUSH_SPEED * TICK_DT, this.doorBodies);
+    }
+  }
 
   // Map logic, then doors move (pushing living players) to where they are this tick, so
   // the tick's commands run against them as the clients predict.

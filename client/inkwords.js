@@ -29,6 +29,7 @@ const SHOTS = new Map([
   [GUN_SOUNDS.sniper, { words: ['KRA-KOOM!', 'KA-BLAM!', 'THOOM!'], size: 60, big: true }],
   [GUN_SOUNDS.shotgun, { words: ['KA-CHOW!', 'BOOM!'], size: 58, big: true }],
   [GUN_SOUNDS.silenced, { words: ['THWIP!', 'PFFT!'], size: 36 }],
+  [GUN_SOUNDS.taser, { words: ['BZZT!', 'ZAP!', 'KRZZT!'], size: 50 }],
   [GUN_SOUNDS.rifle, { text: (n) => (n === 1 ? 'RA' : `RATA${'-TA'.repeat(n - 2)}`), size: 52 }],
   [GUN_SOUNDS.smg, { text: (n) => `B${'R'.repeat(n + 1)}AP`, size: 46 }],
   [GUN_SOUNDS.mg, { text: (n) => `BUDDA${'-DA'.repeat(n - 1)}`, size: 52 }],

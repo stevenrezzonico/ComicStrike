@@ -4,7 +4,8 @@ import { createPlayerState, PS_VEL, PS_FLAGS, PS_EVENTS, FL_ONGROUND, FL_DUCKING
 import {
   WEAPONS, WEAPON_ID, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, ShotList, createWeaponState, giveWeapon,
   weaponTick, getInaccuracy, recoveryTime, UniformRandomStream, WS_ACTIVE, WS_SLOTS, WS_PUNCH, WS_EVENTS, WEV_FIRE, WEV_RELOADED,
-  WEV_SHELL, WS_RELOAD_END, WEV_DRYFIRE, WS_PENALTY, WS_PUNCH_VEL, refillAmmo, RECOIL, shotKick,
+  WEV_SHELL, WS_RELOAD_END, WEV_DRYFIRE, WS_PENALTY, WS_PUNCH_VEL, refillAmmo, RECOIL, shotKick, SLOT_TASER,
+  damageAtRange,
 } from '../shared/weapons.js';
 
 const DEG = Math.PI / 180;
@@ -34,6 +35,25 @@ function hold(ctx, buttons, from, n, select = -1) {
 
 const clip = (ctx, slot) => ctx.ws.f[WS_SLOTS + slot * 3 + 1];
 const reserve = (ctx, slot) => ctx.ws.f[WS_SLOTS + slot * 3 + 2];
+
+Deno.test('the Zeus: 3 again toggles it with the knife, one shot, then it is gone', () => {
+  const ctx = setup('knife', 'taser', 'glock');
+  const zeus = WEAPONS[WEAPON_ID.taser];
+  assert.equal(zeus.slot, SLOT_TASER);
+  hold(ctx, 0, 1000, 1, SLOT_KNIFE);
+  assert.equal(ctx.ws.f[WS_ACTIVE], SLOT_TASER, '3 with the knife in hand: the Zeus');
+  hold(ctx, 0, 1001, 1, SLOT_KNIFE);
+  assert.equal(ctx.ws.f[WS_ACTIVE], SLOT_KNIFE, '3 again: the knife');
+  hold(ctx, 0, 1002, 1, SLOT_KNIFE);
+  assert.equal(hold(ctx, IN_ATTACK, 1003, 60).fired, 0, 'not before its deploy');
+  hold(ctx, 0, 1063, 10); // let go: it fires on a press
+  assert.equal(hold(ctx, IN_ATTACK, 1073, 64).fired, 1, 'one charge');
+  assert.equal(ctx.ws.f[WS_SLOTS + SLOT_TASER * 3], 0, 'spent: gone');
+  assert.equal(ctx.ws.f[WS_ACTIVE], SLOT_SECONDARY, 'the pistol comes out');
+  // 500 up close; at its 190-unit reach about 70 (armor ratio 2: armor stops none of it).
+  assert.ok(damageAtRange(zeus, zeus.damage, 0) === 500 && Math.abs(damageAtRange(zeus, zeus.damage, 190) - 66.5) < 1);
+  assert.ok(zeus.range === 190 && zeus.penetration === 0 && zeus.armorRatio === 2);
+});
 
 Deno.test('AK-47 fire rate quantizes to the 64-tick clock like CS:GO', () => {
   const ctx = setup('ak47');
@@ -260,7 +280,7 @@ Deno.test('recovery slows between the transition bullets', () => {
 
 Deno.test('every CS:GO gun builds from game data; shotguns fire pellets', () => {
   const guns = WEAPONS.filter((w) => w && w.gun);
-  assert.equal(guns.length, 34);
+  assert.equal(guns.length, 35); // and the Zeus
   for (const w of guns) {
     assert.ok(w.cycle > 0 && w.clip > 0 && w.spread >= 0 && w.recoilPattern.every(Number.isFinite), w.name);
   }

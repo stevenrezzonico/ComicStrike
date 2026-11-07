@@ -25,8 +25,11 @@ A read of `shared/` against CS:GO's rules (convars, `items_game.txt`, the SDK's 
 | Team id over heads | none | marks over teammates, through walls | a triangle in the team's color (`cl_teamid_overhead`) |
 | Alive players on the top bar | none | an avatar per player, the dead greyed | pips beside the scores |
 | `autobuy`, `rebuy` | none | F3 / F4 | the same keys; `cl_autobuy`'s list (CS 1.6's) |
+| The Zeus x27 | missing | $200, one charge, 500 damage to ~67 at 190 units, armor ratio 2, in the knife's slot | the data's row; a slot of its own that 3 reaches from the knife; gone once fired |
+| Suicide | no kill change | a kill less (the kill command, falls, the world) | the same; the bomb's victims lose none |
+| Vote issues | kick, changelevel, restartgame | also surrender, starttimeout, scrambleteams, swapteams, pausematch, unpausematch | all of them; timeouts 4 x 30 s in competitive (*unsure*: matchmaking's) |
 
-CS 1.6 map entities the game ignored, from a scan of the 48 maps here: `trigger_hurt`, `env_explosion`, `game_text` (and `game_playerspawn`), `player_weaponstrip`, `game_player_equip`, `info_map_parameters`' `buying`, `trigger_teleport` (predicted). See CLAUDE.md, Doors and Collision.
+CS 1.6 map entities the game ignored, from a scan of the 48 maps here: `trigger_hurt`, `env_explosion`, `game_text` (and `game_playerspawn`), `player_weaponstrip`, `game_player_equip`, `info_map_parameters`' `buying`, `trigger_teleport` (predicted), then `func_rotating`, `func_pendulum`, `func_pushable` (pushed server-side) and `env_fog`. See CLAUDE.md, Doors, Collision and Comic print. Left out on purpose: the VIP mode (as_oilrig's rounds end in a draw at the time-out).
 
 ## Matches (checked)
 
@@ -52,7 +55,6 @@ Grenades and bomb: prices, limits (1, flashbang 2, 4 in all), throw speed formul
 | Plant time | 3.0 s | 3.0 s (some sources 3.2 with the animation) | *unsure* |
 | Defuse reach | eye to bomb 90 units, cone 0.8 | +use reach ~62 | approximation |
 | Hostage hit / kill money | −30 / −1000 | −30 / −1000 | *unsure* |
-| Suicide | no kill change | −1 kill | *unsure* |
 
 ## Weapon leftovers (Phase 14i)
 

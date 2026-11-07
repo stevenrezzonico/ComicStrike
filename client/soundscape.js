@@ -7,7 +7,7 @@ import { GUN_SOUNDS, STEP_RANGE } from './audio.js';
 import { clock } from './clock.js';
 import {
   WEAPONS, WEV_FIRE, WEV_MELEE, WEV_MELEE2, WEV_DRYFIRE, WEV_RELOAD, WEV_SHELL, WEV_DEPLOY, WEV_ZOOM, WEV_MODE, WEV_PIN,
-  WEV_THROW, WEV_COCK, SLOT_SECONDARY,
+  WEV_THROW, WEV_COCK,
 } from '../shared/weapons.js';
 import {
   PS_VEL, PS_FLAGS, PS_EVENTS, PS_LAND_SPEED, PS_WATERLEVEL, FL_ONGROUND, FL_DUCKING, EV_LAND, AIR_TICKS,
@@ -34,12 +34,13 @@ const WATER_RANGE = 2500; // others going into or out of water farther off are n
 // The gunshot voice of weapon w.
 export function gunProfile(w, silencedOn) {
   if (silencedOn) return GUN_SOUNDS.silenced;
+  if (w.taser) return GUN_SOUNDS.taser;
   if (w.bullets > 1) return GUN_SOUNDS.shotgun;
   if (SNIPER.has(w.name)) return GUN_SOUNDS.sniper;
   if (HEAVY.has(w.name)) return GUN_SOUNDS.heavy;
   if (MG.has(w.name)) return GUN_SOUNDS.mg;
   if (SMG.has(w.name)) return GUN_SOUNDS.smg;
-  return w.slot === SLOT_SECONDARY ? GUN_SOUNDS.pistol : GUN_SOUNDS.rifle;
+  return w.pistol ? GUN_SOUNDS.pistol : GUN_SOUNDS.rifle;
 }
 
 // Weapons of one class sound a little different from each other.

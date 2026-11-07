@@ -27,7 +27,7 @@ const SNIPER = ['plain', 'arctic', 'forest', 'hex'];
 const HEAVY = ['plain', 'desert', 'forest', 'hex'];
 const KNIFE = ['plain', 'fade', 'tiger', 'hex'];
 const GROUPS = [
-  [PISTOL, 'glock hkp2000 usp_silencer p250 elite fiveseven tec9 cz75a deagle revolver'],
+  [PISTOL, 'glock hkp2000 usp_silencer p250 elite fiveseven tec9 cz75a deagle revolver taser'],
   [SMG, 'mac10 mp9 mp7 mp5sd ump45 p90 bizon'],
   [RIFLE, 'galilar famas ak47 m4a1 m4a1_silencer sg556 aug'],
   [SNIPER, 'ssg08 awp g3sg1 scar20'],

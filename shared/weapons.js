@@ -34,7 +34,9 @@ export const SLOT_SECONDARY = 1;
 export const SLOT_KNIFE = 2;
 export const SLOT_GRENADE = 3;
 export const SLOT_C4 = 4;
-export const NUM_SLOTS = 5;
+// CS:GO's Zeus x27 shares the knife's key (3 again: the other one); here a slot of its own.
+export const SLOT_TASER = 5;
+export const NUM_SLOTS = 6;
 
 const mr = (x) => x * 0.001; // milliradians -> radians
 
@@ -53,6 +55,7 @@ const EXTRA = {
   ssg08: ['SSG 08', 3.7], awp: ['AWP', 3.67, 1.25], g3sg1: ['G3SG1', 4.67], scar20: ['SCAR-20', 3.07],
   nova: ['Nova', 4.74], xm1014: ['XM1014', 4.22], sawedoff: ['Sawed-Off', 4.22], mag7: ['MAG-7', 2.47],
   m249: ['M249', 5.7, 1.1], negev: ['Negev', 5.7, 1.1],
+  taser: ['Zeus x27', 0], // one charge, never reloaded: gone once fired (CS:GO's itemflag exhaustible)
 };
 // Shotguns loading shell by shell (CS:GO's Nova, XM1014, Sawed-Off): seconds before the
 // first shell, then per shell, so that a full reload takes the measured time above (the
@@ -85,7 +88,7 @@ function fromGameData(name) {
   const altKind = d.zoomLevels > 0 ? 'scope' : d.hasSilencer ? 'silencer' : d.hasBurstMode ? 'burst'
     : d.isRevolver ? 'revolver' : null;
   return {
-    name, label, slot: PISTOLS.has(name) ? SLOT_SECONDARY : SLOT_PRIMARY, auto: d.isFullAuto === 1,
+    name, label, slot: PISTOLS.has(name) ? SLOT_SECONDARY : SLOT_PRIMARY, pistol: PISTOLS.has(name), auto: d.isFullAuto === 1,
     bullets: d.bullets, cycle: d.cycletime, damage: d.damage, armorRatio: d.armorRatio,
     penetration: d.penetration, range: d.range, rangeModifier: d.rangeModifier, headshotMult: d.headshotMultiplier,
     clip: d.primaryClipSize, reserve: d.primaryReserveAmmoMax,
@@ -113,7 +116,7 @@ export const WEAPONS = [
     backstab: 90, backstab2: 180, // from behind (CS:GO's weapon_knife: 40 / 90 swing, 65 / 180 stab)
     maxSpeed: 250, deployTime: 1.0, price: 0, killAward: 1500, armorRatio: 1.7, flinchLarge: 0, flinchSmall: 0,
   },
-  ...Object.keys(EXTRA).map(fromGameData),
+  ...Object.keys(EXTRA).filter((n) => n !== 'taser').map(fromGameData),
   {
     name: 'c4', label: 'C4 Explosive', slot: SLOT_C4, c4: true, clip: 0, reserve: 0,
     maxSpeed: 250, deployTime: 1.0, price: 0, killAward: 0, teams: 0, armorRatio: 1, flinchLarge: 0, flinchSmall: 0,
@@ -133,6 +136,9 @@ export const WEAPONS = [
     // feet: two kill a fully armored player); with 1 it was 47 and took three.
     deployTime: 0.6, killAward: 300, armorRatio: name === 'hegrenade' ? 1.15 : 1, flinchLarge: 0, flinchSmall: 0,
   })),
+  // Last, so no other weapon's id moved: 500 damage falling to ~70 at its 190-unit reach,
+  // armor ratio 2 (armor stops none of it), no penetration; held like a pistol.
+  { ...fromGameData('taser'), slot: SLOT_TASER, pistol: true, taser: true },
 ];
 
 export const WEAPON_ID = Object.fromEntries(WEAPONS.map((w, i) => [w ? w.name : 'none', i]));
@@ -614,8 +620,10 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
       deploy(ws, SLOT_GRENADE, time);
       f[WS_LAST_SLOT] = last;
     }
-  } else if (select >= 0 && select < NUM_SLOTS && select !== f[WS_ACTIVE] && f[WS_SLOTS + select * 3] > 0) {
-    deploy(ws, select, time);
+  } else {
+    // 3 again with the knife in hand: the Zeus, if held (CS:GO's melee slot holds both).
+    if (select === SLOT_KNIFE && f[WS_ACTIVE] === SLOT_KNIFE && f[WS_SLOTS + SLOT_TASER * 3] > 0) select = SLOT_TASER;
+    if (select >= 0 && select < NUM_SLOTS && select !== f[WS_ACTIVE] && f[WS_SLOTS + select * 3] > 0) deploy(ws, select, time);
   }
   // Drop (G): the weapon in hand (one grenade of its kind), except the knife. The server
   // puts it on the ground (or, for the C4, drops the bomb) from WEV_DROP.
@@ -738,6 +746,13 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
     } else {
       f[WS_BURST_LEFT] = 0;
     }
+  }
+
+  // The Zeus is spent once its shot's cycle is over, and leaves the hand (CS:GO).
+  if (w.taser && f[o + 1] <= 0 && time >= f[WS_NEXT_ATTACK]) {
+    removeWeapon(ws, SLOT_TASER, time);
+    f[WS_OLD_BUTTONS] = buttons;
+    return;
   }
 
   // An empty magazine reloads by itself once the last shot's cycle is over, trigger held

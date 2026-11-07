@@ -1,6 +1,7 @@
 // GoldSrc movers and map logic: func_door (sliding), func_door_rotating, func_button and
 // func_rot_button, func_plat (a lift), func_train (along path_corners), momentary_door
-// driven by momentary_rot_button (HL SDK doors.cpp / buttons.cpp / plats.cpp semantics),
+// driven by momentary_rot_button, func_rotating (a fan), func_pendulum and func_pushable (a
+// crate players shove) (HL SDK doors.cpp / buttons.cpp / plats.cpp / bmodels.cpp semantics),
 // plus the entity I/O that drives them: trigger_multiple, trigger_once, trigger_relay,
 // multi_manager, trigger_auto, multisource (a `master` that locks movers and triggers)
 // and `killtarget` (removes the named entities).
@@ -16,7 +17,9 @@
 
 import { TICK_RATE } from './constants.js';
 import { CONTENTS_EMPTY, entityModelIndex, parseVec3 } from './bsp.js';
-import { ENT_NONE, ENT_SOLID, HULL_STAND, HULL_DUCK, rotationFromAngles, entityContents, hullFits } from './trace.js';
+import {
+  ENT_NONE, ENT_SOLID, HULL_STAND, HULL_DUCK, HULL_POINT, rotationFromAngles, entityContents, hullFits,
+} from './trace.js';
 import { PS_ORIGIN, PS_FLAGS, PS_GROUNDENT, FL_DUCKING } from './pmove.js';
 import { Breakables, breakableEntities } from './breakables.js';
 
@@ -29,6 +32,9 @@ export const MOVER_TRAIN = 3;
 export const MOVER_PLAT = 4;
 export const MOVER_MOMENTARY = 5; // momentary_door: moves to the fraction its wheel is at
 export const MOVER_WHEEL = 6; // momentary_rot_button: turns while +use is held
+export const MOVER_SPIN = 7; // func_rotating: turns on and on (position: the share of a turn)
+export const MOVER_PENDULUM = 8; // func_pendulum: swings to and fro (position: seconds swinging)
+export const MOVER_PUSH = 9; // func_pushable: where players shoved it (pos)
 
 // func_door / func_door_rotating spawnflags (HL SDK doors.h).
 const SF_DOOR_START_OPEN = 1;
@@ -51,6 +57,17 @@ const SF_PLAT_TOGGLE = 1;
 // momentary_rot_button spawnflags.
 const SF_WHEEL_NOTSOLID = 1;
 const SF_WHEEL_AUTO_RETURN = 16;
+// func_rotating spawnflags (bmodels.cpp; the default axis is the yaw).
+const SF_SPIN_START_ON = 1;
+const SF_SPIN_BACKWARDS = 2;
+const SF_SPIN_Z_AXIS = 4; // a roll: about x
+const SF_SPIN_X_AXIS = 8; // a pitch: about y
+const SF_SPIN_NOT_SOLID = 64;
+// func_pendulum spawnflags (its axis by the doors' 64 / 128).
+const SF_PENDULUM_START_ON = 1;
+const SF_PENDULUM_PASSABLE = 32;
+const PENDULUM_STOP = 30; // deg/s: a damped pendulum stops below this speed (CPendulum::Swing)
+const PUSH_HULL = 18; // a pushed crate is tried as duck hulls standing on its bottom (half their height)
 // path_corner spawnflags (the HL SDK's trains.h; 2 was read as fire once before).
 const SF_CORNER_WAITFORTRIG = 1; // the train waits here until triggered (as wait -1)
 const SF_CORNER_TELEPORT = 2; // the train gets here at once (the leg into it takes a tick)
@@ -72,8 +89,9 @@ export const BLAST = { armorRatio: 1, flinchLarge: 0, flinchSmall: 0 }; // crush
 const CLASS = {
   func_door: MOVER_DOOR, func_door_rotating: MOVER_ROTATING, func_button: MOVER_BUTTON, func_rot_button: MOVER_BUTTON,
   func_train: MOVER_TRAIN, func_plat: MOVER_PLAT, momentary_door: MOVER_MOMENTARY, momentary_rot_button: MOVER_WHEEL,
+  func_rotating: MOVER_SPIN, func_pendulum: MOVER_PENDULUM, func_pushable: MOVER_PUSH,
 };
-const TURNS = new Set(['func_door_rotating', 'func_rot_button', 'momentary_rot_button']);
+const TURNS = new Set(['func_door_rotating', 'func_rot_button', 'momentary_rot_button', 'func_rotating', 'func_pendulum']);
 
 // GoldSrc SetMovedir: the "angles" (or "angle") key as a direction; -1 up, -2 down.
 function moveDir(e) {
@@ -203,6 +221,7 @@ export class Doors {
     this.path = new Array(n).fill(null); // trains: { pos, next, wait, message, once, rate }
     this.center = new Float64Array(n * 3); // trains: the model's center at spawn (it rides the corners)
     this.byName = new Map(); // targetname -> [k]
+    this.pushables = []; // the func_pushables' k
     this.masters = null; // MapLogic's multisources (name -> { on })
     // Replicated state.
     this.from = new Float32Array(n);
@@ -211,6 +230,7 @@ export class Doors {
     this.t0 = new Int32Array(n);
     this.leg = new Uint8Array(n); // trains: the corner the leg starts at
     this.goal = new Float32Array(n); // momentary doors: the position moved toward
+    this.pos = new Float32Array(n * 3); // pushables: their offset from where they spawned
     // Game state (whoever runs the logic).
     this.next = new Int32Array(n); // tick of the scheduled return, 0 = none
     this.activator = new Array(n).fill(null); // who started it ({ x, y, z, yaw }), for its targets
@@ -225,6 +245,10 @@ export class Doors {
     this.rot = []; // per mover: Float64Array(9), for turning movers
     this.matrix = new Float32Array(MAX_MOVERS * 12); // 3x4 rows per mover, for the world shader
     this.lockedSound = new Uint8Array(n); // the map gives it a locked_sound (clients rattle it)
+    this.omega = new Float64Array(n); // pendulums: rad/s of the swing (its top speed over its distance)
+    this.damp = new Float64Array(n); // pendulums: the swing dies away by e^(-damp t)
+    this.life = new Float64Array(n); // pendulums: seconds it swings (Infinity: undamped)
+    this.fade = new Float64Array(n); // pendulums: the share of e^(-damp t) where it stops
 
     const corners = new Map(); // path_corner targetname -> entity
     for (const e of bsp.entities) if (e.classname === 'path_corner' && e.targetname) corners.set(e.targetname, e);
@@ -240,7 +264,8 @@ export class Doors {
       const passable = (kind === MOVER_DOOR || kind === MOVER_ROTATING || kind === MOVER_MOMENTARY) && (flags & SF_DOOR_PASSABLE) ||
         kind === MOVER_TRAIN && (flags & SF_TRAIN_PASSABLE) ||
         kind === MOVER_BUTTON && turns && (flags & SF_ROTBUTTON_NOTSOLID) ||
-        kind === MOVER_WHEEL && (flags & SF_WHEEL_NOTSOLID);
+        kind === MOVER_WHEEL && (flags & SF_WHEEL_NOTSOLID) || kind === MOVER_SPIN && (flags & SF_SPIN_NOT_SOLID) ||
+        kind === MOVER_PENDULUM && (flags & SF_PENDULUM_PASSABLE);
       this.solidKind[k] = passable ? ENT_NONE : ENT_SOLID;
       if (passable) ce.kind = ENT_NONE;
       this.name.push(e.targetname || '');
@@ -259,7 +284,29 @@ export class Doors {
       }
       let speed = +(e.speed || 0), wait = +(e.wait || 0), dist;
       this.dmg[k] = +(e.dmg || 0);
-      if (turns) {
+      if (kind === MOVER_SPIN || kind === MOVER_PENDULUM) {
+        const a = new Float64Array(3);
+        if (e.angles) parseVec3(e.angles, a);
+        this.ang.set(a, k * 3);
+        const ax = this.axis[k] = kind === MOVER_SPIN ? (flags & SF_SPIN_Z_AXIS ? 2 : flags & SF_SPIN_X_AXIS ? 0 : 1)
+          : (flags & SF_DOOR_ROTATE_Z ? 2 : flags & SF_DOOR_ROTATE_X ? 0 : 1);
+        this.ang0[k] = a[ax];
+        this.rot.push(new Float64Array(9));
+        if (kind === MOVER_SPIN) { // a turn at `speed` degrees a second
+          this.ang1[k] = a[ax] + (flags & SF_SPIN_BACKWARDS ? -360 : 360);
+          dist = 360;
+        } else { // to `distance` and back: A sin(wt), its top speed `speed`, dying away by `damp`
+          speed = speed || 100;
+          const d = this.ang1[k] = +(e.distance || 0), damp = this.damp[k] = +(e.damp || 0) * 0.001;
+          this.omega[k] = d ? speed / Math.abs(d) : 0;
+          this.fade[k] = Math.min(1, PENDULUM_STOP / speed);
+          this.life[k] = damp > 0 ? Math.log(1 / this.fade[k]) / damp : Infinity;
+          dist = Math.abs(d);
+        }
+      } else if (kind === MOVER_PUSH) {
+        dist = 0;
+        this.rot.push(null);
+      } else if (turns) {
         speed = speed || (kind === MOVER_BUTTON ? 40 : 100);
         if (kind === MOVER_BUTTON) wait = wait || 1;
         const a = new Float64Array(3);
@@ -317,14 +364,16 @@ export class Doors {
         this.rot.push(null);
       }
       this.travel[k] = dist;
-      this.rate[k] = kind === MOVER_TRAIN ? 0 : dist > 0 ? speed / dist / TICK_RATE : 1;
+      if (kind === MOVER_PUSH) this.pushables.push(k);
+      this.rate[k] = kind === MOVER_TRAIN ? 0 : kind === MOVER_PENDULUM ? 1 / TICK_RATE : dist > 0 ? speed / dist / TICK_RATE : 1;
       this.wait[k] = wait;
     });
     this.reset(world);
   }
 
-  // Everything back at rest (round restart).
-  reset(world) {
+  // Everything back at rest (round restart at `tick`); fans and pendulums flagged to start
+  // on set off.
+  reset(world, tick = 0) {
     this.from.fill(0);
     this.dir.fill(0);
     this.sign.fill(1);
@@ -335,10 +384,17 @@ export class Doors {
     this.held.fill(-1);
     this.pressDir.fill(-1);
     this.sent.fill(0);
+    this.pos.fill(0);
     this.fired.clear();
     for (let k = 0; k < this.count; k++) {
       this.stopped[k] = this.kind[k] === MOVER_TRAIN && this.name[k] ? 1 : 0;
       this.setDead(world, k, false);
+      const kind = this.kind[k];
+      if ((kind === MOVER_SPIN && (this.flags[k] & SF_SPIN_START_ON) && this.rate[k] > 0) ||
+        (kind === MOVER_PENDULUM && (this.flags[k] & SF_PENDULUM_START_ON))) {
+        this.dir[k] = 1;
+        this.t0[k] = tick;
+      }
     }
     this.applied.fill(NaN);
     this.apply(world, 0);
@@ -363,6 +419,8 @@ export class Doors {
   // Position 0..1 of mover k at `tick`.
   frac(k, tick) {
     let f = this.from[k] + this.dir[k] * (tick - this.t0[k]) * this.rateOf(k);
+    if (this.kind[k] === MOVER_SPIN) return f - Math.floor(f); // round and round
+    if (this.kind[k] === MOVER_PENDULUM) return f; // seconds
     if (this.kind[k] === MOVER_MOMENTARY) {
       const g = this.goal[k];
       f = this.dir[k] > 0 ? Math.min(f, g) : this.dir[k] < 0 ? Math.max(f, g) : f;
@@ -380,7 +438,17 @@ export class Doors {
 
   // At rest where it spawned: the state the clients assume when a snapshot leaves it out.
   idle(k) {
-    return this.atBottom(k) && this.leg[k] === 0 && this.goal[k] === 0;
+    const b = k * 3;
+    return this.atBottom(k) && this.leg[k] === 0 && this.goal[k] === 0 && this.pos[b] === 0 && this.pos[b + 1] === 0 &&
+      this.pos[b + 2] === 0;
+  }
+
+  // A pendulum's turn from its rest at `t` seconds swinging: A sin(wt), A dying away to 0
+  // where its speed fell to PENDULUM_STOP (CPendulum::Swing snaps to rest there).
+  swing(k, t) {
+    if (t >= this.life[k]) return 0;
+    const fade = this.damp[k] > 0 ? (Math.exp(-this.damp[k] * t) - this.fade[k]) / (1 - this.fade[k]) : 1;
+    return this.ang1[k] * fade * Math.sin(this.omega[k] * t);
   }
 
   // World vertex slot of mover k (byte 39 of the world mesh).
@@ -396,6 +464,7 @@ export class Doors {
   // The sliding offset of mover k from its spawn origin at position f.
   offset(k, f, r) {
     const b = k * 3;
+    if (this.kind[k] === MOVER_PUSH) return this.pos[b + r];
     if (this.kind[k] === MOVER_TRAIN) {
       const p = this.path[k], a = this.leg[k], c = p.next[a];
       const from = p.pos[a * 3 + r], to = c >= 0 ? p.pos[c * 3 + r] : from;
@@ -411,7 +480,9 @@ export class Doors {
     const b = k * 3, m = this.matrix, o = k * 12;
     if (this.turns[k]) {
       const ax = this.axis[k], a = this.ang;
-      const turn = this.ang0[k] + (this.ang1[k] * this.sign[k] - this.ang0[k]) * f;
+      const kind = this.kind[k];
+      const turn = kind === MOVER_SPIN ? this.ang0[k] + (this.ang1[k] - this.ang0[k]) * f
+        : kind === MOVER_PENDULUM ? this.ang0[k] + this.swing(k, f) : this.ang0[k] + (this.ang1[k] * this.sign[k] - this.ang0[k]) * f;
       const R = rotationFromAngles(ax === 0 ? turn : a[b], ax === 1 ? turn : a[b + 1], ax === 2 ? turn : a[b + 2],
         this.rot[k]);
       const ox = this.base[b], oy = this.base[b + 1], oz = this.base[b + 2];
@@ -438,9 +509,13 @@ export class Doors {
 
   // Sets mover k's replicated state (the client applying a snapshot). Returns true if
   // it changed.
-  setState(k, from, dir, sign, t0, leg = 0, goal = 0) {
+  setState(k, from, dir, sign, t0, leg = 0, goal = 0, px = 0, py = 0, pz = 0) {
+    const b = k * 3, P = this.pos;
     if (this.from[k] === from && this.dir[k] === dir && this.sign[k] === sign && this.t0[k] === t0 &&
-      this.leg[k] === leg && this.goal[k] === goal) return false;
+      this.leg[k] === leg && this.goal[k] === goal && P[b] === px && P[b + 1] === py && P[b + 2] === pz) return false;
+    P[b] = px;
+    P[b + 1] = py;
+    P[b + 2] = pz;
     this.from[k] = from;
     this.dir[k] = dir;
     this.sign[k] = sign;
@@ -463,6 +538,15 @@ export class Doors {
     for (let k = 0; k < this.count; k++) {
       if (this.dead[k]) continue;
       const kind = this.kind[k], f = this.frac(k, tick);
+      if (kind === MOVER_SPIN || kind === MOVER_PENDULUM || kind === MOVER_PUSH) {
+        if (kind === MOVER_PENDULUM && this.dir[k] && f >= this.life[k]) { // damped out: at rest
+          this.from[k] = 0;
+          this.dir[k] = 0;
+          this.t0[k] = tick;
+        }
+        this.move(world, k, tick, bodies, hurt);
+        continue;
+      }
       if (kind === MOVER_TRAIN && !this.stopped[k] && this.dir[k] === 0 && !this.next[k]) this.trainGo(k, tick); // sets off
       if (kind === MOVER_WHEEL) this.wheelTick(k, tick, f);
       else if (kind === MOVER_MOMENTARY) {
@@ -538,6 +622,40 @@ export class Doors {
       }
       if (pushed === MAX_PUSHED) break;
     }
+  }
+
+  // A func_pushable shoved (dx, dy) along the floor (CPushable::Move, approx.): it goes when it
+  // fits there (duck hulls standing on its bottom over its footprint, clear of the world, the
+  // other solid entities and `bodies`, the living players' states) and a floor still holds its
+  // middle. True when it moved.
+  shove(world, k, dx, dy, bodies) {
+    const b = k * 3, e = world.ents[this.ent[k]], P = this.pos;
+    const ox = P[b] + dx, oy = P[b + 1] + dy, oz = P[b + 2];
+    const x0 = this.mins[b] + ox, x1 = this.maxs[b] + ox, y0 = this.mins[b + 1] + oy, y1 = this.maxs[b + 1] + oy;
+    const z0 = this.mins[b + 2] + oz, z1 = this.maxs[b + 2] + oz;
+    for (const ps of bodies) {
+      const p = ps.f, h = ps.i[PS_FLAGS] & FL_DUCKING ? 18 : 36;
+      if (p[PS_ORIGIN] + 16 > x0 && p[PS_ORIGIN] - 16 < x1 && p[PS_ORIGIN + 1] + 16 > y0 && p[PS_ORIGIN + 1] - 16 < y1 &&
+        p[PS_ORIGIN + 2] + h > z0 && p[PS_ORIGIN + 2] - h < z1) return false;
+    }
+    const kind = e.kind;
+    e.kind = ENT_NONE; // (not in its own way)
+    let fits = !hullFits(world, HULL_POINT, (x0 + x1) / 2, (y0 + y1) / 2, z0 - 4); // a floor under its middle
+    const nx = Math.max(1, Math.ceil((x1 - x0 - 32) / 32) + 1), ny = Math.max(1, Math.ceil((y1 - y0 - 32) / 32) + 1);
+    for (let i = 0; fits && i < nx; i++) {
+      for (let j = 0; fits && j < ny; j++) {
+        const x = nx === 1 ? (x0 + x1) / 2 : x0 + 16 + (x1 - x0 - 32) * i / (nx - 1);
+        const y = ny === 1 ? (y0 + y1) / 2 : y0 + 16 + (y1 - y0 - 32) * j / (ny - 1);
+        fits = hullFits(world, HULL_DUCK, x, y, z0 + PUSH_HULL + 1);
+      }
+    }
+    e.kind = kind;
+    if (!fits) return false;
+    P[b] = ox;
+    P[b + 1] = oy;
+    this.applied[k] = NaN;
+    this.place(world, k, 0);
+    return true;
   }
 
   // CBaseDoor::Blocked: doors that return go the other way; the others wait where they
@@ -666,6 +784,13 @@ export class Doors {
       this.hold(k, tick);
       return;
     }
+    if (kind === MOVER_SPIN || kind === MOVER_PENDULUM) { // on, or off (a fan stops where it is, a pendulum at rest)
+      this.from[k] = this.dir[k] && kind === MOVER_SPIN ? this.frac(k, tick) : 0;
+      this.dir[k] = this.dir[k] ? 0 : 1;
+      this.t0[k] = tick;
+      return;
+    }
+    if (kind === MOVER_PUSH) return;
     if (kind === MOVER_PLAT && !(this.flags[k] & SF_PLAT_TOGGLE)) { // PlatUse: a lift sent down from the top
       if (this.atTop(k)) this.goDown(k, tick);
       return;

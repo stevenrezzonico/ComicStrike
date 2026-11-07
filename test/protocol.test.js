@@ -172,13 +172,13 @@ Deno.test('info carries the MVP counts; the damage report round-trips; the round
   const w = new Writer(), r = new Reader();
   const players = new Array(MAX_PLAYERS).fill(null);
   players[2] = { team: 2, name: 'ann', kills: 3, deaths: 1, score: 0, mvps: 2 };
-  players[5] = { team: 3, name: 'bob', kills: 0, deaths: 4, score: 0, mvps: 0 };
+  players[5] = { team: 3, name: 'bob', kills: -2, deaths: 4, score: 0, mvps: 0 }; // suicides: below zero
   r.set(writeInfo(w, players));
   assert.equal(r.u8v(), S2C_INFO);
   const names = new Array(MAX_PLAYERS).fill(''), teams = new Uint8Array(MAX_PLAYERS), kills = new Int32Array(MAX_PLAYERS);
   const deaths = new Int32Array(MAX_PLAYERS), scores = new Int32Array(MAX_PLAYERS), mvps = new Int32Array(MAX_PLAYERS);
   readInfo(r, names, teams, kills, deaths, scores, mvps);
-  assert.deepEqual([names[2], kills[2], mvps[2], names[5], mvps[5]], ['ann', 3, 2, 'bob', 0]);
+  assert.deepEqual([names[2], kills[2], mvps[2], names[5], kills[5], mvps[5]], ['ann', 3, 2, 'bob', -2, 0]);
   const rows = [{ id: 5, given: 127, givenHits: 4, taken: 0, takenHits: 0 }, { id: 9, given: 0, givenHits: 0, taken: 100, takenHits: 3 }];
   r.set(writeReport(w, 7, rows));
   assert.equal(r.u8v(), S2C_REPORT);
@@ -218,6 +218,7 @@ Deno.test('snapshots: the busiest tick still fits a datagram and decodes', () =>
   const n = 64, doors = {
     count: n, idle: () => false, leg: new Uint8Array(n).fill(1), goal: new Float32Array(n).fill(0.5),
     dir: new Int8Array(n).fill(1), sign: new Int8Array(n).fill(1), from: new Float32Array(n), t0: new Int32Array(n),
+    pos: new Float32Array(n * 3).fill(8), // (crates shoved: 12 bytes more each)
   };
   for (const fields of [32, 0]) {
     player.ws.f.fill(0).fill(1, 0, fields);

@@ -3,8 +3,13 @@ import assert from 'node:assert/strict';
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import {
   Writer, Reader, writeHello, writeCommand, readVote, S2C_REJECT, S2C_WELCOME, S2C_PRINT, S2C_VOTE, S2C_CHAT, VOTE_RUNNING,
-  VOTE_PASSED, VOTE_FAILED, VOTE_KICK, VOTE_RESTART,
+  VOTE_PASSED, VOTE_FAILED, VOTE_KICK, VOTE_RESTART, VOTE_SURRENDER,
 } from '../shared/protocol.js';
+import {
+  PHASE_OVER, PHASE_FREEZE, PHASE_LIVE, END_SURRENDER, GAME_PAUSED, GAME_TIMEOUT, reasonOf, matchOver,
+} from '../shared/economy.js';
+import { TICK_RATE } from '../shared/constants.js';
+import { WEAPON_ID } from '../shared/weapons.js';
 import { loadMap, readCfg, quiet } from './harness.js';
 import { Host } from '../server/host.js';
 
@@ -291,4 +296,105 @@ Deno.test('callvote kick: no ban while a housemate stays (he would be refused at
   assert.equal(vote(a).state, VOTE_PASSED);
   assert.ok(!d.c.joined && mate.c.joined);
   assert.ok(hello('mate rejoining', '', '203.0.113.4').joined, 'not banned');
+});
+
+Deno.test("callvote surrender: the caller's team alone votes, every one of them yes; the other side wins the match", () => {
+  const { host, hello, cmd, said, vote, tick } = server();
+  const a = hello('alpha', '', '203.0.113.1'), b = hello('bravo', '', '203.0.113.2'), ct = hello('ct', '', '203.0.113.9', TEAM_CT);
+  cmd(a, 'callvote surrender');
+  assert.equal(said(a), 'callvote surrender: not in warmup.');
+  host.con.exec('mp_round_restart_delay 2; mp_warmup_end');
+  tick(1);
+  cmd(a, 'callvote surrender');
+  const v = vote(a);
+  assert.deepEqual([v.issue, v.voters, v.needed, v.detail], [VOTE_SURRENDER, 2, 2, 'Ts'], 'the Ts, both of them');
+  assert.equal(vote(ct).mine, 0, 'the CTs see it and cannot vote');
+  cmd(b, 'vote option1');
+  assert.equal(vote(a).state, VOTE_PASSED);
+  const rs = host.game.round;
+  assert.deepEqual([rs.phase, rs.info & 3, reasonOf(rs.info), matchOver(rs.info), rs.scoreCT], [PHASE_OVER, TEAM_CT, END_SURRENDER, true, 1]);
+  tick(2 * TICK_RATE + 1);
+  assert.deepEqual([rs.phase, rs.scoreCT, rs.scoreT], [PHASE_FREEZE, 0, 0], 'a new match');
+});
+
+Deno.test('callvote starttimeout: the team votes; mp_team_timeout_time more freeze time, mp_team_timeout_max a match', () => {
+  const { host, hello, clock, cmd, said, vote, tick } = server();
+  const a = hello('alpha', '', '203.0.113.1'), ct = hello('ct', '', '203.0.113.9', TEAM_CT);
+  // (10 s: the test's sessions send nothing, and a silent one times out after a while)
+  host.con.exec('mp_team_timeout_max 1; mp_team_timeout_time 10; mp_freezetime 5; mp_warmup_end');
+  const g = host.game, rs = g.round;
+  tick(1);
+  const before = rs.ticksLeft;
+  cmd(a, 'callvote starttimeout');
+  assert.equal(vote(a).state, VOTE_PASSED, 'alone on his team');
+  tick(1);
+  assert.equal(rs.ticksLeft, before - 1 + 10 * TICK_RATE);
+  assert.ok(rs.mode & GAME_TIMEOUT);
+  clock.ms += 200000; // (past sv_vote_creation_timer)
+  cmd(a, 'callvote starttimeout');
+  assert.equal(said(a), 'A timeout is already on.');
+  tick(10 * TICK_RATE + 2);
+  assert.ok(!(rs.mode & GAME_TIMEOUT) && rs.phase === PHASE_FREEZE);
+  cmd(a, 'callvote starttimeout');
+  assert.equal(said(a), 'Your team has no timeouts left (mp_team_timeout_max).');
+  tick(5 * TICK_RATE);
+  assert.equal(rs.phase, PHASE_LIVE);
+  cmd(ct, 'callvote starttimeout');
+  assert.ok(g.timeoutTeam === TEAM_CT && !(rs.mode & GAME_TIMEOUT), 'mid-round: at the next freeze time');
+  quiet(() => g.startRound(false));
+  tick(1);
+  assert.ok(rs.ticksLeft > 14 * TICK_RATE && rs.mode & GAME_TIMEOUT);
+});
+
+Deno.test('callvote pausematch / unpausematch: the freeze time stands still until resumed; mp_pause_match mid-round waits for it', () => {
+  const { host, hello, cmd, vote, tick } = server();
+  const a = hello('alpha', '', '203.0.113.1'), ct = hello('ct', '', '203.0.113.9', TEAM_CT);
+  host.con.exec('mp_freezetime 5; mp_warmup_end');
+  const g = host.game, rs = g.round;
+  tick(1);
+  cmd(a, 'callvote pausematch');
+  cmd(ct, 'vote option1');
+  assert.equal(vote(a).state, VOTE_PASSED);
+  tick(1);
+  const held = rs.ticksLeft;
+  tick(20 * TICK_RATE);
+  assert.ok(rs.ticksLeft === held && rs.phase === PHASE_FREEZE && rs.mode & GAME_PAUSED, 'paused');
+  cmd(ct, 'callvote unpausematch');
+  cmd(a, 'vote option1');
+  tick(1);
+  assert.ok(rs.ticksLeft === held - 1 && !(rs.mode & GAME_PAUSED), 'resumed');
+  tick(5 * TICK_RATE);
+  assert.equal(rs.phase, PHASE_LIVE);
+  host.con.exec('mp_pause_match');
+  tick(TICK_RATE);
+  assert.ok(g.paused && !(rs.mode & GAME_PAUSED), 'live: the next freeze time');
+});
+
+Deno.test('callvote swapteams, mp_scrambleteams: the sides change at a restart a second later', () => {
+  const { host, hello, cmd, vote, tick } = server();
+  const ts = [hello('a', '', '203.0.113.1'), hello('b', '', '203.0.113.2')];
+  const cts = [hello('c', '', '203.0.113.3', TEAM_CT), hello('d', '', '203.0.113.4', TEAM_CT)];
+  host.con.exec('mp_warmup_end');
+  tick(1);
+  cmd(ts[0], 'callvote swapteams');
+  cmd(ts[1], 'vote option1');
+  cmd(cts[0], 'vote option1');
+  assert.equal(vote(ts[0]).state, VOTE_PASSED);
+  assert.equal(ts[0].c.team, TEAM_T, 'not yet');
+  tick(TICK_RATE + 1);
+  assert.deepEqual([...ts, ...cts].map((p) => p.c.team), [TEAM_CT, TEAM_CT, TEAM_T, TEAM_T]);
+  assert.equal(host.game.round.phase, PHASE_FREEZE);
+  host.con.exec('mp_scrambleteams');
+  tick(TICK_RATE + 1);
+  const all = [...ts, ...cts].map((p) => p.c.team);
+  assert.ok(all.filter((t) => t === TEAM_T).length === 2 && all.filter((t) => t === TEAM_CT).length === 2, 'two a side');
+});
+
+Deno.test("kill: a suicide (the kill command, a fall, the world) costs a kill, as in CS; the bomb's victims lose none", () => {
+  const { host, hello, cmd } = server();
+  const a = hello('alpha', '', '203.0.113.1'), ct = hello('ct', '', '203.0.113.9', TEAM_CT);
+  cmd(a, 'kill');
+  assert.deepEqual([a.c.player.kills, a.c.player.deaths], [-1, 1]);
+  quiet(() => host.game.kill(ct.c, ct.c, WEAPON_ID.c4, false));
+  assert.deepEqual([ct.c.player.kills, ct.c.player.deaths], [0, 1]);
 });

@@ -1,6 +1,9 @@
 // Votes (CS:GO's callvote): a player calls a vote to kick a teammate (`callvote kick <name or
-// #id>`), change the map (`callvote changelevel <map>`) or restart the match (`callvote
-// restartgame`); the players who may vote (one an address) answer with F1 / F2 (`vote option1` / `vote
+// #id>`), change the map (`callvote changelevel <map>`), restart the match (`callvote
+// restartgame`), scramble or swap the teams (`scrambleteams`, `swapteams`: a fresh match), pause
+// or resume it at the freeze time (`pausematch`, `unpausematch`), or, voted by the caller's team
+// alone, call a tactical timeout (`starttimeout`) or surrender (`surrender`: every one of them
+// yes; the other team wins the match); the players who may vote (one an address) answer with F1 / F2 (`vote option1` / `vote
 // option2`) within sv_vote_timer_duration. The caller votes yes. It passes once the yes votes
 // reach sv_vote_quorum_ratio of those who may vote, and fails once it no longer can or the
 // time is up. A kick is voted on by the target's team (everyone in free for all), the target
@@ -9,17 +12,29 @@
 // The cvars are CS:GO's (the quorum 0.6 here). The Host owns one: a map change ends a vote.
 
 import {
-  writeVote, VOTE_KICK, VOTE_CHANGELEVEL, VOTE_RESTART, VOTE_RUNNING, VOTE_PASSED, VOTE_FAILED,
+  writeVote, VOTE_KICK, VOTE_CHANGELEVEL, VOTE_RESTART, VOTE_RUNNING, VOTE_PASSED, VOTE_FAILED, VOTE_SURRENDER,
+  VOTE_TIMEOUT, VOTE_SCRAMBLE, VOTE_SWAP, VOTE_PAUSE, VOTE_UNPAUSE,
 } from '../shared/protocol.js';
 import { TICK_RATE } from '../shared/constants.js';
+import { TEAM_NAMES } from '../shared/player.js';
+import { PHASE_WARMUP } from '../shared/economy.js';
 import { addressKey, isLoopback, remember } from './host.js';
 
-// By callvote's word: the issue on the wire, the cvar allowing it, how the console says it.
+// By callvote's word: the issue on the wire, the cvar allowing it, how the console says it;
+// `team`: the caller's team votes (else everyone); `teams`: not in free for all; `rounds`: only
+// in a match of rounds between teams, not in warmup.
 const ISSUES = new Map([
   ['kick', { issue: VOTE_KICK, allowed: 'sv_vote_issue_kick_allowed', label: 'kick' }],
   ['changelevel', { issue: VOTE_CHANGELEVEL, allowed: 'sv_vote_issue_changelevel_allowed', label: 'change the map to' }],
   ['restartgame', { issue: VOTE_RESTART, allowed: 'sv_vote_issue_restart_game_allowed', label: 'restart the match' }],
+  ['scrambleteams', { issue: VOTE_SCRAMBLE, allowed: 'sv_vote_issue_scramble_teams_allowed', label: 'scramble the teams', teams: true }],
+  ['swapteams', { issue: VOTE_SWAP, allowed: 'sv_vote_issue_swap_teams_allowed', label: 'swap the teams', teams: true }],
+  ['pausematch', { issue: VOTE_PAUSE, allowed: 'sv_vote_issue_pause_match_allowed', label: 'pause the match' }],
+  ['unpausematch', { issue: VOTE_UNPAUSE, allowed: 'sv_vote_issue_pause_match_allowed', label: 'resume the match' }],
+  ['starttimeout', { issue: VOTE_TIMEOUT, allowed: 'sv_vote_issue_timeout_allowed', label: 'call a tactical timeout', team: true, rounds: true }],
+  ['surrender', { issue: VOTE_SURRENDER, allowed: 'sv_vote_issue_surrender_allowed', label: 'surrender', team: true, rounds: true }],
 ]);
+const USAGE = `callvote ${[...ISSUES.keys()].map((k) => (k === 'kick' ? 'kick <name or #id>' : k === 'changelevel' ? 'changelevel <map>' : k)).join(' | ')}`;
 const SEND_TICKS = TICK_RATE / 2; // a running vote goes out twice a second (datagrams can be lost)
 const RESULT_SENDS = 3; // the result goes out on this many ticks
 const FAILED_KEEP = 256; // failed votes remembered (sv_vote_failure_timer), and callers
@@ -61,7 +76,7 @@ export class Votes {
     const game = this.host.game, now = this.host.now();
     if (!this.num('sv_allow_votes')) return 'Voting is off on this server.';
     const name = (args[1] || '').toLowerCase(), row = ISSUES.get(name);
-    if (!row) return 'callvote kick <name or #id> | changelevel <map> | restartgame';
+    if (!row) return USAGE;
     if (!this.num(row.allowed)) return `callvote ${name} is off on this server.`;
     const issue = row.issue;
     if (this.vote) return 'A vote is already in progress.';
@@ -70,7 +85,14 @@ export class Votes {
     const wait = (this.lastCall.get(who) ?? -Infinity) + this.num('sv_vote_creation_timer') * 1000 - now;
     if (wait > 0) return `You can call another vote in ${Math.ceil(wait / 1000)} s.`;
     const ffa = game.rules.teammatesAreEnemies;
-    let target = null, arg = '', detail = '';
+    if ((row.teams || row.rounds) && ffa) return `callvote ${name}: not in free for all.`;
+    if (row.rounds && (!game.rules.rounds || game.rules.ignoreWinConditions)) return `callvote ${name}: only in a match of rounds.`;
+    if (row.rounds && game.phase === PHASE_WARMUP) return `callvote ${name}: not in warmup.`;
+    if (issue === VOTE_TIMEOUT && (game.timeoutTeam || game.tick < game.timeoutEnd)) return 'A timeout is already on.';
+    if (issue === VOTE_TIMEOUT && !game.timeoutsLeft(c.team)) return 'Your team has no timeouts left (mp_team_timeout_max).';
+    if (issue === VOTE_PAUSE && game.paused) return 'The match is paused already.';
+    if (issue === VOTE_UNPAUSE && !game.paused) return 'The match is not paused.';
+    let target = null, arg = '', detail = row.team ? `${TEAM_NAMES[c.team]}s` : '';
     if (issue === VOTE_KICK) {
       target = this.host.findClient(args.slice(2).join(' '));
       if (!target || target.bot) return 'callvote kick <name or #id>: no such player, or several have that name: status lists the ids (bots go with bot_kick)';
@@ -88,19 +110,20 @@ export class Votes {
     if (again > 0) return `That vote failed a moment ago: it can be called again in ${Math.ceil(again / 1000)} s.`;
     const voters = new Map([[c, 0]]), seen = new Set([who]);
     for (const o of game.clients) {
-      if (!o || !o.joined || o.bot || !o.playing || o === target || (issue === VOTE_KICK && !ffa && o.team !== c.team)) continue;
+      if (!o || !o.joined || o.bot || !o.playing || o === target || ((row.team || issue === VOTE_KICK) && !ffa && o.team !== c.team)) continue;
       const k = voterOf(o);
       if (seen.has(k)) continue; // (another session of an address already in)
       seen.add(k);
       voters.set(o, 0);
     }
-    const needed = Math.max(Math.ceil(this.num('sv_vote_quorum_ratio') * voters.size - 1e-9), issue === VOTE_KICK ? 2 : 1);
+    const needed = issue === VOTE_SURRENDER ? voters.size // every one of the team
+      : Math.max(Math.ceil(this.num('sv_vote_quorum_ratio') * voters.size - 1e-9), issue === VOTE_KICK ? 2 : 1);
     if (voters.size < needed) return 'Not enough players who can vote on that.';
     remember(this.lastCall, who, now, FAILED_KEEP);
     voters.set(c, 1);
     this.id = (this.id + 1) & 0xff;
     this.vote = {
-      id: this.id, issue, label: row.label, key, arg, detail: detail || arg, caller: c, target, voters, needed,
+      id: this.id, issue, label: row.label, key, arg, detail: detail || arg, caller: c, team: c.team, target, voters, needed,
       endsAt: now + this.num('sv_vote_timer_duration') * 1000,
     };
     this.result = null;
@@ -126,6 +149,7 @@ export class Votes {
   }
 
   label(vt) {
+    if (vt.issue === VOTE_TIMEOUT || vt.issue === VOTE_SURRENDER) return `${vt.label} (the ${vt.detail})`;
     return `${vt.label}${vt.detail ? ` ${vt.detail}` : ''}`;
   }
 
@@ -162,8 +186,16 @@ export class Votes {
       // Through the console's changelevel: the practice worker's fetches the map first. A
       // reply while this game still runs says why it did not change (now, or once fetched).
       host.con.run(['changelevel', vt.arg], { source: 'vote', print: (s) => host.game === game && this.unpass(vt, s) });
-    } else {
+    } else if (vt.issue === VOTE_RESTART) {
       game.restartGame(1);
+    } else if (vt.issue === VOTE_SCRAMBLE || vt.issue === VOTE_SWAP) {
+      game.scheduleTeams(vt.issue === VOTE_SWAP ? 'swap' : 'scramble');
+    } else if (vt.issue === VOTE_PAUSE || vt.issue === VOTE_UNPAUSE) {
+      game.pauseMatch(vt.issue === VOTE_PAUSE);
+    } else if (vt.issue === VOTE_TIMEOUT) {
+      game.callTimeout(vt.team);
+    } else if (vt.issue === VOTE_SURRENDER) {
+      game.surrender(vt.team);
     }
   }
 

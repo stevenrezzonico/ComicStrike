@@ -4,7 +4,8 @@
 
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import {
-  PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, END_MATCH, reasonOf, GAME_FFA, GAME_DM,
+  PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, END_MATCH, END_SURRENDER, reasonOf,
+  GAME_PAUSED, GAME_TIMEOUT, GAME_FFA, GAME_DM,
   GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION, GAME_RETAKES,
   BUY_MENU, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER, itemLabel, itemPrice,
 } from '../shared/economy.js';
@@ -105,7 +106,8 @@ export class Hud {
     K.lTied = lTied;
     this.elRound.classList.toggle('planted', planted && rs.phase !== PHASE_OVER);
     const clock = rs.ticksLeft > 0 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : '';
-    const mid = rs.phase === PHASE_WARMUP ? 'WARMUP' : rs.phase === PHASE_FREEZE ? `buy ${clock}` : planted ? ' C4 ' : clock;
+    const mid = rs.phase === PHASE_WARMUP ? 'WARMUP' : rs.mode & GAME_PAUSED ? 'PAUSED'
+      : rs.phase === PHASE_FREEZE ? `${rs.mode & GAME_TIMEOUT ? 'timeout' : 'buy'} ${clock}` : planted ? ' C4 ' : clock;
     const dm = (rs.mode & GAME_DM) !== 0, armsRace = (rs.mode & GAME_ARMSRACE) !== 0;
     const lead = leader && leader.score > 0 && !leader.tied ? `   lead: ${leader.self ? 'you' : leader.name} ` +
       (armsRace ? `level ${Math.min(leader.score + 1, ARMS_RACE.length)}` : leader.score) : '';
@@ -124,6 +126,7 @@ export class Hud {
       else if (reason === END_BOMB) banner = 'Target Bombed: ' + banner;
       else if (reason === END_DEFUSE) banner = 'Bomb Defused: ' + banner;
       else if (reason === END_RESCUE) banner = 'Hostage Rescued: ' + banner;
+      else if (reason === END_SURRENDER) banner = `${winner === TEAM_CT ? 'Terrorists' : 'Counter-Terrorists'} Surrender: ${banner}`;
     } else if (rs.phase === PHASE_WARMUP) {
       banner = rs.mode & GAME_FFA ? 'Warmup: waiting for players' : 'Warmup: waiting for both teams';
     } else if (notice) {

@@ -49,7 +49,7 @@ Deno.test('water: staying under drowns, a death of the player\'s own', () => {
   assert.ok(!c.alive, 'drowned');
   assert.ok(t > secs(30) && t < secs(40), `after ${t / TICK_RATE} s`);
   assert.equal(c.player.deaths, 1);
-  assert.equal(c.player.kills, 0, 'no kill counted for anyone');
+  assert.equal(c.player.kills, -1, 'a suicide: a kill less, as in CS');
 });
 
 // HL's PM_CheckFalling: no fall damage at a water level over 0, however shallow.

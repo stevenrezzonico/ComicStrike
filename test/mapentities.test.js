@@ -12,6 +12,7 @@ import { WEAPON_ID, WS_SLOTS, WS_ACTIVE, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIF
 import { FX_BLAST } from '../shared/grenades.js';
 import { mapBuying, teamMayBuy } from '../shared/economy.js';
 import { Game } from '../server/game.js';
+import { fogOf } from '../client/gl/renderer.js';
 import { yard, walker, quiet, joinClient } from './harness.js';
 
 const trigger = (map, keys, x0, y0, x1, y1) => map.brushEntity(keys, [box(x0, y0, 0, x1, y1, 100, NONE)]);
@@ -151,4 +152,11 @@ Deno.test('game_player_equip: a spawn gets its weapons instead of the default pi
   const plain = quiet(() => new Game('test', bsp, { rounds: false }));
   const d = joinClient(plain, new Writer(), 't', TEAM_T);
   assert.equal(d.player.ws.f[WS_SLOTS + SLOT_SECONDARY * 3], WEAPON_ID.glock, 'no equip: the default');
+});
+
+Deno.test('env_fog: its color and density (GoldSrc GL_EXP2), none without one or at 0', () => {
+  assert.deepEqual(fogOf([{ classname: 'env_fog', rendercolor: '255 0 51', density: '0.0002' }]), [1, 0, 0.2, 0.0002]);
+  assert.equal(fogOf([{ classname: 'env_fog', rendercolor: '1 2 3', density: '0' }]), null);
+  assert.equal(fogOf([{ classname: 'worldspawn' }]), null);
+  assert.equal(fogOf([{ classname: 'env_fog', density: '5' }])[3], 0.01, 'a crafted density held');
 });

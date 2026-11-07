@@ -9,7 +9,7 @@ const GUNS = [
   'glock', 'hkp2000', 'usp_silencer', 'p250', 'elite', 'fiveseven', 'tec9', 'cz75a', 'deagle', 'revolver',
   'mac10', 'mp9', 'mp7', 'mp5sd', 'ump45', 'p90', 'bizon',
   'galilar', 'famas', 'ak47', 'm4a1', 'm4a1_silencer', 'sg556', 'aug', 'ssg08', 'awp', 'g3sg1', 'scar20',
-  'nova', 'xm1014', 'sawedoff', 'mag7', 'm249', 'negev',
+  'nova', 'xm1014', 'sawedoff', 'mag7', 'm249', 'negev', 'taser',
 ];
 
 const KEYS = [

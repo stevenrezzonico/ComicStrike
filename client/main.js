@@ -25,7 +25,7 @@ import {
 import {
   WEAPONS, WEAPON_ID, ShotList, giveWeapon, weaponTick, viewPunchPitch, viewPunchYaw, hash32, WS_LAST_SLOT,
   WS_EVENTS, WS_SIZE, WS_SLOTS, WS_ACTIVE, WS_ACTION, WS_ACTION_END, SLOT_C4, NUM_SLOTS, ACTION_PLANT, ACTION_DEFUSE,
-  SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, SLOT_GRENADE,
+  SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, SLOT_GRENADE, SLOT_TASER,
   WS_ZOOM, WS_THROWN, WEV_THROW, WEV_FIRE, activeWeapon, silenced, RECOIL, shotKick, removeWeapon,
 } from '../shared/weapons.js';
 import { levelWeapon } from '../shared/progression.js';
@@ -35,7 +35,7 @@ import {
   BOMB_EXPLODED,
 } from '../shared/bomb.js';
 import { EXPLODE_RANGE, blastDamage } from '../shared/breakables.js';
-import { mapEntities, MAX_MOVERS, BLAST, SF_EXPLOSION_NODAMAGE, SF_EXPLOSION_NOFIREBALL } from '../shared/doors.js';
+import { mapEntities, MAX_MOVERS, MOVER_SPIN, BLAST, SF_EXPLOSION_NODAMAGE, SF_EXPLOSION_NOFIREBALL } from '../shared/doors.js';
 import { HitTargets, feetOffset } from '../shared/hitgroups.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import {
@@ -53,7 +53,7 @@ import {
 import { DemoRecorder, DemoPlayer, decodeDemo, fillRecorderRow, restoreRing, demoName } from './demo.js';
 import { saveDemo, loadDemo, listDemos, deleteDemo, downloadDemo } from './demostore.js';
 import { buildMapMesh } from './mapmesh.js';
-import { Renderer } from './gl/renderer.js';
+import { Renderer, fogOf } from './gl/renderer.js';
 import { Decals } from './gl/decals.js';
 import { Debris } from './gl/debris.js';
 import { Players } from './gl/players.js';
@@ -432,7 +432,7 @@ SLOT_RANK[SLOT_PRIMARY] = 25;
 SLOT_RANK[SLOT_SECONDARY] = 5;
 SLOT_RANK[SLOT_C4] = 3;
 SLOT_RANK[SLOT_GRENADE] = 1;
-SLOT_RANK[SLOT_KNIFE] = 0;
+SLOT_RANK[SLOT_KNIFE] = SLOT_RANK[SLOT_TASER] = 0;
 const AUTO_SLOTS = [SLOT_PRIMARY, SLOT_SECONDARY];
 const lastSlots = new Float64Array(NUM_SLOTS);
 let lastSpawn = -1;
@@ -599,7 +599,7 @@ async function loadMap(name) {
   step('upload');
   models.vis = renderer.vis;
   models.setSun(sunOf(bsp.entities));
-  renderer.setSky(sunOf(bsp.entities), name);
+  renderer.setSky(sunOf(bsp.entities), name, fogOf(bsp.entities));
   decals.clear();
   debris.clear();
   // Every effect's program draws once now, clipped away, not on its first use in a fight.
@@ -681,7 +681,7 @@ function clearRoundMarks() {
 // Offline round restart: breakables come back, we spawn at our team's first spawn.
 function offlineRespawn() {
   breakables.reset(world);
-  doors.reset(world);
+  doors.reset(world, tickCount);
   killables.reset(world);
   mapLogic.reset(tickCount);
   sandboxRemoved.fill(0);
@@ -1099,7 +1099,8 @@ function applyMovers(mv) {
     const k = mv.mover[m];
     if (k >= doors.count) continue;
     moverSeen[k] = 1;
-    doors.setState(k, mv.from[m], mv.dir[m], mv.sign[m], mv.t0[m], mv.leg[m], mv.goal[m]);
+    doors.setState(k, mv.from[m], mv.dir[m], mv.sign[m], mv.t0[m], mv.leg[m], mv.goal[m], mv.pos[m * 3], mv.pos[m * 3 + 1],
+      mv.pos[m * 3 + 2]);
   }
   for (let k = 0; k < doors.count; k++) if (!moverSeen[k]) doors.setState(k, 0, 0, 1, 0, 0, 0);
 }
@@ -1108,7 +1109,7 @@ function applyMovers(mv) {
 function moverSounds() {
   for (let k = 0; k < doors.count; k++) {
     const dir = doors.dir[k], was = moverDir[k];
-    if (dir === was) continue;
+    if (dir === was || doors.kind[k] >= MOVER_SPIN) continue; // (fans, pendulums and crates make no door sounds)
     moverDir[k] = dir;
     const e = world.ents[doors.ent[k]];
     const x = (e.amin[0] + e.amax[0]) / 2, y = (e.amin[1] + e.amax[1]) / 2, z = (e.amin[2] + e.amax[2]) / 2;
@@ -2383,7 +2384,8 @@ for (let k = 0; k < 3; k++) {
   }, `Opens radio menu ${k + 1} (${'ZXC'[k]}): a number key sends a line`);
 }
 // Votes (server/votes.js): the line goes to the server as typed; F1 / F2 answer.
-for (const [cmd, help] of [['callvote', 'callvote kick <name> | changelevel <map> | restartgame: asks the players'],
+for (const [cmd, help] of [['callvote', 'callvote kick <name> | changelevel <map> | restartgame | scrambleteams | swapteams | ' +
+    'pausematch | unpausematch | starttimeout | surrender: asks the players'],
   ['vote', 'vote option1 (yes, F1) | option2 (no, F2): answers the vote running']]) {
   con.command(cmd, (a, ctx) => {
     if (!net || net.playback) return con.out(ctx, `${cmd}: only on a server`);
@@ -2391,7 +2393,12 @@ for (const [cmd, help] of [['callvote', 'callvote kick <name> | changelevel <map
   }, help);
 }
 con.hint('callvote', (i, a) => {
-  if (i === 1) return [['kick', 'vote a teammate out'], ['changelevel', 'vote for another map'], ['restartgame', 'vote to restart the match']];
+  if (i === 1) {
+    return [['kick', 'vote a teammate out'], ['changelevel', 'vote for another map'], ['restartgame', 'vote to restart the match'],
+      ['scrambleteams', 'shuffle the teams, a new match'], ['swapteams', 'swap sides, a new match'],
+      ['pausematch', 'hold the freeze time'], ['unpausematch', 'let the freeze time run'],
+      ['starttimeout', 'a tactical timeout (your team votes)'], ['surrender', 'give the match up (your whole team votes)']];
+  }
   if (i === 2 && a[1] === 'kick' && net) { // a name several share goes by #id (the server refuses it)
     const ns = net.names;
     return ns.flatMap((n, id) => (!n || id === selfId || /^BOT /.test(n) ? []

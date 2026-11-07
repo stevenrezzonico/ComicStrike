@@ -26,6 +26,7 @@ export const GUN_SOUNDS = {
   shotgun: { pow: [300, 85, 0.14, 0.8], puff: [500, 0.7, 0.2], boom: [65, 0.65, 0.25], rise: 0.014, tail: 0.5 },
   mg: { pow: [420, 130, 0.1, 0.75], puff: [750, 0.5, 0.11], boom: [90, 0.45, 0.14], rise: 0.011, tail: 0.35 },
   silenced: { pow: [700, 350, 0.05, 0.22], puff: [1000, 0.3, 0.07], boom: null, rise: 0.012, tail: 0 }, // "pfft"
+  taser: { pow: [1100, 700, 0.14, 0.3], puff: [1900, 0.45, 0.16], boom: null, rise: 0.008, tail: 0 }, // a buzzing "bzzt"
 };
 
 // Mechanical clicks: band center (Hz), length (s), repeats. The draw (deploy) is one low soft

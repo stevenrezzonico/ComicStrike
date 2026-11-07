@@ -14,7 +14,7 @@ import * as Q from './quat.js';
 import { HAND_GRIP, HAND_GRIP_IN, GRIP_CURL } from '../models/arms.js';
 import { GUN_MAG, GUN_BOLT } from '../models/guns.js';
 import {
-  WEAPONS, SLOT_SECONDARY, SLOT_KNIFE, SLOT_C4, SLOT_GRENADE, WS_ACTIVE, WS_SLOTS, WS_RELOAD_END, WS_DEPLOY_END,
+  WEAPONS, SLOT_KNIFE, SLOT_C4, SLOT_GRENADE, WS_ACTIVE, WS_SLOTS, WS_RELOAD_END, WS_DEPLOY_END,
   WS_LAST_SHOT, WS_ACTION, WS_MODE_END, WS_THROW, WS_THROW_TIME, ACTION_PLANT, ACTION_DEFUSE, WEV_MELEE, WEV_MELEE2,
   SILENCER_TIME, THROW_DELAY, THROW_SHORT,
 } from '../../shared/weapons.js';
@@ -68,7 +68,7 @@ function holdOf(w) {
   if (w.slot === SLOT_C4) return 'c4';
   if (w.slot === SLOT_GRENADE) return 'grenade';
   if (w.name === 'elite') return 'elite';
-  return w.slot === SLOT_SECONDARY ? 'pistol' : 'rifle';
+  return w.pistol ? 'pistol' : 'rifle'; // the Zeus too
 }
 
 // Default hand points in the gun frame (constants: no array per frame).

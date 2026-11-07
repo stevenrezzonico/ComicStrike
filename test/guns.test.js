@@ -187,7 +187,7 @@ Deno.test('guns: hands find the magazine, the bolt or pump and the loading port 
     if (g.mag) {
       assert.ok(nearest(part(g.mesh, GUN_MAG), g.mag) < 1.2, `${w.name}: magazine point off the magazine`);
       assert.ok(Math.abs(Math.hypot(...g.magDir) - 1) < 1e-6, `${w.name}: magazine direction`);
-    } else assert.ok(w.shellTime || w.name === 'revolver', `${w.name} has a magazine`);
+    } else assert.ok(w.shellTime || w.name === 'revolver' || w.taser, `${w.name} has a magazine`);
     if (g.bolt) assert.ok(nearest(part(g.mesh, GUN_BOLT), g.bolt) < 1.2, `${w.name}: bolt point off the bolt`);
     if (w.shellTime) assert.ok(nearest(part(g.mesh, GUN_ROOT), g.port) < 1, `${w.name}: loading port off the gun`);
   });

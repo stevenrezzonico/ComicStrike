@@ -209,6 +209,11 @@ export class Host {
     num('sv_vote_issue_kick_allowed', 1, 'callvote kick is allowed', 0, 1);
     num('sv_vote_issue_changelevel_allowed', 1, 'callvote changelevel is allowed', 0, 1);
     num('sv_vote_issue_restart_game_allowed', 1, 'callvote restartgame is allowed', 0, 1);
+    num('sv_vote_issue_scramble_teams_allowed', 1, 'callvote scrambleteams is allowed', 0, 1);
+    num('sv_vote_issue_swap_teams_allowed', 1, 'callvote swapteams is allowed', 0, 1);
+    num('sv_vote_issue_pause_match_allowed', 1, 'callvote pausematch and unpausematch are allowed', 0, 1);
+    num('sv_vote_issue_timeout_allowed', 1, 'callvote starttimeout is allowed', 0, 1);
+    num('sv_vote_issue_surrender_allowed', 1, 'callvote surrender is allowed', 0, 1);
     num('sv_vote_kick_ban_duration', 15, 'Minutes a player voted out cannot come back (0: none)', 0, 1440);
     // Game modes (cfg/gamemode_*.cfg set these).
     con.cvar('game_type', 0, { help: 'Game type (0 classic, 1 gun game family); applies on the next map', min: 0, max: 3 });
@@ -241,6 +246,8 @@ export class Host {
     num('ff_damage_reduction_other', 0.25, 'Share of other damage a teammate set off (a blast) a teammate takes', 0, 1);
     num('mp_limitteams', 2, 'Most players one team may have over the other when joining (0: no limit)', 0, 30);
     num('mp_autoteambalance', 1, 'Teams two or more players apart are evened out at the round start', 0, 1);
+    num('mp_team_timeout_max', DEFAULT_RULES.timeoutMax, 'Tactical timeouts a team may call in a match', 0, 10);
+    num('mp_team_timeout_time', DEFAULT_RULES.timeoutTime, 'Seconds a tactical timeout adds to the freeze time', 1, 300);
     num('mp_armoury_entities', 1, "The map's own weapons lie out at every round start (armoury_entity, the fy_ maps)", 0, 1);
     num('mp_halftime', 1, 'Teams swap sides after half the rounds', 0, 1);
     num('mp_overtime_enable', 1, 'A tied match goes to overtime', 0, 1);
@@ -310,6 +317,15 @@ export class Host {
     }, 'Ends the warmup now');
     con.command('mp_warmup_start', () => this.game.startWarmup(!this.rules().warmupTime),
       'Starts a warmup (until mp_warmup_end, or mp_warmuptime seconds)');
+    con.command('mp_pause_match', () => this.game.pauseMatch(true), 'Holds the freeze time (now, or the next one) until mp_unpause_match');
+    con.command('mp_unpause_match', () => this.game.pauseMatch(false), 'Lets the freeze time run on');
+    con.command('mp_swapteams', () => this.game.scheduleTeams('swap'), 'Everyone to the other side, and a new match');
+    con.command('mp_scrambleteams', () => this.game.scheduleTeams('scramble'), 'The players shuffled over both sides, and a new match');
+    for (const [cmd, team] of [['timeout_terrorist_start', TEAM_T], ['timeout_ct_start', TEAM_CT]]) {
+      con.command(cmd, (_a, ctx) => {
+        if (!this.game.callTimeout(team)) con.out(ctx, `${cmd}: a timeout is on already, or none is left (mp_team_timeout_max)`);
+      }, `A tactical timeout for the ${team === TEAM_T ? 'Terrorists' : 'Counter-Terrorists'} (mp_team_timeout_time)`);
+    }
     con.command('kick', (a, ctx) => {
       const c = this.findClient(a.slice(1).join(' '));
       if (!c) return con.out(ctx, 'kick <name or #id>: no such player, or several have that name (status lists the ids)');
@@ -431,6 +447,8 @@ export class Host {
       ffOther: v('ff_damage_reduction_other'),
       limitTeams: v('mp_limitteams'),
       autoTeamBalance: v('mp_autoteambalance') !== 0,
+      timeoutMax: v('mp_team_timeout_max'),
+      timeoutTime: v('mp_team_timeout_time'),
       armouryEntities: v('mp_armoury_entities') !== 0,
       botQuota: v('bot_quota'),
       botQuotaMode: this.con.get('bot_quota_mode').value === 'fill' ? 'fill' : 'normal',

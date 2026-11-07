@@ -10,7 +10,9 @@ import { IN_USE, IN_ATTACK, IN_FORWARD, TICK_RATE } from '../shared/constants.js
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { Writer } from '../shared/protocol.js';
 import { WEAPON_ID, WS_ACTIVE, giveWeapon, SLOT_PRIMARY } from '../shared/weapons.js';
-import { MOVER_PLAT, MOVER_TRAIN, MOVER_BUTTON, MOVER_MOMENTARY, MOVER_WHEEL, MAX_FIRES, MAX_QUEUED } from '../shared/doors.js';
+import {
+  MOVER_PLAT, MOVER_TRAIN, MOVER_BUTTON, MOVER_MOMENTARY, MOVER_WHEEL, MOVER_SPIN, MOVER_PENDULUM, MOVER_PUSH, MAX_FIRES, MAX_QUEUED,
+} from '../shared/doors.js';
 import { blastDamage } from '../shared/breakables.js';
 import { Game } from '../server/game.js';
 import { W, yard, walker, quiet, joinClient } from './harness.js';
@@ -528,4 +530,65 @@ Deno.test('doors: which ones rattle when run into', () => {
   const d = game.doors;
   assert.deepEqual([0, 1, 2, 3].map((k) => d.rattlesOnTouch(k)), [true, false, false, false]);
   assert.deepEqual([...d.lockedSound], [1, 1, 1, 0]);
+});
+
+// --- Fans, pendulums, crates (the 2026-11-07 parity pass) ------------------------------
+
+const spinYard = () => yard((map) => {
+  // A fan turning about z at 90 deg/s (started on), a pendulum swinging 45 deg either way at
+  // up to 90 deg/s and dying away (damp 500: e^(-0.5 t)), a 32-unit crate on the floor.
+  map.brushEntity({ classname: 'func_rotating', targetname: 'fan', origin: '0 300 200', speed: '90', spawnflags: '1' },
+    [box(-60, 290, 192, 60, 310, 208, 'steel')]);
+  map.brushEntity({ classname: 'func_pendulum', targetname: 'swing', origin: '-400 300 300', distance: '45', speed: '90',
+    damp: '500' }, [box(-410, 290, 150, -390, 310, 300, 'steel')]);
+  map.brushEntity({ classname: 'func_pushable', health: '1' }, [box(300, -16, 0, 332, 16, 32, 'steel')]);
+});
+
+Deno.test('func_rotating: a fan started on turns at its speed, round and round; its name stops it where it is', () => {
+  const { game, run, snapshot } = walker(spinYard());
+  const d = game.doors, k = d.kind.indexOf(MOVER_SPIN), t = game.tick;
+  assert.ok(k >= 0 && d.dir[k] === 1, 'on');
+  const quarter = (d.frac(k, t + TICK_RATE) - d.frac(k, t) + 1) % 1;
+  assert.ok(Math.abs(quarter - 0.25) < 1e-9, `a quarter turn a second (${quarter})`);
+  run(ticksOf(1));
+  assert.ok(game.world.ents[d.ent[k]].rot, 'its collision turned');
+  const m = snapshot().own.movers;
+  assert.ok(Array.from(m.mover.subarray(0, m.count)).includes(k), 'in the snapshot');
+  game.logic.fireAt(game.tick, 'fan', null, 0);
+  run(2);
+  const at = d.frac(k, game.tick);
+  run(ticksOf(1));
+  assert.ok(d.dir[k] === 0 && d.frac(k, game.tick) === at, 'stopped where it was');
+});
+
+Deno.test('func_pendulum: fired, it swings to its distance and back, dies away and comes to rest', () => {
+  const { game, run } = walker(spinYard());
+  const d = game.doors, k = d.kind.indexOf(MOVER_PENDULUM);
+  assert.ok(k >= 0 && d.idle(k), 'at rest until fired');
+  game.logic.fireAt(game.tick, 'swing', null, 0);
+  run(2);
+  assert.equal(d.dir[k], 1);
+  // w = 90 / 45 = 2 rad/s: the first top at pi/4 s, at 45 deg less what it has died away.
+  const top = d.swing(k, Math.PI / 4);
+  assert.ok(top > 20 && top < 45, `first top ${top.toFixed(1)} deg`);
+  assert.ok(Math.abs(d.swing(k, Math.PI / 2)) < 1e-9, 'back through the middle');
+  run(ticksOf(d.life[k]) + 2); // ln(90 / 30) / 0.5 = 2.2 s
+  assert.ok(d.idle(k), 'at rest again');
+});
+
+Deno.test('func_pushable: walked into, a crate goes ahead; it stops at a wall; standing on it moves nothing', () => {
+  const { game, c, run, put } = walker(spinYard());
+  const d = game.doors, k = d.kind.indexOf(MOVER_PUSH), b = k * 3;
+  assert.ok(k >= 0 && d.pushables.includes(k));
+  put(283, 0, 0); // against its west side
+  run(ticksOf(1), IN_FORWARD, 0);
+  assert.ok(d.pos[b] > 60 && d.pos[b] < 101, `shoved ${d.pos[b].toFixed(1)} east`);
+  assert.ok(Math.abs(d.pos[b + 1]) < 1e-6, 'straight ahead');
+  assert.ok(c.player.ps.f[PS_ORIGIN] > 283 + 50, 'the player went with it');
+  run(ticksOf(12), IN_FORWARD, 0);
+  assert.ok(332 + d.pos[b] <= 1024 + 1e-3 && 332 + d.pos[b] > 1000, `stopped at the wall (${(332 + d.pos[b]).toFixed(1)})`);
+  const x = d.pos[b];
+  put(316 + x, 0, 32); // on top
+  run(ticksOf(1), IN_FORWARD, 180);
+  assert.ok(d.pos[b] === x, 'not from on top');
 });

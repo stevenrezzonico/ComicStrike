@@ -24,7 +24,7 @@
 //            radio line the server chose to deliver to this client)
 //   PING     u8 type, u8 sender, i16 x, y, z (a teammate marked that place: player_ping)
 //   CHANGELEVEL u8 type, str map (the server is switching maps: reconnect)
-//   INFO     u8 type, u8 n, n x { u8 id, u8 team, u16 kills, u16 deaths, u16 score, u8 mvps, str name }
+//   INFO     u8 type, u8 n, n x { u8 id, u8 team, i16 kills, u16 deaths, u16 score, u8 mvps, str name }
 //            (every player, resent periodically and on changes)
 //   REPORT   u8 type, u8 round, u8 n, n x { u8 id, u16 given, u8 givenHits, u16 taken, u8 takenHits }
 //            (the round's damage report for this client: what it dealt to and took from
@@ -62,7 +62,7 @@ import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 import { MAX_MOVERS } from './doors.js';
 
-export const PROTOCOL_VERSION = 22;
+export const PROTOCOL_VERSION = 23;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -92,6 +92,12 @@ export const VOTE_FAILED = 3;
 export const VOTE_KICK = 0; // issues
 export const VOTE_CHANGELEVEL = 1;
 export const VOTE_RESTART = 2;
+export const VOTE_SURRENDER = 3; // the caller's team, every one of them yes
+export const VOTE_TIMEOUT = 4; // the caller's team: a tactical timeout
+export const VOTE_SCRAMBLE = 5;
+export const VOTE_SWAP = 6;
+export const VOTE_PAUSE = 7;
+export const VOTE_UNPAUSE = 8;
 export const NO_MVP = 255;
 export const MAX_TEXT = 900; // bytes of console text per datagram
 export const CHAT_MAX = 127; // characters of one chat line (CS:GO's)
@@ -312,7 +318,7 @@ export function writeInfo(w, players) {
     if (!p) continue;
     w.u8v(id);
     w.u8v(p.team);
-    w.u16v(p.kills);
+    w.i16c(p.kills); // a teamkill or a suicide takes one away: below zero
     w.u16v(p.assists || 0);
     w.u16v(p.deaths);
     w.u16c(p.score);
@@ -339,7 +345,7 @@ export function readInfo(r, names, teams, kills, deaths, scores, mvps = null, as
     if (id < names.length) {
       names[id] = name;
       teams[id] = team;
-      kills[id] = k;
+      kills[id] = k << 16 >> 16;
       deaths[id] = d;
       scores[id] = score;
       if (mvps) mvps[id] = m;
@@ -904,6 +910,7 @@ export class MoverStates {
     this.t0 = new Int32Array(MAX_MOVERS);
     this.leg = new Uint8Array(MAX_MOVERS);
     this.goal = new Float32Array(MAX_MOVERS);
+    this.pos = new Float32Array(MAX_MOVERS * 3); // pushables' offsets
   }
 }
 
@@ -951,16 +958,18 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
     let n = 0;
     for (let m = 0; m < doors.count; m++) {
       if (doors.idle(m)) continue;
-      const more = doors.leg[m] !== 0 || doors.goal[m] !== 0;
-      if (w.pos + (more ? 15 : 10) > end) break;
+      const more = doors.leg[m] !== 0 || doors.goal[m] !== 0, P = doors.pos, b = m * 3;
+      const shoved = P[b] !== 0 || P[b + 1] !== 0 || P[b + 2] !== 0;
+      if (w.pos + (more ? 15 : 10) + (shoved ? 12 : 0) > end) break;
       w.u8v(m);
-      w.u8v((doors.dir[m] + 1) | (doors.sign[m] < 0 ? 4 : 0) | (more ? 8 : 0));
+      w.u8v((doors.dir[m] + 1) | (doors.sign[m] < 0 ? 4 : 0) | (more ? 8 : 0) | (shoved ? 16 : 0));
       w.f32v(doors.from[m]);
       w.u32v(doors.t0[m]);
       if (more) {
         w.u8v(doors.leg[m]);
         w.f32v(doors.goal[m]);
       }
+      if (shoved) for (let a = 0; a < 3; a++) w.f32v(P[b + a]);
       n++;
     }
     w.u8[moversAt] = n;
@@ -1144,6 +1153,10 @@ export function readSnapshot(r, ring, own, ev = null) {
     mv.leg[m] = bits & 8 ? r.u8v() : 0;
     if (bits & 8) r.f32To(mv.goal, m);
     else mv.goal[m] = 0;
+    for (let a = 0; a < 3; a++) {
+      if (bits & 16) r.f32To(mv.pos, m * 3 + a);
+      else mv.pos[m * 3 + a] = 0;
+    }
   }
   own.health = r.u8v();
   const armor = r.u8v();

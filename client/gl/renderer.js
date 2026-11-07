@@ -31,7 +31,7 @@ const LIGHT_FULL_SHARE = 0.75;
 const U1 = new Float32Array(1), U2 = new Float32Array(2), U3 = new Float32Array(3);
 
 const COMPOSITE_UNIFORMS = ['u_albedo', 'u_depth', 'u_ink', 'u_res', 'u_gscale', 'u_line', 'u_dot', 'u_zoom',
-  'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft', 'u_dead', 'u_fog', 'u_sight', 'u_inkaa'];
+  'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft', 'u_dead', 'u_fog', 'u_sight', 'u_inkaa', 'u_mapfog'];
 const INK_UNIFORMS = ['u_normal', 'u_depth', 'u_line', 'u_gscale', 'u_zoom'];
 // The media the camera can be in (COMPOSITE_FS u_fog, u_sight): a tone, an e-fold in
 // units, the share of it over the first-person view. Water's tone is the map's own.
@@ -42,6 +42,17 @@ const WATER_LIGHT = 0.45; // the water's tone: its brightest channel at least th
 const SLIME_FOG = [0.36, 0.5, 0.14, 80, VIEW_TINT];
 const LAVA_FOG = [0.92, 0.42, 0.1, 40, VIEW_TINT];
 const CLOUD_TEX_SIZE = 512; // the sky's cloud noise (cloudNoise): CLOUD_PERIOD cells across
+
+// A map's env_fog (CS:CZ's, the css_ ports and de_cache): [r, g, b, density] (0..1 colors) or
+// null. Its startdist / enddist are left out: GoldSrc's fog is GL_EXP2 by density alone.
+export function fogOf(entities) {
+  const e = entities.find((x) => x.classname === 'env_fog');
+  const density = e ? +e.density : 0;
+  if (!(density > 0)) return null;
+  const c = (e.rendercolor || '').trim().split(/\s+/).map(Number);
+  const ch = (i) => (Number.isFinite(c[i]) ? Math.min(Math.max(c[i], 0), 255) / 255 : 0.75);
+  return [ch(0), ch(1), ch(2), Math.min(density, 0.01)];
+}
 
 // The render scale the GPU can hold for a w x h canvas: at most `scale`, within the largest
 // texture side and `maxPixels` texels.
@@ -111,6 +122,7 @@ export class Renderer {
     this.horizon = new Float32Array([0.76, 0.89, 0.93]);
     this.sun = new Float32Array(3); // toward the map's sun (0: none), for the sky
     this.backdrop = new Float32Array(4); // its far silhouette: color, kind (setSky)
+    this.mapFog = new Float32Array(4); // the map's env_fog: color, density (0: none; setSky, fogOf)
     // The print (client/settings.js r_* cvars): comic or plain, ink line width and dot
     // size relative to the screen height, light bands.
     // calm: the radius (px) of the dot-free zone round the screen center (the crosshair);
@@ -310,9 +322,11 @@ export class Renderer {
 
   // The map's sky: its sun (shared/sun.js sunOf, toward it; null: none) and the far
   // silhouette its name suggests (backdropOf).
-  setSky(sun, name) {
+  setSky(sun, name, fog = null) {
     this.sun.fill(0);
     if (sun) this.sun.set(sun);
+    this.mapFog.fill(0);
+    if (fog) this.mapFog.set(fog);
     const b = backdropOf(name);
     this.backdrop.set(b ? [...b.color, b.kind] : [0, 0, 0, 0]);
   }
@@ -468,6 +482,7 @@ export class Renderer {
       gl.uniform2f(c.u_sight, fog[3], fog[4]);
     }
     gl.uniform1f(c.u_inkaa, st.inkaa ? 1 : 0);
+    gl.uniform4fv(c.u_mapfog, this.mapFog);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
     gl.enable(gl.CULL_FACE);

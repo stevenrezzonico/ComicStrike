@@ -47,10 +47,11 @@ export const END_BOMB = 4; // target bombed
 export const END_DEFUSE = 5;
 export const END_RESCUE = 6; // a hostage reached a rescue zone
 export const END_MATCH = 7; // deathmatch: the time limit ended the match (winner: top score)
-// roundInfo bit 7: this round decided the match (a side past half the rounds; END_MATCH
-// says so itself). The reason is (info >> 2) & 7 (reasonOf).
+export const END_SURRENDER = 8; // the losers voted to surrender (callvote surrender): the match ends
+// roundInfo bit 7: this round decided the match (a side past half the rounds, a surrender;
+// END_MATCH says so itself). The reason is (info >> 2) & 15 (reasonOf).
 export const ROUND_FINAL = 0x80;
-export const reasonOf = (info) => (info >> 2) & 7;
+export const reasonOf = (info) => (info >> 2) & 15;
 export const matchOver = (info) => (info & ROUND_FINAL) !== 0 || reasonOf(info) === END_MATCH;
 
 // Game modes (RoundState.mode bits, set by the server's game_type / game_mode and the
@@ -64,6 +65,9 @@ export const GAME_WINGMAN = 32; // wingman: 2 against 2 on one bomb site
 export const GAME_GHOST_TEAM = 64; // mp_solid_teammates 0: teammates walk through each other (casual)
 export const GAME_FF = 256; // mp_friendlyfire: teammates' bullets and grenades hurt (by the ff_damage_reduction_* shares)
 export const GAME_RETAKES = 128; // retakes: the bomb planted at the round start, loadouts instead of money
+// Not modes, the match's state: the freeze time held (mp_pause_match), a tactical timeout running.
+export const GAME_PAUSED = 512;
+export const GAME_TIMEOUT = 1024;
 export const DM_KILL_POINTS = 10; // per enemy killed (approx.: CS:GO adds weapon bonuses)
 export const DM_RESPAWN = 2; // seconds dead before respawning (approx.)
 
@@ -89,7 +93,7 @@ export const BUY_MENU = [
   ['SMGs', ids('mac10', 'mp9', 'mp7', 'mp5sd', 'ump45', 'p90', 'bizon')],
   ['Rifles', ids('galilar', 'famas', 'ak47', 'm4a1', 'm4a1_silencer', 'ssg08', 'sg556', 'aug', 'awp', 'g3sg1',
     'scar20')],
-  ['Gear', [ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER]],
+  ['Gear', [ITEM_KEVLAR, ITEM_ASSAULTSUIT, WEAPON_ID.taser, ITEM_DEFUSER]],
   ['Grenades', ids('molotov', 'incgrenade', 'decoy', 'flashbang', 'hegrenade', 'smokegrenade')],
 ];
 
