@@ -15,6 +15,11 @@ const KEYS = ['1', '2', '3', '4', '5', '3']; // by slot: slot1-5 (the Zeus comes
 const ROWS_MAX = NUM_SLOTS - 1 + GRENADE_IDS.length;
 export const FADE_MS = 3000;
 const EM = 20; // icon sizes in ems of 20 px (the kill feed's size), so the column's font size scales them
+const SLACK_X = 5, SLACK_Y = 16; // a tap this far off a row's icon still takes it (half the touch row's gap across)
+
+// The console command that draws weapon `id` (slot1-6; the Zeus by slot6, as slot3 with
+// the knife out would).
+export const slotCommand = (id) => `slot${WEAPONS[id].slot + 1}`;
 
 // The rows of weapon state `ws` into `out`, 3 numbers a row: the weapon id, the count (a
 // grenade kind's; 1 for the rest) and 1 for the one in hand. Returns the row count.
@@ -72,6 +77,20 @@ export class LoadoutPanel {
     }
   }
 
+  // A touch screen's tap at page point (x, y) on a row draws that weapon: its command, or
+  // null (nothing there, or the column faded out). The rows' places are read on the tap only.
+  commandAt(x, y) {
+    if (this.faded) return null;
+    const rows = this.el.children;
+    for (let r = 0; r < rows.length; r++) {
+      const b = rows[r].getBoundingClientRect();
+      if (x >= b.left - SLACK_X && x <= b.right + SLACK_X && y >= b.top - SLACK_Y && y <= b.bottom + SLACK_Y) {
+        return rows[r].dataset.cmd;
+      }
+    }
+    return null;
+  }
+
   build(n) {
     const el = this.el, rows = this.rows, icons = this.icons;
     el.textContent = '';
@@ -79,6 +98,7 @@ export class LoadoutPanel {
       const id = rows[r * 3], count = rows[r * 3 + 1];
       const row = el.appendChild(document.createElement('div'));
       row.className = rows[r * 3 + 2] ? 'lo on' : 'lo';
+      row.dataset.cmd = slotCommand(id);
       const ic = row.appendChild(document.createElement('i'));
       const mask = `url(${icons.url(id)})`; // (draws the icon first if it was not yet: sizes too)
       ic.style.width = `${icons.widths[id] / EM}em`;

@@ -2719,6 +2719,7 @@ input.onLockChange = updateOverlay;
 // Touch controls (client/touch.js) under the soft lock: the stick, and buttons that run
 // commands as a key named 'touch' would (held bits release with it).
 const touch = new TouchControls(document.getElementById('touch'), input, (cmd) => con.exec(cmd, { key: 'touch' }));
+touch.tap = (x, y) => loadout.commandAt(x, y); // a weapon's icon draws it (the ammo zone still cycles)
 // Gamepads (client/gamepad.js): polled every frame; the buttons are keys through the binds
 // (or the Controls tab's key capture), the sticks move and look; a pad in use makes the
 // lock soft (a pad press cannot take the pointer lock).

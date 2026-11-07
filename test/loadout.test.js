@@ -1,7 +1,7 @@
 // The HUD's weapon column (client/loadout.js): its rows from a weapon state.
 
 import assert from 'node:assert/strict';
-import { loadoutRows } from '../client/loadout.js';
+import { loadoutRows, slotCommand, LoadoutPanel } from '../client/loadout.js';
 import { createWeaponState, giveWeapon, WEAPON_ID, WS_ACTIVE, WS_SLOTS, SLOT_SECONDARY, SLOT_GRENADE } from '../shared/weapons.js';
 
 const rows = (ws) => {
@@ -26,4 +26,21 @@ Deno.test('loadout rows: slot order, a row per grenade kind with its count, the 
   ws.f[WS_SLOTS + SLOT_GRENADE * 3] = WEAPON_ID.hegrenade;
   const on = rows(ws).filter((r) => r[2]).map((r) => r[0]);
   assert.deepEqual(on, [WEAPON_ID.hegrenade]);
+});
+
+Deno.test('loadout taps: a row draws its weapon by its slot command, with a little slack, not while faded', () => {
+  assert.deepEqual(['ak47', 'glock', 'knife', 'taser', 'hegrenade', 'c4'].map((n) => slotCommand(WEAPON_ID[n])),
+    ['slot1', 'slot2', 'slot3', 'slot6', 'slot4', 'slot5']);
+  // Three rows side by side (the touch layout), 20 px wide with 10 px gaps, 14 px tall at y 300.
+  const row = (left, cmd) => ({ dataset: { cmd }, getBoundingClientRect: () => ({ left, right: left + 20, top: 300, bottom: 314 }) });
+  const panel = Object.create(LoadoutPanel.prototype);
+  panel.el = { children: [row(100, 'slot1'), row(130, 'slot2'), row(160, 'slot3')] };
+  panel.faded = false;
+  assert.equal(panel.commandAt(110, 307), 'slot1');
+  assert.equal(panel.commandAt(126, 290), 'slot2', 'a little left of and over the pistol');
+  assert.equal(panel.commandAt(180, 328), 'slot3', 'under the knife');
+  assert.equal(panel.commandAt(140, 340), null, 'too far under');
+  assert.equal(panel.commandAt(60, 307), null, 'left of every row');
+  panel.faded = true;
+  assert.equal(panel.commandAt(110, 307), null, 'faded out: nothing to tap');
 });

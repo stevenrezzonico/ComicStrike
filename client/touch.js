@@ -6,7 +6,7 @@
 // target can be tracked while firing), the right mouse button beside it, named by what it
 // does with the weapon in hand (SCOPE, BURST, SILENCER, FAN, STAB, LOB; gone otherwise), DUCK on the edge above, JUMP under
 // that in the corner, RELOAD and NEXT either side of the ammo at the bottom (tapping the
-// ammo itself is NEXT too), USE and BUY small along the top, and a second FIRE on the left
+// ammo itself is NEXT too, and a weapon's icon over it draws that weapon), USE and BUY small along the top, and a second FIRE on the left
 // above the stick for the left thumb while the right one tracks. The buttons are
 // translucent (`touch_opacity`), sized by `touch_scale`, and the wire carries buttons only
 // (no analog move), so the stick drives the digital WASD bits, walking (+speed) on a small
@@ -176,6 +176,8 @@ export class TouchButtons {
   }
 }
 
+const TAPPED = { look: false }; // a finger that tapped the HUD: it neither looks nor steers
+
 export class TouchControls {
   // root: the #touch layer (the stick's ring and knob; the buttons are made here);
   // exec(command) runs a console command as a key would.
@@ -203,7 +205,13 @@ export class TouchControls {
       const el = this.els.get(b.name);
       if (el) el.classList.toggle('on', on);
     });
-    input.onTouchDown = (id, x, y) => this.buttons.press(id, x - this.left, y - this.top);
+    this.tap = () => null; // (x, y) page point: a command for a tap on the HUD there (the weapons carried), or null
+    input.onTouchDown = (id, x, y) => {
+      const cmd = this.tap(x, y);
+      if (!cmd) return this.buttons.press(id, x - this.left, y - this.top);
+      exec(cmd);
+      return TAPPED;
+    };
     input.onTouchUp = (id) => this.buttons.release(id);
     input.onStick = (active, x, y, dx, dy) => this.drawStick(active, x, y, dx, dy);
     new ResizeObserver(() => this.layout()).observe(root);
