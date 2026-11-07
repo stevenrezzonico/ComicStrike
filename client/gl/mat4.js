@@ -48,6 +48,16 @@ export function viewFromEye(out, e, a) {
   return out;
 }
 
+// Shifts what a projection (or view-projection) draws by (jx, jy) in normalized device
+// coordinates: clip x += jx * w, y += jy * w (TAA's sub-texel jitter).
+export function jitterClip(m, jx, jy) {
+  for (let c = 0; c < 4; c++) {
+    m[c * 4] += jx * m[c * 4 + 3];
+    m[c * 4 + 1] += jy * m[c * 4 + 3];
+  }
+  return m;
+}
+
 export function multiply(out, a, b) {
   for (let c = 0; c < 4; c++) {
     const b0 = b[c * 4], b1 = b[c * 4 + 1], b2 = b[c * 4 + 2], b3 = b[c * 4 + 3];

@@ -75,7 +75,7 @@ const TABS = [
     ['toggle', 'r_playershadows', 'Sun shadows of players'],
     ['section', null, 'Resolution'],
     ['toggle', 'r_dynres', 'Automatic resolution (keeps 60 fps)'],
-    ['toggle', 'r_inkaa', 'Smooth ink lines'],
+    ['select', 'r_inkaa', 'Anti-aliasing', ['Off', 'Smooth corners', 'FXAA', 'SMAA', 'TAA']],
     ['slider', 'mat_viewportscale', 'Render resolution (most; over 1: supersampling)', 0.5, 8, 0.05],
     ['select', 'r_hidpi', 'High-DPI screens', ['Page pixels', 'Sharp (screen pixels)']],
     ['toggle', 'r_lowlatency', 'Low-latency display (may tear; takes effect on reload)'],

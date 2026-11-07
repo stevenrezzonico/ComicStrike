@@ -20,9 +20,9 @@ float vnoise(vec2 p) {
 }`;
 
 // G-buffer flags (alpha of target 2), as GBUFFER_CONSTS declares them.
-export const G_FLAGS = { FLAT: 1, SKY: 2, SCREEN: 4, VIEW: 8, CHAR: 16 };
+export const G_FLAGS = { FLAT: 1, SKY: 2, SCREEN: 4, VIEW: 8, CHAR: 16, MOVING: 32 };
 
-const GBUFFER_CONSTS = `
+export const GBUFFER_CONSTS = `
 const float DEPTH_FAR = 16384.0; // linear depth range (units)
 const float DEPTH_NEAR = 4.0;    // the near plane: the depth target holds DEPTH_NEAR / depth, 0..1
 const uint G_FLAT = 1u;   // unshaded (lights, flames, flashes): no dots, a bolder line
@@ -30,6 +30,7 @@ const uint G_SKY = 2u;
 const uint G_SCREEN = 4u; // see-through, printed as a dot screen: no ink against what lies behind
 const uint G_VIEW = 8u;   // the first-person view: a bolder line, like a foreground figure
 const uint G_CHAR = 16u;  // a character (player, hostage, their guns): far away, color over ink
+const uint G_MOVING = 32u; // can move on the screen by itself (models, debris, lines, doors): TAA keeps no history there
 const vec3 INK = vec3(0.09, 0.075, 0.06);`;
 
 // Fragment outputs of every scene shader. The depth target is a half-float RG (1 / depth,
@@ -105,7 +106,8 @@ void main() {
   v_col = a_col;
   // Ids 1..127 by texture and entity: ink where the texture changes, not along the
   // BSP's splits of one surface.
-  v_mat = uvec4(a_mat.xyz, (a_mat.z * 7u + slot * 13u) % 127u + 1u);
+  // (256 in the flags: a door or another mover, G_MOVING)
+  v_mat = uvec4(a_mat.x, a_mat.y | (slot > u_moverBase ? 256u : 0u), a_mat.z, (a_mat.z * 7u + slot * 13u) % 127u + 1u);
   gl_Position = u_viewProj * vec4(pos, 1.0);
   // Brush entity faces (FLAG_ENTITY) win over world faces in their plane, and nets,
   // fences (alpha-tested) and breakables / doors over other entities': mappers lay
@@ -363,6 +365,7 @@ void main() {
     if (screenAt(gl_FragCoord.xy, v_col.a, max(u_dot * 0.6, 2.0)) < 0.5) CUT;
     g |= G_SCREEN;
   }
+  if ((flags & 256u) != 0u) g |= G_MOVING;
   gbuffer(albedo, light, v_nrm, v_mat.w, v_w, g);
 }`;
 
@@ -545,7 +548,7 @@ ${GBUFFER}
 void main() {
   vec3 n = normalize(v_nrm);
   float d = dot(n, normalize(vec3(0.35, 0.25, 0.9)));
-  gbuffer(v_col, d > 0.2 ? 1.0 : d > -0.3 ? 0.6 : 0.35, n, v_id, v_w, 0u);
+  gbuffer(v_col, d > 0.2 ? 1.0 : d > -0.3 ? 0.6 : 0.35, n, v_id, v_w, G_MOVING);
 }`;
 
 // Thin lines (client/gl/practice.js: grenade arcs, landing rings; client/gl/tracers.js): a
@@ -596,7 +599,7 @@ uniform float u_rim;   // canvas pixels
 ${GBUFFER}
 void main() {
   float side = (1.0 - abs(v_across)) * 0.5 * u_width; // pixels to the quad's edge
-  gbuffer(side < u_rim ? INK : v_col, 1.0, vec3(0.0, 0.0, 1.0), 125u, v_w, G_FLAT | G_SCREEN);
+  gbuffer(side < u_rim ? INK : v_col, 1.0, vec3(0.0, 0.0, 1.0), 125u, v_w, G_FLAT | G_SCREEN | G_MOVING);
 }`;
 
 // Crosshair: four arms and a dot generated from gl_VertexID (6 vertices each), in
@@ -749,7 +752,7 @@ vec3 gunFinish(vec3 c, uint fin, vec3 p, float t) {
 void main() {
   vec3 n = normalize(v_nrm);
   if (u_emissive > 0.5) {
-    gbuffer(min(v_col * 1.25, vec3(1.0)), 1.0, n, v_id, v_w, G_FLAT | u_flags);
+    gbuffer(min(v_col * 1.25, vec3(1.0)), 1.0, n, v_id, v_w, G_FLAT | G_MOVING | u_flags);
     return;
   }
   if (!gl_FrontFacing) n = -n;
@@ -801,7 +804,7 @@ void main() {
     float l2 = 1.0 - smoothstep(0.8, 1.8, abs(fract(g2) - 0.5) / f2);
     albedo = mix(albedo, albedo * 0.45, max(l1, l2) * 0.85 * (1.0 - smoothstep(0.15, 0.35, max(f1, f2))));
   }
-  gbuffer(mix(albedo, vec3(1.0), u_white), clamp(mix(light, 1.0, u_white), 0.0, 1.0), n, v_id, v_w, u_flags);
+  gbuffer(mix(albedo, vec3(1.0), u_white), clamp(mix(light, 1.0, u_white), 0.0, 1.0), n, v_id, v_w, G_MOVING | u_flags);
 }`;
 
 // A character's sun shadow (client/gl/skinned.js SkinnedShadows): the vertices as
@@ -833,7 +836,7 @@ void main() {
 
 // The ink and the composite share the depth readers: a depth texel (DTEX) with its flags,
 // its depth, and 1 / depth up to a constant (the silhouette test only compares them).
-const DEPTH_READ = `
+export const DEPTH_READ = `
 ivec2 gsize;
 ivec2 cl(ivec2 p) { return clamp(p, ivec2(0), gsize - 1); }
 #ifdef DEPTH_PACKED
@@ -893,7 +896,7 @@ void main() {
   float dP = depthOf(Dp);
   // Ink, sampled at the pixel itself (pc; the ink plate holds still: a hand-drawn boil
   // shifting it 7 times a second was tiring to play with).
-  float edge = 0.0;
+  float edge = 0.0, moving = 0.0;
   if (u_line > 0.0) {
     ivec2 pc = p;
     DTEX Dc = Dp;
@@ -989,8 +992,13 @@ void main() {
     // the ring.
     float inner = (fc & G_CHAR) != 0u ? 1.0 - smoothstep(120.0 * u_zoom, 300.0 * u_zoom, dC) : 1.0 - farC;
     edge = max(sil, max(eN, eI) * fade * inner);
+    // TAA (client/gl/antialias.js): a line drawn from something that moves by itself (a model,
+    // debris, a door: any sample here or a character's ring) keeps no history.
+    uint any = fc | flagsOf(tL) | flagsOf(tR) | flagsOf(tD) | flagsOf(tU) | flagsOf(tDL) | flagsOf(tUR) |
+      flagsOf(tUL) | flagsOf(tDR);
+    moving = (any & G_MOVING) != 0u || dChar < 1e8 ? 1.0 : 0.0;
   }
-  o_ink = vec4(edge, 0.0, 0.0, 1.0);
+  o_ink = vec4(edge, moving, 0.0, 1.0);
 }`;
 
 export const COMPOSITE_FS = `#version 300 es

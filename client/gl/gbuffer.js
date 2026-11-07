@@ -34,12 +34,14 @@ export class GBuffer {
 
   // mips: the color plate and the ink get full mip chains (supersampling over 2x: the
   // composite reads them through `textureLod`, a box filter over the texels under a pixel).
-  resize(w, h, mips = false) {
-    if (w === this.width && h === this.height && mips === this.mips) return;
+  // marks: the ink target keeps INK_FS's moving mark in g (TAA; else R8, a byte less).
+  resize(w, h, mips = false, marks = false) {
+    if (w === this.width && h === this.height && mips === this.mips && marks === this.marks) return;
     const gl = this.gl;
     this.width = w;
     this.height = h;
     this.mips = mips;
+    this.marks = marks;
     const levels = mips ? 1 + Math.floor(Math.log2(Math.max(w, h))) : 1;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
     for (let i = 0; i < 3; i++) {
@@ -62,12 +64,13 @@ export class GBuffer {
     const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
     if (status !== gl.FRAMEBUFFER_COMPLETE) throw new Error(`G-buffer incomplete (0x${status.toString(16)})`);
     // The ink pass's target (INK_FS): the line coverage per texel, filtered when the
-    // composite reads it at another resolution.
+    // composite reads it at another resolution, and whether that texel's line comes from
+    // something moving (for TAA).
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.inkFb);
     if (this.ink) gl.deleteTexture(this.ink);
     const ink = this.ink = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, ink);
-    gl.texStorage2D(gl.TEXTURE_2D, levels, gl.R8, w, h);
+    gl.texStorage2D(gl.TEXTURE_2D, levels, marks ? gl.RG8 : gl.R8, w, h);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mips ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -78,15 +81,16 @@ export class GBuffer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  // The mip chains of the color plate and (with lines) the ink, for this frame's composite.
-  buildMips(ink) {
+  // The mip chains of the color plate and (with lines) the ink the composite reads this
+  // frame: the G-buffer's own, or an anti-aliasing pass's (client/gl/antialias.js).
+  buildMips(albedo, ink) {
     const gl = this.gl;
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.tex[0]);
+    gl.bindTexture(gl.TEXTURE_2D, albedo);
     gl.generateMipmap(gl.TEXTURE_2D);
     if (ink) {
       gl.activeTexture(gl.TEXTURE3);
-      gl.bindTexture(gl.TEXTURE_2D, this.ink);
+      gl.bindTexture(gl.TEXTURE_2D, ink);
       gl.generateMipmap(gl.TEXTURE_2D);
     }
   }

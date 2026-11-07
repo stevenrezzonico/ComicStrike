@@ -21,6 +21,8 @@ import { FlashLights } from './flashes.js';
 import { Afterimage } from './afterimage.js';
 import { WorldVis } from './worldvis.js';
 import { clock } from '../clock.js';
+import { Antialias, AA, aaBytes } from './antialias.js';
+import { jitterClip, invert } from './mat4.js';
 
 // The light that prints fully lit: this share of the map's lit lightmap texels is at or
 // below it (sunlit ground and walls on outdoor maps, lamp pools indoors).
@@ -111,6 +113,14 @@ export class Renderer {
     this.comp = program(gl, COMPOSITE_VS, COMPOSITE_FS, COMPOSITE_UNIFORMS);
     this.inkFull = program(gl, COMPOSITE_VS, INK_FS, INK_UNIFORMS);
     this.afterimage = new Afterimage(gl); // the flashbang's frozen frame
+    // Anti-aliasing besides supersampling (style.aa, r_inkaa). With TAA the world (and the
+    // decals on it, overlays marked `jittered`) is drawn `jitter` (normalized device
+    // coordinates) off each frame; what moves by itself (models, effects, the first-person
+    // view) is not: TAA keeps no history there, and jittered it would shimmer.
+    this.aa = new Antialias(gl, !this.gbuf.packed);
+    this.jitter = new Float32Array(2);
+    this.jViewProj = new Float32Array(16);
+    this.jInvViewProj = new Float32Array(16);
     this.timer = new GpuTimer(gl); // GPU time per pass (cl_showfps 3)
     this.gate = new FrameGate(gl); // frames in flight (r_frames_ahead)
     this.emptyVao = gl.createVertexArray();
@@ -131,8 +141,9 @@ export class Renderer {
     // smoke: 0..1, the camera inside a smoke cloud: the print fogs over with distance.
     // liquid: the CONTENTS_* the camera is in (water, slime, lava), else 0: the same fog,
     // the liquid's, under a longer sight, and the first-person view tinted.
+    // aa: the anti-aliasing mode (client/gl/antialias.js AA).
     this.style = {
-      comic: true, ink: 1, dots: 0, bands: 0, lift: 0.3, calm: 0, soft: false, inkaa: true, dead: 0, smoke: 0,
+      comic: true, ink: 1, dots: 0, bands: 0, lift: 0.3, calm: 0, soft: false, aa: AA.CORNERS, dead: 0, smoke: 0,
       liquid: 0,
     };
     this.waterFog = [0.2, 0.33, 0.36, WATER_SIGHT, VIEW_TINT]; // set per map (loadMap)
@@ -231,6 +242,7 @@ export class Renderer {
     this.transCount = mesh.transCount;
     mapLight.full = fullLight(lm.data);
     this.afterimage.warm(this.canvas.width, this.canvas.height);
+    this.aa.reset();
   }
 
   // Hides (or restores) a breakable's faces without touching the vertex buffer.
@@ -263,11 +275,13 @@ export class Renderer {
       c.height = h;
       changed = true;
     }
-    const s = clampScale(scale, w, h, this.maxSize, this.maxPixels);
+    // The anti-aliasing targets count against the cap too (TAA: ~30 bytes a texel more).
+    const aa = this.style.aa;
+    const s = clampScale(scale, w, h, this.maxSize, this.maxPixels * 15 / (15 + aaBytes(aa, !this.gbuf.packed)));
     this.capped = s < scale - 1e-6;
     const gw = Math.max(1, Math.round(w * s)), gh = Math.max(1, Math.round(h * s));
     if (gw !== this.gbuf.width || gh !== this.gbuf.height) changed = true;
-    this.gbuf.resize(gw, gh, s > 2 + 1e-6);
+    this.gbuf.resize(gw, gh, s > 2 + 1e-6, aa === AA.TAA);
     if (changed) this.timer.reset(); // the GPU's work per frame changed: its readings start over
     return w / h;
   }
@@ -343,6 +357,15 @@ export class Renderer {
   // The time is clock.t (seconds; set by the caller).
   render(viewProj, invViewProj, eye, overlays = null) {
     const gl = this.gl, time = clock.t;
+    const still = viewProj; // overlays that move by themselves are drawn without the jitter
+    if (this.style.aa === AA.TAA) {
+      this.aa.jitterFor(this.gbuf.width, this.gbuf.height, viewProj, invViewProj, this.jitter);
+      this.jViewProj.set(viewProj);
+      jitterClip(this.jViewProj, this.jitter[0], this.jitter[1]);
+      invert(this.jInvViewProj, this.jViewProj);
+      viewProj = this.jViewProj;
+      invViewProj = this.jInvViewProj;
+    }
     const w = this.world;
     const t = this.timer;
     this.flashes.update(time);
@@ -396,7 +419,7 @@ export class Renderer {
       for (let i = 0; i < overlays.length; i++) {
         const o = overlays[i];
         t.mark(o.pass ?? PASS.EFFECTS);
-        o.draw(viewProj, this.gbuf);
+        o.draw(o.jittered ? viewProj : still, this.gbuf);
       }
     }
 
@@ -440,10 +463,16 @@ export class Renderer {
       gl.uniform1fv(k.u_zoom, U1);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
+    this.timer.mark(PASS.AA);
+    const plates = this.aa.run(st.aa, this.gbuf, line > 0);
     this.timer.mark(PASS.PRINT);
     // Over 2x the color plate and the ink are read through their mipmaps (a box filter over
     // the texels under each pixel; LINEAR alone reads 4 of them and aliases).
-    if (this.gbuf.mips) this.gbuf.buildMips(line > 0);
+    if (this.gbuf.mips) this.gbuf.buildMips(plates.albedo, line > 0 ? plates.ink : null);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, plates.albedo);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, plates.ink);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.canvas.width, h);
     const c = this.comp.loc;
@@ -481,7 +510,7 @@ export class Renderer {
       gl.uniform4f(c.u_fog, fog[0], fog[1], fog[2], st.liquid ? 1 : st.smoke);
       gl.uniform2f(c.u_sight, fog[3], fog[4]);
     }
-    gl.uniform1f(c.u_inkaa, st.inkaa ? 1 : 0);
+    gl.uniform1f(c.u_inkaa, st.aa === AA.CORNERS ? 1 : 0);
     gl.uniform4fv(c.u_mapfog, this.mapFog);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);

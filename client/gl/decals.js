@@ -16,6 +16,7 @@ export class Decals {
     this.next = 0;
     this.data = new Float32Array(capacity * FLOATS_PER_DECAL);
     this.owner = new Uint8Array(capacity); // breakable slot the decal sits on, 0 = world
+    this.jittered = true; // on the world: TAA's jitter moves it with the world (Renderer.render)
     this.prog = program(gl, DECAL_VS, DECAL_FS, ['u_viewProj']);
 
     this.vao = gl.createVertexArray();

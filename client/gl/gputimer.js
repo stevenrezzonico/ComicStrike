@@ -14,8 +14,8 @@
 // it: every queued frame is a frame more between the mouse and the screen, long before any
 // frame comes late. Both are eased over a few frames.
 
-export const PASS = { CLEAR: 0, WORLD: 1, SKY: 2, MODELS: 3, EFFECTS: 4, GLASS: 5, VIEW: 6, INK: 7, PRINT: 8, OVER: 9 };
-const LABELS = ['clear', 'world', 'sky', 'models', 'effects', 'glass', 'view', 'ink', 'print', 'over'];
+export const PASS = { CLEAR: 0, WORLD: 1, SKY: 2, MODELS: 3, EFFECTS: 4, GLASS: 5, VIEW: 6, INK: 7, AA: 8, PRINT: 9, OVER: 10 };
+const LABELS = ['clear', 'world', 'sky', 'models', 'effects', 'glass', 'view', 'ink', 'aa', 'print', 'over'];
 const WHOLE = LABELS.length; // the light mode's one query a frame
 const PENDING = 256; // queries in flight (a frame makes ~15; results lag 2-4 frames)
 const EASE = 0.1; // share of a new frame's reading in frameMs / behind

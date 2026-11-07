@@ -2180,6 +2180,7 @@ function applyVideoSettings() {
   dynres.most = most;
   dynres.min = Math.min(1, 0.5 / most);
   renderer.maxPixels = cv.r_supersample_max.number * 1e6;
+  renderer.style.aa = Math.round(cv.r_inkaa.number); // (before resize: the targets and the cap follow it)
   const aspect = renderer.resize(most * (cv.r_dynres.bool ? dynres.factor : 1),
     (cv.r_hidpi.bool ? Math.min(2, devicePixelRatio || 1) : 1) * (cv.r_dynres.bool ? dynres.print : 1));
   const style = renderer.style;
@@ -2193,7 +2194,6 @@ function applyVideoSettings() {
   renderer.novis = cv.r_novis.bool;
   models.farLod = cv.r_lod_dist.number;
   models.sunOn = cv.r_playershadows.bool;
-  style.inkaa = cv.r_inkaa.bool;
   return aspect;
 }
 
