@@ -109,6 +109,39 @@ export function itemPrice(p, item) {
   return w.price;
 }
 
+// The gear's names for `buy` (weapons go by their own: WEAPON_ID).
+export const GEAR_NAMES = { vest: ITEM_KEVLAR, vesthelm: ITEM_ASSAULTSUIT, defuser: ITEM_DEFUSER };
+
+const DEFAULT_PISTOLS = new Set([WEAPON_ID.glock, WEAPON_ID.usp_silencer, WEAPON_ID.hkp2000]);
+
+// What CS's autobuy and rebuy buy of `items` (ids or `buy` names), in order: each one `p`
+// can buy now and afford with what the earlier picks left. `oneOfKind` (autobuy, from
+// cl_autobuy): only the first of each kind (a primary, a pistol, armor, the kit, each
+// grenade), a kind already held skipped (a primary, a pistol other than the team's
+// default). Free (deathmatch): no money counted.
+export function buyPicks(p, items, canBuyNow, free = false, oneOfKind = false) {
+  const out = [], done = new Set();
+  let money = p.money;
+  for (const name of items) {
+    const item = typeof name === 'number' ? name : GEAR_NAMES[name] || WEAPON_ID[name];
+    if (!item) continue;
+    const w = WEAPONS[item];
+    const kind = GEAR[item] ? (item === ITEM_DEFUSER ? 'kit' : 'armor') : w.grenade ? `g${item}` : `s${w.slot}`;
+    if (oneOfKind && done.has(kind)) continue;
+    const held = w && !w.grenade ? p.ws.f[WS_SLOTS + w.slot * 3] : 0;
+    if (oneOfKind && held && !DEFAULT_PISTOLS.has(held)) {
+      done.add(kind);
+      continue;
+    }
+    const price = itemPrice(p, item);
+    if (buyError(p, item, canBuyNow, free) || (!free && price > money)) continue;
+    out.push(item);
+    done.add(kind);
+    if (!free) money -= price;
+  }
+  return out;
+}
+
 // CS 1.6's info_map_parameters "buying": 0 everyone buys, 1 only the CTs, 2 only the Ts,
 // 3 nobody (the fy_ maps: weapons come from the ground).
 export function mapBuying(bsp) {

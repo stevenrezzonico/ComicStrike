@@ -9,7 +9,7 @@ const CONFIG_KEY = 'comicstrike.config.cfg';
 const OLD_CONFIG_KEY = 'webcs.config.cfg'; // saved before the rename to ComicStrike: read once
 // Defaults added after configs were already being saved.
 const NEW_BINDS = ['messagemode', 'messagemode2', 'noclip', 'save_pos', 'load_pos', 'bot_place', 'radio1', 'radio2', 'radio3',
-  'player_ping', 'vote option1', 'vote option2'];
+  'player_ping', 'vote option1', 'vote option2', 'autobuy', 'rebuy'];
 const SAVE_DELAY_MS = 500;
 // The config's first line; a config saved under another one (before the defaults below
 // changed) takes those defaults once, as it loads.
@@ -71,6 +71,10 @@ export function createConsole(print) {
   add('net_graph', 0, 'Network graph: ping, loss, rates, prediction', 0, 1);
   add('cl_drawhud', 1, 'Draw the HUD', 0, 1);
   add('cl_autowepswitch', 1, 'Switch to a weapon you buy or pick up when it is better than the one in hand (CS:GO)', 0, 1);
+  add('hud_showtargetid', 1, 'Name the player under the crosshair (CS:GO\'s target id; an enemy only in plain sight)', 0, 1);
+  add('cl_teamid_overhead', 1, 'Marks over your teammates\' heads, through walls (CS:GO\'s team id)', 0, 1);
+  add('cl_autobuy', 'm4a1 ak47 famas galilar p90 mp5sd vesthelm vest defuser',
+    'autobuy: of these, the first you can afford of each kind (a primary, a pistol, armor, the kit, each grenade)');
   add('cl_comicwords', 1, 'Comic sound words: BAM! on hits, BLAM! on your shots, KA-BOOM! on explosions', 0, 1);
   add('sv_pausable', 1, '0: practice keeps running while the pause menu is up (for testing; online games never pause)', 0, 1, 0);
   add('r_playershadows', 1, 'Players and hostages cast shadows along the sun where they stand in sunlight', 0, 1);

@@ -15,6 +15,9 @@ import { ARMS_RACE } from '../shared/progression.js';
 
 const $ = (id) => document.getElementById(id);
 
+// A team's players as pips, the living filled (at most 10).
+const pips = (alive, all) => '\u25cf'.repeat(Math.min(alive, 10)) + '\u25cb'.repeat(Math.max(0, Math.min(all, 10) - Math.min(alive, 10)));
+
 export class Hud {
   constructor(onBuy) {
     this.onBuy = onBuy; // (item) => void
@@ -63,8 +66,9 @@ export class Hud {
 
   // rs: RoundState and bomb: BombState (null offline); now: ms; leader: the top scorer
   // { name, score, self, tied } (deathmatch, arms race) or null; progress: our place in
-  // the gun game modes' weapon list ('' in the others).
-  update(rs, bomb, money, now, leader = null, progress = '') {
+  // the gun game modes' weapon list ('' in the others); alive: [CTs alive, CTs, Ts alive, Ts]
+  // (the pips beside the scores, CS:GO's alive players on its top bar) or null.
+  update(rs, bomb, money, now, leader = null, progress = '', alive = null) {
     const K = this.key;
     if (money !== K.money) {
       K.money = money;
@@ -81,10 +85,12 @@ export class Hud {
     const notice = now < this.noticeUntil ? this.notice : '';
     const lName = leader ? leader.name : '', lScore = leader ? leader.score : -1, lSelf = !!leader && leader.self;
     const lTied = !!leader && leader.tied;
+    const living = alive ? alive[0] + alive[1] * 32 + alive[2] * 1024 + alive[3] * 32768 : -1; // (each under 32)
     if (secs === K.secs && rs.phase === K.phase && planted === K.planted && rs.scoreCT === K.ct && rs.scoreT === K.t &&
       rs.mode === K.mode && rs.info === K.info && notice === K.notice && lName === K.lName && lScore === K.lScore &&
-      lSelf === K.lSelf && lTied === K.lTied && progress === K.progress) return; // nothing to rebuild (the usual frame)
+      lSelf === K.lSelf && lTied === K.lTied && progress === K.progress && living === K.living) return; // nothing to rebuild (the usual frame)
     K.progress = progress;
+    K.living = living;
     K.secs = secs;
     K.phase = rs.phase;
     K.planted = planted;
@@ -105,7 +111,8 @@ export class Hud {
       (armsRace ? `level ${Math.min(leader.score + 1, ARMS_RACE.length)}` : leader.score) : '';
     this.set(this.elRound, 'round', rs.mode & GAME_DEMO ? `DEMO   ${mid}`
       : dm ? `DEATHMATCH   ${mid}${lead}` : armsRace ? `ARMS RACE   ${mid}   ${progress}${lead}`
-      : `${rs.mode & GAME_RETAKES ? 'RETAKES   ' : ''}CT ${rs.scoreCT}   ${mid}   ${rs.scoreT} T${rs.mode & GAME_DEMOLITION ? `   ${progress}` : ''}`);
+      : `${rs.mode & GAME_RETAKES ? 'RETAKES   ' : ''}${alive ? `${pips(alive[0], alive[1])}  ` : ''}CT ${rs.scoreCT}   ${mid}   ` +
+        `${rs.scoreT} T${alive ? `  ${pips(alive[2], alive[3])}` : ''}${rs.mode & GAME_DEMOLITION ? `   ${progress}` : ''}`);
     let banner = '';
     if (rs.phase === PHASE_OVER && reasonOf(rs.info) === END_MATCH) {
       banner = !leader || leader.tied ? 'Match over: a draw'

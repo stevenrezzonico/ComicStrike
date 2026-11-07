@@ -7,15 +7,14 @@ grenades, AWP and buttons (14j), radar levels (14k), point lights (14l), the rou
 panel and damage report (14m), sun shadows for players (14n), gun looks, comic jingles,
 the demo's practice tools, demo recording, the hurt indicator and the killer's health, characters culled by the PVS, bots' smokes and molotovs, tracers and casings, visibility for our own maps (opt-in: cs_polaris and editor exports), radio and pings, Retakes, comic skies, map load time (the radar's overview off the page's thread), the 2026-11-04 audit's findings (left as they are: duplicated one-line vector helpers and `el` across modules, the two IndexedDB openers, and test-only `buildDefuser`, `buildAllGuns` and the mannequin), the 2026-11-05 audit's findings, the smaller ones included, water (a softer splash, the water jump, drowning, slime and lava, the underwater view and hearing, water sounds, swim poses, grenades sinking, the playground's diving well; left out: HL's drowning HUD icon, the view nudge at the surface, others' bubbles, strokes and gasps, waves; bots know nothing of swimming), server conveniences (`sv_password`, listed rooms, votes; left out: a vote menu in the pause menu, CS:GO's other vote issues, the kicked player reads "connection lost" since a kick closes the session at once).
 
-## CS 1.6 / CS:GO parity, the rest (the 2026-11-07 comparison; waves 1 and 2 are done)
+## CS 1.6 / CS:GO parity, the rest (the 2026-11-07 comparison; waves 1 to 3 are done)
 
-1. **HUD:** the name of the player under the crosshair (CS:GO's target ID); teammates' names or arrows over their heads (`cl_teamid_overhead`); the alive counts per team on the round bar; `rebuy` and `autobuy`.
-2. **Movers the maps have:** `func_rotating` (fans on css_inferno, css_train_go, de_airstrip), `func_pendulum` (de_torn), `func_pushable` (cs_estate, cs_havana): solid and still now.
-3. **`env_fog`** (the css_ ports, de_cache): fog in the map's colour.
-4. **VIP mode** (as_oilrig: `info_vip_start`, `func_vip_safetyzone`): every round there ends in a draw at time-out.
-5. **The Zeus x27:** not among our 34 guns (data, a model, a slot, its animations).
-6. **Vote issues:** surrender, tactical timeouts, scramble and swap teams, `mp_pause_match`.
-7. **Suicide** costs a kill in CS:GO (*unsure*, docs/csgo-parity.md).
+1. **Movers the maps have:** `func_rotating` (fans on css_inferno, css_train_go, de_airstrip), `func_pendulum` (de_torn), `func_pushable` (cs_estate, cs_havana): solid and still now.
+2. **`env_fog`** (the css_ ports, de_cache): fog in the map's colour.
+3. **VIP mode** (as_oilrig: `info_vip_start`, `func_vip_safetyzone`): every round there ends in a draw at time-out.
+4. **The Zeus x27:** not among our 34 guns (data, a model, a slot, its animations).
+5. **Vote issues:** surrender, tactical timeouts, scramble and swap teams, `mp_pause_match`.
+6. **Suicide** costs a kill in CS:GO (*unsure*, docs/csgo-parity.md).
 
 ## Consistent frame times (Phase 15; the measuring is done)
 

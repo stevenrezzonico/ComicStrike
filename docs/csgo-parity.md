@@ -21,6 +21,10 @@ A read of `shared/` against CS:GO's rules (convars, `items_game.txt`, the SDK's 
 | Assists | none | over 40 damage to a victim a teammate kills, else a flash assist; K / A / D | the same, per life of the victim |
 | Team limits | `mp_teamsize_max` only | `mp_limitteams 2`, `mp_autoteambalance 1` | the same; who is moved (newest bot, else the last to join the team) is approx. |
 | Kill feed | headshots | wallbang mark, the assister | WB, `killer + assister` (FLASH for a flash assist) |
+| Target id | none | the player under the crosshair named (`hud_showtargetid`) | the same; an enemy only in plain sight |
+| Team id over heads | none | marks over teammates, through walls | a triangle in the team's color (`cl_teamid_overhead`) |
+| Alive players on the top bar | none | an avatar per player, the dead greyed | pips beside the scores |
+| `autobuy`, `rebuy` | none | F3 / F4 | the same keys; `cl_autobuy`'s list (CS 1.6's) |
 
 CS 1.6 map entities the game ignored, from a scan of the 48 maps here: `trigger_hurt`, `env_explosion`, `game_text` (and `game_playerspawn`), `player_weaponstrip`, `game_player_equip`, `info_map_parameters`' `buying`, `trigger_teleport` (predicted). See CLAUDE.md, Doors and Collision.
 

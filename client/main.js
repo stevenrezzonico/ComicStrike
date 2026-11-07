@@ -71,6 +71,7 @@ import { perspective, viewFromAngles, viewFromEye, multiply, invert, CLIP_ALL } 
 import { clock } from './clock.js';
 import { PracticeMarks } from './gl/practice.js';
 import { Tracers } from './gl/tracers.js';
+import { TeamMarks } from './gl/teammarks.js';
 import { Input, SELECT_LAST } from './input.js';
 import { keyName } from './binds.js';
 import { WeaponView } from './weaponview.js';
@@ -99,8 +100,8 @@ import { NetGraph } from './netgraph.js';
 import { createConsole, watch } from './settings.js';
 import { releaseOf, quote } from '../shared/cvars.js';
 import {
-  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_FF, GAME_DEMO, GAME_GHOST_TEAM, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
-  mapBuying, teamMayBuy,
+  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_FF, GAME_DEMO, GAME_GHOST_TEAM, GAME_DEMOLITION, buyError, applyBuy, itemLabel,
+  mapBuying, teamMayBuy, GEAR_NAMES, buyPicks,
 } from '../shared/economy.js';
 
 const DEG = Math.PI / 180;
@@ -545,6 +546,7 @@ function gunShot(ex, ey, ez, pitch, yaw, quiet, count, w, bx, by, bz, side = 1) 
 
 // The demo's and the sandbox's practice marks (grenade arcs, impact boxes), on top of the rest.
 const practice = new PracticeMarks(renderer.gl);
+const teamMarks = new TeamMarks(renderer.gl); // over teammates' heads, drawn with the crosshair
 onNewGame(() => practice.clear());
 overlays.push(practice);
 const viewProj = new Float32Array(16);
@@ -613,6 +615,7 @@ async function loadMap(name) {
   tracers.screen[0] = canvas.width;
   tracers.screen[1] = canvas.height;
   tracers.warm(CLIP_ALL);
+  teamMarks.warm();
   step('warm');
   world = CollisionWorld.fromBSP(bsp);
   scape.liquidAt = world.liquids ? liquidAtP : null;
@@ -951,9 +954,25 @@ function leader() {
   return L;
 }
 
+// What we bought this round and in the last round we bought anything (rebuy).
+let roundBuys = [], lastBuys = [], buysSerial = -1;
+onNewGame(() => {
+  roundBuys = [];
+  lastBuys = [];
+  buysSerial = -1;
+});
+
 function buy(item) {
   if (net) {
-    if (!buyError(player, item, (net.own.flags & OWN_CAN_BUY) !== 0, freeBuys())) net.buy(item);
+    if (net.own.round.serial !== buysSerial) { // a new round: this one's purchases start afresh
+      buysSerial = net.own.round.serial;
+      if (roundBuys.length) lastBuys = roundBuys;
+      roundBuys = [];
+    }
+    if (!buyError(player, item, (net.own.flags & OWN_CAN_BUY) !== 0, freeBuys())) {
+      net.buy(item);
+      roundBuys.push(item);
+    }
   } else if (!buyError(player, item, true)) {
     applyBuy(player, item);
   }
@@ -1813,6 +1832,72 @@ function frame(now) {
 // A frame: dt seconds since the last drawn one (an argument: boxed once here, then handed on
 // to a dozen callees as it is; read from a field, each call boxed it again); alpha, the
 // share of a tick since the last, in clk.
+// The round bar's alive pips: [CTs alive, CTs, Ts alive, Ts], or null where it shows no teams.
+const aliveCounts = new Int32Array(4);
+function countAlive() {
+  if (!net || gameMode() & (GAME_FFA | GAME_DEMO) || freeBuys() || gunGame() && !(gameMode() & GAME_DEMOLITION)) return null;
+  aliveCounts.fill(0);
+  for (let id = 0; id < MAX_PLAYERS; id++) {
+    const team = net.teams[id];
+    if (!net.names[id] || (team !== TEAM_CT && team !== TEAM_T)) continue;
+    const k = team === TEAM_CT ? 0 : 2;
+    aliveCounts[k + 1]++;
+    if (rowAlive(id)) aliveCounts[k]++;
+  }
+  return aliveCounts;
+}
+
+// Marks over teammates' heads (cl_teamid_overhead, CS:GO's team id), through walls: ours,
+// or everyone's for a spectator (in their team's color); none in free for all. `skip`: the
+// player whose eyes we see through.
+const markAt = new Float64Array(3);
+const CT_MARK = [0.49, 0.72, 1], T_MARK = [1, 0.72, 0.29]; // --ct, --t
+function addTeamMarks(skip) {
+  if (gameMode() & GAME_FFA) return;
+  const mine = player.team, spec = mine !== TEAM_T && mine !== TEAM_CT;
+  for (let id = 0; id < MAX_PLAYERS; id++) {
+    const r = id * E_FIELDS, team = interp[r + E_TEAM];
+    if (id === selfId || id === skip || !interp[r + E_ACTIVE] || interp[r + E_HEALTH] <= 0 || (!spec && team !== mine)) continue;
+    markAt[0] = interp[r + E_X];
+    markAt[1] = interp[r + E_Y];
+    markAt[2] = rowFeet(interp, r) + ((interp[r + E_FLAGS] & FL_DUCKING) ? 62 : 84); // over the head
+    teamMarks.add(viewProj, markAt, canvas.width, canvas.height, team === TEAM_CT ? CT_MARK : T_MARK);
+  }
+  teamMarks.draw(canvas.width, canvas.height);
+}
+
+// CS:GO's target id (hud_showtargetid): the player under the crosshair named below it in
+// his team's color, an enemy only in plain sight (walls and smoke hide him), looked for
+// every 4th frame and held TARGET_HOLD_MS after the crosshair leaves him. `skip`: our own
+// row, or the player whose eyes we see through.
+const targetEl = document.getElementById('targetid');
+const TARGET_REACH = 4096, TARGET_HOLD_MS = 250;
+const targetTrace = new Trace();
+let targetShown = -1, targetSeenAt = -0, targetFrame = 0;
+onNewGame(() => {
+  targetShown = -1;
+  targetEl.textContent = '';
+});
+function updateTargetId(now, show, skip) {
+  if ((++targetFrame & 3) !== 0) return;
+  let id = -1;
+  if (show && world) {
+    const p = cam[0] * DEG, y = cam[1] * DEG, cp = Math.cos(p);
+    const dx = cp * Math.cos(y), dy = cp * Math.sin(y), dz = -Math.sin(p);
+    traceHull(world, HULL_POINT, eye[0], eye[1], eye[2], eye[0] + dx * TARGET_REACH, eye[1] + dy * TARGET_REACH,
+      eye[2] + dz * TARGET_REACH, targetTrace);
+    const hit = targets.trace(eye[0], eye[1], eye[2], dx, dy, dz, TARGET_REACH * targetTrace.fraction, skip, 0, 0);
+    const d = targets.dist;
+    if (hit >= 0 && hit < MAX_PLAYERS && net.names[hit] &&
+      !fx.cur.smokeBetween(eye[0], eye[1], eye[2], eye[0] + dx * d, eye[1] + dy * d, eye[2] + dz * d)) id = hit;
+  }
+  if (id >= 0) targetSeenAt = now;
+  if (id === targetShown || (id < 0 && now - targetSeenAt < TARGET_HOLD_MS)) return;
+  targetShown = id;
+  targetEl.textContent = id >= 0 ? net.names[id] : '';
+  targetEl.className = id >= 0 ? (net.teams[id] === TEAM_CT ? 'ct' : 't') : '';
+}
+
 function draw(now, dt) {
   const alpha = clk.alpha;
   clock.t = now / 1000;
@@ -1956,7 +2041,7 @@ function draw(now, dt) {
   radar.draw(playing, radarAt, interpolated ? interp : null, selfId, watched, player.team,
     (gameMode() & GAME_FFA) !== 0, net ? net.own.bomb : null, net ? net.hostages : null, now);
   lap(3);
-  hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now, leader(), progress());
+  hud.update(net ? net.own.round : null, net ? net.own.bomb : null, player.money, now, leader(), progress(), countAlive());
   hud.roundPanel(net ? net.own.round : null, net, selfId);
   document.body.classList.toggle('dm', freeBuys() || gunGame()); // no money in deathmatch, the demo, the gun games
   const action = ws.f[WS_ACTION];
@@ -2039,6 +2124,9 @@ function draw(now, dt) {
   if (net) showFlash(player.health > 0 ? net.own.flashLeft : 0, net.own.flashTotal);
   else showFlash(flash.left, flash.total);
   renderer.timer.mark(PASS.OVER);
+  const hudOn = !!net && !preview && !dying && cv.cl_drawhud.bool;
+  if (hudOn && cv.cl_teamid_overhead.bool) addTeamMarks(inEyes ? spectator.target : -1);
+  updateTargetId(now, hudOn && cv.hud_showtargetid.bool && (player.health > 0 || inEyes), inEyes ? spectator.target : selfId);
   if (!preview) weaponView.drawCrosshair(canvas.width, canvas.height);
   lap(6);
 }
@@ -2230,15 +2318,24 @@ con.command('teammenu', () => {
   input.unlock();
   menu.showPause('team');
 }, 'Opens the team menu');
-const BUY_NAMES = { vest: ITEM_KEVLAR, vesthelm: ITEM_ASSAULTSUIT, defuser: ITEM_DEFUSER };
 con.command('buy', (a, ctx) => {
-  const item = BUY_NAMES[a[1]] || WEAPON_ID[a[1]];
+  const item = GEAR_NAMES[a[1]] || WEAPON_ID[a[1]];
   if (!item) return con.out(ctx, 'buy <ak47 | m4a1 | m4a1_silencer | awp | deagle | ... | vest | vesthelm | defuser>');
   const err = buyError(player, item, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, freeBuys());
   if (err) return con.out(ctx, `${itemLabel(item)}: ${err}`);
   buy(item);
 }, 'buy <item>: buys a weapon or gear');
-con.hint('buy', (i) => (i === 1 ? [...Object.keys(BUY_NAMES), ...Object.keys(WEAPON_ID).filter((n) => n !== 'none')] : []));
+con.hint('buy', (i) => (i === 1 ? [...Object.keys(GEAR_NAMES), ...Object.keys(WEAPON_ID).filter((n) => n !== 'none')] : []));
+// CS's autobuy and rebuy (F3, F4: CS:GO's keys).
+const buyNow = () => !!net && !gunGame() && (net.own.flags & OWN_CAN_BUY) !== 0;
+con.command('autobuy', () => {
+  if (!buyNow()) return;
+  for (const item of buyPicks(player, cv.cl_autobuy.value.split(/\s+/), true, freeBuys(), true)) buy(item);
+}, 'Buys from cl_autobuy the first you can afford of each kind (a primary, a pistol, armor, the kit, grenades)');
+con.command('rebuy', () => {
+  if (!buyNow()) return;
+  for (const item of buyPicks(player, lastBuys, true, freeBuys())) buy(item);
+}, 'Buys again what you bought in the last round you bought anything');
 con.command('toggleconsole', () => conWin.toggle(), 'Opens or closes the console');
 // Chat (client/chat.js): the typed line goes to the server as say / say_team; its lines
 // come back as CHAT messages for the box (and the console).
