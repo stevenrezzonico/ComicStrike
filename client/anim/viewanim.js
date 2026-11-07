@@ -57,8 +57,17 @@ const ELITE_LEFT = 11; // the second pistol, left of the first
 const REST_L = [6, 6, -30]; // the left hand out of sight (knife)
 const SHIELD_L = [15, 2.5, -2.6]; // the left hand before the eyes (flashed)
 
-const INSPECT_TIME = 3.2;
-const INSPECT_YAW = 62; // degrees the gun turns to show its side
+const INSPECT_TIME = 4;
+const CARRY = 0.5; // the share of the inspect's turn the forearm takes (the wrist bends by the rest)
+const REACH = 0.96; // the inspect moves a wrist at most this share of the arm's length from the shoulder
+// The inspect's two looks per hold: this.turn at the first (0-6), then at the second (7-13):
+// pitch, yaw, roll (degrees, rig frame), twist about the forearm, the wrist's offsets x, y, z.
+const INSPECT = {
+  rifle: new Float64Array([-5, 50, 10, 0, 2, 4, 2, -10, -65, 5, 0, 8, 6, 5]),
+  pistol: new Float64Array([-5, 50, 10, 0, 2, 4, 2, -5, -60, 0, 0, 6, 2, 2]),
+  elite: new Float64Array([-5, -40, -10, 0, 2, -1, 2, -5, 20, 10, 0, 2, -2, 3]),
+  knife: new Float64Array([0, -40, 0, -40, 1, 3, 2, 0, 0, 0, 55, -2, 2, 4]),
+};
 const SLASH_TIME = 0.35;
 const STAB_TIME = 0.6;
 const SHELL_END_TIME = 0.5; // tilting back (and pumping) after the last shell
@@ -143,6 +152,7 @@ export class ViewAnimator {
     this.onGun = [true, true]; // false: the hand's target is in the rig frame
     this.blind = 0; // 0..1: how flashed we are (the off hand shields the eyes)
     this.qTmp = new Float32Array(4);
+    this.qTurn = new Float32Array(8); // carry(): the inspect's turn (0-3), scratch (4-7)
     this.id = -1;
     this.inspectStart = -1;
     this.swingStart = -1;
@@ -150,6 +160,15 @@ export class ViewAnimator {
     this.swingDir = 1;
     this.shellEnd = -1;
     this.wasLoading = false;
+    // The arm solve's pole per arm (left, right), used where `carried`: the elbow aimed
+    // where the inspect's turn carries the forearm.
+    this.pole = new Float32Array(6);
+    this.carried = [false, false];
+    this.e0 = new Float32Array(12); // carry(): each arm's elbow and wrist before the turn
+    this.e1 = new Float32Array(3); // carry(): the turned wrist's new place
+    // carry()'s input: pitch, yaw, roll (degrees, rig frame) after a twist about the forearm
+    // (degrees), then where the wrist would go (x, y, z offsets).
+    this.turn = new Float64Array(7);
   }
 
   // Per-tick weapon events (WS_EVENTS) at sim time `time`: knife swings.
@@ -199,7 +218,12 @@ export class ViewAnimator {
     let gx = hold.grip[0], gy = hold.grip[1], gz = hold.grip[2];
     let pitch = hold.angles[0], yaw = hold.angles[1], roll = hold.angles[2];
     let magOff = 0, boltOff = 0; // magazine out along magDir; bolt / slide / pump back
+    // The turn of the right forearm and the gun in its hand (this.turn: see carry()); the off
+    // hand letting go (0..1).
+    const turn = this.turn.fill(0);
+    let release = 0;
     this.ho.fill(0);
+    this.carried[L] = this.carried[R] = false;
     this.dual = holdName === 'elite';
 
     // Default hands.
@@ -237,7 +261,7 @@ export class ViewAnimator {
       gz -= 13 * up;
       pitch += 40 * up;
       roll += 15 * up;
-      if (holdName === 'knife') roll -= 360 * (1 - ramp(d, 0.25, 0.9)); // a flip into the hand
+      if (holdName === 'knife') turn[3] -= 70 * bump(1 - d, 0.05, 0.35, 0.5, 0.8); // turned in the hand
       const rack = 1 - Math.min(1, d / 0.3); // 0 -> 1 over the last 30 %
       if (pts.bolt && d < 0.3 && holdName !== 'elite') {
         boltOff += (pumpGun ? 2.5 : 1.3) * bump(rack, 0.3, 0.45, 0.55, 0.75);
@@ -379,27 +403,21 @@ export class ViewAnimator {
       }
     }
 
-    // Inspect (CS:GO's look at weapon): the gun comes across the view and turns its left
-    // side to us, then rolls over to show its right side and top, and goes back.
+    // Inspect (CS:GO's look at weapon, approx.): two looks, the gun turned in the right hand
+    // and the forearm turning with it (carry()): a gun turns its left side to us, muzzle
+    // left, then swings round to show its right side, muzzle right, the off hand letting go
+    // (a pistol's from the start); the Dual Berettas turn outward, then in; the knife comes
+    // up with one flat to us, then turns over to show the other.
+    if (holdName === 'grenade' || holdName === 'c4') this.inspectStart = -1; // none (CS:GO's)
     if (this.inspectStart >= 0) {
       const t = (time - this.inspectStart) / INSPECT_TIME;
       if (t >= 1) this.inspectStart = -1;
-      else if (t >= 0 && holdName === 'knife') {
-        const a = bump(t, 0.04, 0.22, 0.44, 0.56), b = bump(t, 0.5, 0.64, 0.84, 0.98);
-        roll -= 50 * a - 30 * b + 360 * ramp(t, 0.3, 0.52);
-        yaw += 12 * a + 8 * b;
-        pitch += -10 * a + 15 * b;
-        gy += 3 * a + 2 * b;
-        gz += 2.5 * a + 1 * b;
-        gx -= 2 * a;
-      } else if (t >= 0) {
-        const a = bump(t, 0.04, 0.2, 0.46, 0.58), b = bump(t, 0.5, 0.64, 0.84, 0.98);
-        yaw += INSPECT_YAW * a - 45 * b;
-        roll += 8 * a + 10 * b;
-        pitch += -6 * a - 6 * b;
-        gx += 6 * a + 8 * b;
-        gy += 5 * a + 8 * b;
-        gz += 3 * a + 3 * b;
+      else if (t >= 0) {
+        const a = bump(t, 0.04, 0.18, 0.36, 0.48), b = bump(t, 0.42, 0.56, 0.82, 0.96);
+        const look = INSPECT[holdName];
+        for (let c = 0; c < 7; c++) turn[c] += look[c] * a + look[c + 7] * b;
+        if (holdName === 'pistol') release = bump(t, 0.02, 0.14, 0.86, 0.98);
+        else if (holdName === 'rifle') release = bump(t, 0.4, 0.5, 0.85, 0.95);
       }
     }
 
@@ -425,6 +443,7 @@ export class ViewAnimator {
       const kick2 = this.flash2 && since < 3 ? Math.exp(-since * 16) : 0;
       matrix(this.gun2, this.qGun2, 0, gx - kick2 * 1.2, gy + ELITE_LEFT - 2 * (gy - hold.grip[1]), gz + kick2 * 0.4);
     }
+    if (turn[0] !== 0 || turn[1] !== 0 || turn[2] !== 0 || turn[3] !== 0) this.carry(hold, release === 0);
     const s = this.gunSkin, md = pts.magDir;
     s[GUN_MAG * 16 + 12] = md ? md[0] * magOff : 0;
     s[GUN_MAG * 16 + 13] = md ? md[1] * magOff : 0;
@@ -432,6 +451,10 @@ export class ViewAnimator {
     s[GUN_BOLT * 16 + 12] = -boltOff;
     if (pumpGun && this.onGun[L] && pts.support && holdName === 'rifle') this.hp[L * 3] -= boltOff * (1 - tip);
 
+    if (release > 0) { // the off hand lets go, down out of sight
+      this.offGun(L);
+      this.mixHand(L, REST_L[0], REST_L[1], REST_L[2], ROT.rest, 0, release);
+    }
     // Flashed: the off hand comes up before the face (not while it holds a second pistol).
     if (this.blind > 0.01 && !this.dual) this.shield(this.blind);
 
@@ -442,17 +465,94 @@ export class ViewAnimator {
   // Moves the off hand toward shielding the eyes by `amount` (0..1, eased): its target goes
   // to the rig frame where it is now, then blends to the shield pose.
   shield(amount) {
-    const o = L * 3, t = amount * amount * (3 - 2 * amount);
-    if (this.onGun[L]) {
-      const g = this.gun, x = this.hp[o], y = this.hp[o + 1], z = this.hp[o + 2];
-      this.hp[o] = g[0] * x + g[4] * y + g[8] * z + g[12];
-      this.hp[o + 1] = g[1] * x + g[5] * y + g[9] * z + g[13];
-      this.hp[o + 2] = g[2] * x + g[6] * y + g[10] * z + g[14];
-      Q.mul(this.qTmp, 0, this.qGun, 0, this.hq, L * 4);
-      this.hq.set(this.qTmp, L * 4);
-      this.onGun[L] = false;
-    }
+    const t = amount * amount * (3 - 2 * amount);
+    this.offGun(L);
     this.mixHand(L, SHIELD_L[0], SHIELD_L[1], SHIELD_L[2], ROT.shield, 0, t);
+  }
+
+  // Hand s's target from the gun frame into the rig frame, where it is now, so it can
+  // leave the gun.
+  offGun(s) {
+    if (!this.onGun[s]) return;
+    const o = s * 3, g = this.gun, x = this.hp[o], y = this.hp[o + 1], z = this.hp[o + 2];
+    this.hp[o] = g[0] * x + g[4] * y + g[8] * z + g[12];
+    this.hp[o + 1] = g[1] * x + g[5] * y + g[9] * z + g[13];
+    this.hp[o + 2] = g[2] * x + g[6] * y + g[10] * z + g[14];
+    Q.mul(this.qTmp, 0, this.qGun, 0, this.hq, s * 4);
+    this.hq.set(this.qTmp, s * 4);
+    this.onGun[s] = false;
+  }
+
+  // The inspect's turn (this.turn): the gun turns about the right wrist by `twist` degrees
+  // about the forearm, then pitch / yaw / roll, and the wrist moves by the offsets. The
+  // forearm turns with it by CARRY of that turn (the arm solve is aimed at the elbow that
+  // puts it there), the wrist bending by the rest: turning the gun alone bent the wrists up
+  // to 95 degrees, and turning the forearm all the way with it swung it into the camera,
+  // the wrist being bent at rest already. The off hand's forearm follows the same way
+  // where it holds the gun (offHand); the second pistol turns mirrored with the left arm.
+  carry(hold, offHand) {
+    this.solveArms(hold);
+    const w = this.pose.wpos, e0 = this.e0, k = this.turn;
+    for (let s = 0; s < 2; s++) {
+      const e = LOWER[s] * 3, h = HAND[s] * 3;
+      for (let c = 0; c < 3; c++) {
+        e0[s * 6 + c] = w[e + c];
+        e0[s * 6 + 3 + c] = w[h + c];
+      }
+    }
+    this.turnArm(R, k[0], k[1], k[2], k[3], k[4], k[5], k[6], this.qGun, this.gun);
+    if (this.dual) this.turnArm(L, k[0], -k[1], -k[2], -k[3], k[4], -k[5], k[6], this.qGun2, this.gun2);
+    else if (offHand && this.onGun[L]) {
+      // The left wrist goes with the gun.
+      const r = this.qTurn, e1 = this.e1, o = L * 6, ro = R * 6;
+      tv[0] = e0[o + 3] - e0[ro + 3];
+      tv[1] = e0[o + 4] - e0[ro + 4];
+      tv[2] = e0[o + 5] - e0[ro + 5];
+      Q.rotate(tv, 3, r, 0, tv, 0);
+      this.carryElbow(L, e1[0] + tv[3], e1[1] + tv[4], e1[2] + tv[5]);
+    }
+  }
+
+  // Turns gun matrix m (rotation q) about arm s's wrist as above; this.qTurn keeps the turn
+  // (0-3) and the forearm's share of it (4-7), this.e1 the wrist's new place.
+  turnArm(s, pitch, yaw, roll, twist, dx, dy, dz, q, m) {
+    const e0 = this.e0, o = s * 6, r = this.qTurn, e1 = this.e1;
+    const wx = e0[o + 3], wy = e0[o + 4], wz = e0[o + 5];
+    const fx = wx - e0[o], fy = wy - e0[o + 1], fz = wz - e0[o + 2], lf = Math.sqrt(fx * fx + fy * fy + fz * fz);
+    Q.fromAxisAngle(r, 0, fx / lf, fy / lf, fz / lf, twist * Math.PI / 180);
+    Q.fromEuler(r, 4, pitch, yaw, roll);
+    Q.mul(r, 0, r, 4, r, 0);
+    Q.identity(r, 4);
+    Q.nlerp(r, 4, r, 4, r, 0, CARRY);
+    Q.mul(q, 0, r, 0, q, 0);
+    tv[0] = m[12] - wx;
+    tv[1] = m[13] - wy;
+    tv[2] = m[14] - wz;
+    Q.rotate(tv, 3, r, 0, tv, 0);
+    // The wrist's new place, kept within the arm's reach (else the hand leaves the grip).
+    const sh = this.pose.wpos, u = UPPER[s] * 3;
+    const ex = e0[o] - sh[u], ey = e0[o + 1] - sh[u + 1], ez = e0[o + 2] - sh[u + 2];
+    const reach = (Math.sqrt(ex * ex + ey * ey + ez * ez) + lf) * REACH;
+    let px = wx + dx - sh[u], py = wy + dy - sh[u + 1], pz = wz + dz - sh[u + 2];
+    const pn = Math.sqrt(px * px + py * py + pz * pz);
+    if (pn > reach) px *= reach / pn, py *= reach / pn, pz *= reach / pn;
+    e1[0] = sh[u] + px, e1[1] = sh[u + 1] + py, e1[2] = sh[u + 2] + pz;
+    matrix(m, q, 0, e1[0] + tv[3], e1[1] + tv[4], e1[2] + tv[5]);
+    this.carryElbow(s, e1[0], e1[1], e1[2]);
+  }
+
+  // Aims arm s's elbow where the forearm's share of the turn (this.qTurn 4-7) puts it with
+  // the wrist at (x, y, z).
+  carryElbow(s, x, y, z) {
+    const e0 = this.e0, o = s * 6, sh = this.pose.wpos, u = UPPER[s] * 3;
+    tv[0] = e0[o] - e0[o + 3];
+    tv[1] = e0[o + 1] - e0[o + 4];
+    tv[2] = e0[o + 2] - e0[o + 5];
+    Q.rotate(tv, 3, this.qTurn, 4, tv, 0);
+    this.pole[s * 3] = x + tv[3] - sh[u];
+    this.pole[s * 3 + 1] = y + tv[4] - sh[u + 1];
+    this.pole[s * 3 + 2] = z + tv[5] - sh[u + 2];
+    this.carried[s] = true;
   }
 
   // Both arms to their hand targets.
@@ -487,9 +587,32 @@ export class ViewAnimator {
       goal[0] = x - tv[3];
       goal[1] = y - tv[4];
       goal[2] = z - tv[5];
-      goal[3] = 0;
-      goal[4] = SIDE[s] * 0.7;
-      goal[5] = -1;
+      if (this.carried[s]) {
+        // reachGoal bends the arm toward the pole from its straight bind pose, then aims it
+        // at the target, which turns the bend plane: the pole goes in turned back by that aim.
+        const w = p.wpos, u = UPPER[s] * 3, h = HAND[s] * 3;
+        const ax = w[h] - w[u], ay = w[h + 1] - w[u + 1], az = w[h + 2] - w[u + 2];
+        const bx = goal[0] - w[u], by = goal[1] - w[u + 1], bz = goal[2] - w[u + 2];
+        let cx = ay * bz - az * by, cy = az * bx - ax * bz, cz = ax * by - ay * bx;
+        const cn = Math.sqrt(cx * cx + cy * cy + cz * cz), la = Math.sqrt(ax * ax + ay * ay + az * az);
+        const lb = Math.sqrt(bx * bx + by * by + bz * bz);
+        tv[0] = this.pole[s * 3];
+        tv[1] = this.pole[s * 3 + 1];
+        tv[2] = this.pole[s * 3 + 2];
+        if (cn > 1e-6) {
+          cx /= cn, cy /= cn, cz /= cn;
+          const ang = Math.acos(Math.max(-1, Math.min(1, (ax * bx + ay * by + az * bz) / (la * lb))));
+          Q.fromAxisAngle(tq, 4, cx, cy, cz, -ang);
+          Q.rotate(tv, 0, tq, 4, tv, 0);
+        }
+        goal[3] = tv[0];
+        goal[4] = tv[1];
+        goal[5] = tv[2];
+      } else {
+        goal[3] = 0;
+        goal[4] = SIDE[s] * 0.7;
+        goal[5] = -1;
+      }
       p.reachGoal(UPPER[s], LOWER[s], HAND[s]);
       p.setWorldRotation(HAND[s], tq, 0);
     }

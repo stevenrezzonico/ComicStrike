@@ -121,3 +121,91 @@ Deno.test('first-person: shots cycle slides, bolts and pumps; the same state giv
   assert.deepEqual(a.pose.skin, b.pose.skin);
   assert.deepEqual(a.gun, b.gun);
 });
+
+// Hand s's wrist, anatomically: [twist, x, y, z]. The twist is the palm's turn about the
+// forearm from neutral (the palm along the elbow's hinge axis, toward the body's middle;
+// degrees); x, y, z the hand's direction in the forearm's frame (forearm, hinge axis, their
+// cross) with the twist taken out, so it changes only when the wrist bends.
+function wristAngles(va, s) {
+  const p = va.pose, at = (i) => [p.wpos[i * 3], p.wpos[i * 3 + 1], p.wpos[i * 3 + 2]];
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const unit = (a) => a.map((c) => c / Math.hypot(...a));
+  const flat = (v, f) => unit(sub(v, f.map((c) => c * dot(v, f)))); // v square to f
+  const side = s ? -1 : 1, hand = A.bone(s ? 'hand_R' : 'hand_L');
+  const sh = at(A.bone(s ? 'arm_upper_R' : 'arm_upper_L')), el = at(A.bone(s ? 'arm_lower_R' : 'arm_lower_L'));
+  const f = unit(sub(at(hand), el)), n = unit(cross(sub(el, sh), sub(at(hand), el)));
+  const axis = (v) => {
+    const o = new Float32Array(6);
+    o.set(v);
+    Q.rotate(o, 3, p.wrot, hand * 4, o, 0);
+    return [o[3], o[4], o[5]];
+  };
+  const palm = flat(axis([0, -side, 0]), f), neutral = flat(n.map((c) => c * side), f), hx = axis([1, 0, 0]);
+  const phi = Math.atan2(dot(cross(palm, neutral), f), dot(palm, neutral)); // turns the palm to neutral
+  const c = Math.cos(phi), sn = Math.sin(phi), fx = cross(f, hx), fd = dot(f, hx);
+  const hs = [0, 1, 2].map((i) => hx[i] * c + fx[i] * sn + f[i] * fd * (1 - c));
+  return [-phi * 180 / Math.PI * -side, dot(hs, f), dot(hs, n), dot(hs, cross(f, n))];
+}
+
+Deno.test('first-person: inspecting and drawing keep the wrists possible, for every weapon', () => {
+  // Measured against the rest pose: the forearm turns at most ~110 degrees from it either
+  // way, never round and round (a span of 180 at most), and the wrist bends little further
+  // (the right hand 40 degrees, the left, its forearm following the gun less closely, 60).
+  // Before: the knife's hand spun a full turn in the inspect and the draw, and the gun
+  // turned about its grip alone bent the right wrist 57 degrees, the left 97.
+  const wrap = (d) => ((d + 540) % 360) - 180, bad = [];
+  WEAPONS.forEach((w, id) => {
+    if (!w) return;
+    const pts = points(w.name), ws = state(w.name), va = new ViewAnimator();
+    va.update(id, ws, 10, pts);
+    const rest = [wristAngles(va, 0), wristAngles(va, 1)];
+    for (const phase of ['inspect', 'draw']) {
+      const seen = [0, 1].map(() => ({ turn: 0, lo: 0, hi: 0, bend: 0 }));
+      if (phase === 'inspect') va.inspect(10);
+      else ws.f[WS_DEPLOY_END] = 10 + w.deployTime;
+      for (let time = 10; time < 20; time += 1 / 30) {
+        va.update(id, ws, time, pts);
+        for (const s of [0, 1]) {
+          // The left hand where it holds the gun in the inspect (it racks the bolt in the draw).
+          if (s === 0 && (phase === 'draw' || (!va.onGun[0] && !va.dual))) continue;
+          const now = wristAngles(va, s), r = rest[s], q = seen[s];
+          q.turn += wrap(wrap(now[0] - r[0]) - q.turn);
+          q.lo = Math.min(q.lo, q.turn);
+          q.hi = Math.max(q.hi, q.turn);
+          q.bend = Math.max(q.bend, Math.acos(Math.min(1, now[1] * r[1] + now[2] * r[2] + now[3] * r[3])) * 180 / Math.PI);
+        }
+        if (phase === 'inspect' ? va.inspectStart < 0 : time > ws.f[WS_DEPLOY_END]) break;
+      }
+      for (const s of [0, 1]) {
+        const q = seen[s], hand = `${w.name} ${phase} ${s ? 'right' : 'left'}`;
+        if (Math.max(-q.lo, q.hi) > 110) bad.push(`${hand}: the forearm turns ${Math.max(-q.lo, q.hi).toFixed(0)}`);
+        if (q.hi - q.lo > 180) bad.push(`${hand}: the forearm turns round ${(q.hi - q.lo).toFixed(0)}`);
+        if (q.bend > (s ? 40 : 60)) bad.push(`${hand}: the wrist bends ${q.bend.toFixed(0)} more`);
+      }
+      ws.f[WS_DEPLOY_END] = 1;
+    }
+  });
+  assert.deepEqual(bad, []);
+});
+
+Deno.test('first-person: the inspect turns the gun to show both sides, the hand staying on its grip', () => {
+  const pts = points('ak47'), ws = state('ak47'), va = new ViewAnimator();
+  va.update(WEAPON_ID.ak47, ws, 10, pts);
+  va.inspect(10);
+  const muzzle = (time) => {
+    va.update(WEAPON_ID.ak47, ws, time, pts);
+    assert.ok(dist(held(va, 1), apply(va.gun, [-0.75, 0, -1.6])) < 1.6, `the right hand off the grip at ${time}`);
+    return Math.atan2(va.gun[1], va.gun[0]) * 180 / Math.PI; // the barrel's heading, + to the left
+  };
+  assert.ok(muzzle(11.1) > 30, 'first the muzzle points left: the left side to us');
+  assert.ok(muzzle(12.6) < -30, 'then right: the right side to us');
+  assert.ok(Math.abs(muzzle(14.5)) < 5 && va.inspectStart < 0, 'and back');
+  // Grenades and the bomb have none (CS:GO's).
+  const ws2 = state('hegrenade'), va2 = new ViewAnimator(), p2 = points('hegrenade');
+  va2.update(WEAPON_ID.hegrenade, ws2, 10, p2);
+  va2.inspect(10);
+  va2.update(WEAPON_ID.hegrenade, ws2, 11, p2);
+  assert.ok(va2.inspectStart < 0);
+});
