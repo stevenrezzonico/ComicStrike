@@ -84,13 +84,13 @@ export class Rooms {
       },
       listMaps: () => [name],
       // Only the mode cfgs (exec in a room's rcon must not read the server's own cfgs).
-      readCfg: (n) => (/^gamemode_[a-z]+(_server)?\.cfg$/.test(n) && this.opts.readCfg ? this.opts.readCfg(n) : null),
+      readCfg: (n) => (/^gamemode_[a-z_]+\.cfg$/.test(n) && this.opts.readCfg ? this.opts.readCfg(n) : null),
       print: (s) => console.log(`[room ${code}] ${s}`),
       now: this.opts.now,
       mapGapMs: L.cooldownMs,
     });
-    const [type, gameMode] = row.key.split('/');
-    host.con.exec(`game_type ${type}; game_mode ${gameMode}; bot_difficulty ${Math.max(0, Math.min(3, difficulty | 0))}; ` +
+    const [type, gameMode, flags = 0] = row.key.split('/'); // (32: the short match)
+    host.con.exec(`game_type ${type}; game_mode ${gameMode}; sv_game_mode_flags ${flags}; bot_difficulty ${Math.max(0, Math.min(3, difficulty | 0))}; ` +
       `mp_armoury_entities ${armoury ? 1 : 0}`);
     host.hostname.set(`Room ${code}`);
     host.password.set(rcon);

@@ -105,7 +105,8 @@ export class Votes {
       arg = (args[2] || '').toLowerCase();
       if (!this.host.opts.listMaps().includes(arg)) return `callvote changelevel <map>: no map "${arg}" here (maps lists them)`;
     }
-    const key = arg ? `${name} ${arg}` : name;
+    // A team vote is its team's: one team's failed timeout does not hold the other's back.
+    const key = arg ? `${name} ${arg}` : row.team ? `${name} ${c.team}` : name;
     const again = (this.failed.get(key) ?? -Infinity) + this.num('sv_vote_failure_timer') * 1000 - now;
     if (again > 0) return `That vote failed a moment ago: it can be called again in ${Math.ceil(again / 1000)} s.`;
     const voters = new Map([[c, 0]]), seen = new Set([who]);
@@ -116,7 +117,7 @@ export class Votes {
       seen.add(k);
       voters.set(o, 0);
     }
-    const needed = issue === VOTE_SURRENDER ? voters.size // every one of the team
+    const needed = issue === VOTE_SURRENDER ? Math.max(voters.size, 2) // every one of the team, two at least (one among bots ended everyone's match)
       : Math.max(Math.ceil(this.num('sv_vote_quorum_ratio') * voters.size - 1e-9), issue === VOTE_KICK ? 2 : 1);
     if (voters.size < needed) return 'Not enough players who can vote on that.';
     remember(this.lastCall, who, now, FAILED_KEEP);

@@ -98,12 +98,12 @@ export class Radar {
     if (css !== this.cssSize) {
       this.cssSize = css;
       document.documentElement.style.setProperty('--radar', `${css ? css + 10 : 0}px`); // #debug goes below it
+      if (css) this.el.style.width = this.el.style.height = `${css}px`;
     }
     if (!show) return;
     const dpr = devicePixelRatio || 1, D = Math.round(css * dpr);
-    if (c.width !== D) {
+    if (c.width !== D || c.height !== D) { // (a new canvas is 300 x 150: a 300-pixel radar stayed that)
       c.width = c.height = D;
-      this.el.style.width = this.el.style.height = `${css}px`;
       this.drawnAt = -Infinity;
     }
     // Drawn about 30 times a second (it cost ~0.3 ms a frame), every frame while the view

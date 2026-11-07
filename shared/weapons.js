@@ -625,6 +625,11 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
     if (select === SLOT_KNIFE && f[WS_ACTIVE] === SLOT_KNIFE && f[WS_SLOTS + SLOT_TASER * 3] > 0) select = SLOT_TASER;
     if (select >= 0 && select < NUM_SLOTS && select !== f[WS_ACTIVE] && f[WS_SLOTS + select * 3] > 0) deploy(ws, select, time);
   }
+  // A spent Zeus put away within its shot's cycle goes too (it stayed and was refilled with
+  // the survivors' guns: a free Zeus every round).
+  if (f[WS_ACTIVE] !== SLOT_TASER && f[WS_SLOTS + SLOT_TASER * 3] > 0 && f[WS_SLOTS + SLOT_TASER * 3 + 1] <= 0) {
+    removeWeapon(ws, SLOT_TASER, time);
+  }
   // Drop (G): the weapon in hand (one grenade of its kind), except the knife. The server
   // puts it on the ground (or, for the C4, drops the bomb) from WEV_DROP.
   const held = activeWeapon(ws);

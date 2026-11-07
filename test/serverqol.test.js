@@ -427,3 +427,44 @@ Deno.test("kill: a suicide (the kill command, a fall, the world) costs a kill, a
   quiet(() => host.game.kill(ct.c, ct.c, WEAPON_ID.c4, false));
   assert.deepEqual([ct.c.player.kills, ct.c.player.deaths], [0, 1]);
 });
+
+Deno.test("team votes: one team's failed timeout holds back its own team only; a surrender needs two humans", () => {
+  const { host, hello, clock, cmd, said, vote, tick } = server();
+  const a = hello('a', '', '203.0.113.1'), b = hello('b', '', '203.0.113.2');
+  const x = hello('x', '', '203.0.113.8', TEAM_CT);
+  host.con.exec('mp_team_timeout_max 4; mp_warmup_end');
+  tick(1);
+  cmd(a, 'callvote starttimeout');
+  cmd(b, 'vote option2');
+  assert.equal(vote(a).state, VOTE_FAILED);
+  clock.ms += 1000;
+  cmd(x, 'callvote surrender');
+  assert.match(said(x), /Not enough players/, 'alone among bots, no surrender: it ended everyone\'s match');
+  cmd(x, 'callvote starttimeout');
+  assert.equal(vote(x).state, VOTE_PASSED, 'the other team still calls its own');
+});
+
+Deno.test('half-time takes the timeouts along; a new match clears assists; a leaver hands no assist on', () => {
+  const { host, hello, tick } = server();
+  const a = hello('a', '', '203.0.113.1'), b = hello('b', '', '203.0.113.2'), x = hello('x', '', '203.0.113.8', TEAM_CT);
+  host.con.exec('mp_team_timeout_max 1; mp_warmup_end');
+  tick(1);
+  const g = host.game;
+  // b did 80 to x and flashed him, then left; whoever takes b's slot did neither.
+  x.c.lifeTaken[b.c.id] = 80;
+  x.c.flashedBy = b.c.id;
+  quiet(() => g.disconnect(b.c));
+  const n = hello('newcomer', '', '203.0.113.3');
+  assert.ok(n.c.id === b.c.id, 'the same slot');
+  quiet(() => g.kill(a.c, x.c, WEAPON_ID.ak47, false));
+  assert.equal(n.c.player.assists, 0);
+  a.c.player.assists = 3;
+  quiet(() => g.startMatch());
+  assert.equal(a.c.player.assists, 0, 'a new match starts with none');
+  g.round.phase = PHASE_LIVE; // (called mid-round: it waits for the next freeze time)
+  quiet(() => g.callTimeout(TEAM_T));
+  quiet(() => g.halftime());
+  assert.equal(g.timeoutsLeft(TEAM_CT), 0, 'the team that used it (now CT) has none left');
+  assert.equal(g.timeoutsLeft(TEAM_T), 1);
+  assert.equal(g.timeoutTeam, TEAM_CT, 'its waiting timeout goes with it');
+});

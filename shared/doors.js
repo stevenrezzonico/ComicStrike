@@ -68,6 +68,7 @@ const SF_PENDULUM_START_ON = 1;
 const SF_PENDULUM_PASSABLE = 32;
 const PENDULUM_STOP = 30; // deg/s: a damped pendulum stops below this speed (CPendulum::Swing)
 const PUSH_HULL = 18; // a pushed crate is tried as duck hulls standing on its bottom (half their height)
+const PUSH_SAMPLES = 8; // at most this many hulls along each side of it (a map-sized crate was 860k tests a command)
 // path_corner spawnflags (the HL SDK's trains.h; 2 was read as fire once before).
 const SF_CORNER_WAITFORTRIG = 1; // the train waits here until triggered (as wait -1)
 const SF_CORNER_TELEPORT = 2; // the train gets here at once (the leg into it takes a tick)
@@ -282,8 +283,9 @@ export class Doors {
         this.maxs[k * 3 + a] = ce.maxs[a] + this.base[k * 3 + a];
         this.center[k * 3 + a] = (ce.mins[a] + ce.maxs[a]) / 2 + this.base[k * 3 + a];
       }
-      let speed = +(e.speed || 0), wait = +(e.wait || 0), dist;
-      this.dmg[k] = +(e.dmg || 0);
+      // (a word in a key is 0, as atof reads it: NaN turned a fan or pendulum into nothing)
+      let speed = +e.speed || 0, wait = +e.wait || 0, dist;
+      this.dmg[k] = +e.dmg || 0;
       if (kind === MOVER_SPIN || kind === MOVER_PENDULUM) {
         const a = new Float64Array(3);
         if (e.angles) parseVec3(e.angles, a);
@@ -297,7 +299,7 @@ export class Doors {
           dist = 360;
         } else { // to `distance` and back: A sin(wt), its top speed `speed`, dying away by `damp`
           speed = speed || 100;
-          const d = this.ang1[k] = +(e.distance || 0), damp = this.damp[k] = +(e.damp || 0) * 0.001;
+          const d = this.ang1[k] = +e.distance || 0, damp = this.damp[k] = (+e.damp || 0) * 0.001;
           this.omega[k] = d ? speed / Math.abs(d) : 0;
           this.fade[k] = Math.min(1, PENDULUM_STOP / speed);
           this.life[k] = damp > 0 ? Math.log(1 / this.fade[k]) / damp : Infinity;
@@ -313,7 +315,7 @@ export class Doors {
         if (e.angles) parseVec3(e.angles, a);
         this.ang.set(a, k * 3);
         const ax = this.axis[k] = flags & SF_DOOR_ROTATE_Z ? 2 : flags & SF_DOOR_ROTATE_X ? 0 : 1;
-        const d = (flags & SF_DOOR_ROTATE_BACKWARDS ? -1 : 1) * +(e.distance || 0);
+        const d = (flags & SF_DOOR_ROTATE_BACKWARDS ? -1 : 1) * (+e.distance || 0);
         // CRotDoor::Spawn: angle1 = angles, angle2 = angles + movedir * distance; start
         // open swaps them.
         const open = kind === MOVER_ROTATING && (flags & SF_DOOR_START_OPEN);
@@ -332,7 +334,7 @@ export class Doors {
         this.rot.push(null);
       } else if (kind === MOVER_PLAT) {
         speed = speed || 150;
-        const height = +(e.height || 0) || ce.maxs[2] - ce.mins[2] - 8;
+        const height = +e.height || ce.maxs[2] - ce.mins[2] - 8;
         // CFuncPlat: position1 is the spawn origin (the top), position2 `height` below it.
         // A lift rests at the bottom and its column calls it; a toggle plat starts at the
         // top and its targets send it either way.
@@ -344,7 +346,7 @@ export class Doors {
         this.rot.push(null);
       } else {
         const md = moveDir(e);
-        const lip = +(e.lip || 0);
+        const lip = +e.lip || 0;
         if (kind === MOVER_BUTTON) {
           speed = speed || 40;
           wait = wait || 1;
@@ -641,7 +643,8 @@ export class Doors {
     const kind = e.kind;
     e.kind = ENT_NONE; // (not in its own way)
     let fits = !hullFits(world, HULL_POINT, (x0 + x1) / 2, (y0 + y1) / 2, z0 - 4); // a floor under its middle
-    const nx = Math.max(1, Math.ceil((x1 - x0 - 32) / 32) + 1), ny = Math.max(1, Math.ceil((y1 - y0 - 32) / 32) + 1);
+    const nx = Math.max(1, Math.min(PUSH_SAMPLES, Math.ceil((x1 - x0 - 32) / 32) + 1));
+    const ny = Math.max(1, Math.min(PUSH_SAMPLES, Math.ceil((y1 - y0 - 32) / 32) + 1));
     for (let i = 0; fits && i < nx; i++) {
       for (let j = 0; fits && j < ny; j++) {
         const x = nx === 1 ? (x0 + x1) / 2 : x0 + 16 + (x1 - x0 - 32) * i / (nx - 1);
@@ -1049,6 +1052,7 @@ const MAX_PUSHED = 32;
 // names a tick.
 export const MAX_FIRES = 256;
 export const MAX_QUEUED = 256;
+export const TEXT_LINES = 8; // lines of a game_text kept (real maps write 1-4)
 const oldRot = new Float64Array(9); // a turning door's rotation before this tick's move
 const pushBuf = new Float64Array(MAX_PUSHED * 4);
 const pushPs = new Array(MAX_PUSHED);
@@ -1071,11 +1075,11 @@ export class MapLogic {
     this.onBreak = null; // (slot, act) => ...
     this.onHurt = null; // (i, damage): trigger_hurt on players[i] of update (damage < 0 heals)
     this.onExplode = null; // (x, y, z, magnitude, flags): an env_explosion fired
-    this.onText = null; // (message, act, all): a game_text fired (all: every player, else the activator)
+    this.onText = null; // (text, act): a game_text fired: text { lines, all } (all: every player, else the activator)
     this.onStrip = null; // (act): a player_weaponstrip fired by that player
     this.hurts = []; // trigger_hurt: { mins, maxs, name, dmg, start, on, next: Map(act -> tick) }
     this.explosions = new Map(); // targetname -> [{ x, y, z, magnitude, flags, done }]
-    this.texts = new Map(); // targetname -> [{ message, all }]
+    this.texts = new Map(); // targetname -> [{ lines (at most TEXT_LINES, raw), all }]
     this.strips = new Set(); // player_weaponstrip targetnames
     this.triggers = []; // { mins, maxs, name, target, kill, master, delay, wait, once, next, done, src }
     this.relays = new Map(); // targetname -> [{ target, kill, delay, src }]
@@ -1141,7 +1145,7 @@ export class MapLogic {
           flags: +(e.spawnflags || 0), done: false });
       } else if (cls === 'game_text' && e.targetname && e.message) {
         if (!this.texts.has(e.targetname)) this.texts.set(e.targetname, []);
-        this.texts.get(e.targetname).push({ message: e.message, all: (+(e.spawnflags || 0) & 1) !== 0 });
+        this.texts.get(e.targetname).push({ lines: e.message.split('\\n', TEXT_LINES), all: (+(e.spawnflags || 0) & 1) !== 0 });
       } else if (cls === 'player_weaponstrip' && e.targetname) {
         this.strips.add(e.targetname);
       } else if (cls === 'multisource' && e.targetname) {
@@ -1212,14 +1216,20 @@ export class MapLogic {
     for (const h of this.hurts) if (h.name === name) h.on = !h.on; // CTriggerHurt's ToggleUse
     const ex = this.explosions.get(name);
     if (ex && this.onExplode) {
-      for (const x of ex) {
+      for (const x of ex) { // each one counts as a fire: 8,000 sharing a name were 0.4 s a tick
         if (x.done) continue;
+        if (++this.fires > MAX_FIRES) break;
         x.done = !(x.flags & SF_EXPLOSION_REPEATABLE); // once a round unless repeatable
         this.onExplode(x.x, x.y, x.z, x.magnitude, x.flags);
       }
     }
     const tx = this.texts.get(name);
-    if (tx && this.onText) for (const t of tx) this.onText(t.message, act, t.all);
+    if (tx && this.onText) {
+      for (const t of tx) {
+        if (++this.fires > MAX_FIRES) break;
+        this.onText(t, act);
+      }
+    }
     if (act && this.onStrip && this.strips.has(name)) this.onStrip(act);
     const slots = this.breakableByName.get(name);
     if (slots && this.onBreak) for (const s of slots) if (!this.breakables.broken[s]) this.onBreak(s, act);

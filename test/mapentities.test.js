@@ -4,6 +4,7 @@
 // compiled yards.
 import assert from 'node:assert/strict';
 import { box, NONE } from '../shared/bspwriter.js';
+import { MAX_FIRES, TEXT_LINES, MOVER_SPIN } from '../shared/doors.js';
 import { TICK_RATE } from '../shared/constants.js';
 import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
@@ -161,4 +162,52 @@ Deno.test('env_fog: its color and density (GoldSrc GL_EXP2), none without one or
   assert.equal(fogOf([{ classname: 'env_fog', rendercolor: '1 2 3', density: '0' }]), null);
   assert.equal(fogOf([{ classname: 'worldspawn' }]), null);
   assert.equal(fogOf([{ classname: 'env_fog', density: '5' }])[3], 0.01, 'a crafted density held');
+});
+
+Deno.test('a hostile map\'s logic stays bounded: explosions sharing a name, game_text floods, a word for a speed', () => {
+  const spam = yard((map) => {
+    trigger(map, { classname: 'trigger_multiple', target: 'many', wait: '0.01' }, 200, -500, 300, -400);
+    for (let i = 0; i < 600; i++) {
+      map.point({ classname: 'env_explosion', targetname: 'many', spawnflags: '3', iMagnitude: '10', origin: `${-900 + i} 400 16` });
+    }
+    trigger(map, { classname: 'trigger_multiple', target: 'spam', wait: '0.01' }, 400, -500, 500, -400);
+    for (let n = 0; n < 30; n++) {
+      const message = Array.from({ length: 20 }, (_, i) => `text ${n} line ${i}`).join('\\n');
+      map.point({ classname: 'game_text', targetname: 'spam', message, origin: '0 0 0' });
+    }
+    map.brushEntity({ classname: 'func_rotating', spawnflags: '1', speed: 'fast', origin: '-600 0 64' },
+      [box(-632, -32, 0, -568, 32, 128, 'crate08')]);
+  });
+  const { game, run, put, inbox } = walker(spam);
+  // 600 repeatable explosions on one name, fired every tick: each counts against MAX_FIRES.
+  let blasts = 0;
+  const explode = game.logic.onExplode;
+  game.logic.onExplode = (...a) => (blasts++, explode(...a));
+  put(250, -450, 0);
+  run(1);
+  assert.ok(blasts > 0 && blasts <= MAX_FIRES, `${blasts} explosions in a tick`);
+  // 30 texts of 20 lines on one name, fired every tick: TEXT_LINES of each, TEXT_BUDGET lines a second.
+  const mapLines = () => {
+    const r = new Reader(), out = [];
+    for (const b of inbox.splice(0)) {
+      r.set(b);
+      if (r.u8v() !== S2C_CHAT) continue;
+      const m = readChat(r);
+      if (m.flags & CHAT_MAP) out.push(m.text);
+    }
+    return out;
+  };
+  put(450, -450, 0);
+  mapLines();
+  run(secs(0.5));
+  const first = mapLines();
+  assert.equal(first.length, 16, 'the second\'s budget');
+  assert.deepEqual(first.slice(0, TEXT_LINES + 1), [...Array.from({ length: TEXT_LINES }, (_, i) => `text 0 line ${i}`), 'text 1 line 0']);
+  run(secs(0.4));
+  assert.equal(mapLines().length, 0, 'nothing more within the second');
+  run(secs(0.2));
+  assert.ok(mapLines().length <= 16, 'the next second, the budget again');
+  // A fan whose speed is a word: still and solid (atof reads 0), not NaN.
+  const d = game.doors, k = Array.from({ length: d.count }, (_, i) => i).find((i) => d.kind[i] === MOVER_SPIN);
+  assert.ok(k >= 0 && d.frac(k, game.tick) === 0, 'the fan stands still at its start');
 });

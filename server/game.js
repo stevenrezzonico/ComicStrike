@@ -67,6 +67,7 @@ import {
 
 const CMD_BANK = 8; // commands a client may run ahead of server time (absorbs jitter, stops speedhacks)
 const MAX_CMDS_PER_TICK = 8;
+const TEXT_BUDGET = 16; // a map's game_text lines one player gets in a second at most
 const TIMEOUT_TICKS = 30 * TICK_RATE; // clients in hidden tabs send a 1 Hz keepalive
 const INFO_INTERVAL = TICK_RATE; // roster resent every second (datagrams can be lost)
 // Ticks the grenade list still goes out every tick after the last grenade or effect went, so
@@ -343,10 +344,11 @@ export class Game {
     this.logic.onBreak = (slot, act) => this.breakSlot(slot, act);
     this.logic.onHurt = (i, damage) => this.mapHurt(this.doorClients[i], damage);
     this.logic.onExplode = (x, y, z, magnitude, flags) => this.mapExplosion(x, y, z, magnitude, flags);
-    this.logic.onText = (message, act, all) => this.mapText(message, act, all);
+    this.logic.onText = (text, act) => this.mapText(text, act);
     this.logic.onStrip = (act) => this.stripWeapons(this.clients[act.id]);
-    this.textsSent = new Set(); // game_text lines sent this tick (textsTick): one each, however many fired them
-    this.textsTick = -1;
+    this.textsSent = new Map(); // game_text -> the players it reached this second (bits by id; textsAt)
+    this.textLines = new Uint8Array(MAX_PLAYERS); // map lines each player got this second
+    this.textsAt = -Infinity;
     // CS 1.6 fires game_playerspawn at every spawn (fy_tuscan greets with a game_text).
     this.spawnFires = bsp.entities.some((e) => e.targetname === 'game_playerspawn');
     // game_player_equip with no name (spawnflags 1: use only): every spawn gets its weapons
@@ -566,7 +568,12 @@ export class Game {
     this.clients[c.id] = null;
     // Whoever takes the slot next must not inherit his fires or his damage in the round's report.
     this.grenades.forget(c.id);
-    for (const o of this.clients) if (o) o.given[c.id] = o.givenHits[c.id] = o.taken[c.id] = o.takenHits[c.id] = 0;
+    for (const o of this.clients) {
+      if (!o) continue;
+      o.given[c.id] = o.givenHits[c.id] = o.taken[c.id] = o.takenHits[c.id] = 0;
+      o.lifeTaken[c.id] = 0; // (nor his assists)
+      if (o.flashedBy === c.id) o.flashedBy = -1;
+    }
     this.historyTick.fill(-1, c.id * HISTORY, (c.id + 1) * HISTORY);
     this.rosterDirty = true;
   }
@@ -1200,7 +1207,7 @@ export class Game {
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
       c.player.money = this.rules.startMoney;
-      c.player.kills = c.player.deaths = c.player.score = 0;
+      c.player.kills = c.player.deaths = c.player.score = c.player.assists = 0;
       c.level = c.roundKills = c.mvps = 0;
     }
     this.rosterDirty = true;
@@ -2045,23 +2052,31 @@ export class Game {
     if (!(flags & SF_EXPLOSION_NODAMAGE) && magnitude > 0) this.blast(x, y, z, magnitude, magnitude * EXPLODE_RANGE, null);
   }
 
-  // A game_text fired: its lines (a backslash and n in the map's text break them) to every
-  // human, or only to the player who set it off, as chat lines of the map's own (CS 1.6
-  // prints them on the screen: approx.); each once a tick, however many fired it.
-  mapText(message, act, all) {
-    const to = all ? null : act && this.clients[act.id];
-    if (!all && (!to || to.bot)) return;
-    if (this.textsTick !== this.tick) {
-      this.textsTick = this.tick;
+  // A game_text fired: its lines (a backslash and n in the map's text break them; at most
+  // TEXT_LINES) to every human, or only to the player who set it off, as chat lines of the
+  // map's own (CS 1.6 prints them on the screen: approx.). Each game_text reaches a player
+  // once a second at most, and the map's lines a player TEXT_BUDGET a second at most: one
+  // map's 100 texts of 1,365 lines fired every tick were 683,000 datagrams in 86 ms.
+  mapText(text, act) {
+    const to = text.all ? null : act && this.clients[act.id];
+    if (!text.all && (!to || to.bot)) return;
+    if (this.tick - this.textsAt >= TICK_RATE) {
+      this.textsAt = this.tick;
       this.textsSent.clear();
+      this.textLines.fill(0);
     }
-    const key = `${to ? to.id : 'all'} ${message}`;
-    if (this.textsSent.has(key)) return;
-    this.textsSent.add(key);
-    const lines = message.split('\\n').map(cleanChat).filter(Boolean);
+    let lines = null;
     for (const c of to ? [to] : this.clients) {
       if (!c || !c.joined || c.bot) continue;
-      for (const line of lines) c.session.send(writeChat(c.writer(), CHAT_CONSOLE, CHAT_MAP, line));
+      const sent = this.textsSent.get(text) | 0, bit = 1 << c.id;
+      if (sent & bit) continue;
+      this.textsSent.set(text, sent | bit);
+      lines ??= text.lines.map(cleanChat).filter(Boolean);
+      for (const line of lines) {
+        if (this.textLines[c.id] >= TEXT_BUDGET) break;
+        this.textLines[c.id]++;
+        c.session.send(writeChat(c.writer(), CHAT_CONSOLE, CHAT_MAP, line));
+      }
     }
   }
 
@@ -2396,6 +2411,9 @@ export class Game {
     [rs.scoreT, rs.scoreCT] = [rs.scoreCT, rs.scoreT];
     [this.otScoreT, this.otScoreCT] = [this.otScoreCT, this.otScoreT];
     [this.lossStreak[TEAM_T], this.lossStreak[TEAM_CT]] = [0, 0];
+    // The timeouts go with the teams (kept by side, the side that used them had the other's).
+    [this.timeoutsUsed[TEAM_T], this.timeoutsUsed[TEAM_CT]] = [this.timeoutsUsed[TEAM_CT], this.timeoutsUsed[TEAM_T]];
+    if (this.timeoutTeam) this.timeoutTeam = this.timeoutTeam === TEAM_T ? TEAM_CT : TEAM_T;
     for (const c of this.clients) {
       if (!c || !c.joined || !c.playing) continue;
       c.player.team = c.team === TEAM_CT ? TEAM_T : TEAM_CT;

@@ -653,8 +653,8 @@ async function loadMap(name) {
   };
   mapLogic.onExplode = (x, y, z, m, flags) => sandboxBlast(x, y, z, m, !(flags & SF_EXPLOSION_NOFIREBALL) && m > 0,
     !(flags & SF_EXPLOSION_NODAMAGE) && m > 0);
-  mapLogic.onText = (message) => {
-    for (const text of message.split('\\n').map(cleanChat).filter(Boolean)) addChat({ sender: CHAT_CONSOLE, flags: CHAT_MAP, text });
+  mapLogic.onText = (t) => {
+    for (const text of t.lines.map(cleanChat).filter(Boolean)) addChat({ sender: CHAT_CONSOLE, flags: CHAT_MAP, text });
   };
   mapLogic.onStrip = () => {
     for (let s = 0; s < NUM_SLOTS; s++) if (s !== SLOT_KNIFE) removeWeapon(ws, s, tickCount * TICK_DT);
@@ -974,13 +974,18 @@ onNewGame(() => {
   buysSerial = -1;
 });
 
+// A new round: this one's purchases start afresh, the last round's kept for rebuy (asked by
+// rebuy too: done only at the next buy, rebuy read the round before last).
+function rollBuys() {
+  if (net.own.round.serial === buysSerial) return;
+  buysSerial = net.own.round.serial;
+  if (roundBuys.length) lastBuys = roundBuys;
+  roundBuys = [];
+}
+
 function buy(item) {
   if (net) {
-    if (net.own.round.serial !== buysSerial) { // a new round: this one's purchases start afresh
-      buysSerial = net.own.round.serial;
-      if (roundBuys.length) lastBuys = roundBuys;
-      roundBuys = [];
-    }
+    rollBuys();
     if (!buyError(player, item, (net.own.flags & OWN_CAN_BUY) !== 0, freeBuys(), buysGrenades())) {
       net.buy(item);
       roundBuys.push(item);
@@ -2372,6 +2377,7 @@ con.command('autobuy', () => {
 }, 'Buys from cl_autobuy the first you can afford of each kind (a primary, a pistol, armor, the kit, grenades)');
 con.command('rebuy', () => {
   if (!buyNow()) return;
+  rollBuys();
   for (const item of buyPicks(player, lastBuys, true, freeBuys())) buy(item);
 }, 'Buys again what you bought in the last round you bought anything');
 con.command('toggleconsole', () => conWin.toggle(), 'Opens or closes the console');

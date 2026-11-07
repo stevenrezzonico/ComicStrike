@@ -14,7 +14,7 @@ import {
   deploy, WS_THROW,
   WEAPONS, WEAPON_ID, damageAtRange,
   SLOT_PRIMARY,
-  SLOT_SECONDARY, SLOT_C4, NUM_SLOTS, WS_ACTIVE, WS_SLOTS, WS_EVENTS, WS_ACTION, WS_ACTION_END, WEV_PLANTED, WEV_DEFUSED,
+  SLOT_SECONDARY, SLOT_KNIFE, SLOT_C4, NUM_SLOTS, WS_ACTIVE, WS_SLOTS, WS_EVENTS, WS_ACTION, WS_ACTION_END, WEV_PLANTED, WEV_DEFUSED,
   ACTION_PLANT, ACTION_DEFUSE, WS_ALT, WS_GRENADES, GRENADE_IDS,
 } from './weapons.js';
 import { PLANT_TIME, DEFUSE_TIME, DEFUSE_TIME_KIT, USE_RANGE, USE_CONE, BOMB_PLANTED } from './bomb.js';
@@ -99,7 +99,8 @@ export function spawnPlayer(p, x, y, z, keepGear = false, withLoadout = true) {
     p.defuser = false;
     p.carrying = false;
   }
-  p.ws.f[WS_ACTIVE] = p.ws.f[WS_SLOTS + SLOT_PRIMARY * 3] ? SLOT_PRIMARY : SLOT_SECONDARY;
+  const f = p.ws.f; // (a survivor who gave his pistol away holds the knife, not an empty slot)
+  f[WS_ACTIVE] = f[WS_SLOTS + SLOT_PRIMARY * 3] ? SLOT_PRIMARY : f[WS_SLOTS + SLOT_SECONDARY * 3] ? SLOT_SECONDARY : SLOT_KNIFE;
   p.health = 100;
   p.spawnCount = (p.spawnCount + 1) & 255;
 }
@@ -346,7 +347,7 @@ export function resolveShots(world, breakables, ws, shots, impacts, targets = nu
         }
         const hx = x + dx * d, hy = y + dy * d, hz = z + dz * d;
         impacts.push(hx, hy, hz, -dx, -dy, -dz, 0, 0, hit, targets.group,
-          damage * (w.melee ? 1 : hitgroupScale(targets.group, w)), pens < PENETRATION_COUNT ? 1 : 0);
+          damage * (w.melee ? 1 : hitgroupScale(targets.group, w)), !w.melee && pens < PENETRATION_COUNT ? 1 : 0);
         exclude |= 1 << hit;
         if (pens <= 0 || traveled > PENETRATION_MAX_DISTANCE) break;
         damage -= penetrationLoss(damage, w.penetration, SURF_FLESH, SURF_FLESH, BODY_THICKNESS);

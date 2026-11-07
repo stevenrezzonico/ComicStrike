@@ -6,7 +6,7 @@ import { JingleCues, TEN_TICKS } from '../client/jingles.js';
 import { RoundState } from '../shared/protocol.js';
 import { BombState, BOMB_PLANTED, BOMB_CARRIED } from '../shared/bomb.js';
 import {
-  PHASE_WARMUP, PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, END_ELIMINATION, END_MATCH, END_DRAW, ROUND_FINAL,
+  PHASE_WARMUP, PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, END_ELIMINATION, END_MATCH, END_DRAW, END_SURRENDER, ROUND_FINAL,
 } from '../shared/economy.js';
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 
@@ -89,6 +89,13 @@ Deno.test('jingles: the match over, a draw, a spectator', () => {
   g.phase(PHASE_OVER, 64);
   g.step();
   assert.deepEqual(g.heard, [], 'a drawn match: no jingle');
+  g.rs.info = TEAM_CT | (END_SURRENDER << 2) | ROUND_FINAL; // (the Ts surrendered at 15-16: the CTs' round ties it)
+  g.phase(PHASE_LIVE, 640);
+  g.step();
+  g.heard.length = 0;
+  g.phase(PHASE_OVER, 64);
+  g.step();
+  assert.deepEqual(g.heard, ['lost'], 'a surrender that ties the score still has its winner');
   g = game(TEAM_T);
   g.phase(PHASE_LIVE, 640);
   g.step();

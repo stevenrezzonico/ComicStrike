@@ -7,7 +7,7 @@ import { CollisionWorld } from '../shared/trace.js';
 import { FloorGrid, MAX_CELLS, floorFaces } from '../shared/floorgrid.js';
 import { Writer, Reader, writeHello, readHello, helloRoom, C2S_HELLO, S2C_WELCOME, S2C_REJECT, readWelcome } from '../shared/protocol.js';
 import { TEAM_T } from '../shared/player.js';
-import { quiet as quietly } from './harness.js';
+import { quiet as quietly, readCfg } from './harness.js';
 
 const PLAYGROUND = Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url));
 
@@ -239,4 +239,12 @@ Deno.test('a room changes its map by rcon at most once per upload cooldown (each
   assert.match(quietly(() => room.host.rcon(who, room.rcon, 'map gap')), /too soon/);
   clock.ms += 30000;
   assert.match(quietly(() => room.host.rcon(who, room.rcon, 'map gap')), /changelevel to gap/);
+});
+
+Deno.test('a Competitive (short) room plays the short match', () => {
+  const rooms = new Rooms({ readCfg, now: () => 0 });
+  const room = quietly(() => rooms.create(PLAYGROUND, { fileName: 'short.bsp', mode: 'competitive_short', address: '198.51.100.1' }));
+  assert.equal(room.host.game.rules.maxRounds, 16);
+  assert.equal(room.host.game.rules.overtime, false);
+  rooms.close(room, 'done');
 });

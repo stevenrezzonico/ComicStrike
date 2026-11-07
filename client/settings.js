@@ -176,7 +176,7 @@ export function createConsole(print) {
   // goes to a practice server or our room with its password), deletes a recording or binds and
   // defines more: a shared file's `bind mouse1 "+attack; demo_delete clutch"` ran on the shot.
   const BIND_REFUSED = new Set(['rcon', 'demo_delete', 'alias', 'exec', 'bind', 'unbind', 'unbindall', 'binddefaults',
-    'map', 'changelevel', 'say', 'say_team', 'callvote', 'disconnect', 'playback', 'record', 'retry']);
+    'map', 'changelevel', 'say', 'say_team', 'callvote', 'disconnect', 'playback', 'playdemo', 'record', 'retry', 'kill', 'jointeam']);
   const bindable = (text) => parse(text).every((a) => {
     const n = a[0].toLowerCase(), cvar = con.cvars.get(n);
     return !BIND_REFUSED.has(n) && (con.commands.has(n) || con.aliases.has(n) || (cvar && !(cvar.flags & FCVAR_PROTECTED)));

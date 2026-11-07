@@ -29,11 +29,18 @@ export function loadoutRows(ws, out) {
   for (let i = 0; i < ORDER.length; i++) {
     const slot = ORDER[i], id = f[WS_SLOTS + slot * 3];
     if (slot === SLOT_GRENADE) {
+      const n0 = n;
       for (let k = 0; k < GRENADE_IDS.length; k++) {
         if (!(f[WS_GRENADES + k] > 0)) continue;
         out[n * 3] = GRENADE_IDS[k];
         out[n * 3 + 1] = f[WS_GRENADES + k];
         out[n * 3 + 2] = active === slot && id === GRENADE_IDS[k] ? 1 : 0;
+        n++;
+      }
+      if (n === n0 && id > 0 && WEAPONS[id]) { // a grenade with no counts: a spectated player's (client/spectate.js)
+        out[n * 3] = id;
+        out[n * 3 + 1] = 1;
+        out[n * 3 + 2] = active === slot ? 1 : 0;
         n++;
       }
     } else if (id > 0 && WEAPONS[id]) {
@@ -78,14 +85,15 @@ export class LoadoutPanel {
   }
 
   // A touch screen's tap at page point (x, y) on a row draws that weapon: its command, or
-  // null (nothing there, or the column faded out). The rows' places are read on the tap only.
+  // null (nothing there, the column faded out, or the weapon already in hand: slot4 again is the
+  // next grenade, slot3 again the Zeus). The rows' places are read on the tap only.
   commandAt(x, y) {
     if (this.faded) return null;
     const rows = this.el.children;
     for (let r = 0; r < rows.length; r++) {
       const b = rows[r].getBoundingClientRect();
       if (x >= b.left - SLACK_X && x <= b.right + SLACK_X && y >= b.top - SLACK_Y && y <= b.bottom + SLACK_Y) {
-        return rows[r].dataset.cmd;
+        return rows[r].className === 'lo on' ? null : rows[r].dataset.cmd;
       }
     }
     return null;

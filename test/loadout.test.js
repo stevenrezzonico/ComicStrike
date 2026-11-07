@@ -32,15 +32,24 @@ Deno.test('loadout taps: a row draws its weapon by its slot command, with a litt
   assert.deepEqual(['ak47', 'glock', 'knife', 'taser', 'hegrenade', 'c4'].map((n) => slotCommand(WEAPON_ID[n])),
     ['slot1', 'slot2', 'slot3', 'slot6', 'slot4', 'slot5']);
   // Three rows side by side (the touch layout), 20 px wide with 10 px gaps, 14 px tall at y 300.
-  const row = (left, cmd) => ({ dataset: { cmd }, getBoundingClientRect: () => ({ left, right: left + 20, top: 300, bottom: 314 }) });
+  const row = (left, cmd, on = false) => ({ dataset: { cmd }, className: on ? 'lo on' : 'lo',
+    getBoundingClientRect: () => ({ left, right: left + 20, top: 300, bottom: 314 }) });
   const panel = Object.create(LoadoutPanel.prototype);
-  panel.el = { children: [row(100, 'slot1'), row(130, 'slot2'), row(160, 'slot3')] };
+  panel.el = { children: [row(100, 'slot1'), row(130, 'slot2'), row(160, 'slot3'), row(190, 'slot4', true)] };
   panel.faded = false;
   assert.equal(panel.commandAt(110, 307), 'slot1');
   assert.equal(panel.commandAt(126, 290), 'slot2', 'a little left of and over the pistol');
   assert.equal(panel.commandAt(180, 328), 'slot3', 'under the knife');
   assert.equal(panel.commandAt(140, 340), null, 'too far under');
   assert.equal(panel.commandAt(60, 307), null, 'left of every row');
+  assert.equal(panel.commandAt(200, 307), null, 'the grenade in hand: slot4 again would be the next kind');
   panel.faded = true;
   assert.equal(panel.commandAt(110, 307), null, 'faded out: nothing to tap');
+});
+
+Deno.test("loadout rows: a grenade with no counts (a spectated player's rebuilt weapon) still shows", () => {
+  const ws = createWeaponState();
+  ws.f[WS_ACTIVE] = SLOT_GRENADE;
+  ws.f[WS_SLOTS + SLOT_GRENADE * 3] = WEAPON_ID.smokegrenade; // (spectate.js sets the slot, no counts)
+  assert.deepEqual(rows(ws), [[WEAPON_ID.smokegrenade, 1, 1]]);
 });

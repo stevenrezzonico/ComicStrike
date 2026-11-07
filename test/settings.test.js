@@ -38,8 +38,10 @@ Deno.test('settings: an imported file runs its settings and binds only', () => {
     // The game's commands, which main.js registers at load: those the default binds run.
     for (const text of binds.map.values()) for (const [name] of parse(text)) if (!con.commands.has(name)) con.command(name, () => {});
     // And those that reach a server or leave the game (main.js registers them too).
-    for (const name of ['say', 'say_team', 'callvote', 'map', 'disconnect', 'playback', 'record', 'retry']) con.command(name, () => {});
-    const refused = ['say hi', 'callvote kick bob', 'map de_dust2', 'disconnect', 'record x'];
+    for (const name of ['say', 'say_team', 'callvote', 'map', 'disconnect', 'playback', 'playdemo', 'record', 'retry', 'kill', 'jointeam']) {
+      con.command(name, () => {});
+    }
+    const refused = ['say hi', 'callvote kick bob', 'map de_dust2', 'disconnect', 'record x', '+attack; playdemo clutch', 'kill', 'jointeam 3'];
     const n = importConfig(refused.map((t, i) => `bind "f${i + 5}" "${t}"
 `).join('') +'// a config\nsensitivity "4"; alias evil "quit"\nbind "k" "+jump"\nrcon_password secret\nviewmodel_roll 12' +
       '\nbind "m" "+jump; demo_delete clutch"\nbind "r" "rcon kick bob"\nbind "u" "kick bob"\nbind "p" "rcon_password x"\nbind "t" "sensitivity 2"');

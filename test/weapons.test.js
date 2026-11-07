@@ -406,3 +406,45 @@ Deno.test('spawn loadout: only guns of the slot and the team', async () => {
   assert.equal(p.ws.f[WS_SLOTS + SLOT_PRIMARY * 3], WEAPON_ID.awp);
   assert.equal(p.ws.f[WS_SLOTS + SLOT_SECONDARY * 3], WEAPON_ID.deagle);
 });
+
+Deno.test('a Zeus fired and put away within its cycle goes too; a survivor without guns holds the knife; the knife makes no wallbang', async () => {
+  const { floorWorld } = await import('./worlds.js');
+  const { Player, runCommand, spawnPlayer, resolveShots, ImpactList } = await import('../shared/player.js');
+  const W = await import('../shared/weapons.js');
+  const { IN_DROP } = await import('../shared/constants.js');
+  const world = floorWorld(), shots = new W.ShotList();
+  let t = 1000;
+  const p = new Player();
+  const run = (b, sel) => runCommand(world, p, b, sel, 0, 0, t++, shots);
+  spawnPlayer(p, 0, 0, 37);
+  W.giveWeapon(p.ws, W.WEAPON_ID.taser);
+  run(0, W.SLOT_TASER);
+  for (let i = 0; i < 70; i++) run(0, -1);
+  run(IN_ATTACK, -1);
+  assert.equal(shots.count, 1, 'the Zeus fires');
+  run(0, W.SLOT_SECONDARY); // put away the next tick, within its 0.15 s
+  assert.equal(p.ws.f[W.WS_SLOTS + W.SLOT_TASER * 3], 0, 'spent: gone');
+  spawnPlayer(p, 0, 0, 37, true); // a survivor's next round
+  assert.equal(p.ws.f[W.WS_SLOTS + W.SLOT_TASER * 3], 0, 'not refilled');
+  // A survivor who dropped his pistol (and had no rifle) starts the next round with the knife out.
+  spawnPlayer(p, 0, 0, 37, false, false);
+  for (let i = 0; i < 70; i++) run(0, -1);
+  run(IN_DROP, -1);
+  run(0, -1);
+  assert.equal(p.ws.f[W.WS_SLOTS + W.SLOT_SECONDARY * 3], 0);
+  spawnPlayer(p, 0, 0, 37, true);
+  assert.equal(W.activeWeapon(p.ws)?.melee, true, 'the knife, not an empty slot');
+  // A knife hit went through nothing (melee starts with no penetrations left).
+  const targets = { dist: 0, group: 1, yaw: [180], trace(_x, _y, _z, _dx, _dy, _dz, seg, _s, _t, exclude) {
+    if (exclude & 1 || seg < 20) return -1;
+    this.dist = 20;
+    return 0;
+  } };
+  for (const [name, pen] of [['knife', 0], ['ak47', 0]]) { // (a direct hit, as a bullet's first)
+    const w = W.WEAPONS[W.WEAPON_ID[name]], list = new W.ShotList(), im = new ImpactList(16);
+    list.push(0, 0, 40, 1, 0, 0, w.range, W.WEAPON_ID[name], w.damage);
+    resolveShots(world, { damage: () => 0 }, W.createWeaponState(), list, im, targets, 1, 2);
+    const hit = Array.from({ length: im.count }, (_, i) => i).find((i) => im.player[i] >= 0);
+    assert.equal(im.pen[hit], pen, name);
+  }
+});

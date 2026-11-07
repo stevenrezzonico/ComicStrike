@@ -127,7 +127,8 @@ export class Hud {
       else if (reason === END_DEFUSE) banner = 'Bomb Defused: ' + banner;
       else if (reason === END_RESCUE) banner = 'Hostage Rescued: ' + banner;
       else if (reason === END_SURRENDER) banner = `${winner === TEAM_CT ? 'Terrorists' : 'Counter-Terrorists'} Surrender: ${banner}`;
-      if (matchOver(rs.info) && rs.scoreT === rs.scoreCT) banner = 'Match Drawn'; // (every round played, no overtime)
+      // (every round played, no overtime; a surrender can leave the scores tied and still has its winner)
+      if (matchOver(rs.info) && rs.scoreT === rs.scoreCT && reason !== END_SURRENDER) banner = 'Match Drawn';
     } else if (rs.phase === PHASE_WARMUP) {
       banner = rs.mode & GAME_FFA ? 'Warmup: waiting for players' : 'Warmup: waiting for both teams';
     } else if (notice) {

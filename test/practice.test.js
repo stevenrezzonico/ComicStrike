@@ -2,7 +2,7 @@
 // bot_place through the Host with the caller's view, the grenade arcs and impact boxes kept
 // for drawing (client/gl/practice.js).
 import assert from 'node:assert/strict';
-import { TEAM_CT } from '../shared/player.js';
+import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { IN_JUMP, IN_FORWARD } from '../shared/constants.js';
 import {
   PS_ORIGIN, PS_FLAGS, FL_NOCLIP, FL_ONGROUND, NOCLIP_SPEED, createPlayerState, noclipMove, playerMove,
@@ -166,4 +166,13 @@ Deno.test('practice: grenade arcs are kept until 3 s after landing, impacts for 
   assert.equal(imp.each(10.5, (x) => seen.push(x)), MAX_IMPACTS, 'the newest MAX_IMPACTS');
   assert.ok(!seen.includes(0));
   assert.equal(imp.each(10 + IMPACT_KEEP + 0.01, () => {}), 0, 'gone after IMPACT_KEEP');
+});
+
+Deno.test('the demo: bot_add_ct targets all go to the CTs (no team limit)', () => {
+  const { host, join } = setup('demo');
+  join('me', TEAM_T);
+  for (let i = 0; i < 5; i++) host.con.exec('bot_add_ct');
+  const bots = host.game.clients.filter((c) => c && c.bot);
+  assert.equal(bots.length, 5);
+  assert.ok(bots.every((c) => c.team === TEAM_CT), bots.map((c) => c.team).join(' '));
 });

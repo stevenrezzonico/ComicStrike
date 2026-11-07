@@ -5,7 +5,7 @@
 // and the match over ('match' for the winners and in the modes with no sides, 'lost'
 // otherwise). Pure: main.js feeds it every snapshot and plays what it returns.
 
-import { PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, END_MATCH, reasonOf, matchOver } from '../shared/economy.js';
+import { PHASE_FREEZE, PHASE_LIVE, PHASE_OVER, END_MATCH, END_SURRENDER, reasonOf, matchOver } from '../shared/economy.js';
 import { BOMB_PLANTED } from '../shared/bomb.js';
 import { TICK_RATE } from '../shared/constants.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
@@ -41,7 +41,7 @@ export class JingleCues {
       const side = team === TEAM_T || team === TEAM_CT, winner = rs.info & 3;
       if (matchOver(rs.info)) {
         if (reasonOf(rs.info) === END_MATCH || !side) return 'match'; // no sides, or watching
-        if (rs.scoreT === rs.scoreCT) return null; // a drawn match
+        if (rs.scoreT === rs.scoreCT && reasonOf(rs.info) !== END_SURRENDER) return null; // a drawn match (a surrender can tie it)
         return winner === team ? 'match' : 'lost';
       }
       if (!side || !winner) return null;
