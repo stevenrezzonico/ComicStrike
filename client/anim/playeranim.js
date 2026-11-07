@@ -42,7 +42,7 @@ const HEEL_STRIKE_WALK = 14, HEEL_STRIKE_RUN = 5; // degrees the toes are up as 
 const TOE_OFF_WALK = 22, TOE_OFF_RUN = 38; // degrees the heel is up as the foot pushes off
 const ANKLE_H = 3.5, BALL = 4, HEEL = 2.5; // the boot: the ankle's height, the ball ahead of it, the heel behind
 const RUN_LEAN = 5; // degrees more lean at a run
-const CLAV_FWD = 18; // degrees a clavicle turns forward with its hand reaching 20 ahead (the shoulder follows the arm)
+const CLAV_KNEEL = 10; // degrees the clavicles turn forward, the hands down at the knees
 const CLAV_UP = 10; // and up, aiming high
 const CLAV_DROP = 4; // and down, the hands held low (a knife, a grenade, the C4, tied)
 const LIFT_WALK = 5; // how high the swinging foot rises, walking
@@ -77,16 +77,26 @@ const KICK_RATE = 4; // radians a second (0.64 Hz)
 const SWIM_BOB = 1.5; // units, at 0.38 Hz
 
 // Hand targets per hold, relative to the shoulder-line center (spine_3), in the aim frame
-// (x along the aim, z up) when `aimed`, else in the body frame: left xyz, right xyz.
+// (x along the aim, z up) when `aimed`, else in the body frame: left xyz, right xyz. `poles`:
+// the way each elbow bends, in the chest's frame (spine_3's: x ahead, y left), so it points
+// out of the chest whatever the stance turns (a rifle's gun elbow out to the side, as CS:GO's
+// stance has it: told to point down, it went into the chest the blade had turned toward it).
+// `clav`: degrees each clavicle turns forward (the shoulders follow the arms).
 // Float64Arrays: a plain array of whole numbers has integer elements, and a load that met
 // both kinds boxed every double it read.
 const GRIPS = {
-  [HOLD_RIFLE]: { aimed: true, hands: Float64Array.of(20, -2.5, -4, 8, -6.5, -5) }, // the stock in the right shoulder
-  [HOLD_PISTOL]: { aimed: true, hands: Float64Array.of(16.5, -0.4, -4.5, 17.5, -1.6, -4) },
-  [HOLD_KNIFE]: { aimed: false, hands: Float64Array.of(1, 9.5, -21, 12, -6.5, -10) },
-  [HOLD_C4]: { aimed: false, hands: Float64Array.of(11, 3, -13, 11, -2.5, -12.5) },
-  [HOLD_TIED]: { aimed: false, hands: Float64Array.of(-7, 2.5, -24, -7, -2.5, -24) },
+  [HOLD_RIFLE]: { aimed: true, hands: Float64Array.of(20, -2.5, -4, 8, -6.5, -5), // the stock in the right shoulder
+    poles: Float64Array.of(-0.1, 0.5, -1, -0.35, -1, -0.35), clav: Float64Array.of(18, 12) },
+  [HOLD_PISTOL]: { aimed: true, hands: Float64Array.of(16.5, -0.4, -4.5, 17.5, -1.6, -4),
+    poles: Float64Array.of(0, 0.9, -1, 0, -0.9, -1), clav: Float64Array.of(14, 14) },
+  [HOLD_KNIFE]: { aimed: false, hands: Float64Array.of(1, 9.5, -21, 11, -9, -11),
+    poles: Float64Array.of(-0.2, 0.8, -1, -0.2, -0.8, -1), clav: Float64Array.of(3, 6) },
+  [HOLD_C4]: { aimed: false, hands: Float64Array.of(11, 3, -13, 11, -2.5, -12.5),
+    poles: Float64Array.of(0, 1, -0.8, 0, -1, -0.8), clav: Float64Array.of(9, 9) },
+  [HOLD_TIED]: { aimed: false, hands: Float64Array.of(-7, 2.5, -24, -7, -2.5, -24),
+    poles: Float64Array.of(-0.3, 0.6, -1, -0.3, -0.6, -1), clav: Float64Array.of(-7, -7) },
 };
+const KNEEL_POLES = Float64Array.of(-0.2, 0.6, -1, -0.2, -0.6, -1); // planting, defusing: hands down at the knees
 const RELOAD_HAND = { [HOLD_RIFLE]: Float64Array.of(7, -2, -11), [HOLD_PISTOL]: Float64Array.of(5, 2, -14) }; // guns without a magazine point
 
 // Hands turn a quarter about z on top of the aim so their boxes point forward, like
@@ -315,12 +325,12 @@ export class PlayerAnimator {
     E[SPINE3 * 3] = lean * 0.2 + aimP * 0.15 - this.kick * 5 + swing * 6; E[SPINE3 * 3 + 1] = twist + swing * 10;
     E[NECK * 3] = -lean * 0.4 + aimP * 0.2 - breath * 0.5 - swimLean * 0.45; E[NECK * 3 + 1] = unturn;
     E[HEAD * 3] = -lean * 0.6 + aimP * 0.35 + this.kick * 5 - breath * 0.5 - swimLean * 0.45; E[HEAD * 3 + 1] = unturn;
-    // Shoulders: each clavicle turns forward with its hand's reach (back for hands tied
+    // Shoulders: each clavicle turns forward by its hold's reach (back for hands tied
     // behind) and up when aiming high, so a reaching arm carries its joint along instead of
     // twisting out of a fixed one (and the deltoid rides with it).
     for (let s = 0; s < 2; s++) {
-      const reachF = Math.max(-0.4, Math.min(1, (kneel ? 12 : grip.hands[s * 3]) / 20));
-      E[CLAV[s] * 3 + 1] = -SIDE[s] * CLAV_FWD * reachF;
+      if (kneel) E[CLAV[s] * 3 + 1] = -SIDE[s] * CLAV_KNEEL;
+      else E[CLAV[s] * 3 + 1] = -SIDE[s] * grip.clav[s];
       if (grip.aimed) E[CLAV[s] * 3 + 2] = SIDE[s] * CLAV_UP * Math.max(-0.5, Math.min(1, -aimP / 70));
       else E[CLAV[s] * 3 + 2] = -SIDE[s] * CLAV_DROP; // hands low: the shoulders settle
     }
@@ -408,9 +418,9 @@ export class PlayerAnimator {
         goal[1] = cyy + o[1];
         goal[2] = cz + o[2];
       }
-      goal[3] = -0.2;
-      goal[4] = SIDE[s] * 0.6;
-      goal[5] = -1;
+      const poles = kneel ? KNEEL_POLES : grip.poles; // (the elbow's way, chest frame to the body's)
+      Q.rotate(goal, 3, p.wrot, SPINE3 * 4, poles, s * 3);
+      this.aimArm(s);
       p.reachGoal(ARM[s], ELBOW[s], HAND[s]);
       te[0] = 0; te[1] = 0; te[2] = 0;
       if (grip.aimed || kneel) te[0] = handP;
@@ -491,6 +501,23 @@ export class PlayerAnimator {
   // solver bends the knee in the plane of the pole only when the limb already points
   // near its target: a leg carried round by the pelvis of a falling body otherwise bent
   // the knee into the ground. Call with world transforms current (after solve()).
+  // Turns arm s, still straight (its elbow unbent since the pose's reset), to point at the
+  // goal, the least turn from where the chest holds it (so the arm keeps its twist), before
+  // the two-bone solve: from the T-pose, a pole along the arm (hands low in front, an elbow
+  // to go out) left the bend plane to chance, and the elbow went into the chest.
+  aimArm(s) {
+    const p = this.pose, g = p.goal, w = p.wpos, a = ARM[s] * 3, h = HAND[s] * 3;
+    let cx = w[h] - w[a], cy = w[h + 1] - w[a + 1], cz = w[h + 2] - w[a + 2];
+    let dx = g[0] - w[a], dy = g[1] - w[a + 1], dz = g[2] - w[a + 2];
+    const lc = Math.max(Math.sqrt(cx * cx + cy * cy + cz * cz), 1e-9), ld = Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 1e-9);
+    cx /= lc; cy /= lc; cz /= lc;
+    dx /= ld; dy /= ld; dz /= ld;
+    const ax = cy * dz - cz * dy, ay = cz * dx - cx * dz, az = cx * dy - cy * dx, sa = Math.sqrt(ax * ax + ay * ay + az * az);
+    if (sa < 1e-6) return;
+    Q.fromAxisAngle(tq, 0, ax / sa, ay / sa, az / sa, Math.atan2(sa, cx * dx + cy * dy + cz * dz));
+    p.applyWorld(ARM[s], tq, 0);
+  }
+
   reachLeg(s) {
     const p = this.pose, g = p.goal, w = p.wpos, h = HIP[s];
     Q.identity(p.rot, KNEE[s] * 4);

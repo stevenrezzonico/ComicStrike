@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildPlayer, HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4 } from '../client/models/players.js';
+import { buildPlayer, HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4, HOLD_TIED } from '../client/models/players.js';
 import { PlayerAnimator, holdOf, gunInHand, primeAnimator } from '../client/anim/playeranim.js';
 import { PLAYER_SKELETON as S } from '../client/anim/skeleton.js';
 
@@ -423,6 +423,36 @@ Deno.test('player animation: the clavicles carry the shoulders toward a gun held
   assert.ok(Math.abs(rest) < 1e-6);
   assert.ok(fwdOf(rifle, 'L') > 1.5, `the rifle's support shoulder forward (${fwdOf(rifle, 'L').toFixed(2)})`);
   assert.ok(fwdOf(rifle, 'L') > fwdOf(knife, 'L') + 1, 'more than with the knife');
+});
+
+// A world point in spine_3's frame (the chest: its origin at the bone, x forward, y left).
+function inChest(a, p) {
+  const i = S.bone('spine_3'), q = a.pose.wrot, w = a.pose.wpos;
+  const vx = p[0] - w[i * 3], vy = p[1] - w[i * 3 + 1], vz = p[2] - w[i * 3 + 2];
+  const qx = -q[i * 4], qy = -q[i * 4 + 1], qz = -q[i * 4 + 2], qw = q[i * 4 + 3]; // the inverse turn
+  const tx = 2 * (qy * vz - qz * vy), ty = 2 * (qz * vx - qx * vz), tz = 2 * (qx * vy - qy * vx);
+  return [vx + qw * tx + (qy * tz - qz * ty), vy + qw * ty + (qz * tx - qx * tz), vz + qw * tz + (qx * ty - qy * tx)];
+}
+
+Deno.test('player animation: elbows and upper arms stay outside the chest, every hold, moving or not, aiming up or down', () => {
+  // The chest's core in spine_3's frame: an arm's center line in here has gone through the
+  // chest (hanging against its broad sides is not: the torso is 17-20 wide, the joints at 9.75).
+  const inside = ([x, y, z]) => z > -5 && z < 3 && Math.abs(y) < 6.2 && Math.abs(x) < 4.5;
+  for (const hold of [HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4, HOLD_TIED]) {
+    for (const [move, pos, duck] of [['still', () => [0, 0, 0], 0], ['run', (t) => [t * 250, 0, 0], 0], ['crouch', () => [0, 0, 0], 1]]) {
+      for (const pitch of [-60, 0, 60]) {
+        const a = run(new PlayerAnimator(), 48, pos, { hold, pitch, duck });
+        for (const side of ['L', 'R']) {
+          const sh = bone(a, `arm_upper_${side}`), el = bone(a, `arm_lower_${side}`);
+          const mid = [(sh[0] + el[0]) / 2, (sh[1] + el[1]) / 2, (sh[2] + el[2]) / 2];
+          for (const [what, p] of [['elbow', el], ['upper arm', mid]]) {
+            const c = inChest(a, p);
+            assert.ok(!inside(c), `hold ${hold} ${move} pitch ${pitch}: the ${side} ${what} inside the chest at ${c.map((v) => v.toFixed(1))}`);
+          }
+        }
+      }
+    }
+  }
 });
 
 Deno.test('player animation: feet and hips turn part way toward a strafe; backpedalling keeps them forward', () => {
