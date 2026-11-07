@@ -400,6 +400,7 @@ const sandboxRemoved = new Uint32Array(8); // the sandbox's killtargeted slots s
 let cmdOffset = 0; // server tick - command number (newest snapshot): when the server runs a command
 const moverSeen = new Uint8Array(MAX_MOVERS);
 const moverDir = new Int8Array(MAX_MOVERS); // last tick's, for sounds
+const holeless = new Set(); // world slots that take no bullet holes (loadMap)
 const sandboxBodies = [];
 const sandboxAct = { x: 0, y: 0, z: 0, yaw: 0 };
 const sandboxActs = [sandboxAct];
@@ -631,6 +632,10 @@ async function loadMap(name) {
     else radar.setMap(Overview.from(e.data.data), sites);
   };
   ({ breakables, doors, killables, logic: mapLogic } = mapEntities(bsp, world));
+  // Fans, pendulums and crates take no bullet holes: holes keep their place, and these move on
+  // without the door's start that clears a door's (moverSounds).
+  holeless.clear();
+  for (let k = 0; k < doors.count; k++) if (doors.kind[k] >= MOVER_SPIN) holeless.add(doors.slot(k));
   breakableColors = mesh.breakableColors;
   mapLogic.onBreak = (slot, act) => { // the sandbox: a breakable fired by name
     if (breakables.setBroken(world, slot, true)) brokeSlot(slot, act);
@@ -718,7 +723,7 @@ function showImpacts() {
       continue;
     }
     const p = impacts.pos, n = impacts.normal;
-    decals.add(p[i * 3], p[i * 3 + 1], p[i * 3 + 2], n[i * 3], n[i * 3 + 1], n[i * 3 + 2], melee ? 1.2 : 1.6,
+    if (!holeless.has(impacts.owner[i])) decals.add(p[i * 3], p[i * 3 + 1], p[i * 3 + 2], n[i * 3], n[i * 3 + 1], n[i * 3 + 2], melee ? 1.2 : 1.6,
       (hash32(tickCount * 7 + i) & 0xffff) / 65536, impacts.owner[i]);
     if (!melee) {
       words.wall(viewProj, p[i * 3], p[i * 3 + 1], p[i * 3 + 2]);
@@ -1212,7 +1217,7 @@ function applyEvents() {
       }
     } else if (!breakables.broken[ev.breakable[k]] || !ev.breakable[k]) {
       sounds.impact(x, y, z);
-      decals.add(x, y, z, ev.normal[k * 3], ev.normal[k * 3 + 1], ev.normal[k * 3 + 2], 1.6,
+      if (!holeless.has(ev.breakable[k])) decals.add(x, y, z, ev.normal[k * 3], ev.normal[k * 3 + 1], ev.normal[k * 3 + 2], 1.6,
         (hash32(k * 31 + net.latestSeq) & 0xffff) / 65536, ev.breakable[k]);
     }
   }

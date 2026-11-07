@@ -123,12 +123,13 @@ export class Votes {
     voters.set(c, 1);
     this.id = (this.id + 1) & 0xff;
     this.vote = {
-      id: this.id, issue, label: row.label, key, arg, detail: detail || arg, caller: c, team: c.team, target, voters, needed,
+      id: this.id, issue, label: row.label, key, arg, detail: detail || arg, caller: c, team: c.team, teamOnly: !!row.team,
+      target, voters, needed,
       endsAt: now + this.num('sv_vote_timer_duration') * 1000,
     };
     this.result = null;
     this.resultSends = 0;
-    game.printAll(`${c.name} called a vote: ${this.label(this.vote)}?`);
+    this.tell(this.vote, `${c.name} called a vote: ${this.label(this.vote)}?`);
     console.log(`vote: ${c.name} called ${key}`);
     this.send();
     this.decide();
@@ -148,6 +149,13 @@ export class Votes {
     return '';
   }
 
+  // A console line about vote vt: a team's vote (surrender, timeout) to its voters alone, as
+  // CS:GO keeps it from the other side; the rest to everyone.
+  tell(vt, text) {
+    if (!vt.teamOnly) return this.host.game.printAll(text);
+    for (const o of vt.voters.keys()) if (o.joined) this.host.game.print(o, text);
+  }
+
   label(vt) {
     if (vt.issue === VOTE_TIMEOUT || vt.issue === VOTE_SURRENDER) return `${vt.label} (the ${vt.detail})`;
     return `${vt.label}${vt.detail ? ` ${vt.detail}` : ''}`;
@@ -164,21 +172,24 @@ export class Votes {
       else if (!x) open++;
     }
     if (vt.target && !vt.target.joined) return this.end(false); // the target left: nothing to vote on
+    // A team's vote whose side changed (the half-time swap within its 15 s) would hand its
+    // result to the other players: it ends, not counted as failed.
+    if (vt.teamOnly && vt.caller.team !== vt.team) return this.end(false, false);
     if (yes >= vt.needed) return this.end(true);
     if (yes + open < vt.needed || this.host.now() >= vt.endsAt) this.end(false);
   }
 
-  end(passed) {
+  end(passed, counted = true) {
     const vt = this.vote, host = this.host, game = host.game, now = host.now();
     this.vote = null;
     vt.state = passed ? VOTE_PASSED : VOTE_FAILED;
     this.result = vt;
     this.resultSends = RESULT_SENDS - 1;
     this.send(vt);
-    game.printAll(`Vote ${passed ? 'passed' : 'failed'}: ${this.label(vt)}`);
-    console.log(`vote: ${vt.key} ${passed ? 'passed' : 'failed'}`);
+    this.tell(vt, `Vote ${passed ? 'passed' : counted ? 'failed' : 'called off'}: ${this.label(vt)}`);
+    console.log(`vote: ${vt.key} ${passed ? 'passed' : counted ? 'failed' : 'called off'}`);
     if (!passed) {
-      remember(this.failed, vt.key, now, FAILED_KEEP);
+      if (counted) remember(this.failed, vt.key, now, FAILED_KEEP);
     } else if (vt.issue === VOTE_KICK) {
       host.ban(vt.target, this.num('sv_vote_kick_ban_duration'));
       game.kick(vt.target, 'kicked by vote');
@@ -238,7 +249,7 @@ export class Votes {
     }
     const left = vt.state ? 0 : Math.max(0, Math.ceil((vt.endsAt - now) / 1000));
     for (const c of game.clients) {
-      if (!c || !c.joined || c.bot) continue;
+      if (!c || !c.joined || c.bot || (vt.teamOnly && !vt.voters.has(c))) continue; // (a team's vote: its own)
       const mine = vt.voters.has(c) ? 1 + vt.voters.get(c) : 0;
       c.session.send(writeVote(c.writer(), vt.id, vt.state || VOTE_RUNNING, vt.issue, vt.caller.id, yes, no,
         vt.voters.size, vt.needed, left, mine, vt.detail));

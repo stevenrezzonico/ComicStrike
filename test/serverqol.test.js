@@ -308,7 +308,7 @@ Deno.test("callvote surrender: the caller's team alone votes, every one of them 
   cmd(a, 'callvote surrender');
   const v = vote(a);
   assert.deepEqual([v.issue, v.voters, v.needed, v.detail], [VOTE_SURRENDER, 2, 2, 'Ts'], 'the Ts, both of them');
-  assert.equal(vote(ct).mine, 0, 'the CTs see it and cannot vote');
+  assert.ok(vote(ct) === null && !/called a vote/.test(said(ct) || ''), 'the CTs neither see it nor read of it');
   cmd(b, 'vote option1');
   assert.equal(vote(a).state, VOTE_PASSED);
   const rs = host.game.round;
@@ -344,6 +344,35 @@ Deno.test('callvote starttimeout: the team votes; mp_team_timeout_time more free
   quiet(() => g.startRound(false));
   tick(1);
   assert.ok(rs.ticksLeft > 14 * TICK_RATE && rs.mode & GAME_TIMEOUT);
+  quiet(() => g.startMatch());
+  tick(1);
+  assert.ok(!(rs.mode & GAME_TIMEOUT) && !g.timeoutTeam, 'a new match: no timeout carried over');
+});
+
+Deno.test("a team's vote whose side changes under it (the half-time swap) is called off, not counted as failed", () => {
+  const { host, hello, cmd, said, vote, tick } = server();
+  const a = hello('alpha', '', '203.0.113.1'), b = hello('bravo', '', '203.0.113.2'), ct = hello('ct', '', '203.0.113.9', TEAM_CT);
+  host.con.exec('mp_warmup_end');
+  tick(1);
+  cmd(a, 'callvote surrender');
+  assert.equal(vote(a).state, VOTE_RUNNING);
+  quiet(() => host.game.halftime());
+  tick(1);
+  assert.equal(vote(a).state, VOTE_FAILED);
+  assert.match(said(a), /called off/);
+  assert.equal(host.game.round.phase, PHASE_FREEZE, 'nobody surrendered');
+  cmd(b, 'callvote surrender');
+  assert.equal(vote(b).state, VOTE_RUNNING, 'it can be called again at once');
+  void ct;
+});
+
+Deno.test('a spent Zeus (in its last cycle) is never dropped', () => {
+  const { host, hello } = server();
+  const a = hello('alpha', '', '203.0.113.1'), g = host.game, n = g.items.count;
+  quiet(() => g.spawnItem(a.c, WEAPON_ID.taser, 0, 0, false));
+  assert.equal(g.items.count, n, 'empty: none');
+  quiet(() => g.spawnItem(a.c, WEAPON_ID.taser, 1, 0, false));
+  assert.equal(g.items.count, n + 1, 'charged: on the ground');
 });
 
 Deno.test('callvote pausematch / unpausematch: the freeze time stands still until resumed; mp_pause_match mid-round waits for it', () => {

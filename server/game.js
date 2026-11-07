@@ -1186,6 +1186,7 @@ export class Game {
     this.otScoreT = this.otScoreCT = 0;
     this.lossStreak[TEAM_T] = this.lossStreak[TEAM_CT] = 0;
     this.timeoutsUsed[TEAM_T] = this.timeoutsUsed[TEAM_CT] = 0;
+    this.timeoutTeam = this.timeoutEnd = 0;
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
       c.player.money = this.rules.startMoney;
@@ -1795,7 +1796,7 @@ export class Game {
   // let go of at chest height (dying, swapping with E); it flies and lands (Items.update).
   spawnItem(c, weapon, clip, reserve, thrown) {
     const w = WEAPONS[weapon];
-    if (weapon !== ITEM_DEFUSER && (!w || w.melee || w.c4)) return;
+    if (weapon !== ITEM_DEFUSER && (!w || w.melee || w.c4 || (w.taser && !clip))) return; // (a spent Zeus, in its last cycle)
     const p = c.player, f = p.ps.f;
     const ez = f[PS_ORIGIN + 2] + (thrown ? eyeOffset(p.ps) - 6 : 10);
     this.items.throw(this.world, weapon, clip, reserve, c.id, f[PS_ORIGIN], f[PS_ORIGIN + 1], ez, thrown ? c.pitch : 0,
