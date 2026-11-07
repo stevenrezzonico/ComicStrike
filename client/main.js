@@ -45,7 +45,7 @@ import {
 import { Grenades, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE, FX_BLAST } from '../shared/grenades.js';
 import { HITGROUP_CHEST, HITGROUP_LEGS } from '../shared/hitgroups.js';
 import {
-  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, KILL_PENETRATED, KILL_FLASH_ASSIST, NO_ASSIST, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, OWN_HURT, E_ACTIVE, E_X,
+  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, KILL_PENETRATED, KILL_FLASH_ASSIST, KILL_AIRBORNE, KILL_NOSCOPE, NO_ASSIST, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, OWN_HURT, E_ACTIVE, E_X,
   CHAT_CONSOLE, CHAT_TEAM, CHAT_MAX, CHAT_RADIO, CHAT_MAP, cleanChat, RADIO,
   E_Y, E_Z, E_PITCH, E_YAW,
   E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw, dequantizePitch, PROTOCOL_VERSION,
@@ -59,6 +59,8 @@ import { Debris } from './gl/debris.js';
 import { Players } from './gl/players.js';
 import { PlayerModels } from './gl/playermodels.js';
 import { GunMeshes } from './gl/gunmeshes.js';
+import { buildGun } from './models/guns.js';
+import { KillIcons } from './killicons.js';
 import { LOOK_GUNS, lookOf } from './models/looks.js';
 import { JingleCues } from './jingles.js';
 import { GrenadeFx } from './gl/grenadefx.js';
@@ -189,6 +191,8 @@ const decals = new Decals(renderer.gl);
 const debris = new Debris(renderer.gl);
 const players = new Players(renderer.gl);
 const guns = new GunMeshes(renderer.gl); // every gun model, shared by first and third person
+const killIcons = new KillIcons((name) => buildGun(name).mesh.positions, WEAPONS); // the kill feed's
+killIcons.prepare();
 const models = new PlayerModels(renderer.gl, guns);
 const fx = new GrenadeFx(renderer.gl, guns);
 onNewGame(() => fx.clear());
@@ -1304,22 +1308,29 @@ function addKill(killer, victim, weapon, flags, assister = NO_ASSIST) {
   const headshot = (flags & KILL_HEADSHOT) !== 0;
   const row = document.createElement('div');
   const name = (id) => net.names[id] || `player${id}`;
-  const wname = WEAPONS[weapon] ? WEAPONS[weapon].label : 'world';
+  const who = (id) => { // a name as text, never HTML
+    const s = document.createElement('span');
+    s.className = teamClass(id);
+    s.textContent = name(id);
+    return s;
+  };
+  // CS:GO's order: the killer, + the assister (flash), in the air, the weapon, no scope,
+  // wallbang, headshot, the victim; a death of one's own: the bomb or a skull, the victim.
   if (killer === victim) {
-    row.innerHTML = WEAPONS[weapon]?.c4 ? `[C4] <span class="${teamClass(victim)}"></span>`
-      : `<span class="${teamClass(victim)}"></span> died`;
-    row.querySelector('span').textContent = name(victim);
+    row.append(WEAPONS[weapon]?.c4 ? killIcons.weapon(weapon) : killIcons.mark('skull'), who(victim));
   } else {
-    const helper = assister !== NO_ASSIST && net.names[assister];
-    row.innerHTML = `<span class="${teamClass(killer)}"></span>` +
-      (helper ? ` + ${flags & KILL_FLASH_ASSIST ? '<b class="fa">FLASH</b> ' : ''}<span class="${teamClass(assister)}"></span>` : '') +
-      ` [<span class="w"></span>]${flags & KILL_PENETRATED ? ' <b class="wb">WB</b>' : ''}${headshot ? ' <b class="hs">HS</b>' : ''}` +
-      ` <span class="${teamClass(victim)}"></span>`;
-    const spans = row.querySelectorAll('span');
-    spans[0].textContent = name(killer);
-    if (helper) spans[1].textContent = helper;
-    spans[helper ? 2 : 1].textContent = wname;
-    spans[helper ? 3 : 2].textContent = name(victim);
+    row.append(who(killer));
+    if (assister !== NO_ASSIST && net.names[assister]) {
+      row.append(' + ');
+      if (flags & KILL_FLASH_ASSIST) row.append(killIcons.mark('flash'));
+      row.append(who(assister));
+    }
+    if (flags & KILL_AIRBORNE) row.append(killIcons.mark('air'));
+    row.append(killIcons.weapon(weapon));
+    if (flags & KILL_NOSCOPE) row.append(killIcons.mark('noscope'));
+    if (flags & KILL_PENETRATED) row.append(killIcons.mark('wallbang'));
+    if (headshot) row.append(killIcons.mark('headshot'));
+    row.append(who(victim));
   }
   if (killer === selfId || victim === selfId) row.className = 'mine';
   killfeed.appendChild(row);
