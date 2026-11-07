@@ -488,3 +488,51 @@ Deno.test('player animation: feet and hips turn part way toward a strafe; backpe
   const back = run(new PlayerAnimator(), 64, (t) => [-t * 250, 0, 0], { hold: HOLD_PISTOL });
   assert.ok(Math.abs(footYaw(back, 'L') - footYaw(fwd, 'L')) < 5, 'backpedalling feet point forward');
 });
+
+// The closest points of segments p1-q1 and p2-q2 (Ericson's ClosestPtSegmentSegment), their distance.
+function segmentGap(p1, q1, p2, q2) {
+  const d1 = [0, 1, 2].map((k) => q1[k] - p1[k]), d2 = [0, 1, 2].map((k) => q2[k] - p2[k]), r = [0, 1, 2].map((k) => p1[k] - p2[k]);
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const a = dot(d1, d1), e = dot(d2, d2), f = dot(d2, r), c = dot(d1, r), b = dot(d1, d2), den = a * e - b * b;
+  let s = den > 1e-9 ? Math.min(1, Math.max(0, (b * f - c * e) / den)) : 0, t = (b * s + f) / e;
+  if (t < 0) [t, s] = [0, Math.min(1, Math.max(0, -c / a))];
+  else if (t > 1) [t, s] = [1, Math.min(1, Math.max(0, (b - c) / a))];
+  const x = [0, 1, 2].map((k) => p1[k] + d1[k] * s - p2[k] - d2[k] * t);
+  return Math.sqrt(dot(x, x));
+}
+
+Deno.test('player animation: the legs pass each other in every direction, walking, running and crouched', () => {
+  // The leg bones' axes (thigh, shin, the boot to its ball) of one leg never come nearer the
+  // other's than the tubes round them allow (thighs 4.7 to 3.2 across at most, shins 3.7):
+  // a forward run passes its shins 5.9 apart. Strafing, the feet ran across the body and the
+  // legs swept through each other (0.2 apart walking, 0.02 crouched).
+  const leg = (a, side) => {
+    const hip = bone(a, `leg_upper_${side}`), knee = bone(a, `leg_lower_${side}`), ankle = bone(a, `ankle_${side}`);
+    const q = a.pose.wrot, i = S.bone(`ankle_${side}`) * 4; // the boot's ball: 4 ahead of the ankle along its x
+    const fx = 1 - 2 * (q[i + 1] * q[i + 1] + q[i + 2] * q[i + 2]), fy = 2 * (q[i] * q[i + 1] + q[i + 3] * q[i + 2]), fz = 2 * (q[i] * q[i + 2] - q[i + 3] * q[i + 1]);
+    return [hip, knee, ankle, [ankle[0] + 4 * fx, ankle[1] + 4 * fy, ankle[2] + 4 * fz]];
+  };
+  for (const [speed, duck] of [[130, 0], [250, 0], [85, 1]]) {
+    for (let dir = 0; dir < 360; dir += 45) {
+      for (const hold of [HOLD_RIFLE, HOLD_PISTOL]) {
+        const a = new PlayerAnimator(), d = dir * Math.PI / 180;
+        let thigh = 1e9, shin = 1e9, cross = 1e9, foot = 1e9;
+        for (let k = 0; k < 320; k++) {
+          const t = k / 64;
+          a.update(1 / 64, Math.cos(d) * speed * t, Math.sin(d) * speed * t, 0, 0, 0, duck, true, hold, 0, 0, true);
+          if (k < 128) continue; // (settled into the gait)
+          const [h0, k0, a0, b0] = leg(a, 'L'), [h1, k1, a1, b1] = leg(a, 'R');
+          thigh = Math.min(thigh, segmentGap(h0, k0, h1, k1));
+          shin = Math.min(shin, segmentGap(k0, a0, k1, a1));
+          cross = Math.min(cross, segmentGap(k0, a0, h1, k1), segmentGap(k1, a1, h0, k0));
+          foot = Math.min(foot, segmentGap(a0, b0, a1, b1));
+        }
+        const at = `${dir} degrees at ${speed}${duck ? ' crouched' : ''}, ${hold === HOLD_RIFLE ? 'rifle' : 'pistol'}`;
+        assert.ok(thigh > 4.5, `${at}: thighs ${thigh.toFixed(2)} apart`);
+        assert.ok(shin > 4.5, `${at}: shins ${shin.toFixed(2)} apart`);
+        assert.ok(cross > 4.5, `${at}: a shin ${cross.toFixed(2)} from the other thigh`);
+        assert.ok(foot > 4, `${at}: boots ${foot.toFixed(2)} apart`);
+      }
+    }
+  }
+});

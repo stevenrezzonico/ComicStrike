@@ -48,7 +48,7 @@ const CLAV_DROP = 4; // and down, the hands held low (a knife, a grenade, the C4
 const LIFT_WALK = 5; // how high the swinging foot rises, walking
 const LIFT_RUN = 15; // running: the heel comes up behind, the knee folds
 const FOOT_TURN = 0.6; // the feet turn this share of the way toward the movement direction
-const HIP_TURN = 0.4; // the hips too (the spine takes two thirds of it back)
+const HIP_TURN = 0.7; // the hips too (the spine takes two thirds of it back): their joints line up across a strafe's lanes
 const TOSS_RATE = 2.5; // a throw's arm swing lasts 1 / this seconds
 const FLY = 0.55; // a headshot's body flies for this long (seconds, before HS_PACE)
 const HS_PACE = 1.25; // the headshot's whole fall plays this much faster than its timings (1 was a little slow)
@@ -307,7 +307,10 @@ export class PlayerAnimator {
     p.pos[PELVIS * 3] = -5 * c;
     p.pos[PELVIS * 3 + 1] = SWAY * Math.sin(this.time * 0.94) * rest;
     p.pos[PELVIS * 3 + 2] = PELVIS_Z - CROUCH_DROP * c - (drop + KNEE_SOFT) * (1 - c) + SWIM_BOB * Math.sin(this.time * 2.4) * wet;
-    const hipYaw = -RIFLE_BLADE * blade - HIP_SWING * stride + HIP_TURN * moveYaw;
+    // (a strafe takes the rifle's blade out of the hips, the spine keeping it: bladed hips
+    // put the hip joints along one strafe's lanes, and those legs ran close)
+    const bladeOff = blade * Math.abs(dirL) * walk;
+    const hipYaw = -RIFLE_BLADE * (blade - bladeOff) - HIP_SWING * stride + HIP_TURN * moveYaw;
     const E = p.eul; // the turns, applied together by turnAll() (see Pose.turnAll)
     E[PELVIS * 3] = (MOVE_LEAN + RUN_LEAN * run) * dirF * walk + swimLean; E[PELVIS * 3 + 1] = hipYaw; E[PELVIS * 3 + 2] = -MOVE_LEAN * dirL * walk;
 
@@ -316,7 +319,7 @@ export class PlayerAnimator {
     // the head keeps looking along the aim (a little of the blade is left in it).
     const lean = CROUCH_LEAN * c + READY_LEAN * (grip.aimed ? 1 : 0.4) * (1 - c);
     const aimP = Math.max(-80, Math.min(80, pitch));
-    const twist = -RIFLE_TWIST * blade + (HIP_SWING * stride - HIP_TURN * moveYaw) * (2 / 9);
+    const twist = -RIFLE_TWIST * blade - RIFLE_BLADE * bladeOff / 3 + (HIP_SWING * stride - HIP_TURN * moveYaw) * (2 / 9);
     const unturn = -(hipYaw + 3 * twist) * 0.5 - 3 * blade;
     const breath = BREATH * Math.sin(this.time * 1.57);
     E[SPINE1 * 3] = lean * 0.5 + aimP * 0.15; E[SPINE1 * 3 + 1] = twist;
@@ -339,15 +342,18 @@ export class PlayerAnimator {
     // Legs: feet under the hips, apart at rest (the right one back when bladed), closer to
     // the line under the body moving (a run puts its feet nearly on it), the cycle laid
     // along the movement direction, the knees bending toward it (only a little out). Heel
-    // to toe, toes out, the feet turned part way toward the movement.
-    const base = 4.5 - 2 * run;
+    // to toe, toes out, the feet turned part way toward the movement. Each foot keeps to a
+    // lane on its side of the movement's line (across the direction folded for backpedalling,
+    // the knees' pole below), so a strafe's feet run one lane behind and one ahead and the
+    // swinging leg passes the planted one; across the body, they swept through each other.
+    const base = 4.5 - 2 * run, laneF = dirF * back * walk + (1 - walk), laneL = dirL * back * walk;
     for (let s = 0; s < 2; s++) {
-      const goal = p.goal;
-      goal[0] = 2 * c + dirF * along[s] + (s ? -3 : 4) * this.air + SIDE[s] * BLADE_STEP * blade * rest;
-      goal[1] = SIDE[s] * (base + c + (STANCE - base) * rest) + dirL * along[s];
+      const goal = p.goal, lane = SIDE[s] * (base + c + (STANCE - base) * rest);
+      goal[0] = 2 * c + dirF * along[s] + (s ? -3 : 4) * this.air + SIDE[s] * BLADE_STEP * blade * rest - lane * laneL;
+      goal[1] = lane * laneF + dirL * along[s];
       goal[2] = ANKLE_H + lift[s] + rise[s] + 9 * this.air;
-      goal[3] = dirF * back * walk + (1 - walk);
-      goal[4] = dirL * back * walk + SIDE[s] * (0.25 - 0.17 * walk);
+      goal[3] = laneF;
+      goal[4] = laneL + SIDE[s] * (0.25 - 0.17 * walk);
       goal[5] = 0;
       if (wet > 0) { // swimming: along the body's axis below the hips, kicking across it
         const la = swimLean * Math.PI / 180, ca = Math.cos(la), sa = Math.sin(la);
