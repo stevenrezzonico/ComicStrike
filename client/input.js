@@ -124,6 +124,14 @@ export class Input {
     document.addEventListener('mouseup', (e) => {
       if (MOUSE_NAMES[e.button]) this.onKey(MOUSE_NAMES[e.button], false);
     });
+    // The mouse's back and forward buttons are mouse4 and mouse5 here (binds, the Controls
+    // tab's key capture), not the page's history: the browser goes back or forward on their
+    // release unless the page cancels it, which left the game or the settings.
+    for (const type of ['mousedown', 'mouseup', 'auxclick']) {
+      document.addEventListener(type, (e) => {
+        if (e.button === 3 || e.button === 4) e.preventDefault();
+      });
+    }
     // The wheel has no "up": a notch presses and releases at once (latched for the tick).
     document.addEventListener('wheel', (e) => {
       if (!this.locked || e.deltaY === 0) return;
