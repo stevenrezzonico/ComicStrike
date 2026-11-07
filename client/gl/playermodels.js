@@ -239,7 +239,7 @@ export class PlayerModels {
           this.guns.points[weapon] || null, weapon);
         this.owedDt[id] = 0;
       }
-      this.weapon[id] = alive && this.guns.mesh[weapon] ? weapon : 0;
+      this.weapon[id] = (alive || a.hold) && this.guns.mesh[weapon] ? weapon : 0; // (a bomb's victim standing till its front)
       this.silenced[id] = (ents[r + E_ANIM] & ANIM_SILENCED) !== 0;
       this.immune[id] = alive && (ents[r + E_ANIM] & ANIM_IMMUNE) !== 0;
       this.body[id] = ents[r + E_TEAM] === TEAM_CT

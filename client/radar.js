@@ -32,12 +32,14 @@ const UNSUB = 1 / SUB;
 const TAU = 2 * Math.PI;
 const PT = new Float64Array(2); // place()'s world point
 const q = (v) => (v * SUB) | 0; // pixels to 16ths
+const DASH = [0, 0], NO_DASH = []; // the bomb's outer circle (setLineDash copies them)
 
 export class Radar {
   // el: the radar's element (#radar: its CSS draws the disc, the clip and the rims), holding
   // the canvas the map and the markers are drawn on.
   constructor(el, cv) {
     this.pings = [];
+    this.blast = null; // the bomb's explosion (client/bombfx.js BombFx), its rings drawn while it shows
     this.el = el;
     this.canvas = el.querySelector('canvas');
     this.ctx = this.canvas.getContext('2d');
@@ -166,6 +168,7 @@ export class Radar {
       ctx.fillText(site[2], this.sx, this.sy);
     }
     ctx.setTransform(UNSUB, 0, 0, UNSUB, 0, 0); // the rest in 16ths of a pixel
+    if (this.blast !== null && this.blast.marks > 0) this.blastRings(this.blast, k, r);
     if (hostages) {
       for (let h = 0; h < hostages.count; h++) {
         PT[0] = hostages.x[h];
@@ -236,6 +239,33 @@ export class Radar {
     PT[0] = selfX;
     PT[1] = selfY;
     if (this.place(true)) this.arrow(team === TEAM_CT ? COLOR[TEAM_CT] : team === TEAM_T ? COLOR[TEAM_T] : '#f2ecd8');
+  }
+
+  // The bomb's explosion: its front as a pale ring, the kill circles it has passed (through
+  // kevlar, then without) in red, the farthest it hurts dashed, all fading with its marks.
+  blastRings(b, k, r) {
+    const ctx = this.ctx, dx = b.x - this.cx, dy = b.y - this.cy;
+    const x = this.R + k * (dx * this.ca - dy * this.sa), y = this.R - k * (dx * this.sa + dy * this.ca);
+    ctx.globalAlpha = b.marks;
+    if (b.dome > 0) this.circle(x, y, b.front * k, '#fff3c4', r * 0.9);
+    if (b.front >= b.killArmor) this.circle(x, y, b.killArmor * k, COLOR.enemy, r * 0.6);
+    if (b.front >= b.killBare) this.circle(x, y, b.killBare * k, COLOR.enemy, r * 0.35);
+    if (b.front >= b.range * 0.999) {
+      DASH[0] = DASH[1] = q(r * 1.2);
+      ctx.setLineDash(DASH);
+      this.circle(x, y, b.range * k, '#17130f', r * 0.35);
+      ctx.setLineDash(NO_DASH);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  circle(x, y, rad, color, w) {
+    const ctx = this.ctx;
+    ctx.beginPath();
+    ctx.arc(q(x), q(y), q(rad), 0, TAU);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = q(w);
+    ctx.stroke();
   }
 
   // Faint unless feet at z are on the level drawn.

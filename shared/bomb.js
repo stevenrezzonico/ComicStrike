@@ -108,3 +108,12 @@ export function bombDamage(radius, dist) {
   const sigma = range / 3;
   return radius * Math.exp(-(dist * dist) / (2 * sigma * sigma));
 }
+
+// How far from the bomb its blast still does `damage` (bombDamage's inverse): 0 when it does
+// less even at the bomb, the farthest it hurts when it does that much there.
+export function bombRangeFor(radius, damage) {
+  const range = radius * 3.5;
+  if (damage >= radius) return 0;
+  if (damage <= radius * Math.exp(-4.5)) return range;
+  return range / 3 * Math.sqrt(2 * Math.log(radius / damage));
+}

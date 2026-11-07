@@ -20,6 +20,7 @@ import * as Q from './quat.js';
 import { HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4, HOLD_TIED } from '../models/players.js';
 import { WEAPONS, WEAPON_ID, SLOT_KNIFE, SLOT_C4 } from '../../shared/weapons.js';
 import { ANIM_RELOAD, ANIM_PLANT, ANIM_DEFUSE } from '../../shared/protocol.js';
+import { clock } from '../clock.js';
 import { ramp, matrix } from './viewanim.js'; // (bump written out as ramps: as a call, not inlined, its double argument was boxed)
 
 const PELVIS = S.bone('pelvis'), SPINE1 = S.bone('spine_1'), SPINE2 = S.bone('spine_2'), SPINE3 = S.bone('spine_3');
@@ -170,6 +171,10 @@ export class PlayerAnimator {
     this.toss = -0; // a weapon throw (G), 1 when it leaves the hand, down to 0
     this.shots = -1;
     this.dead = -0; // seconds since death (0 = alive)
+    // Killed by the bomb (client/bombfx.js): hold, standing until its front comes; blown, his
+    // fall then runs on the effects' clock (in slow motion).
+    this.hold = false;
+    this.blown = false;
     this.deathDir[0] = this.deathDir[1] = 0;
     this.headshot = false;
     this.deathDist = -0;
@@ -213,8 +218,11 @@ export class PlayerAnimator {
     this.px = x;
     this.py = y;
     this.pz = z;
-    if (!alive) this.dead += dt;
-    else this.dead = 0;
+    if (alive) { // (hold stays: the kill event comes while the row, drawn behind, still lives)
+      if (this.dead > 0) this.blown = false; // a new life
+      this.dead = 0;
+    } else if (this.blown) this.dead += dt * clock.rate;
+    else if (!this.hold) this.dead += dt;
     if (this.shots >= 0 && shots !== this.shots) this.kick = 1;
     this.shots = shots;
     this.kick = Math.max(0, this.kick - dt * 7);

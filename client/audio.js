@@ -710,6 +710,28 @@ export class Sounds {
     osc.stop(t + 0.13);
   }
 
+  // The bomb: the explosion's BOOM slowed down (client/bombfx.js): a deeper falling sine, a
+  // longer tail, and a rumble swelling under it while the shockwave grows.
+  bomb(volume = 1) {
+    if (!this.ready || volume <= 0) return;
+    const out = this.bus, t = this.ctx.currentTime;
+    this.tone(out, t, 60, 16, 0.8 * volume, 2.4, 0, 'sine', 0.03);
+    this.tone(out, t, 110, 40, 0.3 * volume, 1.6, 0.05, 'triangle', 0.02);
+    this.burst(out, t, 20, 700, 0.75 * volume, 3.8, 0, 0.03);
+    this.burst(out, t, 20, 140, 0.5 * volume, 3, 0.4, 1.2);
+  }
+
+  // The bomb's shockwave passing the listener: a whoomp and a rushing crack, `hit` (0..1)
+  // how hard; the ears ring after a hard one.
+  blastPass(hit) {
+    if (!this.ready) return;
+    const out = this.bus, t = this.ctx.currentTime, v = 0.35 + 0.5 * hit;
+    this.tone(out, t, 90, 30, 0.7 * v, 0.6, 0, 'sine', 0.01);
+    this.burst(out, t, 300, 3000, 0.45 * v, 0.5, 0, 0.04);
+    this.burst(out, t, 40, 400, 0.5 * v, 1.4, 0.05, 0.08);
+    if (hit > 0.3) this.earRing(1 + 3 * hit);
+  }
+
   // Explosion: a round "BOOM": low-passed noise swelling in with a long tail, plus a
   // falling sine.
   explosion(volume = 1) {

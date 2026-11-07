@@ -30,10 +30,11 @@ const LIGHT_FULL_SHARE = 0.75;
 
 // Doubles go to WebGL through these and the *fv forms: as arguments of a call they were each
 // a new heap number (~25 a frame; the per-frame rules in CLAUDE.md, Phase 15b).
-const U1 = new Float32Array(1), U2 = new Float32Array(2), U3 = new Float32Array(3);
+const U1 = new Float32Array(1), U2 = new Float32Array(2), U3 = new Float32Array(3), U4 = new Float32Array(4);
 
 const COMPOSITE_UNIFORMS = ['u_albedo', 'u_depth', 'u_ink', 'u_res', 'u_gscale', 'u_line', 'u_dot', 'u_zoom',
-  'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft', 'u_dead', 'u_fog', 'u_sight', 'u_inkaa', 'u_mapfog'];
+  'u_bands', 'u_lift', 'u_style', 'u_calm', 'u_soft', 'u_dead', 'u_fog', 'u_sight', 'u_inkaa', 'u_mapfog',
+  'u_blast', 'u_blastR', 'u_blastK', 'u_invViewProj', 'u_eye'];
 const INK_UNIFORMS = ['u_normal', 'u_depth', 'u_line', 'u_gscale', 'u_zoom'];
 // The media the camera can be in (COMPOSITE_FS u_fog, u_sight): a tone, an e-fold in
 // units, the share of it over the first-person view. Water's tone is the map's own.
@@ -142,10 +143,15 @@ export class Renderer {
     // liquid: the CONTENTS_* the camera is in (water, slime, lava), else 0: the same fog,
     // the liquid's, under a longer sight, and the first-person view tinted.
     // aa: the anti-aliasing mode (client/gl/antialias.js AA).
+    // blast: the bomb's shockwave (client/bombfx.js BombFx: its center, front, kill ranges,
+    // marks, dome and impact frame), painted while its marks show; null: none.
     this.style = {
       comic: true, ink: 1, dots: 0, bands: 0, lift: 0.3, calm: 0, soft: false, aa: AA.CORNERS, dead: 0, smoke: 0,
-      liquid: 0,
+      liquid: 0, blast: null,
     };
+    // The last render's camera (unjittered), for the composite's world positions.
+    this.invViewProj = new Float32Array(16);
+    this.eye = new Float32Array(3);
     this.waterFog = [0.2, 0.33, 0.36, WATER_SIGHT, VIEW_TINT]; // set per map (loadMap)
     // The liquid and smoke the composite's fog uniforms were last given: uploaded only when
     // they change (NaN: again).
@@ -358,6 +364,10 @@ export class Renderer {
   render(viewProj, invViewProj, eye, overlays = null) {
     const gl = this.gl, time = clock.t;
     const still = viewProj; // overlays that move by themselves are drawn without the jitter
+    this.invViewProj.set(invViewProj);
+    this.eye[0] = eye[0];
+    this.eye[1] = eye[1];
+    this.eye[2] = eye[2];
     if (this.style.aa === AA.TAA) {
       this.aa.jitterFor(this.gbuf.width, this.gbuf.height, viewProj, invViewProj, this.jitter);
       this.jViewProj.set(viewProj);
@@ -512,6 +522,33 @@ export class Renderer {
     }
     gl.uniform1f(c.u_inkaa, st.aa === AA.CORNERS ? 1 : 0);
     gl.uniform4fv(c.u_mapfog, this.mapFog);
+    const b = st.blast;
+    if (b !== null && b.marks > 0) {
+      U4[0] = b.x;
+      U4[1] = b.y;
+      U4[2] = b.z;
+      U4[3] = b.front;
+      gl.uniform4fv(c.u_blast, U4);
+      U4[0] = b.killArmor;
+      U4[1] = b.killBare;
+      U4[2] = b.range;
+      U4[3] = b.marks;
+      gl.uniform4fv(c.u_blastR, U4);
+      U3[0] = b.impact;
+      U3[1] = b.dome;
+      // A pixel's width at depth 1: a clip x of 2 / width at clip w 1, turned into the world
+      // (the inverse's first column; the clip position scales with the depth).
+      const m = this.invViewProj;
+      U3[2] = 2 / this.canvas.width * Math.sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+      gl.uniform3fv(c.u_blastK, U3);
+      gl.uniformMatrix4fv(c.u_invViewProj, false, this.invViewProj);
+      gl.uniform3fv(c.u_eye, this.eye);
+    } else {
+      U4.fill(0);
+      gl.uniform4fv(c.u_blastR, U4);
+      U3.fill(0);
+      gl.uniform3fv(c.u_blastK, U3);
+    }
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
     gl.enable(gl.CULL_FACE);

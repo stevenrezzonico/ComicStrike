@@ -32,7 +32,7 @@ import { levelWeapon } from '../shared/progression.js';
 import { modeOfBits } from '../shared/modes.js';
 import {
   BombSites, PLANT_TIME, DEFUSE_TIME, DEFUSE_TIME_KIT, C4_TIMER, BOMB_DROPPED, BOMB_PLANTED, BOMB_DEFUSED,
-  BOMB_EXPLODED,
+  BOMB_EXPLODED, bombDamage, DEFAULT_BOMB_RADIUS,
 } from '../shared/bomb.js';
 import { EXPLODE_RANGE, blastDamage } from '../shared/breakables.js';
 import { mapEntities, MAX_MOVERS, MOVER_SPIN, BLAST, SF_EXPLOSION_NODAMAGE, SF_EXPLOSION_NOFIREBALL } from '../shared/doors.js';
@@ -66,6 +66,7 @@ import { LOOK_GUNS, lookOf } from './models/looks.js';
 import { JingleCues } from './jingles.js';
 import { GrenadeFx } from './gl/grenadefx.js';
 import { Blasts } from './gl/blast.js';
+import { BombFx } from './bombfx.js';
 import { PASS } from './gl/gputimer.js';
 import { DynamicResolution, SLOW_MS } from './dynres.js';
 import { modelLight } from './gl/skinned.js';
@@ -523,6 +524,12 @@ const view = new Float32Array(16);
 const blasts = new Blasts(renderer.gl, view); // explosions: the fire faces this camera
 onNewGame(() => blasts.clear());
 overlays.push(blasts);
+// The bomb's explosion in slow motion (client/bombfx.js): its front painted over the world
+// by the composite, the kill zones, the victims falling as it reaches them, the camera's hit.
+const bombFx = new BombFx();
+renderer.style.blast = bombFx;
+radar.blast = bombFx;
+onNewGame(endBombFx);
 // Bullet tracers, behind what is nearer; casings tink where they land.
 const tracers = new Tracers(renderer.gl);
 overlays.push(tracers);
@@ -687,6 +694,7 @@ function clearRoundMarks() {
   debris.clear();
   blasts.clear();
   renderer.flashes.clear();
+  endBombFx();
 }
 
 // Offline round restart: breakables come back, we spawn at our team's first spawn.
@@ -1095,7 +1103,7 @@ function applySnapshot() {
       hud.flash('The bomb has been planted', 3000, performance.now());
       nextBeep = 0;
     } else if (bomb.state === BOMB_EXPLODED && lastBombState === BOMB_PLANTED) {
-      explosion(bomb.x, bomb.y, bomb.z);
+      bombExplosion(bomb.x, bomb.y, bomb.z);
     }
     lastBombState = bomb.state;
   }
@@ -1239,7 +1247,8 @@ function applyEvents() {
     seenKills[seenKillNext] = id;
     seenKillNext = (seenKillNext + 1) % seenKills.length;
     addKill(ev.killer[k], ev.victim[k], ev.weapon[k], ev.killFlags[k], ev.killAssist[k]);
-    killBody(ev.killer[k], ev.victim[k], (ev.killFlags[k] & KILL_HEADSHOT) !== 0, id);
+    if (ev.killer[k] === ev.victim[k] && WEAPONS[ev.weapon[k]]?.c4) bombVictim(ev.victim[k], id);
+    else killBody(ev.killer[k], ev.victim[k], (ev.killFlags[k] & KILL_HEADSHOT) !== 0, id);
     if (ev.killer[k] === selfId && (ev.killFlags[k] & KILL_HEADSHOT)) sounds.hit(true);
     if (ev.killer[k] === selfId && ev.victim[k] !== selfId) words.kill((ev.killFlags[k] & KILL_HEADSHOT) !== 0);
   }
@@ -1255,7 +1264,82 @@ function explosion(x, y, z, size = 1) {
   debris.puff(x, y, z + 40 * size, 1.0, 0.6, 0.12, Math.round(25 * size));
   if (size >= 1) decals.add(x, y, z + 0.5, 0, 0, 1, 72, Math.random(), 0);
   sounds.explosion(Math.min(1, size * Sounds.falloff(Math.hypot(x - eye[0], y - eye[1], z - eye[2]), 1500)));
-  words.explosion(viewProj, x, y, z + 300 * size, size); // above the fireball
+  if (!bombFx.active) words.explosion(viewProj, x, y, z + 300 * size, size); // above the fireball (the bomb's own word is enough)
+}
+
+// The bomb's: in slow motion (client/bombfx.js), a bigger fireball with a skirt of smoke
+// rolling out and a column rising, a longer light, more debris, a wider scorch, a deep boom.
+function bombExplosion(x, y, z) {
+  tag('explosion');
+  // (the frame's clock, which bombFrame hands it: performance.now() can differ from it)
+  bombFx.start(x, y, z, world ? world.bombSites.radius : DEFAULT_BOMB_RADIUS, clock.t * 1000);
+  blasts.add(x, y, z, 1, world && world.surfaces, true);
+  renderer.flashes.add(x, y, z + 60, 1400, 1, 1.4, performance.now() / 1000);
+  debris.puff(x, y, z + 24, 0.2, 0.16, 0.12, 80);
+  debris.puff(x, y, z + 40, 1.0, 0.6, 0.12, 50);
+  decals.add(x, y, z + 0.5, 0, 0, 1, 110, Math.random(), 0);
+  sounds.bomb(Sounds.falloff(Math.hypot(x - eye[0], y - eye[1], z - eye[2]), 3000));
+  words.explosion(viewProj, x, y, z + 450, 1.4);
+}
+
+// A player the bomb killed stands until its front reaches him, then blowAway. Ourselves: our
+// death panel and spectating wait for it (draw).
+const bombSeed = new Int32Array(MAX_PLAYERS);
+function bombVictim(victim, seed) {
+  if (!world || bombFx.at < 0) return;
+  if (victim === selfId) {
+    bombFx.killedSelf(bombFx.distTo(eye[0], eye[1], eye[2]));
+    return;
+  }
+  const r = victim * E_FIELDS;
+  bombSeed[victim] = seed;
+  models.anim[victim].hold = true;
+  if (!bombFx.hold(victim, bombFx.distTo(interp[r + E_X], interp[r + E_Y], rowFeet(interp, r) + 36))) blowAway(victim);
+}
+
+// The bomb's front reached player `id`: thrown away from the bomb, farther the nearer he
+// stood (the headshot's fall, client/anim/playeranim.js), in slow motion.
+function blowAway(id) {
+  const a = models.anim[id];
+  a.hold = false;
+  if (!world) return;
+  const r = id * E_FIELDS, vx = interp[r + E_X], vy = interp[r + E_Y], vz = rowFeet(interp, r);
+  let dx = vx - bombFx.x, dy = vy - bombFx.y;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len < 1) {
+    dx = 1;
+    dy = 0;
+  } else {
+    dx /= len;
+    dy /= len;
+  }
+  const hit = bombDamage(bombFx.radius, bombFx.distTo(vx, vy, vz + 36)) / bombFx.radius;
+  throwRoom(vx, vy, vz, dx, dy, 60 + 240 * hit);
+  a.die(dx, dy, true, thrown[0], thrown[1], bombSeed[id]);
+  a.blown = true;
+}
+
+// The round or the game is over: whoever still waits for the front stops waiting.
+function endBombFx() {
+  for (let i = 0; i < bombFx.waiting; i++) models.anim[bombFx.ids[i]].hold = false;
+  bombFx.clear();
+}
+
+// Once a frame before the view is set: the front, the victims it reached, the sound and
+// shake as it passes the camera.
+const bombOut = new Int32Array(64), bombShake = new Float64Array(2);
+function bombFrame(now) {
+  if (bombFx.update(now, eye)) {
+    tag('bomb front');
+    sounds.blastPass(bombFx.passHit);
+  }
+  if (bombFx.waiting > 0) {
+    const n = bombFx.reached(bombOut);
+    for (let i = 0; i < n; i++) blowAway(bombOut[i]);
+  }
+  bombFx.shake(now, bombShake);
+  cam[0] += bombShake[0];
+  cam[1] += bombShake[1];
 }
 
 // While planted: beep, faster and faster (approximation of CS:GO's 1.4 s down to
@@ -1278,6 +1362,19 @@ function teamClass(id) {
 // a wall (one trace at chest height) and how far down the floor is there (a second one;
 // no floor within 72 units: not thrown). A death without a shooter collapses in place.
 const bodyTrace = new Trace();
+// How far a body standing at (vx, vy, vz) (feet) may be thrown along (dx, dy), at most
+// `reach`, before a wall, and how far down the floor is there: into `thrown` (dist, drop;
+// no floor within 72 units: not thrown).
+const thrown = new Float64Array(2);
+function throwRoom(vx, vy, vz, dx, dy, reach) {
+  traceHull(world, HULL_POINT, vx, vy, vz + 36, vx + dx * reach, vy + dy * reach, vz + 36, bodyTrace);
+  const dist = Math.max(0, bodyTrace.fraction * reach - 6);
+  const lx = vx + dx * dist, ly = vy + dy * dist;
+  traceHull(world, HULL_POINT, lx, ly, vz + 36, lx, ly, vz - 72, bodyTrace);
+  const floor = bodyTrace.fraction < 1;
+  thrown[0] = floor ? dist : 0;
+  thrown[1] = floor ? Math.max(0, vz - bodyTrace.endz) : 0;
+}
 function killBody(killer, victim, headshot, seed) {
   if (victim === selfId || killer === victim || !world) return;
   const r = victim * E_FIELDS, vx = interp[r + E_X], vy = interp[r + E_Y], vz = rowFeet(interp, r);
@@ -1296,17 +1393,10 @@ function killBody(killer, victim, headshot, seed) {
   if (len < 1) return;
   dx /= len;
   dy /= len;
-  let dist = 0, drop = 0;
-  if (headshot) {
-    const reach = 120; // blown off his feet: a long way back where there is room
-    traceHull(world, HULL_POINT, vx, vy, vz + 36, vx + dx * reach, vy + dy * reach, vz + 36, bodyTrace);
-    dist = Math.max(0, bodyTrace.fraction * reach - 6);
-    const lx = vx + dx * dist, ly = vy + dy * dist;
-    traceHull(world, HULL_POINT, lx, ly, vz + 36, lx, ly, vz - 72, bodyTrace);
-    if (bodyTrace.fraction === 1) dist = 0;
-    else drop = Math.max(0, vz - bodyTrace.endz);
-  }
-  models.anim[victim].die(dx, dy, headshot, dist, drop, seed);
+  thrown[0] = 0;
+  thrown[1] = 0;
+  if (headshot) throwRoom(vx, vy, vz, dx, dy, 120); // blown off his feet: a long way back where there is room
+  models.anim[victim].die(dx, dy, headshot, thrown[0], thrown[1], seed);
 }
 
 // A kill feed row (CS:GO's): the killer, the assister with + (a flashbang mark for a flash
@@ -1942,6 +2032,8 @@ function updateTargetId(now, show, skip) {
 function draw(now, dt) {
   const alpha = clk.alpha;
   clock.t = now / 1000;
+  clock.rate = bombFx.rate(now); // the effects' clock: slowed for the bomb's explosion
+  clock.fx += dt * clock.rate;
   const f = ps.f;
   const k = Math.exp(-dt * SMOOTH_RATE);
   smooth[0] *= k;
@@ -1963,6 +2055,7 @@ function draw(now, dt) {
   // team follows anyone at once or roams free.
   const dead = player.health <= 0;
   if (dead && !wasDead) deadAt = now;
+  if (dead && bombFx.selfWaiting) deadAt = now; // killed by the bomb: from when its front reaches us
   const specTeam = player.team === TEAM_SPECTATOR;
   if (specTeam && !wasSpecTeam) { // just joined the spectators: roam from our eye (or a spawn)
     const s = spawns[TEAM_CT][0] || spawns[TEAM_T][0];
@@ -2044,10 +2137,11 @@ function draw(now, dt) {
     proj[0] *= 0.97 + wob;
     proj[5] *= 1.03 - wob;
   }
+  bombFrame(now);
   viewFromEye(view, eye, cam);
   multiply(viewProj, proj, view);
   invert(invViewProj, viewProj);
-  debris.update(dt, world);
+  debris.update(dt * clock.rate, world);
   fx.update(net ? clk.serverClock - cv.cl_interp_ratio.number : tickCount - 1 + alpha, world && world.surfaces);
   sounds.listen(eye, cam);
   scape.effects(fx.cur, dt);
@@ -2119,7 +2213,8 @@ function draw(now, dt) {
   }
   // Our death as a comic panel until the camera goes to someone (at most a second past
   // the spectating delay: with nobody to watch it would stay), the print easing to red.
-  const dying = dead && !!net && !spectating && !specTeam && !preview && now - deadAt < (SPEC_DELAY + 1) * 1000;
+  const dying = dead && !!net && !spectating && !specTeam && !preview && now - deadAt < (SPEC_DELAY + 1) * 1000 &&
+    !bombFx.selfWaiting;
   deathPanel.show(dying);
   renderer.style.dead += ((dying ? 1 : 0) - renderer.style.dead) * Math.min(1, dt * (dying ? 6 : 10));
   if (renderer.style.dead < 0.005) renderer.style.dead = 0;
@@ -3177,6 +3272,9 @@ globalThis.comicstrike = {
   overlays, // objects drawn with draw(viewProj, gbuffer) after the opaque world
   models, // other players' animated models
   renderer, // the comic print (style, flash lights, GPU timer)
+  bombFx, // the bomb's slow-motion explosion (client/bombfx.js)
+  // The bomb's explosion at (x, y, z) as the clients see it (the sandbox has no bomb rules).
+  bombExplosion: (x, y, z) => bombExplosion(x, y, z),
   // Offline only: equip any weapon by name, e.g. comicstrike.give('negev').
   give: (name) => {
     const id = WEAPON_ID[name];

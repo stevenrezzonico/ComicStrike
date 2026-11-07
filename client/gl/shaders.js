@@ -1023,6 +1023,11 @@ uniform vec4 u_fog;   // the medium the camera is in (a smoke cloud, water, slim
 uniform vec2 u_sight; // its e-fold (units), and how much it tints the first-person view
 uniform vec4 u_mapfog; // the map's env_fog: its color and density (GL_EXP2; 0: none)
 uniform float u_inkaa; // 1: smooth the lines at the canvas's own render scale (r_inkaa)
+uniform vec4 u_blast;  // the bomb's shockwave (client/bombfx.js): its center, the front's radius
+uniform vec4 u_blastR; // the farthest it kills through kevlar, without, the farthest it hurts; the marks' strength (0: none)
+uniform vec3 u_blastK; // the impact frame (0..1), the dome's strength (0..1), a pixel's width at depth 1 (units)
+uniform mat4 u_invViewProj; // the scene's (unjittered): a pixel's world position from its depth
+uniform vec3 u_eye;
 out vec4 o_color;
 const float INK_CORNER = 0.35; // smoothInk: the ink a step's inside corner takes
 ${GBUFFER_CONSTS}
@@ -1062,6 +1067,26 @@ float tone(vec2 frag, float dark, float size, vec2 turn, float far) {
 }
 const vec2 TURN_SHADE = vec2(0.70738827, 0.70682518); // 45 degrees (0.785 rad)
 const vec2 TURN_SKY = vec2(0.96638998, 0.25708055);   // 0.26 rad
+
+// The bomb's shockwave (u_blast...): a pixel's world position is rebuilt from its linear
+// depth (the clip w) as TAA_FS does it.
+const float BZA = (DEPTH_FAR + DEPTH_NEAR) / (DEPTH_FAR - DEPTH_NEAR);
+const float BZB = -2.0 * DEPTH_FAR * DEPTH_NEAR / (DEPTH_FAR - DEPTH_NEAR);
+const vec3 HEAT_KILL = vec3(0.86, 0.16, 0.08); // kills through kevlar
+const vec3 HEAT_BARE = vec3(0.95, 0.42, 0.1);  // kills without
+const vec3 HEAT_HURT = vec3(0.98, 0.72, 0.25); // hurts
+const vec3 BLAST_INK = vec3(0.55, 0.03, 0.02); // the kill lines' red ink
+const vec3 SHOCK = vec3(1.0, 0.97, 0.82);      // the front's glow and the dome
+const float FRONT_GLOW = 160.0; // the surfaces glow this far behind the front (units, e-fold)
+const float DASH = 48.0;        // the outer line's dashes (units)
+vec3 worldAt(vec2 frag, float d) {
+  vec4 q = u_invViewProj * vec4((frag / u_res * 2.0 - 1.0) * d, BZA * d + BZB, d);
+  return q.xyz / q.w;
+}
+// Ink at dist from a line at at: w and w + 1.2 times g (the distance's change over a pixel) wide.
+float ring(float dist, float at, float g, float w) {
+  return 1.0 - smoothstep(g * w, g * (w + 1.2), abs(dist - at));
+}
 
 void main() {
   vec2 frag = gl_FragCoord.xy;
@@ -1139,6 +1164,53 @@ void main() {
       col = mix(col, u_fog.rgb, u_fog.a * u_sight.y);
     }
   }
+  // The bomb's shockwave: inside the front the surfaces take the heat of their zone (kills
+  // through kevlar, kills without, hurts), the front itself glows with an ink line, the kill
+  // lines stay in red ink and the outer edge dashed; in the air the front is a pale dome with
+  // an inked outline. By the 3D distance, through walls, as the blast's damage.
+  if (u_blastR.w > 0.0) {
+    vec3 wp = worldAt(frag, dP);
+    float px = u_blastK.z * dP + 1e-3; // a pixel's width there
+    float dist = distance(wp, u_blast.xyz), R = u_blast.w, mk = u_blastR.w;
+    float g = clamp(fwidth(dist), px * 0.5, px * 4.0); // (here, in uniform control flow)
+    if ((fl & G_SKY) == 0u) {
+      bool still = (fl & G_MOVING) == 0u; // (the fireball, the smoke and the bodies keep their colors)
+      if (dist < R) {
+        vec3 heat = dist < u_blastR.x ? HEAT_KILL : dist < u_blastR.y ? HEAT_BARE : HEAT_HURT;
+        float lum = dot(col, vec3(0.3, 0.59, 0.11));
+        if (still) col = mix(col, heat * (0.45 + 0.75 * lum), 0.55 * mk);
+        if (u_blastK.y > 0.0) col = mix(col, SHOCK, 0.85 * exp(-(R - dist) / FRONT_GLOW) * u_blastK.y);
+      }
+      float kill = 0.0, outer = 0.0;
+      if (still && R >= u_blastR.x) kill = ring(dist, u_blastR.x, g, 1.2);
+      if (still && R >= u_blastR.y) kill = max(kill, ring(dist, u_blastR.y, g, 0.8));
+      if (still && R >= u_blastR.z * 0.999) {
+        vec3 v = wp - u_blast.xyz;
+        outer = ring(dist, u_blastR.z, g, 0.8);
+        if (outer > 0.0) outer *= step(0.5, fract((atan(v.y, v.x) * length(v.xy) + v.z) / DASH));
+      }
+      col = mix(col, BLAST_INK, kill * mk);
+      edge = max(edge, max(u_blastK.y > 0.0 ? ring(dist, R, g, 1.0) * u_blastK.y : 0.0, outer * mk));
+    }
+    if (u_blastK.y > 0.0 && R > 1.0) {
+      vec3 dir = wp - u_eye;
+      float sd = length(dir);
+      dir /= max(sd, 1e-3);
+      vec3 oc = u_eye - u_blast.xyz;
+      float b = dot(oc, dir), c = dot(oc, oc) - R * R, h = b * b - c;
+      if (h > 0.0) {
+        float sh = sqrt(h), t = c > 0.0 ? -b - sh : -b + sh; // outside: its near side; inside: its far side
+        if (t > 0.0 && t < sd) {
+          float rim = 1.0 - sh / R; // 0 facing us, 1 grazing
+          col = mix(col, SHOCK, u_blastK.y * (0.12 + 0.55 * rim * rim * rim));
+          if (c > 0.0) { // seen from outside: its outline, where the view grazes it
+            float ang = (R - sqrt(max(dot(oc, oc) - b * b, 0.0))) / max(t, 1.0);
+            edge = max(edge, (1.0 - smoothstep(1.5, 3.0, ang * dP / px)) * u_blastK.y);
+          }
+        }
+      }
+    }
+  }
   if (u_dead > 0.0) {
     float g = dot(col, vec3(0.3, 0.59, 0.11));
     col = mix(col, vec3(0.08, 0.0, 0.0) + g * vec3(1.15, 0.7, 0.58), u_dead * 0.8);
@@ -1146,7 +1218,13 @@ void main() {
   col *= 0.965 + 0.035 * h21(frag); // paper grain
   vec2 uv = frag / u_res - 0.5;
   col *= 1.0 - dot(uv, uv) * (0.3 + 0.9 * u_dead);
-  o_color = vec4(mix(col, INK, edge), 1.0);
+  col = mix(col, INK, edge);
+  // The impact frame as the bomb's front hits the camera: the print in negative, ink and paper.
+  // (a soft step: a hard one speckled the mid tones with the paper grain)
+  if (u_blastK.x > 0.0) {
+    col = mix(col, mix(vec3(0.98, 0.95, 0.86), INK, smoothstep(0.4, 0.6, dot(col, vec3(0.3, 0.59, 0.11)))), u_blastK.x);
+  }
+  o_color = vec4(col, 1.0);
 }`;
 
 // The G-buffer shaders, for test/comic.test.js.
