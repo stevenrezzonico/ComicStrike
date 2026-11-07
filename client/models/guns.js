@@ -29,6 +29,8 @@ const BEVEL = 0.12; // edge rounding of boxes and outlines (in)
 const SEG = 12; // sides of round parts
 const C4_TAN = [0.52, 0.47, 0.3];
 const LED = [0.95, 0.12, 0.08];
+export const LED_AT = [0.9, 1.5, 1.8]; // the C4's LED on its top, beside the keypad
+const LED_GLOW = [1, 0.22, 0.12], LED_CORE = [1, 0.86, 0.55];
 // Pistols: the off hand's point on the grip's left, beside the shooting hand's fingers,
 // and its grasp (the grip's axis that far in, wrapped with the shooting hand: that half-size).
 const PISTOL_SUPPORT = [-0.65, 1.35, -1.95];
@@ -651,9 +653,22 @@ function buildGrenade(b, name) {
 function buildC4(b, ledColor = LED) {
   b.color(C4_TAN).box(7, 4.6, 3, 3, 0, 0);
   b.color(BLACK).box(3.8, 3.2, 0.5, 3.5, 0, 1.75);
-  b.color(ledColor).box(0.5, 0.5, 0.5, 1.2, 1.6, 1.75);
+  b.color(ledColor).box(0.9, 0.9, 0.6, ...LED_AT);
   b.color([0.8, 0.15, 0.1]).box(5, 0.3, 0.3, 3, 2.35, 0.5).box(5, 0.3, 0.3, 3, -2.35, 0.5); // wires
   return { muzzle: [6.5, 0, 0], support: [3, 2.6, 0] };
+}
+
+// The planted bomb's LED lit (client/gl/playermodels.js): a comic glint drawn emissive over
+// the LED at each beep, turned to face the camera and grown with the distance (the LED alone
+// was a pixel at 300 units). Fat points: thin ones, three crossed stars before, were
+// narrower than the ink line round them and printed black. In the x-z plane, centered.
+export function buildC4Glow() {
+  const star = (n, r1, r2) => Array.from({ length: n * 2 }, (_, i) => {
+    const a = (i / (n * 2) + 0.25) * Math.PI * 2, r = i % 2 ? r2 : r1;
+    return [Math.cos(a) * r, Math.sin(a) * r];
+  });
+  return new MeshBuilder().color(LED_GLOW).extrude(star(6, 3.6, 2), 0.2)
+    .color(LED_CORE).extrude(star(6, 1.8, 1), 0.4).build(); // (the core thicker: no z-fight)
 }
 
 // The defuse kit (dropped kits, CT belts): a small yellow tool case.

@@ -4,6 +4,8 @@
 // fell until they respawn or leave. Also draws the dropped bomb.
 
 import { SkinnedRenderer, SkinnedMesh, SkinnedShadows, IDENTITY_SKIN, modelLight, printedLight, eyeOf } from './skinned.js';
+import { LED_AT } from '../models/guns.js';
+import { WEAPON_ID } from '../../shared/weapons.js';
 import { G_FLAGS } from './shaders.js';
 import { buildPlayer, HOLD_TIED } from '../models/players.js';
 import { MAX_HOSTAGES, HS_IDLE, HS_CARRIED, HS_DEAD } from '../../shared/hostages.js';
@@ -13,7 +15,6 @@ import { GUN_MAG, GUN_BOLT } from '../models/guns.js';
 import { multiply, sphereInViewAt, CLIP_ALL } from './mat4.js';
 import { FloorShadows, SHADOW_FLOATS } from './shadows.js';
 import { TEAM_CT } from '../../shared/player.js';
-import { WEAPON_ID } from '../../shared/weapons.js';
 import { MAX_ITEMS } from '../../shared/items.js';
 import { TICK_RATE } from '../../shared/constants.js';
 import { FL_ONGROUND } from '../../shared/pmove.js';
@@ -25,13 +26,17 @@ import {
 } from '../../shared/protocol.js';
 
 const SPINE3 = S.bone('spine_3');
-const C4_ID = WEAPON_ID.c4;
 const ITEM_SPIN = 720; // degrees/s a flying weapon turns end over end
 const OWN_TOSS_TICKS = 16; // our own thrown weapon stays hidden this long (first person shows it)
 // Bounding spheres for skipping what lies outside the view: a character from the middle of
 // its standing height (lying dead or carried on a shoulder, with the gun held out, it
 // stays within), a weapon on the ground from its grip, the bomb.
 const BODY_MID = 36, BODY_R = 84, ITEM_R = 48, BOMB_R = 16;
+const C4_ID = WEAPON_ID.c4;
+// The bomb's glint at a beep (buildC4Glow): this far over its LED and toward the eye, and
+// grown with the distance past GLINT_NEAR units, up to GLINT_MAX times its size (~10 px tall
+// at any distance on a 720p screen, where the LED was a pixel at 300 units).
+const GLINT_UP = 1.5, GLINT_OUT = 2, GLINT_NEAR = 200, GLINT_MAX = 4;
 // Contact shadow under a living character: radius and the light it takes at its middle,
 // growing fainter and wider with the height above the floor (a jump), gone at SHADOW_FADE.
 const SHADOW_R = 20, SHADOW_DARK = 0.75, SHADOW_FADE = 180;
@@ -85,6 +90,7 @@ export class PlayerModels {
     this.handM = new Float32Array(16);
     this.qGun = new Float32Array(8);
     this.bomb = { show: false, led: false, model: new Float32Array(16), light: new Float32Array([1, 1, 1]) };
+    this.glintM = new Float32Array(16);
     this.itemCount = 0; // weapons on the ground (and flying ones)
     this.itemWeapon = new Uint8Array(MAX_ITEMS);
     // Flying weapons: drawn between the previous and the newest list (they come every tick
@@ -452,6 +458,23 @@ export class PlayerModels {
     if (surfaces && surfaces.lightAtP(this.lm, sph)) modelLight(b.light, this.lm);
   }
 
+  // The glint's model matrix over the LED of the bomb at m (a translation), facing the eye:
+  // x across the view, its normal (y) toward the eye, z up.
+  glint(m) {
+    const g = this.glintM, e = this.eye;
+    const px = m[12] + LED_AT[0], py = m[13] + LED_AT[1], pz = m[14] + LED_AT[2] + GLINT_UP;
+    const ex = e[0] - px, ey = e[1] - py, ez = e[2] - pz;
+    const d = Math.sqrt(ex * ex + ey * ey + ez * ez) || 1;
+    const fx = ex / d, fy = ey / d, fz = ez / d, rl = Math.sqrt(fx * fx + fy * fy);
+    const rx = rl > 1e-4 ? fy / rl : 1, ry = rl > 1e-4 ? -fx / rl : 0;
+    const s = Math.min(GLINT_MAX, Math.max(1, d / GLINT_NEAR));
+    g[0] = rx * s; g[1] = ry * s; g[2] = 0; g[3] = 0;
+    g[4] = fx * s; g[5] = fy * s; g[6] = fz * s; g[7] = 0;
+    g[8] = ry * fz * s; g[9] = -rx * fz * s; g[10] = (rx * fy - ry * fx) * s; g[11] = 0;
+    g[12] = px + fx * GLINT_OUT; g[13] = py + fy * GLINT_OUT; g[14] = pz + fz * GLINT_OUT; g[15] = 1;
+    return g;
+  }
+
   // The mesh for character `slot` (players, then hostages) with its feet at m: `mesh`, or
   // its coarse version when far from the eye, with a band of hysteresis.
   lod(slot, mesh, m) {
@@ -529,6 +552,7 @@ export class PlayerModels {
       if (!begun) r.begin(viewProj);
       begun = true;
       r.draw(b.led ? this.guns.mesh[C4_ID] : this.guns.c4Off, b.model, IDENTITY_SKIN, b.light, 0);
+      if (b.led) r.draw(this.guns.c4Glow, this.glint(b.model), IDENTITY_SKIN, b.light, 1);
     }
     if (begun) r.end();
   }

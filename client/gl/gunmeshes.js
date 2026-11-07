@@ -3,7 +3,7 @@
 
 import { SkinnedMesh } from './skinned.js';
 import { MeshBuilder } from './meshkit.js';
-import { buildGun, buildDefuser } from '../models/guns.js';
+import { buildGun, buildDefuser, buildC4Glow } from '../models/guns.js';
 import { paintMesh, paintsAll } from '../models/looks.js';
 import { fitHands } from '../anim/handfit.js';
 import { WEAPONS } from '../../shared/weapons.js';
@@ -61,6 +61,7 @@ export class GunMeshes {
       }
     });
     this.c4Off = new SkinnedMesh(gl, buildGun('c4', { ledOff: true }).mesh); // dropped bomb between beeps
+    this.c4Glow = new SkinnedMesh(gl, buildC4Glow()); // the glint over its LED at a beep (emissive)
     this.mesh[ITEM_DEFUSER] = new SkinnedMesh(gl, buildDefuser()); // a dead CT's kit on the ground
     for (const name of ['m4a1_silencer', 'usp_silencer']) {
       const id = WEAPONS.findIndex((w) => w && w.name === name), g = buildGun(name, { noSilencer: true });
