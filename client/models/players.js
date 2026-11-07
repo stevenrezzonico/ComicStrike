@@ -61,13 +61,19 @@ function chain(axis, stops, abs = false) {
     return [bones.at(-1), bones.at(-1), 0];
   };
 }
-const TORSO = chain(2, [[36, 'pelvis'], [40, 'spine_0'], [44.5, 'spine_1'], [49, 'spine_2'], [53.5, 'spine_3'],
+const TORSO_SPINE = chain(2, [[36, 'pelvis'], [40, 'spine_0'], [44.5, 'spine_1'], [49, 'spine_2'], [53.5, 'spine_3'],
   [59.5, 'neck_0']]);
+// The torso up the spine, and its shoulder shelf (out past 6 from the middle, over the
+// chest) partly on the clavicles, so the top of the shoulder goes with an arm reaching forward.
+const TORSO = (q) => {
+  const ay = Math.abs(q[1]), w = 0.5 * Math.min(1, Math.max(0, (ay - 6) / 4)) * Math.min(1, Math.max(0, (q[2] - 53.5) / 3));
+  return w > 0 ? [B('spine_3'), B(q[1] > 0 ? 'clavicle_L' : 'clavicle_R'), w] : TORSO_SPINE(q);
+};
 const ARM = chain(1, [[3.5, 'spine_3'], [7, 'clavicle_L'], [10.5, 'arm_upper_L'], [19.75, 'arm_upper_L'],
   [23.75, 'arm_lower_L'], [31.75, 'arm_lower_L'], [33.75, 'hand_L']], true);
-// The deltoid: a ball on the shoulder joint, mostly the clavicle's, so the arm's root stays
-// covered however the arm swings.
-const DELTOID = () => [B('clavicle_L'), B('arm_upper_L'), 0.3];
+// The deltoid: a ball on the shoulder joint, half the clavicle's, half the arm's, so the
+// arm's root stays covered however the arm swings.
+const DELTOID = () => [B('clavicle_L'), B('arm_upper_L'), 0.5];
 const LEG = chain(2, [[2.5, 'ankle_L'], [5.5, 'leg_lower_L'], [18, 'leg_lower_L'], [22, 'leg_upper_L'],
   [33, 'leg_upper_L'], [38, 'pelvis']]);
 
@@ -160,7 +166,8 @@ export function buildPlayer(team, helmet = false, coarse = false) {
     // Arms (T-pose along +y): the deltoid on the joint, then one tube from inside it to the
     // wrist, a full upper arm, the forearm swelling below the elbow and tapering to the wrist.
     const [, sy, sz] = bind('arm_upper_L'), [, ey] = bind('arm_lower_L'), [, hy] = bind('hand_L');
-    m.skin(DELTOID).color(L.jacket).push().translate(0.3, sy, sz + 0.3).sphere(3.6, sg(12), coarse ? 2 : 6).pop();
+    // (its top level with the shoulder shelf: higher, it bulged up by the ears)
+    m.skin(DELTOID).color(L.jacket).push().translate(0.3, sy, sz - 0.7).sphere(3.4, sg(12), coarse ? 2 : 6).pop();
     m.skin(ARM).sweep([{ at: [0, sy - 0.8, sz], a: 3.5, b: 3.6 }, { at: [0, sy + 2.5, sz], a: 3.3, b: 3.4 },
       { at: [0, sy + 7, sz], a: 3.0, b: 3.1 }, { at: [0, ey, sz], a: 2.6, b: 2.7 }, { at: [0, ey + 3.2, sz], a: 2.95, b: 2.8 },
       { at: [0, ey + 7, sz], a: 2.5, b: 2.4 }, { at: [0, hy - 2.2, sz], a: 2.0, b: 2.05 }], sg(12));

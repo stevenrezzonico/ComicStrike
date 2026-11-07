@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ComicStrike Player Models</title>
+<link rel="icon" type="image/svg+xml" href="/client/favicon.svg">
+<style>
+  /* The player models animated in place, printed like the game (client/playerviewer.js). */
+  :root {
+    --paper: #f6eedb; --paper-hi: #fffaf0; --ink: #17130f; --yellow: #ffd23a;
+    --body: 'Comic Sans MS', 'Comic Neue', 'Chalkboard SE', sans-serif;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper); color: var(--ink); }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+  #bar { position: fixed; left: 8px; top: 8px; display: flex; flex-wrap: wrap; gap: 4px; max-width: calc(100% - 16px);
+    font: 13px/1.2 var(--body); }
+  #bar button { font: inherit; padding: 3px 8px; background: var(--paper-hi); border: 2px solid var(--ink); cursor: pointer; }
+  #bar button.on { background: var(--yellow); font-weight: 700; }
+  #bar span { width: 8px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="bar"></div>
+<script type="module" src="/client/playerviewer.js"></script>
+</body>
+</html>

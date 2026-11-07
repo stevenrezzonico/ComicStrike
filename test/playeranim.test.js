@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { buildPlayer, HOLD_RIFLE, HOLD_PISTOL, HOLD_KNIFE, HOLD_C4 } from '../client/models/players.js';
 import { PlayerAnimator, holdOf, gunInHand, primeAnimator } from '../client/anim/playeranim.js';
 import { PLAYER_SKELETON as S } from '../client/anim/skeleton.js';
+
+const PLAYER_BIND_X = (name) => S.bind[S.bone(name) * 3]; // a bone's x at the bind pose
 import { MESH_STRIDE } from '../client/gl/meshkit.js';
 import { WEAPON_ID, WEAPONS } from '../shared/weapons.js';
 import { ANIM_PLANT, ANIM_RELOAD } from '../shared/protocol.js';
@@ -365,7 +367,7 @@ Deno.test('player animation: a planted foot does not slide; the swing lifts high
     for (const [s, side] of [[0, 'L'], [1, 'R']]) {
       const [ax, , az] = bone(a, `ankle_${side}`);
       hi = Math.max(hi, az);
-      if (az < 3.6) {
+      if (a.footLift[s] === 0) { // planted (its ankle may rise on the heel or the ball)
         if (!Number.isNaN(last[s])) maxSlide = Math.max(maxSlide, Math.abs(ax + x - last[s]));
         last[s] = ax + x;
         planted++;
@@ -382,6 +384,45 @@ Deno.test('player animation: a planted foot does not slide; the swing lifts high
     wh = Math.max(wh, bone(w, 'ankle_L')[2]);
   }
   assert.ok(wh > 5 && wh < 11, `walking lifts less (${wh.toFixed(1)})`);
+});
+
+Deno.test('player animation: a run lands heel first and pushes off from the ball, hips high, feet near the line', () => {
+  const pitchOf = (a, side) => { // degrees, toes down positive
+    const q = a.pose.wrot, i = S.bone(`ankle_${side}`) * 4;
+    return Math.asin(Math.max(-1, Math.min(1, 2 * (q[i + 3] * q[i + 1] - q[i + 2] * q[i])))) * 180 / Math.PI;
+  };
+  const a = run(new PlayerAnimator(), 64, (t) => [t * 250, 0, 0], { hold: HOLD_RIFLE });
+  const stand = bone(run(new PlayerAnimator(), 64, () => [0, 0, 0], { hold: HOLD_RIFLE }), 'pelvis')[2];
+  let up = 0, down = 0, low = Infinity, wide = 0;
+  for (let k = 0; k < 64; k++) {
+    run(a, 1, () => [(64 + k) / 64 * 250, 0, 0], { hold: HOLD_RIFLE });
+    for (const [s, side] of [[0, 'L'], [1, 'R']]) {
+      if (a.footLift[s] !== 0) continue;
+      up = Math.min(up, pitchOf(a, side));
+      down = Math.max(down, pitchOf(a, side));
+      wide = Math.max(wide, Math.abs(bone(a, `ankle_${side}`)[1]));
+    }
+    low = Math.min(low, bone(a, 'pelvis')[2]);
+  }
+  assert.ok(Math.abs(up) > 3 && down > 25, `toes up landing (${up.toFixed(0)}), heel up pushing off (${down.toFixed(0)})`);
+  assert.ok(stand - low < 5, `the hips drop ${(stand - low).toFixed(1)} running (a lunge was ~9)`);
+  assert.ok(wide < 4, `planted feet ${wide.toFixed(1)} from the line`);
+});
+
+Deno.test('player animation: the clavicles carry the shoulders toward a gun held out, back for tied hands', () => {
+  const rest = PLAYER_BIND_X('arm_upper_L');
+  const rifle = run(new PlayerAnimator(), 32, () => [0, 0, 0], { hold: HOLD_RIFLE });
+  const knife = run(new PlayerAnimator(), 32, () => [0, 0, 0], { hold: HOLD_KNIFE });
+  const fwdOf = (a, side) => { // the shoulder joint ahead of its clavicle's root, in the chest's frame
+    const c = bone(a, `clavicle_${side}`), j = bone(a, `arm_upper_${side}`), q = a.pose.wrot, i = S.bone('spine_3') * 4;
+    const dx = j[0] - c[0], dy = j[1] - c[1], dz = j[2] - c[2];
+    // chest forward axis (x of spine_3's world rotation)
+    const fx = 1 - 2 * (q[i + 1] * q[i + 1] + q[i + 2] * q[i + 2]), fy = 2 * (q[i] * q[i + 1] + q[i + 3] * q[i + 2]), fz = 2 * (q[i] * q[i + 2] - q[i + 3] * q[i + 1]);
+    return dx * fx + dy * fy + dz * fz;
+  };
+  assert.ok(Math.abs(rest) < 1e-6);
+  assert.ok(fwdOf(rifle, 'L') > 1.5, `the rifle's support shoulder forward (${fwdOf(rifle, 'L').toFixed(2)})`);
+  assert.ok(fwdOf(rifle, 'L') > fwdOf(knife, 'L') + 1, 'more than with the knife');
 });
 
 Deno.test('player animation: feet and hips turn part way toward a strafe; backpedalling keeps them forward', () => {
