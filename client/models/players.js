@@ -1,7 +1,7 @@
 // Player models on the player skeleton (client/anim/skeleton.js), built in the bind
 // T-pose, in comic form: a torso, arms and legs swept as single smooth tubes whose
 // vertices blend between two bones (the spine bends, elbows and knees fold without
-// seams), rounded heads with eyes, clothes in a few flat colors with crease marks.
+// seams), rounded heads with eyes, clothes in a few flat colors.
 // Proportions follow the hit boxes (shared/hitgroups.js): head 59..69, chest 41..59 and
 // 22 wide, stomach 31..42, legs 0..31. The gun in hand is drawn separately
 // (client/models/guns.js).
@@ -79,11 +79,6 @@ const DELTOID = () => [B('clavicle_L'), B('arm_upper_L'), 0.65];
 const LEG = chain(2, [[2.5, 'ankle_L'], [5.5, 'leg_lower_L'], [18, 'leg_lower_L'], [22, 'leg_upper_L'],
   [33, 'leg_upper_L'], [38, 'pelvis']]);
 
-// A crease mark: a thin lens of a darker shade on the surface, its outline a stroke.
-function fold(b, at, pitch, yaw, roll, len) {
-  b.push().translate(...at).rotate(pitch, yaw, roll).scale(len, 0.13, 0.13).sphere(1, 6, 3).pop();
-}
-
 // Torso sections up the spine (width a across, depth b forward, roundness n: 3 a rounded box,
 // 2 an ellipse): a V, narrow at the waist, broad across the chest, then rounder and narrower
 // over the shoulders, sloping into the neck like a trapezius, so the deltoids and the arms
@@ -95,7 +90,7 @@ const torsoAt = (grow = 0, from = 0, to = TORSO_SECTIONS.length) => TORSO_SECTIO
 
 // team: 'T', 'CT' or 'H' (hostage); helmet: CTs show a helmet only when they own one.
 // coarse: the far version (client/gl/playermodels.js past FAR_LOD): the same tubes and
-// bones with fewer segments and without the small parts (crease marks, eyes, pouches,
+// bones with fewer segments and without the small parts (eyes, pouches,
 // buckle, thumb), under 1,500 triangles; from a distance it prints the same silhouette.
 export function buildPlayer(team, helmet = false, coarse = false) {
   const L = LOOKS[team] || T_LOOK;
@@ -110,10 +105,6 @@ export function buildPlayer(team, helmet = false, coarse = false) {
     [1, 0, 0], 'flat');
   if (fine) {
     b.color(shade(L.belt, 1.6)).rbox(0.5, 1.6, 1.2, 0.2, 4.8, 0, 39.9, 1); // buckle
-    // Crease marks at the waist and the chest.
-    b.color(shade(L.jacket, 0.75));
-    fold(b, [5.2, -2.5, 43], 15, 0, 0, 1.6);
-    fold(b, [5.0, 2.8, 44.5], -12, 0, 0, 1.4);
   }
   if (L.vest) { // chest rig / plate carrier over the jacket, pouches on the front
     b.color(L.vest).sweep(torsoAt(0.45, 2, 7), sg(16), [1, 0, 0], 'flat');
@@ -179,9 +170,6 @@ export function buildPlayer(team, helmet = false, coarse = false) {
       m.color(shade(L.jacket, team === 'H' ? 1.08 : 1.18)).push().translate(0, hy - 3.2, sz).rotate(0, 0, -90)
         .lathe([[2.2, 0], [2.35, 0.3], [2.35, 1.0], [2.15, 1.3]], 12).pop(); // sleeve end
       if (L.patch) m.color(L.patch).push().translate(0, sy + 4, sz + 3.3).scale(1.4, 1.4, 0.35).sphere(1, 8, 4).pop();
-      m.color(shade(L.jacket, 0.75));
-      fold(m, [1.9, ey - 0.6, sz + 0.9], 0, 70, 30, 1.5); // the elbow's crease
-      fold(m, [1.6, ey + 1.6, sz + 1.4], 0, 60, 20, 1.2);
     }
     if (fine) m.color(L.gloves).push().translate(0, hy - 1.6, sz).rotate(0, 0, -90).lathe([[2.05, 0], [2.1, 0.4], [1.9, 1.8]], 12).pop();
     m.skin();
@@ -195,10 +183,6 @@ export function buildPlayer(team, helmet = false, coarse = false) {
       { at: [0.2, ly, 24], a: 3.7, b: 3.9 }, { at: [0.3, ly, 20], a: 3.2, b: 3.4 }, { at: [-0.2, ly, 16], a: 3.4, b: 3.7 },
       { at: [0, ly, 11], a: 2.9, b: 3.1 }, { at: [0, ly, 4.5], a: 2.4, b: 2.5 }], sg(12), [1, 0, 0]);
     if (fine) {
-      m.color(shade(L.pants, 0.75));
-      fold(m, [3.9, ly + 0.8, 33.5], 20, 0, 90, 1.6); // hip crease
-      fold(m, [-3.3, ly, 21], 0, 90, 0, 1.4); // behind the knee
-      fold(m, [3.4, ly - 0.6, 25], -25, 0, 90, 1.2);
       if (team === 'T') m.color(shade(L.pants, 0.88)).rbox(4, 1.6, 4.6, 0.6, 0, ly + 4.3, 27, 1); // cargo pocket
       if (L.pads) m.color(L.pads).rbox(1.6, 4.2, 4.2, 0.7, 3.3, ly, 20, 1); // knee pad
     }
