@@ -62,6 +62,7 @@ export const GAME_ARMSRACE = 8; // arms race: a new weapon for every kill, no bu
 export const GAME_DEMOLITION = 16; // demolition: a better weapon each round after a kill, no buying
 export const GAME_WINGMAN = 32; // wingman: 2 against 2 on one bomb site
 export const GAME_GHOST_TEAM = 64; // mp_solid_teammates 0: teammates walk through each other (casual)
+export const GAME_FF = 256; // mp_friendlyfire: teammates' bullets and grenades hurt (by the ff_damage_reduction_* shares)
 export const GAME_RETAKES = 128; // retakes: the bomb planted at the round start, loadouts instead of money
 export const DM_KILL_POINTS = 10; // per enemy killed (approx.: CS:GO adds weapon bonuses)
 export const DM_RESPAWN = 2; // seconds dead before respawning (approx.)
@@ -107,6 +108,17 @@ export function itemPrice(p, item) {
   if (p.ws.f[WS_SLOTS + w.slot * 3] === item) return -1; // already have it
   return w.price;
 }
+
+// CS 1.6's info_map_parameters "buying": 0 everyone buys, 1 only the CTs, 2 only the Ts,
+// 3 nobody (the fy_ maps: weapons come from the ground).
+export function mapBuying(bsp) {
+  const e = bsp.entities.find((x) => x.classname === 'info_map_parameters');
+  const v = e ? Math.trunc(+e.buying || 0) : 0;
+  return v >= 0 && v <= 3 ? v : 0;
+}
+
+// May `team` buy on a map whose buying rule is `buying` (mapBuying)?
+export const teamMayBuy = (buying, team) => buying === 0 || (buying === 1 && team === TEAM_CT) || (buying === 2 && team === TEAM_T);
 
 // Why `p` cannot buy `item` now ('' = it can). `canBuyNow`: in a buy zone in buy time;
 // `free`: deathmatch (no money).

@@ -7,7 +7,7 @@ import {
 } from './constants.js';
 import {
   createPlayerState, copyPlayerState, playerMove, fallDamage, eyeOffset, PS_ORIGIN, PS_FLAGS, PS_EVENTS, PS_LAND_SPEED,
-  PS_VELMOD, PS_WATERLEVEL, EV_LAND, FL_ONGROUND, FL_DUCKING,
+  PS_VELMOD, PS_VEL, PS_WATERLEVEL, EV_LAND, FL_ONGROUND, FL_DUCKING,
 } from './pmove.js';
 import {
   createWeaponState, copyWeaponState, giveWeapon, weaponTick, infiniteAmmo, activeWeapon, weaponStats, removeWeapon, refillAmmo,
@@ -45,10 +45,13 @@ export class Player {
     this.carrying = false; // a hostage on the shoulder (shared/hostages.js)
     this.team = TEAM_T;
     this.spawnCount = 0; // bumps on every respawn, so clients notice a teleport
+    this.teleported = false; // the last runCommand went through a trigger_teleport (facing teleportYaw)
+    this.teleportYaw = 0;
     this.primary = 0; // warmup loadout weapon ids (0 = team default)
     this.secondary = 0;
     this.money = 0;
     this.kills = 0;
+    this.assists = 0;
     this.deaths = 0;
     this.score = 0; // deathmatch points
   }
@@ -116,6 +119,7 @@ export function runCommand(world, p, buttons, select, pitch, yaw, tick, shots, f
   const w = weaponStats(p.ws); // scoped rifles walk slower
   const maxSpeed = w ? w.maxSpeed : 250;
   playerMove(world, p.ps, moveButtons, pitch, yaw, TICK_DT, p.carrying ? Math.min(maxSpeed, CARRY_SPEED) : maxSpeed);
+  p.teleported = world.teleports !== null && teleport(world.teleports, p);
   // A landing in water hurts nobody (HL's PM_CheckFalling, CS:GO alike).
   if ((p.ps.i[PS_EVENTS] & EV_LAND) && !p.ps.i[PS_WATERLEVEL]) p.health -= Math.round(fallDamage(p.ps.f[PS_LAND_SPEED]));
   const slot = p.ws.f[WS_ACTIVE], clip = p.ws.f[WS_SLOTS + slot * 3 + 1];
@@ -123,6 +127,25 @@ export function runCommand(world, p, buttons, select, pitch, yaw, tick, shots, f
   if (demo) infiniteAmmo(p.ws, slot, clip, tick * TICK_DT);
   bombAction(world, p, buttons, pitch, yaw, tick, bomb, demo);
   return p.health <= 0;
+}
+
+// A trigger_teleport the hull touches after the move sends the player to its destination
+// (HL's CTriggerTeleport: feet there and a unit up, at rest, facing its yaw, which the
+// client's view takes: `teleportYaw`). In the shared simulation, so the client predicts it.
+function teleport(list, p) {
+  const f = p.ps.f, x = f[PS_ORIGIN], y = f[PS_ORIGIN + 1], z = f[PS_ORIGIN + 2];
+  const hz = (p.ps.i[PS_FLAGS] & FL_DUCKING) ? 18 : 36;
+  for (const t of list) {
+    if (x + 16 <= t.mins[0] || x - 16 >= t.maxs[0] || y + 16 <= t.mins[1] || y - 16 >= t.maxs[1] ||
+      z + hz <= t.mins[2] || z - hz >= t.maxs[2]) continue;
+    f[PS_ORIGIN] = t.x;
+    f[PS_ORIGIN + 1] = t.y;
+    f[PS_ORIGIN + 2] = t.z + hz + 1;
+    f[PS_VEL] = f[PS_VEL + 1] = f[PS_VEL + 2] = 0;
+    p.teleportYaw = t.yaw;
+    return true;
+  }
+  return false;
 }
 
 const DEG = Math.PI / 180;
@@ -226,9 +249,10 @@ export class ImpactList {
     this.player = new Int8Array(capacity); // player hit (-1 = none: world impact)
     this.group = new Uint8Array(capacity); // hit group when a player was hit
     this.damage = new Float32Array(capacity); // damage to that player (before armor)
+    this.pen = new Uint8Array(capacity); // 1: the bullet went through a wall or a body before this hit
   }
 
-  push(x, y, z, nx, ny, nz, owner, broke, player, group, damage) {
+  push(x, y, z, nx, ny, nz, owner, broke, player, group, damage, pen = 0) {
     if (this.count === this.capacity) return;
     const k = this.count++;
     this.pos[k * 3] = x;
@@ -242,6 +266,7 @@ export class ImpactList {
     this.player[k] = player;
     this.group[k] = group;
     this.damage[k] = damage;
+    this.pen[k] = pen;
   }
 }
 
@@ -321,7 +346,7 @@ export function resolveShots(world, breakables, ws, shots, impacts, targets = nu
         }
         const hx = x + dx * d, hy = y + dy * d, hz = z + dz * d;
         impacts.push(hx, hy, hz, -dx, -dy, -dz, 0, 0, hit, targets.group,
-          damage * (w.melee ? 1 : hitgroupScale(targets.group, w)));
+          damage * (w.melee ? 1 : hitgroupScale(targets.group, w)), pens < PENETRATION_COUNT ? 1 : 0);
         exclude |= 1 << hit;
         if (pens <= 0 || traveled > PENETRATION_MAX_DISTANCE) break;
         damage -= penetrationLoss(damage, w.penetration, SURF_FLESH, SURF_FLESH, BODY_THICKNESS);

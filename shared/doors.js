@@ -57,6 +57,10 @@ const SF_CORNER_TELEPORT = 2; // the train gets here at once (the leg into it ta
 const SF_CORNER_FIREONCE = 4;
 // trigger_* spawnflags.
 const SF_TRIGGER_NOCLIENTS = 2;
+const SF_HURT_START_OFF = 2, SF_HURT_NOCLIENTS = 8; // trigger_hurt
+const HURT_TICKS = TICK_RATE / 2; // a trigger_hurt doses a player every half second
+export const SF_EXPLOSION_NODAMAGE = 1, SF_EXPLOSION_NOFIREBALL = 4; // env_explosion
+const SF_EXPLOSION_REPEATABLE = 2;
 
 const USE_RADIUS = 64; // PLAYER_SEARCH_RADIUS
 const USE_DOT = 0.7; // VIEW_FIELD_NARROW
@@ -929,8 +933,10 @@ const pushPs = new Array(MAX_PUSHED);
 // multisources that are on once every entity targeting them has fired (a `master` locks
 // movers and triggers while off), killtargets that remove entities. Firing a name uses
 // every mover with that targetname and breaks every breakable (through `onBreak(slot,
-// act)`, the game's: it fires its target and sets off its explosion). Other entities are
-// ignored.
+// act)`, the game's: it fires its target and sets off its explosion). The rest of what a
+// name or a player sets off goes to the game through callbacks: trigger_hurt volumes
+// (`onHurt`), env_explosion (`onExplode`), game_text (`onText`), player_weaponstrip
+// (`onStrip`). Other entities are ignored.
 export class MapLogic {
   constructor(bsp, doors, world = null, breakables = null, killables = null) {
     this.doors = doors;
@@ -938,6 +944,14 @@ export class MapLogic {
     this.breakables = breakables;
     this.killables = killables;
     this.onBreak = null; // (slot, act) => ...
+    this.onHurt = null; // (i, damage): trigger_hurt on players[i] of update (damage < 0 heals)
+    this.onExplode = null; // (x, y, z, magnitude, flags): an env_explosion fired
+    this.onText = null; // (message, act, all): a game_text fired (all: every player, else the activator)
+    this.onStrip = null; // (act): a player_weaponstrip fired by that player
+    this.hurts = []; // trigger_hurt: { mins, maxs, name, dmg, start, on, next: Map(act -> tick) }
+    this.explosions = new Map(); // targetname -> [{ x, y, z, magnitude, flags, done }]
+    this.texts = new Map(); // targetname -> [{ message, all }]
+    this.strips = new Set(); // player_weaponstrip targetnames
     this.triggers = []; // { mins, maxs, name, target, kill, master, delay, wait, once, next, done, src }
     this.relays = new Map(); // targetname -> [{ target, kill, delay, src }]
     this.autos = []; // { target, kill, delay, src }
@@ -987,6 +1001,24 @@ export class MapLogic {
       } else if (cls === 'trigger_auto' && (e.target || kill)) {
         this.autos.push({ target: e.target || '', kill, delay, src: bi });
         if (e.target) this.named.add(e.target);
+      } else if (cls === 'trigger_hurt' && +e.dmg && !(+(e.spawnflags || 0) & SF_HURT_NOCLIENTS)) {
+        // CTriggerHurt: `dmg` a second, dealt in half-second doses while a player touches it;
+        // a named one is switched on and off by its name, and starts off with spawnflags 2.
+        const b = box(e);
+        if (!b) return;
+        const start = !(e.targetname && (+(e.spawnflags || 0) & SF_HURT_START_OFF));
+        this.hurts.push({ ...b, name: e.targetname || '', dmg: +e.dmg, start, on: start, next: new Map() });
+      } else if (cls === 'env_explosion' && e.targetname) {
+        const o = new Float64Array(3);
+        if (e.origin) parseVec3(e.origin, o);
+        if (!this.explosions.has(e.targetname)) this.explosions.set(e.targetname, []);
+        this.explosions.get(e.targetname).push({ x: o[0], y: o[1], z: o[2], magnitude: Math.max(0, +e.iMagnitude || 0),
+          flags: +(e.spawnflags || 0), done: false });
+      } else if (cls === 'game_text' && e.targetname && e.message) {
+        if (!this.texts.has(e.targetname)) this.texts.set(e.targetname, []);
+        this.texts.get(e.targetname).push({ message: e.message, all: (+(e.spawnflags || 0) & 1) !== 0 });
+      } else if (cls === 'player_weaponstrip' && e.targetname) {
+        this.strips.add(e.targetname);
       } else if (cls === 'multisource' && e.targetname) {
         this.masters.set(e.targetname, { sources: [], state: [], target: e.target || '', on: true });
       } else if ((cls === 'func_button' || cls === 'func_rot_button' || cls.startsWith('func_door')) && e.target) {
@@ -1025,6 +1057,11 @@ export class MapLogic {
     }
     this.dead.clear();
     this.removed.fill(0);
+    for (const h of this.hurts) {
+      h.on = h.start;
+      h.next.clear();
+    }
+    for (const list of this.explosions.values()) for (const x of list) x.done = false;
     for (const a of this.autos) this.fireAt(tick, a.target, null, a.delay, a.src, a.kill);
   }
 
@@ -1047,6 +1084,18 @@ export class MapLogic {
     if (!name) return;
     const d = this.doors;
     for (let k = 0; k < d.count; k++) if (d.name[k] === name) d.use(k, tick, act);
+    for (const h of this.hurts) if (h.name === name) h.on = !h.on; // CTriggerHurt's ToggleUse
+    const ex = this.explosions.get(name);
+    if (ex && this.onExplode) {
+      for (const x of ex) {
+        if (x.done) continue;
+        x.done = !(x.flags & SF_EXPLOSION_REPEATABLE); // once a round unless repeatable
+        this.onExplode(x.x, x.y, x.z, x.magnitude, x.flags);
+      }
+    }
+    const tx = this.texts.get(name);
+    if (tx && this.onText) for (const t of tx) this.onText(t.message, act, t.all);
+    if (act && this.onStrip && this.strips.has(name)) this.onStrip(act);
     const slots = this.breakableByName.get(name);
     if (slots && this.onBreak) for (const s of slots) if (!this.breakables.broken[s]) this.onBreak(s, act);
     const r = this.relays.get(name);
@@ -1125,6 +1174,17 @@ export class MapLogic {
         if (t.once) t.done = true;
         else t.next = tick + ticksOf(t.wait);
         break;
+      }
+    }
+    if (!this.onHurt) return;
+    for (const h of this.hurts) {
+      if (!h.on) continue;
+      for (let i = 0; i < players.length; i++) {
+        const p = players[i];
+        if (p.x + 16 <= h.mins[0] || p.x - 16 >= h.maxs[0] || p.y + 16 <= h.mins[1] || p.y - 16 >= h.maxs[1] ||
+          p.z + 36 <= h.mins[2] || p.z - 36 >= h.maxs[2] || tick < (h.next.get(p) || 0)) continue;
+        h.next.set(p, tick + HURT_TICKS);
+        this.onHurt(i, h.dmg * 0.5); // half a second's worth (HL: dmg is per second)
       }
     }
   }

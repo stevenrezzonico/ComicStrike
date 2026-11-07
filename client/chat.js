@@ -4,7 +4,7 @@
 // *SPEC* for a spectator, (Terrorist) / (Counter-Terrorist) on team chat. Every piece of
 // text goes in as textContent: names and lines never become markup.
 
-import { CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC, CHAT_RADIO, CHAT_MAX } from '../shared/protocol.js';
+import { CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC, CHAT_RADIO, CHAT_MAP, CHAT_MAX } from '../shared/protocol.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 
 const CHAT_LINES = 8; // lines kept in the box
@@ -47,7 +47,8 @@ export class Chat {
       name.textContent = prefix + (this.names(sender) || `player${sender}`);
       name.className = (flags & CHAT_SPEC) ? 'spec' : team === TEAM_CT ? 'ct' : team === TEAM_T ? 't' : 'spec';
     }
-    row.append(name, ` : ${text}`);
+    if (flags & CHAT_MAP) row.append(text); // the map's own text (game_text): no name
+    else row.append(name, ` : ${text}`);
     this.box.appendChild(row);
     while (this.box.children.length > CHAT_LINES) this.box.firstChild.remove();
     row.addEventListener('animationend', () => row.remove()); // its 12 s fade (chatfade in index.html), held while typing

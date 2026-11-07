@@ -548,7 +548,9 @@ class Bot {
       const off = Math.hypot(angleDiff(wantY, this.yaw), wantP - this.pitch);
       const tolerance = Math.atan2(14, dist) / DEG + 0.6 + sk.slack;
       // A hostage in the way: hold fire and keep going (CS:GO's bots do not shoot them).
-      const clear = !this.hostageInLine(x, y, eye, ef[PS_ORIGIN], ef[PS_ORIGIN + 1], tz);
+      // With friendly fire on, a teammate in the way alike.
+      const clear = !this.hostageInLine(x, y, eye, ef[PS_ORIGIN], ef[PS_ORIGIN + 1], tz) &&
+        !(g.rules.friendlyFire && this.friendInLine(x, y, eye, ef[PS_ORIGIN], ef[PS_ORIGIN + 1], tz));
       move = !clear || g.rules.botDontShoot; // else stand still to shoot straight (CS:GO's bots stop too)
       // A sniper rifle: scope for a far enemy, then let the scope settle before the shot.
       let mayFire = true;
@@ -875,6 +877,20 @@ class Bot {
       if (t <= 0 || t >= 1) continue;
       const lz = z + (tz - z) * t;
       if (Math.hypot(x + dx * t - h.x[k], y + dy * t - h.y[k]) < 20 && lz > h.z[k] && lz < h.z[k] + 72) return true;
+    }
+    return false;
+  }
+
+  // Is a living teammate within a body's width of the line from (x, y, z) to the target?
+  friendInLine(x, y, z, tx, ty, tz) {
+    const dx = tx - x, dy = ty - y, len2 = dx * dx + dy * dy;
+    for (const o of this.game.clients) {
+      if (!o || o === this.c || !o.joined || !o.alive || o.team !== this.c.team) continue;
+      const f = o.player.ps.f, t = len2 > 0 ? ((f[PS_ORIGIN] - x) * dx + (f[PS_ORIGIN + 1] - y) * dy) / len2 : 0;
+      if (t <= 0 || t >= 1) continue;
+      const lz = z + (tz - z) * t;
+      if (Math.hypot(x + dx * t - f[PS_ORIGIN], y + dy * t - f[PS_ORIGIN + 1]) < 24 &&
+        Math.abs(lz - f[PS_ORIGIN + 2]) < 36) return true;
     }
     return false;
   }

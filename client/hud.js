@@ -187,12 +187,12 @@ export class Hud {
       const table = document.createElement('table');
       const head = table.insertRow();
       head.className = 'head';
-      for (const c of dm || armsRace ? ['', armsRace ? 'Level' : 'Score', 'K', 'D'] : ['', 'K', 'D', 'MVP']) head.insertCell().textContent = c;
+      for (const c of dm || armsRace ? ['', armsRace ? 'Level' : 'Score', 'K', 'D'] : ['', 'K', 'A', 'D', 'MVP']) head.insertCell().textContent = c;
       for (const id of ids.slice(0, 10)) {
         const tr = table.insertRow();
         tr.className = `${id === selfId ? 'me ' : ''}${net.teams[id] === TEAM_CT ? 'ct' : 't'}`;
         const cells = dm || armsRace ? [net.names[id], armsRace ? Math.min(net.scores[id] + 1, ARMS_RACE.length) : net.scores[id], net.kills[id], net.deaths[id]]
-          : [net.names[id], net.kills[id], net.deaths[id], net.mvps[id]];
+          : [net.names[id], net.kills[id], net.assists[id], net.deaths[id], net.mvps[id]];
         for (const c of cells) tr.insertCell().textContent = c; // names as text, never HTML
       }
       el.append(table);
@@ -290,7 +290,7 @@ export class Hud {
       : [[[TEAM_CT], 'Counter-Terrorists', 'ct'], [[TEAM_T], 'Terrorists', 't']];
     const lines = [];
     for (const [teams, title, cls] of groups) {
-      lines.push(dm ? [cls, title, armsRace ? 'Level' : 'Score', 'K', 'D'] : [cls, title, 'K', 'D', '★']);
+      lines.push(dm ? [cls, title, armsRace ? 'Level' : 'Score', 'K', 'D'] : [cls, title, 'K', 'A', 'D', '★']);
       const ids = [];
       for (let id = 0; id < net.names.length; id++) if (net.names[id] && teams.includes(net.teams[id])) ids.push(id);
       ids.sort((a, b) => (dm ? net.scores[b] - net.scores[a] : 0) || net.kills[b] - net.kills[a] ||
@@ -298,7 +298,7 @@ export class Hud {
       for (const id of ids) {
         const cls = `${id === selfId ? 'me' : ''}${alive(id) ? '' : ' dead'}`;
         lines.push(dm ? [cls, net.names[id], ranked(id), net.kills[id], net.deaths[id]]
-          : [cls, net.names[id], net.kills[id], net.deaths[id], net.mvps[id] || '']);
+          : [cls, net.names[id], net.kills[id], net.assists[id], net.deaths[id], net.mvps[id] || '']);
       }
     }
     const watching = [];

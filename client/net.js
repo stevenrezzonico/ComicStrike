@@ -58,6 +58,7 @@ export class NetClient {
     this.scores = new Int32Array(MAX_PLAYERS); // deathmatch points
     this.deaths = new Int32Array(MAX_PLAYERS);
     this.mvps = new Int32Array(MAX_PLAYERS); // rounds each player was the MVP of
+    this.assists = new Int32Array(MAX_PLAYERS);
     this.report = null; // the newest round's damage report { round, rows } (S2C_REPORT)
     this.buyId = 0;
     this.cmdId = 0;
@@ -398,7 +399,7 @@ export class NetClient {
           this.keep.info = bytes.slice(from, to);
           this.infoVersion++;
         }
-        readInfo(r, this.names, this.teams, this.kills, this.deaths, this.scores, this.mvps);
+        readInfo(r, this.names, this.teams, this.kills, this.deaths, this.scores, this.mvps, this.assists);
       } else if (type === S2C_REPORT) {
         this.report = readReport(r);
       } else if (type === S2C_PRINT) {

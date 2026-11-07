@@ -3,10 +3,11 @@
 
 import { SkinnedMesh } from './skinned.js';
 import { MeshBuilder } from './meshkit.js';
-import { buildGun } from '../models/guns.js';
+import { buildGun, buildDefuser } from '../models/guns.js';
 import { paintMesh, paintsAll } from '../models/looks.js';
 import { fitHands } from '../anim/handfit.js';
 import { WEAPONS } from '../../shared/weapons.js';
+import { ITEM_DEFUSER } from '../../shared/economy.js';
 
 const FLASH = [1.0, 0.82, 0.23];
 const FLASH_CORE = [1.0, 0.97, 0.82];
@@ -60,6 +61,7 @@ export class GunMeshes {
       }
     });
     this.c4Off = new SkinnedMesh(gl, buildGun('c4', { ledOff: true }).mesh); // dropped bomb between beeps
+    this.mesh[ITEM_DEFUSER] = new SkinnedMesh(gl, buildDefuser()); // a dead CT's kit on the ground
     for (const name of ['m4a1_silencer', 'usp_silencer']) {
       const id = WEAPONS.findIndex((w) => w && w.name === name), g = buildGun(name, { noSilencer: true });
       this.bare[id] = new SkinnedMesh(gl, g.mesh);

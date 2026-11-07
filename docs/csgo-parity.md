@@ -12,6 +12,18 @@ A read of `shared/` against CS:GO's rules (convars, `items_game.txt`, the SDK's 
 | Hostage first touch | $300 | `cash_player_interact_with_hostage` 150 | $150 |
 | Overtime | none: a 15-15 match restarted | MR3 periods, $10000 each half, first to 4 of a period, 3-3 plays another | `startOvertime` in `server/game.js`, `mp_overtime_*` |
 
+## Fixed in the 2026-11-07 pass
+
+| Rule | Was | CS:GO | Now |
+|---|---|---|---|
+| Friendly fire | always off | competitive and wingman: `mp_friendlyfire 1`, bullets 0.33, grenades 0.85, own grenade 1, other 0.4 | the same cvars and shares (`hurtBy`, `applyImpacts`); bots hold fire past a teammate |
+| Death drops | the gun only | also the grenade in hand or the best (`mp_death_drop_grenade 2`) and the kit (`mp_death_drop_defuser 1`) | the same; the best grenade by price is *unsure* |
+| Assists | none | over 40 damage to a victim a teammate kills, else a flash assist; K / A / D | the same, per life of the victim |
+| Team limits | `mp_teamsize_max` only | `mp_limitteams 2`, `mp_autoteambalance 1` | the same; who is moved (newest bot, else the last to join the team) is approx. |
+| Kill feed | headshots | wallbang mark, the assister | WB, `killer + assister` (FLASH for a flash assist) |
+
+CS 1.6 map entities the game ignored, from a scan of the 48 maps here: `trigger_hurt`, `env_explosion`, `game_text` (and `game_playerspawn`), `player_weaponstrip`, `game_player_equip`, `info_map_parameters`' `buying`, `trigger_teleport` (predicted). See CLAUDE.md, Doors and Collision.
+
 ## Matches (checked)
 
 Movement: gravity 800, friction 5.2, stopspeed 80, accelerate 5.5 (scaled by max(250, wishspeed)), airaccelerate 12, air wishspeed cap 30, jump impulse 301.993 (57 units, crouch-jump 66), stamina max 80 / jump cost 0.08 / recovery 60, must release jump to jump again, walk 0.52, duck 0.34, step 18, ladder 200, max velocity 3500, per-weapon speeds from the game data (knife and C4 250, scoped AWP 100), fall damage `(v − 580) × 100 / (1024 − 580)` ignoring armor.

@@ -327,7 +327,7 @@ export class Grenades {
         const pitch = targets.pitch(i) * DEG, yaw = targets.yaw(i) * DEG, cp = Math.cos(pitch);
         const facing = (cp * Math.cos(yaw) * dx + cp * Math.sin(yaw) * dy - Math.sin(pitch) * dz) / dist;
         const t = flashDuration(dist, facing);
-        if (t > 0) targets.flash(i, t);
+        if (t > 0) targets.flash(i, t, owner);
       }
     } else if (kind === 'smoke') {
       this.addEffect(FX_SMOKE, weapon, owner, team, x, y, z);
@@ -379,4 +379,4 @@ export class Grenades {
 
 // What grenades act on (the server's players, or the offline player): implement
 //   count, alive(i), center(i, out) (hull center), eye(i, out), feet(i, out),
-//   pitch(i), yaw(i), hurt(i, damage, weapon, ownerId, ownerTeam), flash(i, seconds).
+//   pitch(i), yaw(i), hurt(i, damage, weapon, ownerId, ownerTeam), flash(i, seconds, ownerId).

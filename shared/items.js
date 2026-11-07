@@ -146,7 +146,8 @@ export class Items {
     const dx = cp * Math.cos(yaw * DEG), dy = cp * Math.sin(yaw * DEG), dz = -Math.sin(pitch * DEG);
     let best = -1, bestD = USE_RANGE;
     for (let i = 0; i < this.count; i++) {
-      if (this.flying[i] || WEAPONS[this.weapon[i]]?.grenade) continue;
+      const w = WEAPONS[this.weapon[i]];
+      if (this.flying[i] || !w || w.grenade) continue; // (a defuse kit is walked over, as a grenade)
       const vx = this.x[i] - ex, vy = this.y[i] - ey, vz = this.z[i] + 2 - ez, d = Math.sqrt(vx * vx + vy * vy + vz * vz);
       if (d >= bestD || (vx * dx + vy * dy + vz * dz) / d < USE_CONE) continue;
       best = i;

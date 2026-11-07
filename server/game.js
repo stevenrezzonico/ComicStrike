@@ -15,7 +15,7 @@ import {
 import {
   EXPLODE_RANGE, blastDamage, SF_BREAK_TOUCH, SF_BREAK_PRESSURE, MAT_UNBREAKABLE_GLASS,
 } from '../shared/breakables.js';
-import { mapEntities, BLAST } from '../shared/doors.js';
+import { mapEntities, BLAST, SF_EXPLOSION_NODAMAGE, SF_EXPLOSION_NOFIREBALL } from '../shared/doors.js';
 import { touched, touchedCount } from '../shared/pmove.js';
 import {
   PS_ORIGIN, PS_VEL, PS_FLAGS, PS_DUCK_AMOUNT, PS_GROUNDENT, PS_WATERLEVEL, FL_ONGROUND, FL_DUCKING, FL_NOCLIP, AIR_TICKS,
@@ -24,7 +24,7 @@ import {
 import {
   ShotList, WEAPONS, WEAPON_ID, giveWeapon, silenced, canCarryGrenade, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4,
   WEV_PLANTED, WEV_DEFUSED, WEV_DROP, WEV_FIRE, WEV_MELEE, WEV_THROW, WS_RELOAD_END, WS_ACTION, WS_THROWN, ACTION_PLANT,
-  ACTION_DEFUSE, SLOT_PRIMARY, SLOT_SECONDARY,
+  ACTION_DEFUSE, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, SLOT_GRENADE, NUM_SLOTS, WS_GRENADES, GRENADE_IDS, removeWeapon,
 } from '../shared/weapons.js';
 import { HitTargets, HITGROUP_HEAD, HITGROUP_CHEST, HITGROUP_LEGS, feetOffset } from '../shared/hitgroups.js';
 import { Grenades, FX_BLAST } from '../shared/grenades.js';
@@ -49,12 +49,13 @@ import {
   PLANT_LOSS_BONUS, LOSS_STREAK_MAX, TEAMKILL_PENALTY, END_ELIMINATION, END_TIME, END_DRAW, END_BOMB, END_DEFUSE,
   END_RESCUE, RESCUE_WIN_REWARD, RESCUE_REWARD, HOSTAGE_TOUCH_REWARD, HOSTAGE_HIT_PENALTY, HOSTAGE_KILL_PENALTY,
   END_MATCH, ROUND_FINAL, matchOver, GAME_FFA, GAME_GHOST_TEAM, DM_KILL_POINTS, DM_RESPAWN, lossBonus, buyError, applyBuy, BuyZones,
+  mapBuying, teamMayBuy, GAME_FF, ITEM_DEFUSER,
 } from '../shared/economy.js';
 import {
   PROTOCOL_VERSION, SNAPSHOT_HISTORY, MAX_PLAYERS, CMD_REDUNDANCY, C2S_HELLO, C2S_CMDS, C2S_BYE, C2S_BUY, C2S_COMMAND, SHOT_IMPACT,
   SHOT_BLOOD, writePrint, printChunks, writeChat, cleanChat, cleanName, CHAT_CONSOLE, CHAT_TEAM, CHAT_DEAD, CHAT_SPEC, writeReport, NO_MVP,
-  CHAT_RADIO, RADIO, radioIndex, writePing,
-  KILL_HEADSHOT, KILL_REPEAT_TICKS, HURT_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
+  CHAT_RADIO, CHAT_MAP, RADIO, radioIndex, writePing,
+  KILL_HEADSHOT, KILL_PENETRATED, KILL_FLASH_ASSIST, NO_ASSIST, KILL_REPEAT_TICKS, HURT_REPEAT_TICKS, Writer, Reader, CmdRing, SnapshotRing, EventList, RoundState, readHello,
   writeWelcome, writeReject, writeInfo, writeItems, writeGrenades, writeHostages, readCmds, writeSnapshot, quantizePitch,
   quantizeYaw,
   E_ACTIVE, E_X, E_Y, E_Z,
@@ -86,10 +87,21 @@ const ARMOURY_ITEMS = [
   'mp5sd', 'mp9', 'p90', 'mac10', 'ak47', 'nova', 'm4a1', 'scar20', 'awp', 'g3sg1', 'ssg08', 'deagle', 'famas', 'galilar',
   'm249', null, null, 'hegrenade', 'flashbang', 'smokegrenade',
 ];
+// CS 1.6's weapon names (game_player_equip's keys) as ours, the same stand-ins as above, the
+// M4A1 with its silencer as the M4A1-S, the P228 as the P250.
+const CS16_WEAPONS = {
+  weapon_knife: 'knife', weapon_glock18: 'glock', weapon_usp: 'usp_silencer', weapon_p228: 'p250', weapon_deagle: 'deagle',
+  weapon_elite: 'elite', weapon_fiveseven: 'fiveseven', weapon_m3: 'nova', weapon_xm1014: 'xm1014', weapon_mp5navy: 'mp5sd',
+  weapon_tmp: 'mp9', weapon_p90: 'p90', weapon_mac10: 'mac10', weapon_ump45: 'ump45', weapon_ak47: 'ak47',
+  weapon_sg552: 'sg556', weapon_m4a1: 'm4a1_silencer', weapon_aug: 'aug', weapon_scout: 'ssg08', weapon_awp: 'awp',
+  weapon_g3sg1: 'g3sg1', weapon_sg550: 'scar20', weapon_m249: 'm249', weapon_galil: 'galilar', weapon_famas: 'famas',
+  weapon_hegrenade: 'hegrenade', weapon_flashbang: 'flashbang', weapon_smokegrenade: 'smokegrenade',
+};
 const DEMO_RESTOCK = 2; // the demo: seconds from a bomb going off or being defused to the next one
 const DEMO_HEAL = 2; // the demo: seconds from the last hurt to full health
 const DROWN_BACK = 10; // health drowned given back every DROWN_BACK_TICKS once the head is out
 const DROWN_BACK_TICKS = 2 * TICK_RATE;
+const ASSIST_DAMAGE = 40; // CS:GO: more than this to a victim a teammate kills is an assist
 const BOT_PLACE_GAP = 40; // bot_place all: units between the bots in a row
 export const CHAT_FLOOD_TICKS = Math.round(0.66 * TICK_RATE); // least gap between a player's chat lines (CS:GO's flood check: ~0.75 s)
 // Retakes: the Ts start RETAKE_T units from the planted bomb, the CTs RETAKE_CT, at most
@@ -113,6 +125,19 @@ const VIEW_WRAP = 2 ** 24; // a command's viewTick crosses the wire as ticks x 2
 const VIEW_SLACK = 13; // ticks (~200 ms, CS:GO's) a shooter's view may lag its newest snapshot
 const MAX_INTERP = 2; // cl_interp_ratio's most
 const H_X = 0, H_Y = 1, H_Z = 2, H_YAW = 3, H_FLAGS = 4, H_DUCK = 5, H_LIFE = 6, H_FIELDS = 7;
+
+// The grenade the dead drop (mp_death_drop_grenade): 2 the one in hand, else (and 1) the
+// best they carry by price (approx. of CS:GO's pick); 0 for none.
+function deathGrenade(f, mode) {
+  const held = f[WS_SLOTS + SLOT_GRENADE * 3];
+  if (mode === 2 && f[WS_ACTIVE] === SLOT_GRENADE && held) return held;
+  let best = 0;
+  for (let k = 0; k < GRENADE_IDS.length; k++) {
+    const id = GRENADE_IDS[k];
+    if (f[WS_GRENADES + k] > 0 && (!best || WEAPONS[id].price > WEAPONS[best].price)) best = id;
+  }
+  return best;
+}
 
 class Client {
   constructor(id, session) {
@@ -169,6 +194,9 @@ class Client {
     this.givenHits = new Uint8Array(MAX_PLAYERS);
     this.taken = new Uint16Array(MAX_PLAYERS);
     this.takenHits = new Uint8Array(MAX_PLAYERS);
+    this.lifeTaken = new Uint16Array(MAX_PLAYERS); // damage from each player in this life (assists)
+    this.flashedBy = -1; // who threw the flashbang that blinds it longest now (flash assists)
+    this.teamSince = -Infinity; // server tick it came onto its team (auto-balance moves the newest)
     this.cmdTime = 0; // sim time of the last command run (a weapon earned mid-command draws then)
     this.flashLeft = 0; // seconds of flashbang blindness left (sent in the own block)
     this.flashTotal = 0;
@@ -210,6 +238,10 @@ class Client {
 
   get deaths() {
     return this.player.deaths;
+  }
+
+  get assists() {
+    return this.player.assists;
   }
 
   get score() {
@@ -268,6 +300,19 @@ export const DEFAULT_RULES = {
   immunityTime: 0, // mp_respawn_immunitytime (s)
   matchRestartDelay: 15, // mp_match_restart_delay (s)
   deathDropGun: true, // mp_death_drop_gun
+  deathDropGrenade: 2, // mp_death_drop_grenade: 0 none, 1 the best, 2 the one in hand, else the best
+  deathDropDefuser: true, // mp_death_drop_defuser
+  // Friendly fire (mp_friendlyfire; the shares are CS:GO's defaults, the competitive cfg's
+  // are 0.33 / 0.85 / 1 / 0.4). ffGrenadeSelf applies whether it is on or not.
+  friendlyFire: false,
+  ffBullets: 0.1, // ff_damage_reduction_bullets
+  ffGrenade: 0.25, // ff_damage_reduction_grenade
+  ffGrenadeSelf: 1, // ff_damage_reduction_grenade_self
+  ffOther: 0.25, // ff_damage_reduction_other
+  // Team sizes: the server's cvars are CS:GO's (mp_limitteams 2, mp_autoteambalance 1); off
+  // here, so a game made in code (the tests) puts players where it says.
+  limitTeams: 0,
+  autoTeamBalance: false,
   armouryEntities: true, // mp_armoury_entities: the map's weapons lying out at each round start
   // Bots (server/bots.js).
   botQuota: 0, // bot_quota
@@ -290,6 +335,24 @@ export class Game {
     ({ breakables: this.breakables, doors: this.doors, killables: this.killables, logic: this.logic } = mapEntities(bsp, this.world));
     this.pressed = new Map(); // breakable slot stood on -> the tick it breaks (SF_BREAK_PRESSURE)
     this.logic.onBreak = (slot, act) => this.breakSlot(slot, act);
+    this.logic.onHurt = (i, damage) => this.mapHurt(this.doorClients[i], damage);
+    this.logic.onExplode = (x, y, z, magnitude, flags) => this.mapExplosion(x, y, z, magnitude, flags);
+    this.logic.onText = (message, act, all) => this.mapText(message, act, all);
+    this.logic.onStrip = (act) => this.stripWeapons(this.clients[act.id]);
+    this.textsSent = new Set(); // game_text lines sent this tick (textsTick): one each, however many fired them
+    this.textsTick = -1;
+    // CS 1.6 fires game_playerspawn at every spawn (fy_tuscan greets with a game_text).
+    this.spawnFires = bsp.entities.some((e) => e.targetname === 'game_playerspawn');
+    // game_player_equip with no name (spawnflags 1: use only): every spawn gets its weapons
+    // instead of the default pistol (usp_glass: knife and USP; css_india2: AWP and Deagle).
+    this.equip = [];
+    for (const e of bsp.entities) {
+      if (e.classname !== 'game_player_equip' || e.targetname || (+(e.spawnflags || 0) & 1)) continue;
+      for (const k of Object.keys(e)) {
+        const id = WEAPON_ID[CS16_WEAPONS[k]];
+        if (id && !this.equip.includes(id)) this.equip.push(id);
+      }
+    }
     this.doorBodies = []; // living players' PlayerStates, refilled every tick
     this.placeTrace = new Trace(); // bot_place
     this.placeNext = -1;
@@ -299,6 +362,7 @@ export class Game {
     this.hurtBlocked = (i, dmg) => this.hurtBy(this.doorClients[i], dmg, null, 0);
     this.blastOut = []; // slots a blast broke
     this.buyZones = new BuyZones(bsp);
+    this.mapBuying = mapBuying(bsp); // info_map_parameters: who may buy on this map (the demo ignores it)
     this.spawns = teamSpawns(bsp);
     const o = new Float32Array(3);
     // The map's weapons lying out (CS 1.6's armoury_entity: fy_ maps): placed at each round
@@ -402,11 +466,12 @@ export class Game {
       yaw: (i) => this.clients[i].yaw,
       hurt: (i, damage, weapon, owner, team, x, y, z) => this.grenadeHurt(this.clients[i], damage, weapon, owner, team, x, y, z),
       blast: (x, y, z, damage, radius, _weapon, owner) => this.blastBreakables(x, y, z, damage, radius, this.clients[owner] || null),
-      flash: (i, seconds) => {
+      flash: (i, seconds, owner) => {
         const c = this.clients[i];
         if (seconds > c.flashLeft) {
           c.flashLeft = seconds;
           c.flashTotal = seconds;
+          c.flashedBy = owner;
         }
       },
     };
@@ -429,6 +494,7 @@ export class Game {
     attacker.givenHits[victim.id] = Math.min(255, attacker.givenHits[victim.id] + 1);
     victim.taken[attacker.id] = Math.min(65535, victim.taken[attacker.id] + lost);
     victim.takenHits[attacker.id] = Math.min(255, victim.takenHits[attacker.id] + 1);
+    victim.lifeTaken[attacker.id] = Math.min(65535, victim.lifeTaken[attacker.id] + lost);
   }
 
   // Where the damage `victim` just took (health `before` it) came from, for its hurt
@@ -560,11 +626,14 @@ export class Game {
       for (const o of this.clients) if (o && o !== c && o.joined && o.playing) o.team === TEAM_CT ? ct++ : t++;
       p.team = ct < t ? TEAM_CT : TEAM_T;
     }
-    // A full team (mp_teamsize_max): the other one, else watch.
+    // A team too far ahead (mp_limitteams): the other one. A full team (mp_teamsize_max): the
+    // other one, else watch.
+    if (p.team !== TEAM_SPECTATOR && this.stacked(p.team, c)) p.team = p.team === TEAM_CT ? TEAM_T : TEAM_CT;
     if (p.team !== TEAM_SPECTATOR && this.teamFull(p.team, c)) {
       const other = p.team === TEAM_CT ? TEAM_T : TEAM_CT;
       p.team = this.teamFull(other, c) ? TEAM_SPECTATOR : other;
     }
+    c.teamSince = this.tick;
     p.money = this.phase === PHASE_WARMUP ? WARMUP_MONEY : this.rules.startMoney;
     if (c.playing && (this.phase === PHASE_WARMUP || this.phase === PHASE_FREEZE ||
       (this.phase === PHASE_LIVE && this.respawns(c)))) {
@@ -585,6 +654,7 @@ export class Game {
     spawnPlayer(c.player, pick[0], pick[1], pick[2], keepGear, withLoadout);
     const list = this.progression();
     if (list) armLevel(c.player.ws, list, c.level, c.team === TEAM_CT);
+    else if (this.equip.length && this.mode !== MODE.retakes && this.mode !== MODE.deathmatch) this.equipPlayer(c, keepGear);
     if (this.rules.freeArmor) {
       c.player.armor = 100;
       c.player.helmet = true;
@@ -598,6 +668,20 @@ export class Game {
     c.life++;
     c.airUntil = this.tick + AIR_TICKS;
     c.drowned = 0;
+    c.lifeTaken.fill(0);
+    c.flashedBy = -1;
+    // (a second later: a joining client's first spawn comes before its WELCOME, and it then
+    // loads the map; a game_text at once never reached it)
+    if (this.spawnFires) this.logic.fireAt(this.tick, 'game_playerspawn', this.actOf(c), 1);
+  }
+
+  // The map's game_player_equip at a spawn (CS 1.6's PlayerSpawn): a new life gets its
+  // weapons instead of the default ones (the knife stays), a survivor those it lacks.
+  equipPlayer(c, keepGear) {
+    const ws = c.player.ws, f = ws.f;
+    if (!keepGear) f.fill(0, WS_SLOTS + SLOT_PRIMARY * 3, WS_SLOTS + SLOT_SECONDARY * 3 + 3); // (slots 0 and 1)
+    for (const id of this.equip) if (WEAPONS[id].grenade || !f[WS_SLOTS + WEAPONS[id].slot * 3]) giveWeapon(ws, id);
+    f[WS_ACTIVE] = f[WS_SLOTS + SLOT_PRIMARY * 3] ? SLOT_PRIMARY : f[WS_SLOTS + SLOT_SECONDARY * 3] ? SLOT_SECONDARY : SLOT_KNIFE;
   }
 
   // CS:GO's bot takeover: dead `c`, watching a living bot of its team, takes its place
@@ -628,6 +712,7 @@ export class Game {
     c.life++;
     c.airUntil = o.airUntil;
     c.drowned = 0;
+    c.lifeTaken.set(o.lifeTaken);
     if (this.bombCarrier === o) this.bombCarrier = c;
     const h = this.hostages, k = h.carriedBy(o.id);
     if (k >= 0) {
@@ -706,11 +791,13 @@ export class Game {
   }
 
   // In a buy zone (or mp_buy_anywhere) in buy time; deathmatch: mp_buytime from each spawn.
-  // The gun game modes earn their weapons instead.
+  // The gun game modes earn their weapons instead, and the map may let only one team or
+  // nobody buy (info_map_parameters: the fy_ maps).
   canBuy(c) {
     const ph = this.phase, r = this.rules;
     if (this.mode.earned) return false;
     if (r.demo) return c.alive && ph !== PHASE_OVER; // anywhere, anytime
+    if (!teamMayBuy(this.mapBuying, c.team)) return false;
     const inTime = r.deathmatch ? ph !== PHASE_OVER && this.tick < c.spawnTick + r.buyTime * TICK_RATE
       : ph === PHASE_WARMUP || ph === PHASE_FREEZE || (ph === PHASE_LIVE && this.tick < this.buyEnd);
     const f = c.player.ps.f;
@@ -847,7 +934,7 @@ export class Game {
     if (events & WEV_DEFUSED) this.defuseBomb(c);
     if (this.shots.count) {
       this.rewind(c.view);
-      const team = this.rules.teammatesAreEnemies ? 0 : c.team; // 0: nobody is skipped
+      const team = this.rules.teammatesAreEnemies || this.rules.friendlyFire ? 0 : c.team; // 0: nobody is skipped
       resolveShots(this.world, this.breakables, p.ws, this.shots, this.impacts, this.targets, c.id, team);
       this.applyImpacts(c);
     }
@@ -877,15 +964,17 @@ export class Game {
       ev.addShot(shooter.id, SHOT_BLOOD, x, y, z, nx, ny, nz, 0);
       if (!victim.alive) continue; // already killed by an earlier pellet
       const before = victim.player.health;
-      applyDamage(victim.player, im.damage[i], w, im.group[i]);
+      const share = this.isEnemy(shooter, victim) ? 1 : this.rules.ffBullets; // a teammate: friendly fire's share
+      applyDamage(victim.player, im.damage[i] * share, w, im.group[i]);
       this.recordDamage(shooter, victim, before);
       const sf = shooter.player.ps.f;
       this.hurtFrom(victim, before, sf[PS_ORIGIN], sf[PS_ORIGIN + 1], sf[PS_ORIGIN + 2] + eyeOffset(shooter.player.ps));
-      if (victim.player.health <= 0) this.kill(shooter, victim, weapon, im.group[i] === HITGROUP_HEAD);
+      if (victim.player.health <= 0) this.kill(shooter, victim, weapon, im.group[i] === HITGROUP_HEAD, im.pen[i] !== 0);
     }
   }
 
-  kill(killer, victim, weapon, headshot) {
+  // `penetrated`: the bullet went through something first (the kill feed's wallbang mark).
+  kill(killer, victim, weapon, headshot, penetrated = false) {
     const k = killer.player, v = victim.player;
     if (this.mode === MODE.demo && !victim.bot && v.health <= 0) { // the demo: humans take the hit, not the death
       v.health = 1;
@@ -895,10 +984,17 @@ export class Game {
     v.deaths++;
     if (this.bombCarrier === victim) this.dropBomb(victim, false);
     this.dropHostage(victim);
-    // CS:GO: the dead drop their primary, else their pistol.
+    // CS:GO: the dead drop their primary, else their pistol, a grenade and the defuse kit.
     const vf = v.ws.f;
     const slot = vf[WS_SLOTS + SLOT_PRIMARY * 3] ? SLOT_PRIMARY : vf[WS_SLOTS + SLOT_SECONDARY * 3] ? SLOT_SECONDARY : -1;
     if (slot >= 0 && this.rules.deathDropGun) this.dropSlot(victim, slot, false);
+    const nade = this.rules.deathDropGrenade ? deathGrenade(vf, this.rules.deathDropGrenade) : 0;
+    if (nade) this.spawnItem(victim, nade, 0, 0, false);
+    if (v.defuser && this.rules.deathDropDefuser) {
+      v.defuser = false;
+      this.spawnItem(victim, ITEM_DEFUSER, 0, 0, false);
+    }
+    let assist = NO_ASSIST;
     const dm = this.mode === MODE.deathmatch;
     if (killer !== victim) {
       if (!this.isEnemy(killer, victim)) {
@@ -915,13 +1011,39 @@ export class Game {
           if (this.mode === MODE.armsrace) this.armsRaceKill(killer, victim, weapon);
         }
         if (killer.bot && !dm) this.bots.killed(killer); // now and then: "Enemy down."
+        if (!this.rules.teammatesAreEnemies) assist = this.assisterOf(killer, victim);
+        if (assist !== NO_ASSIST) this.clients[assist].player.assists++;
       }
     }
     if (this.phase === PHASE_WARMUP) victim.respawnTick = this.tick + WARMUP_RESPAWN * TICK_RATE;
     else if (this.respawns(victim)) victim.respawnTick = this.tick + DM_RESPAWN * TICK_RATE;
-    this.events.addKill(this.nextKillId, killer.id, victim.id, weapon, headshot ? KILL_HEADSHOT : 0, this.tick);
+    const flags = (headshot ? KILL_HEADSHOT : 0) | (penetrated ? KILL_PENETRATED : 0) |
+      (assist !== NO_ASSIST && this.flashAssisted ? KILL_FLASH_ASSIST : 0);
+    this.events.addKill(this.nextKillId, killer.id, victim.id, weapon, flags, this.tick, assist);
     this.nextKillId = (this.nextKillId + 1) & 0xffff || 1;
     this.rosterDirty = true;
+  }
+
+  // CS:GO's assist for killer's kill of victim: the killer's teammate who did the most damage
+  // to the victim in this life of his, over ASSIST_DAMAGE, else one whose flashbang still
+  // blinds him (a flash assist: flashAssisted). NO_ASSIST for none.
+  assisterOf(killer, victim) {
+    this.flashAssisted = false;
+    let best = NO_ASSIST, most = ASSIST_DAMAGE;
+    for (const o of this.clients) {
+      if (!o || !o.joined || o === killer || o === victim || o.team !== killer.team) continue;
+      if (victim.lifeTaken[o.id] > most) {
+        best = o.id;
+        most = victim.lifeTaken[o.id];
+      }
+    }
+    if (best !== NO_ASSIST) return best;
+    const f = victim.flashedBy >= 0 ? this.clients[victim.flashedBy] : null;
+    if (victim.flashLeft > 0 && f && f.joined && f !== killer && f.team === killer.team) {
+      this.flashAssisted = true;
+      return f.id;
+    }
+    return NO_ASSIST;
   }
 
   // Arms Race: the killer gets the next weapon at once (score = level); a knife kill takes a
@@ -963,7 +1085,7 @@ export class Game {
     }
     const ready = this.ready(t, ct), r = this.rules;
     rs.mode = (r.teammatesAreEnemies ? GAME_FFA : 0) | this.mode.bit |
-      (!r.solidTeammates && !r.teammatesAreEnemies ? GAME_GHOST_TEAM : 0);
+      (!r.solidTeammates && !r.teammatesAreEnemies ? GAME_GHOST_TEAM : 0) | (r.friendlyFire ? GAME_FF : 0);
     if (rs.phase === PHASE_WARMUP) {
       if (!ready) this.warmupReady = -1;
       else if (this.warmupReady < 0) this.warmupReady = this.tick;
@@ -1067,6 +1189,9 @@ export class Game {
     this.doors.reset(this.world);
     this.killables.reset(this.world);
     this.logic.reset(this.tick);
+    if (this.rules.autoTeamBalance && this.rules.rounds && !this.rules.teammatesAreEnemies && this.mode !== MODE.demo) {
+      this.balanceTeams();
+    }
     this.placing = true;
     for (const c of this.clients) if (c) c.placed = false;
     const demolition = this.mode === MODE.demolition, retake = this.mode === MODE.retakes ? this.retakeSetup() : null;
@@ -1445,9 +1570,12 @@ export class Game {
     if (team !== TEAM_SPECTATOR && this.teamFull(team, c)) {
       return this.print(c, `The ${TEAM_NAMES[team]}s are full (mp_teamsize_max ${this.rules.teamSizeMax})`);
     }
+    if (team !== TEAM_SPECTATOR && this.stacked(team, c)) {
+      return this.print(c, `Too many players on the ${TEAM_NAMES[team]}s (mp_limitteams ${this.rules.limitTeams})`);
+    }
     if (this.bombCarrier === c) this.dropBomb(c, false);
     this.dropHostage(c);
-    c.lastTeamChange = this.tick;
+    c.lastTeamChange = c.teamSince = this.tick;
     c.switchedTeam = true; // no bot takeover until the next round (it switched sides with a living body)
     c.player.team = team;
     c.player.health = 0;
@@ -1456,6 +1584,46 @@ export class Game {
     if (this.phase === PHASE_WARMUP || this.phase === PHASE_FREEZE) this.respawn(c, false, this.phase === PHASE_WARMUP);
     else if (this.phase === PHASE_LIVE && this.respawns(c)) c.respawnTick = this.tick + DM_RESPAWN * TICK_RATE;
     console.log(`player ${c.id} "${c.name}" joined ${team === TEAM_SPECTATOR ? 'the spectators' : `the ${TEAM_NAMES[team]}s`}`);
+  }
+
+  // mp_limitteams: would `c` on `team` put it more than limitTeams players ahead of the other?
+  // Bots count, but with bot_quota fill a human joining pushes one of that team's bots out.
+  stacked(team, c) {
+    const limit = this.rules.limitTeams;
+    if (!limit || this.rules.teammatesAreEnemies) return false;
+    let n = 0, other = 0, bots = 0;
+    for (const o of this.clients) {
+      if (!o || o === c || !o.joined || !o.playing) continue;
+      if (o.team !== team) other++;
+      else {
+        n++;
+        if (o.bot) bots++;
+      }
+    }
+    if (!c.bot && bots && this.rules.botQuotaMode === 'fill') n--;
+    return n + 1 - other > limit;
+  }
+
+  // mp_autoteambalance at a round start: while one team has two players more than the
+  // other, its newest bot moves over, else the human who came onto it last (approx. of CS's
+  // pick), starting the round afresh there (no death counted).
+  balanceTeams() {
+    for (let moves = 0; moves < MAX_PLAYERS; moves++) {
+      let t = 0, ct = 0;
+      for (const o of this.clients) if (o && o.joined && o.playing) o.team === TEAM_CT ? ct++ : t++;
+      if (Math.abs(t - ct) < 2) return;
+      const from = t > ct ? TEAM_T : TEAM_CT;
+      let pick = null;
+      for (const o of this.clients) {
+        if (!o || !o.joined || o.team !== from) continue;
+        if (!pick || (o.bot && !pick.bot) || (o.bot === pick.bot && o.teamSince >= pick.teamSince)) pick = o; // (ties: the later id)
+      }
+      pick.player.team = from === TEAM_T ? TEAM_CT : TEAM_T;
+      pick.player.health = 0; // a fresh spawn on the other side, not a survivor's gear
+      pick.teamSince = this.tick;
+      this.rosterDirty = true;
+      this.printAll(`${pick.name} is moved to the ${TEAM_NAMES[pick.team]}s to even the teams`);
+    }
   }
 
   // Has `team` its mp_teamsize_max players already (not counting `except`)?
@@ -1534,7 +1702,7 @@ export class Game {
   // let go of at chest height (dying, swapping with E); it flies and lands (Items.update).
   spawnItem(c, weapon, clip, reserve, thrown) {
     const w = WEAPONS[weapon];
-    if (!w || w.melee || w.c4) return;
+    if (weapon !== ITEM_DEFUSER && (!w || w.melee || w.c4)) return;
     const p = c.player, f = p.ps.f;
     const ez = f[PS_ORIGIN + 2] + (thrown ? eyeOffset(p.ps) - 6 : 10);
     this.items.throw(this.world, weapon, clip, reserve, c.id, f[PS_ORIGIN], f[PS_ORIGIN + 1], ez, thrown ? c.pitch : 0,
@@ -1558,8 +1726,9 @@ export class Game {
   // gun's reload or scope ended: an E swap mid-reload filled the new gun), with its own ammo.
   takeItem(c, i) {
     const it = this.items, w = WEAPONS[it.weapon[i]];
-    giveWeapon(c.player.ws, it.weapon[i]);
-    if (!w.grenade) {
+    if (it.weapon[i] === ITEM_DEFUSER) c.player.defuser = true;
+    else giveWeapon(c.player.ws, it.weapon[i]);
+    if (w && !w.grenade) {
       const f = c.player.ws.f, o = WS_SLOTS + w.slot * 3;
       f[o + 1] = it.clip[i];
       f[o + 2] = it.reserve[i];
@@ -1591,9 +1760,10 @@ export class Game {
       const f = c.player.ps.f, ws = c.player.ws.f;
       const feet = f[PS_ORIGIN + 2] - feetOffset(c.player.ps.i[PS_FLAGS]);
       for (let i = 0; i < it.count; i++) {
-        const w = WEAPONS[it.weapon[i]];
+        const id = it.weapon[i], w = WEAPONS[id];
         if (this.tick < it.pickupTick[i] || it.flying[i]) continue;
-        if (w.grenade ? !canCarryGrenade(c.player.ws, it.weapon[i]) : ws[WS_SLOTS + w.slot * 3]) continue;
+        if (id === ITEM_DEFUSER ? c.team !== TEAM_CT || c.player.defuser
+          : w.grenade ? !canCarryGrenade(c.player.ws, id) : ws[WS_SLOTS + w.slot * 3]) continue;
         if (Math.hypot(f[PS_ORIGIN] - it.x[i], f[PS_ORIGIN + 1] - it.y[i]) > PICKUP_RANGE) continue;
         if (Math.abs(feet - it.z[i]) > 40) continue;
         this.takeItem(c, i);
@@ -1621,7 +1791,7 @@ export class Game {
   // the tick's commands run against them as the clients predict.
   updateDoors() {
     // (Delayed fires too: a map with no doors and no triggers never fired a trigger_auto's.)
-    if (!this.doors.count && !this.logic.triggers.length && !this.logic.queue.length) return;
+    if (!this.doors.count && !this.logic.triggers.length && !this.logic.queue.length && !this.logic.hurts.length) return;
     const bodies = this.doorBodies, acts = this.doorActs, owners = this.doorClients;
     bodies.length = acts.length = owners.length = 0;
     for (const c of this.clients) {
@@ -1636,11 +1806,15 @@ export class Game {
 
   // Damage from the map itself (a crushing mover, an exploding breakable: armor as a chest
   // hit) or a grenade (grenadeHurt). `by`: the client whose shot or throw set it off (the
-  // kill feed's killer), else the victim's own doing; `team`: by's side. Friendly fire is
-  // off: a barrel a teammate shot spares us, as his HE does (his own hurts him).
+  // kill feed's killer), else the victim's own doing; `team`: by's side. Without friendly
+  // fire a barrel a teammate shot spares us, as his HE does; with it we take the grenade's
+  // or the other share; his own grenade hurts him by ff_damage_reduction_grenade_self.
   hurtBy(c, damage, by, weapon, x, y, z, stats = BLAST, group = HITGROUP_CHEST, team = by ? by.team : 0) {
     if (!c || !c.alive || this.tick < c.immuneUntil) return;
-    if (team && team === c.team && by !== c && !this.rules.teammatesAreEnemies) return;
+    if (team && team === c.team && by !== c && !this.rules.teammatesAreEnemies) {
+      if (!this.rules.friendlyFire) return;
+      damage *= stats.grenade ? this.rules.ffGrenade : this.rules.ffOther;
+    } else if (by === c && stats.grenade) damage *= this.rules.ffGrenadeSelf;
     const before = c.player.health;
     applyDamage(c.player, damage, stats, group);
     this.recordDamage(by && by.joined ? by : null, c, before);
@@ -1719,6 +1893,50 @@ export class Game {
     for (const s of broke) this.brokeSlot(s, null, by);
   }
 
+  // A trigger_hurt's dose (MapLogic.onHurt): the map's damage, armor as a chest hit, a death
+  // the victim's own; less than 0 heals, to 100 at most.
+  mapHurt(c, damage) {
+    if (!c || !c.alive) return;
+    if (damage >= 0) this.hurtBy(c, damage, null, 0);
+    else c.player.health = Math.max(c.player.health, Math.min(100, c.player.health - damage));
+  }
+
+  // An env_explosion fired (CEnvExplosion::Use): a fireball sized by its magnitude and
+  // RadiusDamage of it to 2.5 times it, by its flags (no damage 1, no fireball 4).
+  mapExplosion(x, y, z, magnitude, flags) {
+    if (!(flags & SF_EXPLOSION_NOFIREBALL) && magnitude > 0) {
+      this.grenades.addEffect(FX_BLAST, Math.min(255, Math.round(magnitude)), -1, 0, x, y, z);
+    }
+    if (!(flags & SF_EXPLOSION_NODAMAGE) && magnitude > 0) this.blast(x, y, z, magnitude, magnitude * EXPLODE_RANGE, null);
+  }
+
+  // A game_text fired: its lines (a backslash and n in the map's text break them) to every
+  // human, or only to the player who set it off, as chat lines of the map's own (CS 1.6
+  // prints them on the screen: approx.); each once a tick, however many fired it.
+  mapText(message, act, all) {
+    const to = all ? null : act && this.clients[act.id];
+    if (!all && (!to || to.bot)) return;
+    if (this.textsTick !== this.tick) {
+      this.textsTick = this.tick;
+      this.textsSent.clear();
+    }
+    const key = `${to ? to.id : 'all'} ${message}`;
+    if (this.textsSent.has(key)) return;
+    this.textsSent.add(key);
+    const lines = message.split('\\n').map(cleanChat).filter(Boolean);
+    for (const c of to ? [to] : this.clients) {
+      if (!c || !c.joined || c.bot) continue;
+      for (const line of lines) c.session.send(writeChat(c.writer(), CHAT_CONSOLE, CHAT_MAP, line));
+    }
+  }
+
+  // A player_weaponstrip fired by `c`: every weapon but the knife goes (the bomb drops).
+  stripWeapons(c) {
+    if (!c || !c.alive) return;
+    if (this.bombCarrier === c) this.dropBomb(c, false);
+    for (let s = 0; s < NUM_SLOTS; s++) if (s !== SLOT_KNIFE) removeWeapon(c.player.ws, s, c.cmdTime);
+  }
+
   // The living players as bodies the tick's commands collide with (shared/trace.js): each
   // command meets the others where they are now, as in CS:GO (no lag compensation for
   // movement); a client predicts against the newest snapshot's positions.
@@ -1773,7 +1991,7 @@ export class Game {
 
   // Where client c stands and looks (door swing side, trigger activator).
   actOf(c) {
-    const a = c.act || (c.act = { x: 0, y: 0, z: 0, yaw: 0 }), f = c.player.ps.f;
+    const a = c.act || (c.act = { x: 0, y: 0, z: 0, yaw: 0, id: c.id }), f = c.player.ps.f;
     a.x = f[PS_ORIGIN];
     a.y = f[PS_ORIGIN + 1];
     a.z = f[PS_ORIGIN + 2];

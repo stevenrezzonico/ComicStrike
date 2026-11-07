@@ -98,6 +98,7 @@ export class CollisionWorld {
     // False once fromBSP found no liquid leaf and no func_water: the water probes (pmove,
     // grenades, the client's swimming and splashes) are skipped on a dry map.
     this.liquids = true;
+    this.teleports = null; // trigger_teleport volumes (fromBSP: teleportsOf), run by shared/player.js
     this.surfaces = null; // SurfaceMap, attached by whoever loads the map (bullet penetration)
     this.bodies = new Float32Array(MAX_BODIES * BODY_FIELDS); // see BODY_FIELDS
     this.bodyCount = 0; // slots in use (by player id, so holes are bodies of half height 0)
@@ -231,8 +232,31 @@ export class CollisionWorld {
       if (kind === ENT_WATER && (skin === CONTENTS_SLIME || skin === CONTENTS_LAVA)) world.ents[i].liquid = skin;
     });
     world.liquids = wet || world.water.length > 0;
+    world.teleports = teleportsOf(bsp);
     return world;
   }
+}
+
+// The map's trigger_teleport volumes (each brush's bounds, as MapLogic's triggers) and where
+// each sends a player: the entity its target names (info_teleport_destination), feet at its
+// origin, facing its angles' yaw. Null on a map with none. Not for players with spawnflags 2.
+function teleportsOf(bsp) {
+  const out = [], o = new Float64Array(3), d = new Float64Array(3), mf = bsp.modelsF;
+  for (const e of bsp.entities) {
+    if (e.classname !== 'trigger_teleport' || !e.target || (+(e.spawnflags || 0) & 2)) continue;
+    const m = entityModelIndex(e), dest = bsp.entities.find((x) => x.targetname === e.target);
+    if (m <= 0 || !dest || !dest.origin) continue;
+    o.fill(0);
+    if (e.origin) parseVec3(e.origin, o);
+    parseVec3(dest.origin, d);
+    const yaw = dest.angles ? +dest.angles.trim().split(/\s+/)[1] || 0 : +(dest.angle || 0) || 0;
+    out.push({
+      mins: [mf[m * 16] + o[0], mf[m * 16 + 1] + o[1], mf[m * 16 + 2] + o[2]],
+      maxs: [mf[m * 16 + 3] + o[0], mf[m * 16 + 4] + o[1], mf[m * 16 + 5] + o[2]],
+      x: d[0], y: d[1], z: d[2], yaw,
+    });
+  }
+  return out.length ? out : null;
 }
 
 // Solid brush entities not named func_* (shared/doors.js moves them).

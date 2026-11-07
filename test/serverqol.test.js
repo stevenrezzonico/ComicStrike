@@ -18,6 +18,7 @@ function server() {
     loadMap, listMaps: () => ['de_playground'], readCfg, print: () => {}, now: () => clock.ms,
   });
   quiet(() => host.start('de_playground'));
+  host.con.exec('mp_limitteams 0'); // these tests put many players on one side
   const w = new Writer();
   const hello = (name, password = '', address = '203.0.113.7', team = TEAM_T) => {
     const sent = [];

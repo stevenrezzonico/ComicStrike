@@ -231,6 +231,16 @@ export class Host {
     num('mp_respawn_immunitytime', 0, 'Seconds a respawned player cannot be hurt (until he shoots)', 0, 60);
     num('mp_match_restart_delay', 15, 'Seconds between the end of a match and the next', 1, 300);
     num('mp_death_drop_gun', 1, 'The dead drop their best gun', 0, 1);
+    num('mp_death_drop_grenade', 2, 'The dead drop a grenade: 0 none, 1 their best, 2 the one in hand, else their best', 0, 2);
+    num('mp_death_drop_defuser', 1, 'Dead CTs drop their defuse kit', 0, 1);
+    // Friendly fire (CS:GO's; the competitive and wingman cfgs turn it on, with their shares).
+    num('mp_friendlyfire', 0, 'Teammates hurt each other (by the ff_damage_reduction_* shares)', 0, 1);
+    num('ff_damage_reduction_bullets', 0.1, "Share of a bullet's damage a teammate takes", 0, 1);
+    num('ff_damage_reduction_grenade', 0.25, "Share of a grenade's damage a teammate takes", 0, 1);
+    num('ff_damage_reduction_grenade_self', 1, "Share of his own grenade's damage the thrower takes", 0, 1);
+    num('ff_damage_reduction_other', 0.25, 'Share of other damage a teammate set off (a blast) a teammate takes', 0, 1);
+    num('mp_limitteams', 2, 'Most players one team may have over the other when joining (0: no limit)', 0, 30);
+    num('mp_autoteambalance', 1, 'Teams two or more players apart are evened out at the round start', 0, 1);
     num('mp_armoury_entities', 1, "The map's own weapons lie out at every round start (armoury_entity, the fy_ maps)", 0, 1);
     num('mp_halftime', 1, 'Teams swap sides after half the rounds', 0, 1);
     num('mp_overtime_enable', 1, 'A tied match goes to overtime', 0, 1);
@@ -412,6 +422,15 @@ export class Host {
       immunityTime: v('mp_respawn_immunitytime'),
       matchRestartDelay: v('mp_match_restart_delay'),
       deathDropGun: v('mp_death_drop_gun') !== 0,
+      deathDropGrenade: v('mp_death_drop_grenade'),
+      deathDropDefuser: v('mp_death_drop_defuser') !== 0,
+      friendlyFire: v('mp_friendlyfire') !== 0,
+      ffBullets: v('ff_damage_reduction_bullets'),
+      ffGrenade: v('ff_damage_reduction_grenade'),
+      ffGrenadeSelf: v('ff_damage_reduction_grenade_self'),
+      ffOther: v('ff_damage_reduction_other'),
+      limitTeams: v('mp_limitteams'),
+      autoTeamBalance: v('mp_autoteambalance') !== 0,
       armouryEntities: v('mp_armoury_entities') !== 0,
       botQuota: v('bot_quota'),
       botQuotaMode: this.con.get('bot_quota_mode').value === 'fill' ? 'fill' : 'normal',

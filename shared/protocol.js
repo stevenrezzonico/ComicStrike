@@ -62,7 +62,7 @@ import { WS_SIZE } from './weapons.js';
 import { BombState, BOMB_DROPPED } from './bomb.js';
 import { MAX_MOVERS } from './doors.js';
 
-export const PROTOCOL_VERSION = 21;
+export const PROTOCOL_VERSION = 22;
 export const MAX_PLAYERS = 20;
 export const MAX_DATAGRAM = 1024; // Chrome's WebTransport maxDatagramSize
 export const CMD_REDUNDANCY = 4;
@@ -100,6 +100,7 @@ export const CHAT_TEAM = 1;
 export const CHAT_DEAD = 2;
 export const CHAT_SPEC = 4;
 export const CHAT_RADIO = 8;
+export const CHAT_MAP = 16; // a line of the map's own (game_text), from CHAT_CONSOLE: shown with no name
 // CS:GO's radio commands (the console command, the line), menu by menu: radio1 (Z) the
 // first six, radio2 (X) the next six, radio3 (C) the rest.
 export const RADIO = [
@@ -117,6 +118,9 @@ export const radioIndex = (cmd) => RADIO.findIndex((r) => r[0] === cmd);
 export const SHOT_IMPACT = 0; // bullet hit the world
 export const SHOT_BLOOD = 1; // bullet hit a player
 export const KILL_HEADSHOT = 1;
+export const KILL_PENETRATED = 2; // the bullet went through a wall or a body first (the kill feed's wallbang mark)
+export const KILL_FLASH_ASSIST = 4; // the assister flashed the victim, did not hurt him
+export const NO_ASSIST = 255; // a kill event's assister: none
 export const KILL_REPEAT_TICKS = 32;
 const CMD_BYTES = 21;
 
@@ -296,7 +300,7 @@ export function writeReject(w, reason) {
   return w.view();
 }
 
-// players: array indexed by id of { team, name, kills, deaths, score, mvps } or null.
+// players: array indexed by id of { team, name, kills, assists, deaths, score, mvps } or null.
 export function writeInfo(w, players) {
   w.reset();
   w.u8v(S2C_INFO);
@@ -309,6 +313,7 @@ export function writeInfo(w, players) {
     w.u8v(id);
     w.u8v(p.team);
     w.u16v(p.kills);
+    w.u16v(p.assists || 0);
     w.u16v(p.deaths);
     w.u16c(p.score);
     w.u8v(Math.min(p.mvps || 0, 255));
@@ -319,17 +324,18 @@ export function writeInfo(w, players) {
   return w.view();
 }
 
-// Fills names / teams / kills / deaths / scores / mvps indexed by id (others cleared).
-export function readInfo(r, names, teams, kills, deaths, scores, mvps = null) {
+// Fills names / teams / kills / deaths / scores / mvps / assists indexed by id (others cleared).
+export function readInfo(r, names, teams, kills, deaths, scores, mvps = null, assists = null) {
   names.fill('');
   teams.fill(0);
   kills.fill(0);
   deaths.fill(0);
   scores.fill(0);
   if (mvps) mvps.fill(0);
+  if (assists) assists.fill(0);
   const n = r.u8v();
   for (let i = 0; i < n; i++) {
-    const id = r.u8v(), team = r.u8v(), k = r.u16v(), d = r.u16v(), score = r.u16v(), m = r.u8v(), name = r.str();
+    const id = r.u8v(), team = r.u8v(), k = r.u16v(), a = r.u16v(), d = r.u16v(), score = r.u16v(), m = r.u8v(), name = r.str();
     if (id < names.length) {
       names[id] = name;
       teams[id] = team;
@@ -337,6 +343,7 @@ export function readInfo(r, names, teams, kills, deaths, scores, mvps = null) {
       deaths[id] = d;
       scores[id] = score;
       if (mvps) mvps[id] = m;
+      if (assists) assists[id] = a;
     }
   }
 }
@@ -697,6 +704,7 @@ export class EventList {
     this.victim = new Uint8Array(killCapacity);
     this.weapon = new Uint8Array(killCapacity);
     this.killFlags = new Uint8Array(killCapacity);
+    this.killAssist = new Uint8Array(killCapacity); // NO_ASSIST: none
     this.killTick = new Uint32Array(killCapacity); // server only
   }
 
@@ -714,7 +722,7 @@ export class EventList {
     this.breakable[k] = breakable;
   }
 
-  addKill(id, killer, victim, weapon, flags, tick) {
+  addKill(id, killer, victim, weapon, flags, tick, assister = NO_ASSIST) {
     if (this.kills === this.killId.length) this.dropOldestKill();
     const k = this.kills++;
     this.killId[k] = id;
@@ -722,6 +730,7 @@ export class EventList {
     this.victim[k] = victim;
     this.weapon[k] = weapon;
     this.killFlags[k] = flags;
+    this.killAssist[k] = assister;
     this.killTick[k] = tick;
   }
 
@@ -731,13 +740,14 @@ export class EventList {
     this.victim.copyWithin(0, 1, this.kills);
     this.weapon.copyWithin(0, 1, this.kills);
     this.killFlags.copyWithin(0, 1, this.kills);
+    this.killAssist.copyWithin(0, 1, this.kills);
     this.killTick.copyWithin(0, 1, this.kills);
     this.kills--;
   }
 }
 
 const SHOT_BYTES = 18;
-const KILL_BYTES = 6;
+const KILL_BYTES = 7;
 const OWN_BYTES = 21; // the own block before the player state, with a hurt place
 const ROW_BYTES = 25; // another player's row with every field
 const quantizeNormal = (v) => Math.max(-127, Math.min(127, Math.round(v * 127)));
@@ -774,6 +784,7 @@ function writeEvents(w, ev, self) {
     w.u8v(ev.victim[k]);
     w.u8v(ev.weapon[k]);
     w.u8v(ev.killFlags[k]);
+    w.u8v(ev.killAssist[k]);
   }
 }
 
@@ -788,7 +799,7 @@ function readEvents(r, ev) {
   const kills = r.u8v();
   for (let i = 0; i < kills; i++) {
     const id = r.u16v(), killer = r.u8v(), victim = r.u8v(), weapon = r.u8v(), flags = r.u8v();
-    ev.addKill(id, killer, victim, weapon, flags, 0);
+    ev.addKill(id, killer, victim, weapon, flags, 0, r.u8v());
   }
 }
 
@@ -874,7 +885,7 @@ export class RoundState {
     this.scoreCT = 0;
     this.info = 0; // last round: winner team | reason << 2
     this.round = 0;
-    this.mode = 0; // GAME_FFA | GAME_DM (shared/economy.js)
+    this.mode = 0; // GAME_FFA | GAME_DM | ... (shared/economy.js; 16 bits)
     this.serial = 0; // round starts mod 256 (the round number repeats on a restart in round 1)
     this.mvp = NO_MVP; // the last round's most valuable player (a player id), NO_MVP none
   }
@@ -915,7 +926,7 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
   w.u8v(rs.scoreCT);
   w.u8v(rs.info);
   w.u8v(rs.round);
-  w.u8v(rs.mode);
+  w.u16v(rs.mode);
   w.u8v(rs.serial);
   w.u8v(rs.mvp);
   w.u8v(bomb.state);
@@ -1110,7 +1121,7 @@ export function readSnapshot(r, ring, own, ev = null) {
   rs.scoreCT = r.u8v();
   rs.info = r.u8v();
   rs.round = r.u8v();
-  rs.mode = r.u8v();
+  rs.mode = r.u16v();
   rs.serial = r.u8v();
   rs.mvp = r.u8v();
   const bomb = own.bomb;

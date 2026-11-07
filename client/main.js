@@ -26,7 +26,7 @@ import {
   WEAPONS, WEAPON_ID, ShotList, giveWeapon, weaponTick, viewPunchPitch, viewPunchYaw, hash32, WS_LAST_SLOT,
   WS_EVENTS, WS_SIZE, WS_SLOTS, WS_ACTIVE, WS_ACTION, WS_ACTION_END, SLOT_C4, NUM_SLOTS, ACTION_PLANT, ACTION_DEFUSE,
   SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, SLOT_GRENADE,
-  WS_ZOOM, WS_THROWN, WEV_THROW, WEV_FIRE, activeWeapon, silenced, RECOIL, shotKick,
+  WS_ZOOM, WS_THROWN, WEV_THROW, WEV_FIRE, activeWeapon, silenced, RECOIL, shotKick, removeWeapon,
 } from '../shared/weapons.js';
 import { levelWeapon } from '../shared/progression.js';
 import { modeOfBits } from '../shared/modes.js';
@@ -35,7 +35,7 @@ import {
   BOMB_EXPLODED,
 } from '../shared/bomb.js';
 import { EXPLODE_RANGE, blastDamage } from '../shared/breakables.js';
-import { mapEntities, MAX_MOVERS, BLAST } from '../shared/doors.js';
+import { mapEntities, MAX_MOVERS, BLAST, SF_EXPLOSION_NODAMAGE, SF_EXPLOSION_NOFIREBALL } from '../shared/doors.js';
 import { HitTargets, feetOffset } from '../shared/hitgroups.js';
 import { SurfaceMap } from '../shared/surfaces.js';
 import {
@@ -45,8 +45,8 @@ import {
 import { Grenades, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE, FX_BLAST } from '../shared/grenades.js';
 import { HITGROUP_CHEST, HITGROUP_LEGS } from '../shared/hitgroups.js';
 import {
-  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, OWN_HURT, E_ACTIVE, E_X,
-  CHAT_CONSOLE, CHAT_TEAM, CHAT_MAX, CHAT_RADIO, RADIO,
+  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, KILL_PENETRATED, KILL_FLASH_ASSIST, NO_ASSIST, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, OWN_HURT, E_ACTIVE, E_X,
+  CHAT_CONSOLE, CHAT_TEAM, CHAT_MAX, CHAT_RADIO, CHAT_MAP, cleanChat, RADIO,
   E_Y, E_Z, E_PITCH, E_YAW,
   E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw, dequantizePitch, PROTOCOL_VERSION,
 } from '../shared/protocol.js';
@@ -99,7 +99,8 @@ import { NetGraph } from './netgraph.js';
 import { createConsole, watch } from './settings.js';
 import { releaseOf, quote } from '../shared/cvars.js';
 import {
-  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_DEMO, GAME_GHOST_TEAM, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
+  PHASE_FREEZE, PHASE_LIVE, GAME_FFA, GAME_FF, GAME_DEMO, GAME_GHOST_TEAM, buyError, applyBuy, itemLabel, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER,
+  mapBuying, teamMayBuy,
 } from '../shared/economy.js';
 
 const DEG = Math.PI / 180;
@@ -558,6 +559,7 @@ let roomCode = (params.get('room') || '').toLowerCase().replace(/[^a-z0-9]/g, ''
 let roomRcon = '', roomNames = null;
 
 let currentMap = '';
+let mapBuy = 0; // the map's info_map_parameters buying rule (mapBuying), for the B key's answer
 let overviewWorker = null, overviewJob = 0;
 let mapLoads = 0; // loadMap calls: one whose fetch returns after a newer one began stops there
 async function loadMap(name) {
@@ -630,6 +632,19 @@ async function loadMap(name) {
   mapLogic.onBreak = (slot, act) => { // the sandbox: a breakable fired by name
     if (breakables.setBroken(world, slot, true)) brokeSlot(slot, act);
   };
+  // The rest of the map's logic the sandbox runs on itself (the server's Game online).
+  mapLogic.onHurt = (_i, damage) => {
+    if (damage >= 0) sandboxHurt(0, damage);
+    else player.health = Math.max(player.health, Math.min(100, player.health - damage));
+  };
+  mapLogic.onExplode = (x, y, z, m, flags) => sandboxBlast(x, y, z, m, !(flags & SF_EXPLOSION_NOFIREBALL) && m > 0,
+    !(flags & SF_EXPLOSION_NODAMAGE) && m > 0);
+  mapLogic.onText = (message) => {
+    for (const text of message.split('\\n').map(cleanChat).filter(Boolean)) addChat({ sender: CHAT_CONSOLE, flags: CHAT_MAP, text });
+  };
+  mapLogic.onStrip = () => {
+    for (let s = 0; s < NUM_SLOTS; s++) if (s !== SLOT_KNIFE) removeWeapon(ws, s, tickCount * TICK_DT);
+  };
   moverDir.fill(0);
   sandboxRemoved.fill(0);
   renderer.setMovers(doors);
@@ -638,6 +653,7 @@ async function loadMap(name) {
     `lightmap ${mesh.lightmap.width}x${mesh.lightmap.height}, ${world.ents.length} collision ents, ` +
     `${breakables.count} breakables, ${doors.count} movers, built in ${ms} ms (${steps.join(', ')}; fetched in ${(t0 - tf).toFixed(0)})`);
   Object.assign(spawns, teamSpawns(bsp));
+  mapBuy = mapBuying(bsp);
 }
 
 function resetView(yaw) {
@@ -741,13 +757,20 @@ function brokeSlot(slot, act) {
   const m = b.magnitude[slot];
   if (m <= 0) return;
   const c = b.center(slot, blastAt);
-  localGrenades.addEffect(FX_BLAST, Math.min(255, Math.round(m)), -1, 0, c[0], c[1], c[2]);
-  const d = blastDamage(m, m * EXPLODE_RANGE, Math.hypot(ps.f[PS_ORIGIN] - c[0], ps.f[PS_ORIGIN + 1] - c[1], ps.f[PS_ORIGIN + 2] - c[2]));
+  sandboxBlast(c[0], c[1], c[2], m, true, true);
+}
+
+// The sandbox's side of a map explosion (the server's brokeSlot and mapExplosion): a
+// fireball of magnitude m, and its damage on us and the breakables in reach.
+function sandboxBlast(x, y, z, m, fireball, damage) {
+  if (fireball) localGrenades.addEffect(FX_BLAST, Math.min(255, Math.round(m)), -1, 0, x, y, z);
+  if (!damage) return;
+  const d = blastDamage(m, m * EXPLODE_RANGE, Math.hypot(ps.f[PS_ORIGIN] - x, ps.f[PS_ORIGIN + 1] - y, ps.f[PS_ORIGIN + 2] - z));
   if (d > 0 && player.health > 0) {
-    traceHull(world, HULL_POINT, c[0], c[1], c[2], ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1], ps.f[PS_ORIGIN + 2], blastTrace);
+    traceHull(world, HULL_POINT, x, y, z, ps.f[PS_ORIGIN], ps.f[PS_ORIGIN + 1], ps.f[PS_ORIGIN + 2], blastTrace);
     if (blastTrace.fraction >= 1) sandboxHurt(0, d);
   }
-  sandboxBlastBreakables(c[0], c[1], c[2], m, m * EXPLODE_RANGE);
+  sandboxBlastBreakables(x, y, z, m, m * EXPLODE_RANGE);
 }
 
 function sandboxBlastBreakables(x, y, z, damage, radius) {
@@ -1178,7 +1201,7 @@ function applyEvents() {
     if (seenKills.includes(id)) continue;
     seenKills[seenKillNext] = id;
     seenKillNext = (seenKillNext + 1) % seenKills.length;
-    addKill(ev.killer[k], ev.victim[k], ev.weapon[k], (ev.killFlags[k] & KILL_HEADSHOT) !== 0);
+    addKill(ev.killer[k], ev.victim[k], ev.weapon[k], ev.killFlags[k], ev.killAssist[k]);
     killBody(ev.killer[k], ev.victim[k], (ev.killFlags[k] & KILL_HEADSHOT) !== 0, id);
     if (ev.killer[k] === selfId && (ev.killFlags[k] & KILL_HEADSHOT)) sounds.hit(true);
     if (ev.killer[k] === selfId && ev.victim[k] !== selfId) words.kill((ev.killFlags[k] & KILL_HEADSHOT) !== 0);
@@ -1249,8 +1272,11 @@ function killBody(killer, victim, headshot, seed) {
   models.anim[victim].die(dx, dy, headshot, dist, drop, seed);
 }
 
-function addKill(killer, victim, weapon, headshot) {
+// A kill feed row (CS:GO's): the killer, the assister with + (a flashbang mark for a flash
+// assist), the weapon, WB for a wallbang, HS, the victim.
+function addKill(killer, victim, weapon, flags, assister = NO_ASSIST) {
   tag('kill');
+  const headshot = (flags & KILL_HEADSHOT) !== 0;
   const row = document.createElement('div');
   const name = (id) => net.names[id] || `player${id}`;
   const wname = WEAPONS[weapon] ? WEAPONS[weapon].label : 'world';
@@ -1259,12 +1285,16 @@ function addKill(killer, victim, weapon, headshot) {
       : `<span class="${teamClass(victim)}"></span> died`;
     row.querySelector('span').textContent = name(victim);
   } else {
-    row.innerHTML = `<span class="${teamClass(killer)}"></span> [<span></span>]${headshot ? ' <b class="hs">HS</b>' : ''}` +
+    const helper = assister !== NO_ASSIST && net.names[assister];
+    row.innerHTML = `<span class="${teamClass(killer)}"></span>` +
+      (helper ? ` + ${flags & KILL_FLASH_ASSIST ? '<b class="fa">FLASH</b> ' : ''}<span class="${teamClass(assister)}"></span>` : '') +
+      ` [<span class="w"></span>]${flags & KILL_PENETRATED ? ' <b class="wb">WB</b>' : ''}${headshot ? ' <b class="hs">HS</b>' : ''}` +
       ` <span class="${teamClass(victim)}"></span>`;
     const spans = row.querySelectorAll('span');
     spans[0].textContent = name(killer);
-    spans[1].textContent = wname;
-    spans[2].textContent = name(victim);
+    if (helper) spans[1].textContent = helper;
+    spans[helper ? 2 : 1].textContent = wname;
+    spans[helper ? 3 : 2].textContent = name(victim);
   }
   if (killer === selfId || victim === selfId) row.className = 'mine';
   killfeed.appendChild(row);
@@ -1381,6 +1411,7 @@ function tick() {
     weaponTick(ws, ps, buttons, select, angles[0], angles[1], t, shots);
   } else if (alive) {
     const died = runCommand(world, player, buttons, select, angles[0], angles[1], t, shots, frozen(), simBomb(), demo());
+    if (player.teleported) resetView(player.teleportYaw); // predicted: the view takes the destination's (not on replays)
     if (!net) sandboxTouches(t, buttons);
     if (died && !net) offlineRespawn();
   }
@@ -1388,9 +1419,9 @@ function tick() {
   lastButtons = buttons;
   moverSounds();
   if (shots.count) {
-    // Free for all: bullets stop at everyone (team 0 skips nobody), as on the server.
+    // Free for all or friendly fire: bullets stop at everyone (team 0 skips nobody), as on the server.
     resolveShots(world, breakables, ws, shots, impacts, net ? targets : null, selfId,
-      gameMode() & GAME_FFA ? 0 : player.team);
+      gameMode() & (GAME_FFA | GAME_FF) ? 0 : player.team);
     showImpacts();
   }
   if (!net) { // offline grenades
@@ -2189,7 +2220,10 @@ con.command('drop', () => input.pulse(IN_DROP), 'Drop the active weapon (the C4 
 con.command('buymenu', () => {
   if (hud.menuOpen) closeBuyMenu();
   else if (gunGame()) hud.flash('No buying in this mode: kills earn the next weapon', 2500, performance.now());
-  else if (playing && player.team !== TEAM_SPECTATOR) hud.toggleMenu(true);
+  else if (net && !demo() && !teamMayBuy(mapBuy, player.team)) {
+    hud.flash(mapBuy === 3 ? 'No buying on this map: take weapons from the ground' : 'Only the other team buys on this map',
+      2500, performance.now());
+  }  else if (playing && player.team !== TEAM_SPECTATOR) hud.toggleMenu(true);
 }, 'Opens the buy menu');
 con.command('teammenu', () => {
   if (!playing) return;
@@ -2224,7 +2258,8 @@ function addChat(m) {
   chat.add(m.sender, m.flags, m.text);
   if (m.flags & CHAT_RADIO) callouts.say(m.sender, m.text, performance.now());
   const name = m.sender === CHAT_CONSOLE ? 'Console' : (net ? net.names[m.sender] : cv.name.value) || `player${m.sender}`;
-  conWin.print(`${(m.flags & CHAT_RADIO) ? '(radio) ' : (m.flags & CHAT_TEAM) ? '(team) ' : ''}${name} : ${m.text}`);
+  if (m.flags & CHAT_MAP) conWin.print(m.text);
+  else conWin.print(`${(m.flags & CHAT_RADIO) ? '(radio) ' : (m.flags & CHAT_TEAM) ? '(team) ' : ''}${name} : ${m.text}`);
 }
 const sayCommand = (a, ctx, team) => {
   const text = a.slice(1).join(' ').trim();
