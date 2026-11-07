@@ -5,6 +5,7 @@ import { PLAYER_SKELETON as S } from '../client/anim/skeleton.js';
 
 const PLAYER_BIND_X = (name) => S.bind[S.bone(name) * 3]; // a bone's x at the bind pose
 import { MESH_STRIDE } from '../client/gl/meshkit.js';
+import { BOX_DATA, BOX_STRIDE, HITGROUP_HEAD } from '../shared/hitgroups.js';
 import { WEAPON_ID, WEAPONS } from '../shared/weapons.js';
 import { ANIM_PLANT, ANIM_RELOAD } from '../shared/protocol.js';
 
@@ -39,6 +40,26 @@ Deno.test('player models: closed, under budget, team looks differ', () => {
   assert.equal(holdOf(WEAPON_ID.deagle), HOLD_PISTOL);
   assert.equal(holdOf(WEAPON_ID.knife), HOLD_KNIFE);
   assert.equal(holdOf(WEAPON_ID.c4), HOLD_C4);
+});
+
+Deno.test('player models: every head (near and far) fits the head hit box; helmets and hair a little over its top', () => {
+  const B0 = BOX_DATA.subarray(0, BOX_STRIDE); // the head's: group, center x y z, half x y z
+  assert.equal(B0[0], HITGROUP_HEAD);
+  for (const [team, helmet] of [['T', false], ['CT', false], ['CT', true], ['H', false]]) {
+    for (const coarse of [false, true]) {
+      const m = buildPlayer(team, helmet, coarse), u8 = new Uint8Array(m.data);
+      let n = 0;
+      for (let v = 0; v < m.count; v++) {
+        if (S.names[u8[v * MESH_STRIDE + 15]] !== 'head_0') continue;
+        const x = m.positions[v * 3], y = m.positions[v * 3 + 1], z = m.positions[v * 3 + 2];
+        if (team === 'T' && x < -3.3 && Math.abs(y) < 2.2) continue; // the shemagh's knot and tail: cloth, hanging behind
+        const out = Math.max(Math.abs(x - B0[1]) - B0[4], Math.abs(y - B0[2]) - B0[5], B0[3] - B0[6] - z);
+        assert.ok(out < 0.6 && z < B0[3] + B0[6] + 1.6, `${team}${helmet ? ' helmet' : ''}${coarse ? ' far' : ''}: a head vertex at ${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)}`);
+        n++;
+      }
+      assert.ok(n > 100, `${team}: head vertices ${n}`);
+    }
+  }
 });
 
 Deno.test('player models: every leg part rides the bone whose span it covers', () => {

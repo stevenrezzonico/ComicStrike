@@ -19,6 +19,9 @@ export const HOLD_TIED = 4; // hostages: hands tied behind the back
 const SKIN = [0.78, 0.6, 0.47];
 const BLACK = [0.1, 0.1, 0.11];
 const EYE = [0.08, 0.07, 0.07];
+const EYE_WHITE = [0.93, 0.91, 0.86];
+const BROW = [0.13, 0.1, 0.08];
+const LIPS = [0.5, 0.29, 0.25];
 
 // Phoenix (the concept's T): a red patterned shemagh over the head and face, olive jacket
 // under a chest rig, tan cargo trousers, a red shoulder patch.
@@ -79,6 +82,37 @@ const DELTOID = () => [B('clavicle_L'), B('arm_upper_L'), 0.65];
 const LEG = chain(2, [[2.5, 'ankle_L'], [5.5, 'leg_lower_L'], [18, 'leg_lower_L'], [22, 'leg_upper_L'],
   [33, 'leg_upper_L'], [38, 'pelvis']]);
 
+// The head's profile (radius, height), turned about z at x 1; the far version's coarser.
+const HEAD_PROFILE = [[0, 59.4], [2.6, 59.9], [3.4, 60.6], [3.85, 61.6], [4.15, 62.6], [4.25, 63.6], [4.25, 64.6], [4.2, 65.6],
+  [3.95, 66.7], [3.5, 67.8], [2.6, 68.8], [1.4, 69.35], [0, 69.5]];
+const HEAD_PROFILE_FAR = [[0, 59.4], [2.6, 59.9], [3.7, 61.2], [4.2, 63.2], [4.2, 65.8], [3.6, 67.9], [2.3, 69.1], [0, 69.5]];
+const smooth01 = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
+// The skull over the turned egg (points about x 1): the back of the head deeper, flatter
+// toward the nape, the jaw narrower toward the chin; with `face`, the face flatter in front,
+// a brow ridge and the chin forward. Hair and helmets take it without the face.
+function headWarp(face) {
+  return ([x, y, z]) => {
+    let u = x - 1;
+    const jaw = smooth01((63.8 - z) / 4);
+    if (u < 0) u *= z > 61 ? 1 + 0.06 * smooth01((z - 61) / 2) : 1 - 0.3 * jaw;
+    const v = y * (1 - 0.32 * jaw);
+    if (face && u > 2.6) {
+      u = 2.6 + (u - 2.6) * (1 - 0.3 * smooth01((u - 2.6) / 1.2));
+      const front = smooth01(1 - Math.abs(v) / 3);
+      u += 0.4 * front * Math.exp(-((z - 66) ** 2) / 0.35) + 0.7 * front * Math.exp(-((z - 60.5) ** 2) / 0.5);
+    }
+    return [u + 1, v, z];
+  };
+}
+// The hostage's hair: the skull's shape, its lower edge a hairline, high over the forehead,
+// above the ears at the sides, down to the nape behind.
+const hairSkull = headWarp(false);
+function hairWarp(p) {
+  const [x, y, z] = hairSkull(p), u = x - 1;
+  const edge = 62.8 + 2.8 * smooth01((u + 2.4) / 2) + 0.8 * smooth01((u - 1.5) / 1.6);
+  return [x, y, z < edge ? edge - (edge - z) * 0.08 : z];
+}
+
 // Torso sections up the spine (width a across, depth b forward, roundness n: 3 a rounded box,
 // 2 an ellipse): a V, narrow at the waist, broad across the chest, then rounder and narrower
 // over the shoulders, sloping into the neck like a trapezius, so the deltoids and the arms
@@ -120,41 +154,54 @@ export function buildPlayer(team, helmet = false, coarse = false) {
   }
   b.skin();
 
-  // Neck and head.
+  // Neck and head. The head is a turned egg the warp shapes into a skull (headWarp): with
+  // a face, the far version too; features only on the near one.
   b.bone(B('neck_0')).color(team === 'H' ? SKIN : L.head).push().translate(0.3, 0, 58).lathe([[2.4, 0], [2.1, 3.6]], sg(12)).pop();
-  b.bone(B('head_0')).color(L.head).push().translate(1, 0, 0)
-    .lathe([[0, 59.4], [2.6, 59.9], [3.7, 61.2], [4.2, 63.2], [4.2, 65.8], [3.6, 67.9], [2.3, 69.1], [0, 69.5]], sg(16)).pop();
-  const eyes = (z) => {
+  b.bone(B('head_0')).color(L.head).warp(headWarp(true)).push().translate(1, 0, 0)
+    .lathe(coarse ? HEAD_PROFILE_FAR : HEAD_PROFILE, coarse ? sg(16) : 18).pop().warp();
+  // Eyes on the face at x0 (its front at eye height): a white with a dark pupil, and a brow
+  // above, its inner end lower (a stern look).
+  const eyes = (z, x0, brow = 0.8) => {
     if (coarse) return;
-    b.color(EYE);
-    for (const y of [-1.1, 1.1]) b.push().translate(5.05, y, z).scale(0.3, 0.42, 0.55).sphere(1, 8, 4).pop();
-  };
-  if (team === 'H') { // bare head: hair, ears, nose
-    b.color(L.cap).push().translate(0.8, 0, 0).lathe([[4.45, 64.4], [4.4, 66.4], [3.6, 68.6], [2.1, 69.7], [0, 70]], sg(16)).pop();
-    if (fine) {
-      b.color(SKIN);
-      for (const y of [-4.1, 4.1]) b.push().translate(0.8, y, 64.3).scale(0.5, 0.35, 0.9).sphere(1, 8, 4).pop();
-      b.push().translate(5.2, 0, 63.6).scale(0.55, 0.45, 0.75).sphere(1, 8, 4).pop();
+    for (const s of [-1, 1]) {
+      b.color(EYE_WHITE).push().translate(x0 - 0.05, s * 1.15, z).scale(0.3, 0.52, 0.42).sphere(1, 8, 4).pop();
+      b.color(EYE).push().translate(x0 + 0.15, s * 1.1, z).scale(0.12, 0.24, 0.3).sphere(1, 8, 4).pop();
+      b.color(BROW).push().translate(x0 + 0.05, s * 1.2, z + brow).rotate(0, 0, s * 12).box(0.3, 1.4, 0.3).pop();
     }
-    eyes(65.1);
+  };
+  if (fine) b.color(L.head).push().translate(4.9, 0, 63.75).rotate(-18, 0, 0).scale(0.55, 0.5, 0.8).sphere(1, 8, 4).pop(); // nose
+  if (team === 'H') { // bare head: hair over a hairline, ears, a mouth
+    b.color(L.cap).warp(hairWarp).push().translate(0.9, 0, 0).lathe([[4.35, 62.8], [4.5, 64.4], [4.5, 66.4], [3.8, 68.4],
+      [2.25, 69.55], [0, 69.95]], sg(16)).pop().warp();
+    if (fine) {
+      for (const s of [-1, 1]) {
+        b.color(SKIN).push().translate(0.9, s * 4.25, 64.2).scale(0.5, 0.35, 0.95).sphere(1, 8, 4).pop();
+        b.color(shade(SKIN, 0.72)).push().translate(0.95, s * 4.5, 64.2).scale(0.28, 0.1, 0.55).sphere(1, 8, 4).pop();
+      }
+      b.color(LIPS).box(0.25, 1.5, 0.22, 4.5, 0, 61.6); // the mouth
+    }
+    eyes(65.1, 4.8);
   } else { // a face cover with an eye slit
-    b.color(SKIN).push().translate(4.55, 0, 64.9).scale(0.7, 2.7, 0.85).sphere(1, sg(12), coarse ? 3 : 6).pop();
-    eyes(64.95);
-    if (team === 'T') { // the shemagh: a muffle over the mouth, a tail down the back
-      b.color(L.head).push().translate(4.2, 0, 61.8).scale(1.1, 3.2, 1.7).sphere(1, sg(12), coarse ? 3 : 6).pop();
+    b.color(SKIN).push().translate(4.3, 0, 64.9).scale(0.7, 2.7, 0.85).sphere(1, sg(12), coarse ? 3 : 6).pop();
+    eyes(64.95, 4.95, 0.55); // (the brows inside the slit)
+    if (team === 'T') { // the shemagh: a muffle over the mouth, a knot and its tail at the back
+      b.color(L.head).push().translate(4.0, 0, 61.8).scale(1.1, 3.2, 1.7).sphere(1, sg(12), coarse ? 3 : 6).pop();
+      if (fine) b.push().translate(-3.6, 0, 64.6).scale(0.8, 1.2, 1).sphere(1, 10, 5).pop();
       b.sweep([{ at: [-3.4, 0, 64], a: 2, b: 0.7 }, { at: [-4.1, 0, 60.5], a: 1.9, b: 0.7 }, { at: [-4.3, 0, 57.5], a: 1.5, b: 0.5 }],
         sg(8), [-1, 0, 0]);
     }
   }
   if (team === 'CT' && helmet) {
+    // (round, not on the skull's shape: it already clears it, and a deeper back left the head box)
     b.color(L.helmet).push().translate(1, 0, 0).lathe([[4.75, 64.6], [4.85, 66.4], [3.95, 68.7], [2.2, 69.9], [0, 70.4]], sg(16)).pop();
-    b.color(BLACK).rbox(1, 6.8, 1.5, 0.4, 5.15, 0, 65, 1); // goggles band
+    b.color(BLACK).rbox(1, 6.8, 1.5, 0.4, 4.95, 0, 65, 1); // goggles band
     if (fine) {
       b.color(finish([0.42, 0.6, 0.74], FINISH.METAL));
-      for (const y of [-1.4, 1.4]) b.push().translate(5.6, y, 65).scale(0.2, 1.1, 0.6).sphere(1, 10, 4).pop();
+      for (const y of [-1.4, 1.4]) b.push().translate(5.4, y, 65).scale(0.2, 1.1, 0.6).sphere(1, 10, 4).pop();
     }
   } else if (team === 'CT') {
-    b.color(L.cap).push().translate(1, 0, 0).lathe([[4.35, 65.8], [3.7, 68.6], [2, 69.6], [0, 69.9]], sg(16)).pop();
+    b.color(L.cap).warp(headWarp(false)).push().translate(1, 0, 0).lathe([[4.35, 65.8], [3.7, 68.6], [2, 69.6], [0, 69.9]],
+      sg(16)).pop().warp();
   }
 
   b.mirror((m) => {
