@@ -1510,6 +1510,19 @@ function tick() {
   tickCount++;
 }
 
+// A browser with its vsync off (Chrome, Edge) calls requestAnimationFrame back at once only
+// after a frame that changed the page; else the next call waits for the display's refresh.
+// The game's canvas did not count when desynchronized (r_lowlatency) or not drawn (fps_max,
+// r_frames_ahead holding it): 60 fps, except while shooting, whose HUD writes changed every
+// frame (300+). So a 1-pixel canvas, all but transparent, changes in every frame of a game:
+// no DOM write (no style or layout, nothing for the benchmark's observer), a few µs; a
+// vsync-paced browser runs as before.
+const wake = document.body.appendChild(document.createElement('canvas'));
+wake.width = wake.height = 1;
+wake.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;pointer-events:none';
+const wakeCtx = wake.getContext('2d');
+let wakeOdd = 0;
+
 let last = performance.now();
 let lastDraw = last; // when the last frame was drawn (fps_max, r_frames_ahead skip frames)
 let ticksSinceDraw = 0; // the ticks run since, held frames included (the benchmark's frame kinds)
@@ -1667,6 +1680,9 @@ function frame(now) {
     if (backdrop) drawBackdrop(now);
     return;
   }
+  wakeOdd ^= 1; // (the next frame comes at once with the vsync off: see `wake`)
+  wakeCtx.fillStyle = wakeOdd ? '#000' : '#fff';
+  wakeCtx.fillRect(0, 0, 1, 1);
   // Practice pauses with the pause menu, like a listen server: the worker's ticks stop
   // (bots, the round clock, timeouts) and so do ours; the frame still draws. sv_pausable 0
   // keeps it running (testing: the game goes on while the menu is up or the mouse is lost).
