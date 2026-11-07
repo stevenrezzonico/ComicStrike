@@ -1417,12 +1417,21 @@ export class Game {
     return t > need || ct > need || (played >= limit && t !== ct);
   }
 
+  // Every round of regulation (or of the overtime period) played.
+  periodOver() {
+    const ot = this.overtime > 0, max = this.rules.maxRounds, otMax = this.rules.overtimeRounds;
+    return (ot ? this.roundsPlayed - max - (this.overtime - 1) * otMax : this.roundsPlayed) >= (ot ? otMax : max);
+  }
+
   endRound(winner, reason, hero = null) {
     const rs = this.round;
     this.roundsPlayed++;
     if (winner === TEAM_T) rs.scoreT++;
     if (winner === TEAM_CT) rs.scoreCT++;
-    rs.info = winner | (reason << 2) | (this.matchWon() ? ROUND_FINAL : 0); // the clients' match-end fanfare
+    // The clients' match end: won, or every round played with no overtime to come (a draw: 8-8
+    // in a short match; the match restarts after it either way).
+    const last = this.matchWon() || (this.periodOver() && !(this.rules.overtime && this.rules.halftime));
+    rs.info = winner | (reason << 2) | (last ? ROUND_FINAL : 0);
     this.roundMvp(winner, hero);
     this.sendReports();
     for (const team of [TEAM_T, TEAM_CT]) {

@@ -3,7 +3,8 @@
 // a mode. A new mode is a row here, its cfg/gamemode_<name>.cfg and whatever new rules it
 // brings in server/game.js.
 //
-// name: the cfg's and the Host's; key: game_type/game_mode; label: as the menus show it;
+// name: the cfg's and the Host's; key: game_type/game_mode, and /sv_game_mode_flags when the mode
+// has flags (CS:GO's short match: 32); label: as the menus show it;
 // rule: its flag in the game rules (server/host.js rules()); bit: in the round block (none:
 // it plays as competitive); respawns: the dead come back (no bot to take over); free: buying
 // costs nothing (no money); earned: weapons are handed out, no buying (no money); ladder: the
@@ -19,6 +20,7 @@ const row = (name, key, label, rule, bit, facts = {}) => ({
 export const MODES = [
   row('casual', '0/0', 'Casual', '', 0),
   row('competitive', '0/1', 'Competitive', '', 0),
+  row('competitive_short', '0/1/32', 'Competitive (short)', '', 0), // 16 rounds, a draw at 8-8
   row('wingman', '0/2', 'Wingman', 'wingman', GAME_WINGMAN, { oneSite: true }),
   row('deathmatch', '1/2', 'Deathmatch', 'deathmatch', GAME_DM, { respawns: true, free: true }),
   row('armsrace', '1/0', 'Arms Race', 'armsRace', GAME_ARMSRACE, { respawns: true, earned: true, ladder: ARMS_RACE }),

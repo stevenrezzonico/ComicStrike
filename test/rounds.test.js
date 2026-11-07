@@ -207,3 +207,26 @@ Deno.test('rounds: the round that decides the match says so (the clients\' fanfa
   run(1 + 64 + 64 + 4);
   assert.equal(game.round.scoreT + game.round.scoreCT, 0, 'a new match');
 });
+
+Deno.test('short competitive (16 rounds, no overtime): 8-8 ends the match as a draw, 9 wins it', async (t) => {
+  const s = await setup(t);
+  if (!s) return;
+  const { game, t1, ct, run } = s;
+  game.rules = { ...game.rules, maxRounds: 16, overtime: false };
+  run(1 + 64 + 2);
+  game.roundsPlayed = 15;
+  game.round.scoreT = 8;
+  game.round.scoreCT = 7;
+  game.kill(ct, t1, WEAPON_ID.usp_silencer, false);
+  run(1);
+  assert.ok(matchOver(game.round.info) && game.round.scoreT === 8 && game.round.scoreCT === 8, 'the 16th round: a drawn match');
+  run(1 + 64 + 64 + 4);
+  assert.equal(game.round.scoreT + game.round.scoreCT, 0, 'a new match, no overtime');
+  assert.equal(game.overtime, 0);
+  game.roundsPlayed = 14;
+  game.round.scoreT = 8;
+  game.round.scoreCT = 6;
+  game.kill(t1, ct, WEAPON_ID.glock, false);
+  run(1);
+  assert.ok(matchOver(game.round.info) && game.round.scoreT === 9, 'the 9th win');
+});

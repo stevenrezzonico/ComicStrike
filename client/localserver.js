@@ -105,8 +105,8 @@ async function start({ map, mode, players: n, difficulty, armoury = true, bytes 
   // The page's console reaches the server with rcon: a password only it knows.
   const rcon = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16)).join('');
   host.password.set(rcon);
-  const [type, gameMode] = modeNamed(mode).key.split('/'); // (competitive for an unknown name)
-  host.con.exec(`game_type ${type}; game_mode ${gameMode}; hostname Practice; bot_difficulty ${difficulty}; ` +
+  const [type, gameMode, flags = 0] = modeNamed(mode).key.split('/'); // (competitive for an unknown name)
+  host.con.exec(`game_type ${type}; game_mode ${gameMode}; sv_game_mode_flags ${flags}; hostname Practice; bot_difficulty ${difficulty}; ` +
     `mp_armoury_entities ${armoury ? 1 : 0}`);
   host.start(map);
   for (const name of ['map', 'changelevel']) { // fetch the map first (the Host loads synchronously)

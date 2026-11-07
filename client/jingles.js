@@ -41,6 +41,7 @@ export class JingleCues {
       const side = team === TEAM_T || team === TEAM_CT, winner = rs.info & 3;
       if (matchOver(rs.info)) {
         if (reasonOf(rs.info) === END_MATCH || !side) return 'match'; // no sides, or watching
+        if (rs.scoreT === rs.scoreCT) return null; // a drawn match
         return winner === team ? 'match' : 'lost';
       }
       if (!side || !winner) return null;

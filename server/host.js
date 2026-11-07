@@ -222,6 +222,7 @@ export class Host {
         '1/1 demolition, 1/2 deathmatch, 2/0 demo); applies on the next map',
       min: 0, max: 3,
     });
+    num('sv_game_mode_flags', 0, 'Game mode flags (32: a short match, with game_mode 1); applies on the next map', 0, 255);
     num('mp_teammates_are_enemies', 0, 'Everyone is an enemy (free for all)', 0, 1);
     num('mp_solid_teammates', 1, 'Teammates block each other (enemies always do)', 0, 1);
     num('mp_respawn_on_death_t', 0, 'Terrorists respawn after dying', 0, 1);
@@ -384,7 +385,8 @@ export class Host {
 
   // Runs the game mode's cfgs (game_type / game_mode) for the map about to start.
   loadMode() {
-    const key = `${this.con.get('game_type').number}/${this.con.get('game_mode').number}`;
+    const base = `${this.con.get('game_type').number}/${this.con.get('game_mode').number}`;
+    const flags = this.con.get('sv_game_mode_flags').number, key = flags && GAME_MODES[`${base}/${flags}`] ? `${base}/${flags}` : base;
     this.modeName = GAME_MODES[key] || 'competitive';
     if (!GAME_MODES[key]) this.con.out({}, `game_type / game_mode ${key} is not supported: competitive`);
     const quiet = { print: () => {} };

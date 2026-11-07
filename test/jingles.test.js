@@ -71,6 +71,7 @@ Deno.test('jingles: the match over, a draw, a spectator', () => {
   g.step();
   g.phase(PHASE_OVER, 64);
   g.rs.info = TEAM_CT | (END_ELIMINATION << 2) | ROUND_FINAL;
+  g.rs.scoreCT = 16;
   g.step();
   assert.deepEqual(g.heard, ['match']);
   g = game(TEAM_T);
@@ -78,8 +79,16 @@ Deno.test('jingles: the match over, a draw, a spectator', () => {
   g.step();
   g.phase(PHASE_OVER, 64);
   g.rs.info = TEAM_CT | (END_ELIMINATION << 2) | ROUND_FINAL;
+  g.rs.scoreCT = 16;
   g.step();
   assert.deepEqual(g.heard, ['lost'], 'the losers of the match get the lost cadence');
+  g.rs.scoreT = 16; // (the same round's end, seen anew as a drawn match: nothing)
+  g.phase(PHASE_LIVE, 640);
+  g.step();
+  g.heard.length = 0;
+  g.phase(PHASE_OVER, 64);
+  g.step();
+  assert.deepEqual(g.heard, [], 'a drawn match: no jingle');
   g = game(TEAM_T);
   g.phase(PHASE_LIVE, 640);
   g.step();

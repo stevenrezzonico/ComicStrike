@@ -4,7 +4,7 @@
 
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import {
-  PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, END_MATCH, END_SURRENDER, reasonOf,
+  PHASE_WARMUP, PHASE_FREEZE, PHASE_OVER, END_TIME, END_BOMB, END_DEFUSE, END_RESCUE, END_MATCH, END_SURRENDER, reasonOf, matchOver,
   GAME_PAUSED, GAME_TIMEOUT, GAME_FFA, GAME_DM,
   GAME_DEMO, GAME_ARMSRACE, GAME_DEMOLITION, GAME_RETAKES,
   BUY_MENU, ITEM_KEVLAR, ITEM_ASSAULTSUIT, ITEM_DEFUSER, itemLabel, itemPrice,
@@ -127,6 +127,7 @@ export class Hud {
       else if (reason === END_DEFUSE) banner = 'Bomb Defused: ' + banner;
       else if (reason === END_RESCUE) banner = 'Hostage Rescued: ' + banner;
       else if (reason === END_SURRENDER) banner = `${winner === TEAM_CT ? 'Terrorists' : 'Counter-Terrorists'} Surrender: ${banner}`;
+      if (matchOver(rs.info) && rs.scoreT === rs.scoreCT) banner = 'Match Drawn'; // (every round played, no overtime)
     } else if (rs.phase === PHASE_WARMUP) {
       banner = rs.mode & GAME_FFA ? 'Warmup: waiting for players' : 'Warmup: waiting for both teams';
     } else if (notice) {
