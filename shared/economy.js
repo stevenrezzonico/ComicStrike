@@ -159,9 +159,10 @@ export const teamMayBuy = (buying, team) => buying === 0 || (buying === 1 && tea
 
 // Why `p` cannot buy `item` now ('' = it can). `canBuyNow`: in a buy zone in buy time;
 // `free`: deathmatch (no money).
-export function buyError(p, item, canBuyNow, free = false) {
+export function buyError(p, item, canBuyNow, free = false, grenades = true) {
   if (!canBuyNow) return 'not in a buy zone or out of buy time';
   if (p.health <= 0) return 'dead';
+  if (!grenades && WEAPONS[item]?.grenade) return 'no grenades in this mode'; // mp_buy_allow_grenades 0
   const price = itemPrice(p, item);
   if (price < 0) return 'not available';
   if (!free && price > p.money) return 'not enough money';

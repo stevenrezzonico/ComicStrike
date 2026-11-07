@@ -408,7 +408,7 @@ export class Hud {
     this.elHint.textContent = cat < 0 ? 'B / Esc: close  ·  pick a category'
       : 'B / Esc: close  ·  right click or the center: back';
     this.centerKey = '';
-    this.refreshMenu(this.lastPlayer, this.lastCanBuy, this.lastFree);
+    this.refreshMenu(this.lastPlayer, this.lastCanBuy, this.lastFree, this.lastGrenades);
   }
 
   // The sector in the mouse's direction from the wheel's center (-1: the center).
@@ -437,7 +437,7 @@ export class Hud {
       g.style.transform = `translate(${g.dataset.dx}px, ${g.dataset.dy}px)`;
     }
     this.centerKey = '';
-    this.refreshMenu(this.lastPlayer, this.lastCanBuy, this.lastFree);
+    this.refreshMenu(this.lastPlayer, this.lastCanBuy, this.lastFree, this.lastGrenades);
   }
 
   pick(k) {
@@ -453,10 +453,11 @@ export class Hud {
 
   // Prices, what this player cannot buy now and the center text (`free`: deathmatch).
   // Called every frame: touches the DOM only when something changed.
-  refreshMenu(player, canBuy, free = false) {
+  refreshMenu(player, canBuy, free = false, grenades = true) {
     this.lastPlayer = player;
     this.lastCanBuy = canBuy;
     this.lastFree = free;
+    this.lastGrenades = grenades;
     if (!this.menuOpen || !player) return;
     if (this.shownTeam !== player.team) { // the items differ per team
       this.shownTeam = player.team;
@@ -465,14 +466,15 @@ export class Hud {
     this.elMenu.classList.toggle('closed', !canBuy);
     if (this.view === 'items') {
       for (const s of this.sectors) {
-        const price = itemPrice(player, s.item);
+        const banned = !grenades && WEAPONS[s.item]?.grenade; // mp_buy_allow_grenades 0 (deathmatch)
+        const price = banned ? -1 : itemPrice(player, s.item);
         const state = price < 0 ? 1 : !canBuy || player.health <= 0 || (!free && price > player.money) ? 2 : 0;
         s.enabled = state === 0;
         if (state !== s.shownState) {
           s.shownState = state;
           s.g.classList.toggle('off', state !== 0);
         }
-        const text = price < 0 ? 'OWNED' : free ? 'FREE' : `$${price}`;
+        const text = banned ? 'NONE' : price < 0 ? 'OWNED' : free ? 'FREE' : `$${price}`;
         if (text !== s.shownPrice) s.price.textContent = s.shownPrice = text;
       }
     }

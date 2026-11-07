@@ -298,6 +298,7 @@ export const DEFAULT_RULES = {
   timeLimit: 0, // mp_timelimit (s): match length when rounds never end; 0 none
   buyAnywhere: false, // mp_buy_anywhere
   freeArmor: false, // mp_free_armor: kevlar + helmet at every spawn
+  buyGrenades: true, // mp_buy_allow_grenades (deathmatch: none)
   giveC4: true, // mp_give_player_c4
   hostagesMax: HOSTAGES_PER_ROUND, // mp_hostages_max
   immunityTime: 0, // mp_respawn_immunitytime (s)
@@ -784,7 +785,7 @@ export class Game {
   // Buys `item` for `c` if he may (BUY messages, bots).
   buyItem(c, item) {
     const free = this.mode.free;
-    if (buyError(c.player, item, this.canBuy(c), free)) return false;
+    if (buyError(c.player, item, this.canBuy(c), free, this.rules.buyGrenades)) return false;
     // A weapon bought into a taken slot throws the old one down (CS:GO; deathmatch: it is
     // gone, and the new one is handed out again at every respawn).
     const w = WEAPONS[item], p = c.player;
@@ -853,6 +854,7 @@ export class Game {
     for (const c of this.clients) {
       if (!c || !c.joined) continue;
       c.canBuy = this.canBuy(c);
+      c.noGrenades = !this.rules.buyGrenades; // the buy menu marks them
       c.immune = c.alive && this.tick < c.immuneUntil; // shown: others' models pulse, our HUD says so
     }
     this.recordHistory();

@@ -188,3 +188,22 @@ Deno.test('modes: each row runs its cfg and rule; the client reads the same fact
     assert.equal(host.game.rules.respawnT && host.game.rules.respawnCT, m.respawns, `${m.name}: respawning`);
   }
 });
+
+Deno.test({ name: 'deathmatch sells no grenades (mp_buy_allow_grenades 0), guns yes; competitive sells both', ignore: !haveMap, fn: () => {
+  const dm = setup([1, 2]);
+  const a = dm.join('alpha', TEAM_CT);
+  dm.join('bravo', TEAM_T);
+  dm.run(4);
+  assert.equal(dm.host.modeName, 'deathmatch');
+  assert.ok(dm.host.game.canBuy(a));
+  assert.ok(!dm.host.game.buyItem(a, WEAPON_ID.hegrenade), 'no HE');
+  assert.equal(a.player.ws.f[WS_GRENADES], 0);
+  assert.ok(a.noGrenades, 'the own block tells the buy menu');
+  assert.ok(dm.host.game.buyItem(a, WEAPON_ID.awp), 'a gun still');
+  const comp = setup([0, 1]);
+  const c = comp.join('charlie', TEAM_CT);
+  comp.join('delta', TEAM_T);
+  comp.run(4);
+  assert.ok(comp.host.game.buyItem(c, WEAPON_ID.hegrenade), 'competitive: an HE');
+  assert.ok(!c.noGrenades);
+}});

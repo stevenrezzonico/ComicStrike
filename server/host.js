@@ -232,6 +232,7 @@ export class Host {
     num('mp_timelimit', 0, 'Match length when rounds never end (min; 0: none)', 0, 600);
     num('mp_buy_anywhere', 0, 'Buy outside the buy zones', 0, 1);
     num('mp_free_armor', 0, 'Spawn with kevlar and a helmet', 0, 1);
+    num('mp_buy_allow_grenades', 1, 'Grenades in the buy menu (CS:GO\'s; deathmatch 0)', 0, 1);
     num('mp_give_player_c4', 1, 'A terrorist gets the bomb each round', 0, 1);
     num('mp_hostages_max', 2, 'Hostages per round on hostage maps', 0, 4);
     num('mp_respawn_immunitytime', 0, 'Seconds a respawned player cannot be hurt (until he shoots)', 0, 60);
@@ -435,6 +436,7 @@ export class Host {
       timeLimit: Math.round(v('mp_timelimit') * 60),
       buyAnywhere: v('mp_buy_anywhere') !== 0,
       freeArmor: v('mp_free_armor') !== 0,
+      buyGrenades: v('mp_buy_allow_grenades') !== 0,
       giveC4: v('mp_give_player_c4') !== 0,
       hostagesMax: v('mp_hostages_max'),
       immunityTime: v('mp_respawn_immunitytime'),

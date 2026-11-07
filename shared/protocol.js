@@ -40,7 +40,7 @@
 //                        [u8 leg, f32 goal if more: a train's leg, a momentary door's goal] },
 //            own player: u8 health, u8 armor (bit 7: helmet), u8 spawnCount, u8 team, f32 spawnYaw,
 //                        u16 money, u8 ownFlags (OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE,
-//                        OWN_HURT), u8 flash left, u8 flash length (1/32 s: flashbang blindness),
+//                        OWN_HURT, OWN_NO_GRENADES), u8 flash left, u8 flash length (1/32 s: flashbang blindness),
 //                        u8 use progress (0..255: picking up a hostage),
 //                        [u8 hurt serial, i16 x, y, z if OWN_HURT: where the last damage came
 //                        from, repeated for HURT_REPEAT_TICKS after it],
@@ -138,6 +138,7 @@ export const OWN_DEFUSER = 2;
 export const OWN_CARRYING = 4; // carrying a hostage (slower: the client predicts it)
 export const OWN_IMMUNE = 8; // our spawn protection is on (deathmatch)
 export const OWN_HURT = 16; // we took damage from somewhere lately: its place follows
+export const OWN_NO_GRENADES = 32; // the server sells no grenades (mp_buy_allow_grenades 0: deathmatch)
 export const HURT_REPEAT_TICKS = 16; // how long the place is repeated (a lost snapshot loses nothing)
 const BROKEN_WORDS = 8; // 256-bit mask, one bit per breakable slot
 
@@ -984,7 +985,7 @@ export function writeSnapshot(w, ring, k, base, self, own, ev = null, rs = NO_RO
   w.f32v(own.spawnYaw);
   w.u16c(p.money);
   w.u8v((own.canBuy ? OWN_CAN_BUY : 0) | (p.defuser ? OWN_DEFUSER : 0) | (p.carrying ? OWN_CARRYING : 0) |
-    (own.immune ? OWN_IMMUNE : 0) | (own.hurtRecent ? OWN_HURT : 0));
+    (own.immune ? OWN_IMMUNE : 0) | (own.hurtRecent ? OWN_HURT : 0) | (own.noGrenades ? OWN_NO_GRENADES : 0));
   w.u8c(Math.round((own.flashLeft || 0) * 32));
   w.u8c(Math.round((own.flashTotal || 0) * 32));
   w.u8c(Math.round((own.useProgress || 0) * 255));

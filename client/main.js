@@ -45,7 +45,7 @@ import {
 import { Grenades, FX_HE, FX_FLASH, FX_SMOKE, FX_FIRE, FX_FIZZLE, FX_BLAST } from '../shared/grenades.js';
 import { HITGROUP_CHEST, HITGROUP_LEGS } from '../shared/hitgroups.js';
 import {
-  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, KILL_PENETRATED, KILL_FLASH_ASSIST, KILL_AIRBORNE, KILL_NOSCOPE, NO_ASSIST, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, OWN_HURT, E_ACTIVE, E_X,
+  MAX_PLAYERS, CmdRing, SHOT_BLOOD, KILL_HEADSHOT, KILL_PENETRATED, KILL_FLASH_ASSIST, KILL_AIRBORNE, KILL_NOSCOPE, NO_ASSIST, SNAPSHOT_HISTORY, OWN_CAN_BUY, OWN_DEFUSER, OWN_CARRYING, OWN_IMMUNE, OWN_HURT, OWN_NO_GRENADES, E_ACTIVE, E_X,
   CHAT_CONSOLE, CHAT_TEAM, CHAT_MAX, CHAT_RADIO, CHAT_MAP, cleanChat, RADIO,
   E_Y, E_Z, E_PITCH, E_YAW,
   E_FLAGS, E_DUCK, E_HEALTH, E_TEAM, E_FIELDS, dequantizeYaw, dequantizePitch, PROTOCOL_VERSION,
@@ -918,6 +918,7 @@ function useHint(off) {
 const demo = () => (gameMode() & GAME_DEMO) !== 0;
 const freeBuys = () => modeOfBits(gameMode()).free; // deathmatch and the demo: no money
 const gunGame = () => modeOfBits(gameMode()).earned; // weapons handed out: no money
+const buysGrenades = () => !net || (net.own.flags & OWN_NO_GRENADES) === 0; // (deathmatch: none)
 // Our place in the gun game modes' weapon list for the round bar ('' in the others), rebuilt
 // only when it changes.
 const progressKey = [-1, -1, -1];
@@ -980,7 +981,7 @@ function buy(item) {
       if (roundBuys.length) lastBuys = roundBuys;
       roundBuys = [];
     }
-    if (!buyError(player, item, (net.own.flags & OWN_CAN_BUY) !== 0, freeBuys())) {
+    if (!buyError(player, item, (net.own.flags & OWN_CAN_BUY) !== 0, freeBuys(), buysGrenades())) {
       net.buy(item);
       roundBuys.push(item);
     }
@@ -2090,7 +2091,7 @@ function draw(now, dt) {
     : picking > 0 ? 'Picking up the hostage' : '',
     picking > 0 ? picking : 1 - (ws.f[WS_ACTION_END] - simTime) / actionTime);
   hud.useHint(useHint(dead || specTeam || !!action || preview || frozen()));
-  hud.refreshMenu(player, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, freeBuys());
+  hud.refreshMenu(player, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, freeBuys(), buysGrenades());
   hud.scoreboard((input.buttons & IN_SCORE) !== 0 && input.locked, net, selfId, rowAlive);
 
   weaponView.hidden = dead && !inEyes;
@@ -2358,7 +2359,7 @@ con.command('teammenu', () => {
 con.command('buy', (a, ctx) => {
   const item = GEAR_NAMES[a[1]] || WEAPON_ID[a[1]];
   if (!item) return con.out(ctx, 'buy <ak47 | m4a1 | m4a1_silencer | awp | deagle | ... | vest | vesthelm | defuser>');
-  const err = buyError(player, item, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, freeBuys());
+  const err = buyError(player, item, net ? (net.own.flags & OWN_CAN_BUY) !== 0 : true, freeBuys(), buysGrenades());
   if (err) return con.out(ctx, `${itemLabel(item)}: ${err}`);
   buy(item);
 }, 'buy <item>: buys a weapon or gear');
