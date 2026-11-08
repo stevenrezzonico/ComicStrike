@@ -18,7 +18,7 @@ import { modeNamed } from '../shared/modes.js';
 export const ROOM_LIMITS = {
   rooms: 8, // live rooms on the server
   bytes: 24 << 20, // the largest map file taken
-  perAddress: 1, // live rooms one address may have
+  perAddress: 1, // live rooms one address keeps: a new one replaces its oldest
   cooldownMs: 30000, // between two uploads from one address
   idleMs: 2 * 60000, // a room closes this long after its last player left
   unusedMs: 10 * 60000, // ... or after its upload when nobody ever joined
@@ -139,20 +139,28 @@ export class Rooms {
       created: now, emptySince: null, joined: false,
       epoch: performance.now(), // the room's own tick clock (server/main.js)
     };
+    // The address's older rooms past perAddress go, oldest first, only now that the new one
+    // runs (a host who closed the browser left one behind and could not make another).
+    const old = this.mine(key);
+    for (const r of old.slice(0, Math.max(0, old.length - (L.perAddress - 1)))) this.close(r, 'its host made a new room');
     this.rooms.set(code, room);
     console.log(`room ${code}: ${name} (${row.name}${bytes ? `, ${(bytes.byteLength / 1048576).toFixed(1)} MB` : ', a server map'}) for ${key || 'local'}`);
     return room;
   }
 
-  // Throws a RoomError when `address` may not make a room now: the server's rooms are taken,
-  // it hosts one already, or it uploaded a moment ago. Run before an upload is read too
-  // (server/main.js: reading 24 MB first let parallel uploads fill the memory).
+  // The rooms an address key made, oldest first.
+  mine(key) {
+    return [...this.rooms.values()].filter((r) => r.address === key);
+  }
+
+  // Throws a RoomError when `address` may not make a room now: the server's rooms are taken
+  // (not counting the address's own ones the new room will replace, build) or it made one a
+  // moment ago. Run before an upload is read too (server/main.js: reading 24 MB first let
+  // parallel uploads fill the memory).
   check(address) {
     const L = this.limits, key = addressKey(address);
-    if (this.rooms.size >= L.rooms) throw new RoomError('every room on this server is taken: try again later', 503);
-    if ([...this.rooms.values()].filter((r) => r.address === key).length >= L.perAddress) {
-      throw new RoomError('you already host a room: close it first (quit it and wait for it to empty)', 429);
-    }
+    const replaced = Math.max(0, this.mine(key).length - (L.perAddress - 1));
+    if (this.rooms.size - replaced >= L.rooms) throw new RoomError('every room on this server is taken: try again later', 503);
     if (this.now() - (this.lastUpload.get(key) ?? -Infinity) < L.cooldownMs) {
       throw new RoomError('one upload at a time: try again in a few seconds', 429);
     }

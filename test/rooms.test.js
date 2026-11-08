@@ -121,15 +121,23 @@ Deno.test('uploads are limited: size, rooms, one per address, a cooldown, real m
   clock.ms += 2000;
   refused(() => rooms.create(PLAYGROUND, { mode: 'quake', address: '1.1.1.1' }), /unknown mode/, 400);
   clock.ms += 2000;
-  quietly(() => rooms.create(PLAYGROUND, { address: '1.1.1.1' }));
+  const first = quietly(() => rooms.create(PLAYGROUND, { address: '1.1.1.1' }));
   clock.ms += 2000;
-  refused(() => rooms.create(PLAYGROUND, { address: '1.1.1.1' }), /already host/, 429);
+  // A second room from one address replaces its first (a host who closed the browser left it behind).
+  const second = quietly(() => rooms.create(PLAYGROUND, { address: '1.1.1.1' }));
+  assert.ok(rooms.get(first.code) === null && rooms.get(second.code) === second);
+  assert.equal(rooms.rooms.size, 1);
   quietly(() => rooms.create(PLAYGROUND, { address: '2.2.2.2' }));
   refused(() => rooms.create(PLAYGROUND, { address: '3.3.3.3' }), /every room/, 503);
+  clock.ms += 2000;
+  quietly(() => rooms.create(PLAYGROUND, { address: '1.1.1.1' })); // every room taken, but its own one goes
+  assert.equal(rooms.rooms.size, 2);
   // IPv6: one /64 is one address.
   const v6 = makeRooms({ cooldownMs: 0 }).rooms;
-  quietly(() => v6.create(PLAYGROUND, { address: '2001:db8:1:2::5' }));
-  refused(() => v6.create(PLAYGROUND, { address: '2001:db8:1:2::77' }), /already host/, 429);
+  const a = quietly(() => v6.create(PLAYGROUND, { address: '2001:db8:1:2::5' }));
+  quietly(() => v6.create(PLAYGROUND, { address: '2001:db8:1:2::77' }));
+  assert.ok(v6.get(a.code) === null);
+  assert.equal(v6.rooms.size, 1);
 });
 
 // The upload's test tick is the game's own: Host.step logs a tick that throws and goes on.
@@ -200,7 +208,7 @@ Deno.test('uploads are refused before their body is read', async () => {
   assert.equal(rooms.rooms.size, 2);
   await refused('3.3.3.3', /every room/, 503);
   clock.ms += 1;
-  await refused('1.1.1.1', /every room|already host/, 503);
+  await refused('1.1.1.1', /one upload at a time/, 429); // its own room does not count toward full
 });
 
 // The cooldown list kept one entry per address that ever uploaded: the sweep drops those past it.
@@ -275,14 +283,19 @@ Deno.test('rooms on the server\'s maps: listed by sv_listed, a join password, th
   const join = (password) => {
     const s = session(), c = room.host.game.connect(s);
     quietly(() => room.host.game.receive(c, writeHello(w, TEAM_T, 0, 0, 'guest', room.code, password).slice()));
+    c.s = s;
     return c;
   };
   assert.ok(!join('').joined);
   assert.ok(join('sesame').joined);
-  // One live room an address, as for uploads.
-  clock.ms += 60000;
-  assert.throws(() => rooms.open('de_inkwell', { address: '1.2.3.4' }), /already host a room/);
   // Its rcon may change to another of the server's maps.
   quietly(() => room.host.con.exec('changelevel de_inkwell'));
   assert.equal(room.host.game.mapName, 'de_inkwell');
+  // A new room from the same address replaces it, its players told why.
+  const guest = join('sesame');
+  clock.ms += 60000;
+  const next = quietly(() => rooms.open('de_inkwell', { address: '1.2.3.4' }));
+  assert.ok(rooms.get(room.code) === null && rooms.get(next.code) === next);
+  assert.equal(guest.s.closed, 'its host made a new room');
+  assert.equal(new Reader().set(guest.s.got.at(-1)).u8v(), S2C_REJECT);
 });
