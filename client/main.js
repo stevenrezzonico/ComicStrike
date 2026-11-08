@@ -188,6 +188,7 @@ let glLost = false;
 canvas.addEventListener('webglcontextlost', () => {
   glLost = true;
   leaveGame('The graphics card was reset (WebGL context lost): reload the page to play again.');
+  menu.root.classList.remove('cover'); // nothing draws it now
 });
 const decals = new Decals(renderer.gl);
 const debris = new Debris(renderer.gl);
@@ -1784,6 +1785,7 @@ function frame(now) {
     last = now;
     clk.accumulator = 0;
     if (backdrop) drawBackdrop(now);
+    else if (world && !starting && !glLost && menu.visible) drawCover();
     return;
   }
   wakeOdd ^= 1; // (the next frame comes at once with the vsync off: see `wake`)
@@ -2300,32 +2302,41 @@ function applyVideoSettings() {
   return aspect;
 }
 
-// The Video tab's window at the start menu: a map drawn behind the menu from a spawn,
-// the view swaying slowly, nothing else running (no players, ticks or sounds). The map
-// stays loaded; a game loads its own. `backdrop` is set while the window is open.
+// The start menu's backdrop: a map seen from a spawn, nothing else running (no players,
+// ticks or sounds). Behind the whole menu it is a still cover, drawn once (drawCover); in the
+// Video tab's window it sways slowly, drawn every frame while `backdrop` is set (the window
+// open). The map stays loaded; a game loads its own (loadMap counts its calls, so a backdrop
+// load finishing after a game's stops there).
 let backdrop = false;
-let backdropLoading = false;
+let backdropLoad = null; // the backdrop map's load while it runs
+let coverKey = ''; // the canvas size and map the cover was drawn for ('' draws it again)
 input.canLock = () => !menu.visible; // a click in the window (a hole in the menu) stays a menu click
+function loadBackdrop() {
+  if (world) return Promise.resolve();
+  return backdropLoad ||= (async () => {
+    const maps = menu.maps || await fetch('/maps.json').then((r) => r.json(), () => []);
+    const map = ['de_inkwell', 'de_playground', 'de_dust2'].find((m) => maps.includes(m)) || maps[0];
+    if (!map) throw new Error('no maps');
+    if (!playing && !starting) await loadMap(map);
+  })().catch((err) => console.warn(`no backdrop scene: ${err.message}`)).finally(() => {
+    backdropLoad = null;
+  });
+}
 menu.onWindow = (open) => {
   if (playing || starting) return; // (a game's load takes the map)
-  if (!open) {
-    backdrop = false;
-    return;
-  }
-  if (world) {
-    backdrop = true;
-    return;
-  }
-  if (backdropLoading) return;
-  backdropLoading = true;
-  const maps = menu.maps || [];
-  const map = maps.includes('de_playground') ? 'de_playground' : maps.includes('de_dust2') ? 'de_dust2' : maps[0];
-  (map ? loadMap(map) : Promise.reject(new Error('no maps'))).then(() => {
-    if (!playing && menu.windowOpen) backdrop = true;
-  }).catch((err) => console.warn(`no preview scene: ${err.message}`)).finally(() => {
-    backdropLoading = false;
+  backdrop = false;
+  coverKey = ''; // the window drew into its own rectangle: the cover again once it closes
+  menu.root.classList.remove('cover');
+  if (open) loadBackdrop().then(() => {
+    if (!playing && menu.windowOpen && world) backdrop = true;
   });
 };
+function drawCover() {
+  if (coverKey === `${canvas.width}x${canvas.height} ${mapLoads}`) return;
+  drawBackdrop(0, true); // (at rest: no sway)
+  coverKey = `${canvas.width}x${canvas.height} ${mapLoads}`;
+  menu.root.classList.add('cover');
+}
 // The settings window's aspect when it is open, else the canvas's.
 function windowAspect(aspect) {
   const hb = menu.holeBounds;
@@ -2342,10 +2353,35 @@ function projectIntoWindow(proj) {
   proj[8] = -((hb.left + hb.width / 2) / cw * 2 - 1);
   proj[9] = (hb.top + hb.height / 2) / ch * 2 - 1;
 }
-function drawBackdrop(now) {
-  const s = spawns[TEAM_CT][0] || spawns[TEAM_T][0] || [0, 0, 0, 0];
-  const o = spawns[TEAM_T][0] || s; // looking toward the other spawn: the map, not a spawn wall
-  const toward = o === s ? s[3] : Math.atan2(o[1] - s[1], o[0] - s[0]) / DEG;
+// The backdrop's view, once a map: of the first spawns of each team, the eye (a little over a
+// player's) and the 15° step that see farthest, by three rays 15° apart (down a street, not
+// through a gap; toward the other spawn it often faced a wall).
+const backdropView = [0, 0, 64, 0]; // x, y, z, yaw
+let backdropViewFor = -1;
+function pickBackdropView() {
+  if (backdropViewFor === mapLoads) return;
+  backdropViewFor = mapLoads;
+  let best = -1;
+  for (const s of [...spawns[TEAM_CT].slice(0, 4), ...spawns[TEAM_T].slice(0, 4)]) {
+    const z = s[2] + 60; // (the spawn origin is the hull center: the eye 28 over it)
+    for (let i = 0; i < 24; i++) {
+      let seen = 0;
+      for (let k = -1; k <= 1; k++) {
+        const a = (i + k) * 15 * DEG;
+        seen += specSight(s[0], s[1], z, s[0] + Math.cos(a) * 4096, s[1] + Math.sin(a) * 4096, z);
+      }
+      if (seen > best) {
+        best = seen;
+        backdropView[0] = s[0];
+        backdropView[1] = s[1];
+        backdropView[2] = z;
+        backdropView[3] = i * 15;
+      }
+    }
+  }
+}
+function drawBackdrop(now, cover = false) {
+  pickBackdropView();
   const aspect = applyVideoSettings();
   renderer.zoom = 1;
   renderer.begin();
@@ -2354,11 +2390,13 @@ function drawBackdrop(now) {
   const fovY = 2 * Math.atan(Math.tan(45 * DEG) * 0.75);
   perspective(proj, fovY, windowAspect(aspect), 4, 16384);
   projectIntoWindow(proj);
-  eye[0] = s[0];
-  eye[1] = s[1];
-  eye[2] = s[2] + 28; // the spawn origin is the hull center: the eye 28 above it
-  const yaw = toward + 18 * Math.sin(now / 5000);
-  viewFromAngles(view, eye[0], eye[1], eye[2], 4, yaw);
+  // The cover's vanishing point in the open space left of the panel (the wide layout).
+  if (cover && innerWidth > 960 && innerHeight > 560) proj[8] = 0.44;
+  eye[0] = backdropView[0];
+  eye[1] = backdropView[1];
+  eye[2] = backdropView[2];
+  const yaw = backdropView[3] + 18 * Math.sin(now / 5000);
+  viewFromAngles(view, eye[0], eye[1], eye[2], 6, yaw);
   multiply(viewProj, proj, view);
   invert(invViewProj, viewProj);
   clock.t = now / 1000;
@@ -3096,6 +3134,7 @@ function leaveGame(message = '') {
   con.remote = new Map();
   playing = false;
   backdrop = false;
+  coverKey = '';
   resetSession();
   input.unlock();
   input.leaveFullscreen();
@@ -3217,7 +3256,10 @@ async function start() {
   // URL parameters skip the menu (testing): join the room at once (?room=code&team=; the
   // sandbox without a room or if it does not answer), practice, or the sandbox.
   // A room link (?room=code) opens on the Play panel: that room's teams.
-  if (!['team', 'offline', 'map', 'practice'].some((p) => params.has(p))) return menu.showStart('', roomCode ? 'play' : '');
+  if (!['team', 'offline', 'map', 'practice'].some((p) => params.has(p))) {
+    loadBackdrop(); // the cover behind the start menu
+    return menu.showStart('', roomCode ? 'play' : '');
+  }
   const team = { spec: 1, t: 2, ct: 3 }[params.get('team')] || 0;
   const map = params.get('map') || defaultMap(await fetch('/maps.json').then((r) => r.json(), () => [])) || 'de_dust2';
   if (params.has('practice')) {

@@ -358,6 +358,7 @@ export class Menu {
   hide() {
     this.cancelCapture();
     this.root.classList.remove('open', 'pause');
+    document.body.classList.remove('startmenu');
     this.updateWindow();
   }
 
@@ -417,6 +418,7 @@ export class Menu {
     this.shownAt = performance.now();
     this.root.classList.add('open');
     this.root.classList.toggle('pause', this.inGame);
+    document.body.classList.toggle('startmenu', !this.inGame);
     this.render();
   }
 
@@ -733,6 +735,7 @@ export class Menu {
         this.render();
       });
       b.title = label;
+      if (!own) b.dataset.kind = mapKind(m);
       if (own ? this.practiceOwn : !this.practiceOwn && m === this.practiceMap) b.classList.add('active');
       grid.append(b);
     };
@@ -963,6 +966,7 @@ export class Menu {
       row.append(range, num);
       this.refreshers.push(() => {
         range.value = cv.number;
+        range.style.setProperty('--fill', `${Math.min(100, Math.max(0, (cv.number - a) / (b - a) * 100))}%`);
         if (document.activeElement !== num) num.value = +cv.number.toFixed(4);
       });
     } else if (kind === 'toggle' || kind === 'invert') {

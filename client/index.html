@@ -328,6 +328,9 @@
   #menu .menu-teams button.spec { color: #6d665c; }
   body.nohud .hud, body.nohud #hud-money, body.nohud #hud-bomb, body.nohud #roundbar, body.nohud #targetid, body.nohud #killfeed,
   body.nohud #fx, body.nohud #chat, body.nohud #callouts, body.nohud #radiomenu, body.nohud #vote { display: none; }
+  /* The start menu shows the cover scene through itself: no HUD over it. */
+  body.startmenu .hud, body.startmenu #hud-money, body.startmenu #hud-bomb, body.startmenu #roundbar, body.startmenu #radar,
+  body.startmenu #killfeed, body.startmenu #chat { display: none; }
   /* Death and spectator notice: a caption box. */
   #death {
     position: fixed; left: 50%; top: 30%; transform: translateX(-50%) rotate(-1deg); display: none; max-width: 80vw;
@@ -401,6 +404,7 @@
     background: radial-gradient(circle, var(--sky-dot) 32%, transparent 34%) 0 0 / 11px 11px, var(--sky);
     color: var(--ink); font: 15px/1.45 var(--body); overflow-y: auto; }
   #menu.open { display: grid; }
+  #menu.cover:not(.pause) { background: radial-gradient(ellipse at 20% 30%, rgba(246, 238, 219, 0.35), transparent 60%); }
   #menu.pause { background: radial-gradient(circle, rgba(23, 19, 15, 0.45) 1.5px, transparent 2.2px) 0 0 / 8px 8px,
     rgba(23, 19, 15, 0.45); }
   #menu.pause .menu-logo { display: none; } /* (it covered the radar and the round bar) */
@@ -411,12 +415,17 @@
     color: var(--yellow); -webkit-text-stroke: 3px var(--ink); paint-order: stroke fill; transform: rotate(-3deg);
     transform-origin: left; text-shadow: 1px 1px 0 var(--ink), 2px 2px 0 var(--ink), 3px 3px 0 var(--ink),
       4px 4px 0 var(--ink), 5px 5px 0 var(--ink), 6px 6px 0 var(--ink), 7px 7px 0 var(--ink); }
-  #menu h2 { margin: 0 0 14px; font: 30px/1 var(--display); letter-spacing: 0.04em; color: var(--red);
-    -webkit-text-stroke: 1px var(--ink); paint-order: stroke fill; text-shadow: 2px 2px 0 var(--ink); }
-  #menu h3 { margin: 16px 0 6px; font: 17px/1 var(--display); letter-spacing: 0.1em; color: var(--ink); opacity: 0.75; }
+  #menu h2 { align-self: flex-start; margin: 0 0 16px; padding: 7px 14px 4px; font: 25px/1 var(--display);
+    letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink); background: var(--yellow);
+    border: 3px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); transform: rotate(-1.5deg); transform-origin: left; }
+  #menu h3 { display: flex; align-items: center; gap: 8px; margin: 18px 0 6px; font: 17px/1 var(--display);
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink); }
+  #menu h3::before { content: ''; flex: none; width: 16px; height: 8px; background: var(--red); border: 2px solid var(--ink);
+    transform: skewX(-20deg); }
   #menu button { font: 17px/1 var(--display); letter-spacing: 0.04em; color: var(--ink); background: var(--paper-hi);
     border: 3px solid var(--ink); box-shadow: 3px 3px 0 var(--ink); padding: 8px 12px 6px; cursor: pointer; }
-  #menu button:hover { background: var(--yellow); }
+  #menu button { transition: transform 80ms, box-shadow 80ms; }
+  #menu button:hover { background: var(--yellow); transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--ink); }
   #menu button:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
   #menu button:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
   #menu button.active { background: var(--yellow); }
@@ -426,7 +435,7 @@
     box-shadow: 4px 4px 0 var(--ink); }
   #menu .menu-nav button:nth-child(odd) { transform: rotate(-1deg); }
   #menu .menu-nav button:nth-child(even) { transform: rotate(1deg); }
-  #menu .menu-nav button:hover { background: var(--yellow); }
+  #menu .menu-nav button:hover { background: var(--yellow); transform: rotate(-2deg) scale(1.05); box-shadow: 6px 6px 0 var(--ink); }
   #menu .menu-nav button.active { background: var(--red); color: var(--yellow); -webkit-text-stroke: 1px var(--ink);
     paint-order: stroke fill; text-shadow: 2px 2px 0 var(--ink); }
   .menu-note { grid-column: 1; grid-row: 3; margin-top: 18px; min-height: 1.4em; align-self: start; justify-self: start; }
@@ -444,19 +453,38 @@
     padding: 12px var(--px) var(--pb); background: var(--paper); border-top: 3px solid var(--ink); }
   .menu-foot .menu-row { padding: 0; }
   .menu-foot > .menu-hint { flex-basis: 100%; margin: 0; }
-  .menu-badge { display: inline-block; vertical-align: middle; margin-left: 6px; padding: 3px 8px 1px;
-    font: 15px/1 var(--display); letter-spacing: 0.06em; color: var(--ink); -webkit-text-stroke: 0; text-shadow: none;
-    background: var(--yellow); border: 2px solid var(--ink); transform: rotate(2deg); }
+  .menu-badge { display: inline-block; vertical-align: 2px; margin-left: 6px; padding: 3px 7px 1px;
+    font: 15px/1 var(--display); letter-spacing: 0.06em; text-transform: none; color: var(--paper-hi); background: var(--red);
+    border: 2px solid var(--ink); transform: rotate(3deg); }
   .menu-panel.empty { display: none; }
   .menu-grip { margin: -12px -16px 12px; padding: 4px 8px; cursor: move; user-select: none; touch-action: none;
     font-size: 13px; text-align: center; opacity: 0.7; background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(23, 19, 15, 0.18) 3px 4px); }
   .menu-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
   .menu-row > span:first-child { flex: 0 1 200px; min-width: 0; font-weight: 700; }
-  .menu-row input[type=range] { flex: 1; min-width: 80px; accent-color: var(--red); }
-  .menu-row input.num { width: 70px; }
   .menu-row input, .menu-row select { font: inherit; color: var(--ink); background: var(--paper-hi);
-    border: 2px solid var(--ink); padding: 4px 6px; }
-  .menu-row input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--red); }
+    border: 3px solid var(--ink); box-shadow: 2px 2px 0 var(--ink); padding: 4px 7px; border-radius: 0; }
+  .menu-row input:focus-visible, .menu-row select:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+  .menu-row input.num { width: 64px; font: 16px/1.2 var(--display); letter-spacing: 0.04em; }
+  .menu-row input[type=checkbox] { -webkit-appearance: none; appearance: none; flex: none; width: 26px; height: 26px;
+    margin: 0; padding: 0; cursor: pointer; transform: rotate(-3deg); }
+  .menu-row input[type=checkbox]:checked { background: var(--yellow) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M3 10l5 5 9-11' fill='none' stroke='%2317130f' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M3 10l5 5 9-11' fill='none' stroke='%23e2402a' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% no-repeat; }
+  .menu-row select { -webkit-appearance: none; appearance: none; padding: 5px 30px 3px 9px; cursor: pointer;
+    font: 16px/1.2 var(--display); letter-spacing: 0.04em; background: var(--paper-hi) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%2317130f' stroke-width='2.5'/%3E%3C/svg%3E") right 9px center / 12px no-repeat; }
+  /* A slider: an ink track filled red to the value (--fill, set by menu.js) and a yellow knob. */
+  .menu-row input[type=range] { -webkit-appearance: none; appearance: none; flex: 1; min-width: 80px; height: 28px;
+    margin: 0; padding: 0; border: 0; box-shadow: none; background: none; cursor: pointer; --fill: 0%; }
+  .menu-row input[type=range]::-webkit-slider-runnable-track { height: 10px; border: 3px solid var(--ink);
+    background: linear-gradient(90deg, var(--red) var(--fill), var(--paper-hi) var(--fill)); box-shadow: 2px 2px 0 var(--ink); }
+  .menu-row input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; box-sizing: border-box; width: 24px;
+    height: 24px; margin-top: -7px; border: 3px solid var(--ink); border-radius: 50%; background: var(--yellow);
+    box-shadow: 2px 2px 0 var(--ink); }
+  .menu-row input[type=range]::-moz-range-track { height: 10px; border: 3px solid var(--ink); background: var(--paper-hi);
+    box-shadow: 2px 2px 0 var(--ink); }
+  .menu-row input[type=range]::-moz-range-progress { height: 10px; background: var(--red); }
+  .menu-row input[type=range]::-moz-range-thumb { box-sizing: border-box; width: 24px; height: 24px;
+    border: 3px solid var(--ink); border-radius: 50%; background: var(--yellow); box-shadow: 2px 2px 0 var(--ink); }
+  .menu-row input[type=range]:hover::-webkit-slider-thumb { background: var(--paper-hi); }
+  .menu-row input[type=range]:hover::-moz-range-thumb { background: var(--paper-hi); }
   #menu .menu-bind button.key { flex: 0 1 130px; min-width: 0; padding: 5px 8px 3px; font: 700 14px/1.2 var(--body);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-shadow: 2px 2px 0 var(--ink); }
   .menu-settings, .menu-maps { scrollbar-color: var(--ink) transparent; }
@@ -494,15 +522,34 @@
   .menu-opts { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 8px; }
   #menu .menu-choice button { padding: 6px 10px 4px; white-space: nowrap; }
   .menu-teams { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
-  #menu .menu-teams button { flex: 1 1 160px; padding: 16px 14px 12px; font-size: 24px; box-shadow: 5px 5px 0 var(--ink); }
-  #menu .menu-teams button.t { color: var(--red); }
-  #menu .menu-teams button.ct { color: var(--blue); }
-  .menu-maps button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #menu .menu-teams button { --team: 109, 102, 92; flex: 1 1 160px; padding: 18px 14px 14px; font-size: 26px;
+    border-width: 4px; box-shadow: 5px 5px 0 var(--ink);
+    background: radial-gradient(circle, rgba(var(--team), 0.28) 30%, transparent 33%) 0 0 / 9px 9px, var(--paper-hi); }
+  #menu .menu-teams button.t { --team: 226, 64, 42; color: var(--red); }
+  #menu .menu-teams button.ct { --team: 47, 111, 196; color: var(--blue); }
+  #menu .menu-teams button:hover { transform: rotate(-1deg) scale(1.03); }
+  #menu .menu-teams button.active { color: var(--yellow); -webkit-text-stroke: 1.5px var(--ink); paint-order: stroke fill;
+    text-shadow: 3px 3px 0 var(--ink); background: radial-gradient(circle, rgba(23, 19, 15, 0.22) 30%, transparent 33%) 0 0 / 9px 9px,
+    rgb(var(--team)); transform: rotate(-1.5deg); }
+  #menu .menu-teams button.ct.active { color: var(--paper-hi); transform: rotate(1.5deg); }
+  .menu-maps button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-left-width: 9px; }
+  .menu-maps button[data-kind=de] { border-left-color: var(--red); }
+  .menu-maps button[data-kind=cs] { border-left-color: var(--blue); }
+  .menu-maps button[data-kind=fun] { border-left-color: #e8a91c; }
+  .menu-maps button[data-kind=css] { border-left-color: #3f9a5a; }
   .menu-maps { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); grid-auto-rows: min-content;
     gap: 8px; padding: 2px 6px 6px 2px; }
-  #menu button.menu-go { padding: 12px 30px 8px; font-size: 34px; background: var(--red);
-    color: var(--yellow); border-width: 4px; box-shadow: 6px 6px 0 var(--ink); -webkit-text-stroke: 1.5px var(--ink);
-    paint-order: stroke fill; text-shadow: 2px 2px 0 var(--ink); }
+  #menu button.menu-go { position: relative; isolation: isolate; padding: 24px 54px 20px; font-size: 40px;
+    color: var(--yellow); background: none; border: 0; box-shadow: none; -webkit-text-stroke: 1.5px var(--ink);
+    paint-order: stroke fill; text-shadow: 3px 3px 0 var(--ink); filter: drop-shadow(5px 5px 0 var(--ink));
+    transform: rotate(-3deg); }
+  #menu button.menu-go::before, #menu button.menu-go::after { content: ''; position: absolute; z-index: -1; clip-path: polygon(53% 0%, 61% 17%, 75% 14%, 76% 27%, 95% 28%, 84% 43%, 94% 53%, 83% 61%, 91% 78%, 73% 76%, 69% 90%, 57% 84%, 47% 100%, 39% 83%, 25% 86%, 24% 73%, 5% 72%, 16% 57%, 6% 47%, 17% 39%, 9% 22%, 27% 24%, 31% 10%, 43% 16%); }
+  #menu button.menu-go::before { inset: -6px; background: var(--ink); }
+  #menu button.menu-go::after { inset: 0; background: var(--red); }
+  #menu button.menu-go:hover { background: none; box-shadow: none; transform: rotate(-5deg) scale(1.07); }
+  #menu button.menu-go:hover::after { background: #f2583a; }
+  #menu button.menu-go:active { transform: rotate(-3deg) scale(0.97); }
+  .menu-foot:has(.menu-go) { padding-top: 6px; padding-bottom: 8px; }
   #menu button.menu-reset { font-size: 14px; }
   .menu-server { font-weight: 700; }
   .menu-tagline { margin: 0 0 14px; font-size: 17px; }
@@ -559,8 +606,8 @@
   @media (pointer: coarse) {
     #menu button { min-height: 44px; }
     #menu .menu-choice button, .menu-maps button, .menu-maps .menu-drop, .menu-tabs button { min-height: 40px; }
-    .menu-row input[type=checkbox] { width: 26px; height: 26px; }
-    .menu-row input[type=range] { height: 28px; }
+    .menu-row input[type=checkbox] { width: 30px; height: 30px; }
+    .menu-row input[type=range] { height: 36px; }
     .menu-row select { padding: 8px 6px; }
     #menu .menu-bind button.key { min-height: 40px; }
   }
