@@ -42,8 +42,9 @@ for (const name of ['de_playground', 'de_inkwell']) {
     for (const cls of ['func_breakable', 'func_door_rotating', 'func_water']) {
       if (bsp.entities.some((e) => e.classname === cls)) assert.ok(made.get(cls) > 0, cls);
     }
-    // The editor has no trains yet: the playground's cart and its corners are left out.
-    assert.deepEqual(report.dropped, name === 'de_playground' ? { func_train: 1, path_corner: 4 } : {},
+    // The playground's cart comes back with its corners.
+    if (name === 'de_playground') assert.equal(p.points.filter((q) => q.kind === 'path_corner').length, 4);
+    assert.deepEqual(report.dropped, {},
       'our own maps hold nothing else the editor cannot make');
     const out = compileProject(p, 'draft').bytes;
     assert.ok(solidAgreement(bsp, p, out) > 0.995, 'solid where it was solid');

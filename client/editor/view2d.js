@@ -18,7 +18,7 @@ const AXES = {
 };
 const ZONE_COLORS = {
   func_buyzone: '#3c9a4a', func_bomb_target: '#e2402a', func_ladder: '#e08a1e', func_water: '#2f6fc4',
-  func_hostage_rescue: '#2f9fc4',
+  func_hostage_rescue: '#2f9fc4', trigger_hurt: '#c0392b', trigger_teleport: '#8e44ad', trigger_multiple: '#16a085',
 };
 const HANDLE = 5; // px, half size
 const PICK = 4; // px of slack when picking
@@ -364,12 +364,12 @@ export class View2D {
     const ctx = this.ctx, { u, v } = this.ax;
     const pk = POINTS[q.kind];
     const top = this.name === 'top';
-    const cu = q.o[u], cv = top || pk.lamp ? q.o[v] : q.o[v] + 36;
+    const cu = q.o[u], cv = top || pk.lamp || pk.logic ? q.o[v] : q.o[v] + 36;
     const [x, y] = this.toScreen(cu, cv);
     ctx.fillStyle = pk.color;
     ctx.strokeStyle = '#17130f';
     ctx.lineWidth = 1.5;
-    if (pk.lamp) { // a lamp: a disc where it hangs, in every view (a spot's aim line from the top)
+    if (pk.lamp || pk.logic) { // a lamp or a logic point: a disc where it is, in every view (a spot's aim line from the top)
       const r = Math.max(6, 12 * this.scale);
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);

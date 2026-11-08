@@ -996,7 +996,7 @@ export class Editor {
     if (it.o) {
       const pk = POINTS[it.kind];
       box.append(el('h3', '', pk.label));
-      numbers(pk.lamp ? 'Position (x y z)' : 'Feet (x y z)', it.o, (k, v) => {
+      numbers(pk.lamp || pk.logic ? 'Position (x y z)' : 'Feet (x y z)', it.o, (k, v) => {
         it.o[k] = v;
       });
       field('Facing', it.yaw, (v) => {

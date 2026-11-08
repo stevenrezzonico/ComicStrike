@@ -86,7 +86,21 @@ export const KINDS = {
     help: 'material: 0 glass, 1 wood, 2 metal, 7 unbreakable' },
   func_conveyor: { label: 'Conveyor', keys: { speed: '160', angles: '0 0 0' },
     help: 'carries what stands on it toward angles (yaw); a Conveyor belt top slides that way' },
-  func_water: { label: 'Water', water: true, help: 'a volume of water: only its top shows; sunk in a pit, its top level with the floor' },
+  func_water: { label: 'Water', water: true, keys: { skin: '-3' },
+    help: 'a volume of water: only its top shows; sunk in a pit, its top level with the floor; skin -3 water, -4 slime (burns), -5 lava (burns more)' },
+  func_train: { label: 'Train', keys: { target: '', speed: '100', dmg: '2', targetname: '' },
+    help: 'target: its first Path corner; its middle rides from corner to corner at speed, carrying riders and hurting by dmg whoever blocks it; a targetname makes it wait until that name fires' },
+  func_rotating: { label: 'Fan', keys: { speed: '120', spawnflags: '65', targetname: '' },
+    help: 'turns about its middle at speed degrees a second; spawnflags add up: 1 on from the start, 2 backwards, 4 about x, 8 about y (else about z), 64 not solid; its targetname switches it on and off' },
+  func_pendulum: { label: 'Pendulum', keys: { distance: '30', speed: '60', damp: '0', spawnflags: '97', targetname: '' },
+    help: 'swings distance degrees either way about the middle of its top, at most speed degrees a second; spawnflags add up: 1 on from the start, 32 passable, 64 about x, 128 about y (else about z); damp slows it to a stop' },
+  func_pushable: { label: 'Pushable', help: 'a crate players shove along the floor by walking into it; back where it was at each round start' },
+  trigger_hurt: { label: 'Hurt zone', keys: { dmg: '10', targetname: '', spawnflags: '0' }, trigger: true,
+    help: 'dmg a second to whoever is in it (below 0 heals); a targetname switches it on and off, spawnflags 2 starting off' },
+  trigger_teleport: { label: 'Teleport', keys: { target: '' }, trigger: true,
+    help: 'sends whoever touches it to the Teleport exit its target names, facing the way the exit faces' },
+  trigger_multiple: { label: 'Trigger', keys: { target: '', delay: '0', wait: '1', killtarget: '' }, trigger: true,
+    help: 'fires target, delay seconds after a player walks in, and again after wait seconds; killtarget removes what it names until the round restarts' },
   func_ladder: { label: 'Ladder volume', trigger: true, help: 'climbable: put it against a wall with the Ladder texture' },
   func_buyzone: { label: 'Buy zone', keys: { team: '1' }, trigger: true, help: 'team: 1 Terrorists, 2 Counter-Terrorists' },
   func_bomb_target: { label: 'Bomb site', trigger: true, help: 'the first is site A, the second B' },
@@ -96,18 +110,36 @@ export const KINDS = {
     help: 'solid like a wall but an entity of its own: with rendermode 2 and renderamt under 255 it is drawn see-through (glass) and lets the light through' },
 };
 
-// Point kinds: label, short mark and color for the 2D views; lamps (`lamp`: a light baked
-// into the lightmaps, not a thing standing on the floor) have keys like a brush entity and
-// `lift`: how high over the floor a click from the top puts one.
+// Point kinds: label, short mark and color for the 2D views; `hull`: the map's point is the
+// standing hull's center, 37 over the feet (spawns); lamps (`lamp`: a light baked into the
+// lightmaps, not a thing standing on the floor) and the map's logic (`logic`: where it is
+// matters, not what it stands on) have keys like a brush entity and `lift`: how high over
+// the floor a click from the top puts one.
 export const POINTS = {
-  info_player_deathmatch: { label: 'T spawn', mark: 'T', color: '#e2402a' },
-  info_player_start: { label: 'CT spawn', mark: 'CT', color: '#2f6fc4' },
+  info_player_deathmatch: { label: 'T spawn', mark: 'T', color: '#e2402a', hull: true },
+  info_player_start: { label: 'CT spawn', mark: 'CT', color: '#2f6fc4', hull: true },
   hostage_entity: { label: 'Hostage', mark: 'H', color: '#3c9a4a' },
   light: { label: 'Lamp', mark: 'L', color: '#e8b625', lamp: true, lift: 112, keys: { _light: '255 235 190 200' },
     help: '_light: red green blue brightness; a facing surface 128 units away gets the brightness, falling off by the square of the distance to nothing at 64 × √brightness units (200: 905)' },
   light_spot: { label: 'Spot lamp', mark: 'S', color: '#e8b625', lamp: true, lift: 160,
     keys: { _light: '255 235 190 250', pitch: '-90', _cone: '30', _cone2: '45' },
     help: 'a cone of light: pitch -90 straight down, 0 level (Q / E turn it round); full within _cone degrees of its axis, fading to nothing at _cone2' },
+  info_teleport_destination: { label: 'Teleport exit', mark: 'X', color: '#8e44ad', keys: { targetname: '' },
+    help: 'where a Teleport naming it as its target sends players: their feet here, facing this way' },
+  path_corner: { label: 'Path corner', mark: 'P', color: '#7f8c8d', logic: true, lift: 16, keys: { targetname: '', target: '', wait: '', speed: '' },
+    help: 'a Train\'s middle comes here, waits wait seconds (-1: until fired) and goes on to the corner target names, at speed when set' },
+  env_explosion: { label: 'Explosion', mark: '*', color: '#e67e22', logic: true, lift: 32, keys: { targetname: '', iMagnitude: '100', spawnflags: '0' },
+    help: 'explodes when its targetname fires: iMagnitude damage here, to nothing at 2.5 times that; spawnflags 1 no damage, 2 again and again, 4 no fireball' },
+  game_text: { label: 'Text', mark: '"', color: '#16a085', logic: true, lift: 64, keys: { targetname: '', message: '', spawnflags: '0' },
+    help: 'its message (\\n breaks a line) goes to whoever set its targetname off, or to everyone with spawnflags 1' },
+  trigger_relay: { label: 'Relay', mark: 'R', color: '#7f8c8d', logic: true, lift: 64, keys: { targetname: '', target: '', delay: '0', killtarget: '' },
+    help: 'when its targetname fires, fires target delay seconds later; killtarget removes what it names' },
+  multi_manager: { label: 'Relay list', mark: 'M', color: '#7f8c8d', logic: true, lift: 64, keys: { targetname: '' },
+    help: 'when its targetname fires, fires each of its other keys after the seconds that key holds' },
+  trigger_auto: { label: 'Round start', mark: 'A', color: '#7f8c8d', logic: true, lift: 64, keys: { target: '', delay: '0' },
+    help: 'fires target delay seconds after each round starts' },
+  multisource: { label: 'Lock', mark: '&', color: '#7f8c8d', logic: true, lift: 64, keys: { targetname: '', target: '' },
+    help: 'on once everything whose target names it has fired (each fire toggles it): a door, button, lift or trigger whose master is its targetname works only then' },
 };
 
 export const LIMITS = { coord: 8192, brushes: 3000, points: 256 };
@@ -391,7 +423,7 @@ export function checkProject(p) {
       if (solids.some((pc) => pointInside(pc, q.o))) warnings.push({ text: `A ${POINTS[q.kind].label} is inside a shape: it lights nothing.`, id: q.id });
       continue;
     }
-    if (q.kind === 'hostage_entity') continue;
+    if (q.kind === 'hostage_entity' || POINTS[q.kind].logic) continue;
     // The standing hull (center 37 over the feet) must be free, and a floor within 64 under it.
     if (solids.some((pc) => hullInside(pc, [x, y, z + 37]))) {
       errors.push({ text: `A ${POINTS[q.kind].label} is inside a shape.`, id: q.id });
@@ -401,18 +433,23 @@ export function checkProject(p) {
   }
   const sites = p.brushes.filter((b) => b.kind === 'func_bomb_target').length;
   if (sites > 2) warnings.push({ text: 'More than two bomb sites: only A and B have names.' });
+  const pointNamed = (kind, name) => p.points.some((q) => q.kind === kind && q.keys && q.keys.targetname === name);
   for (const b of p.brushes) {
     if (b.kind === 'func_button' && b.keys.target && !p.brushes.some((d) => d.keys.targetname === b.keys.target)) {
       warnings.push({ text: `A button targets "${b.keys.target}", which no door is named.`, id: b.id });
+    } else if (b.kind === 'func_train' && b.keys.target && !pointNamed('path_corner', b.keys.target)) {
+      warnings.push({ text: `A train targets "${b.keys.target}", which no Path corner is named: it stays put.`, id: b.id });
+    } else if (b.kind === 'trigger_teleport' && !pointNamed('info_teleport_destination', b.keys.target)) {
+      warnings.push({ text: `A teleport targets "${b.keys.target || ''}", which no Teleport exit is named.`, id: b.id });
     }
   }
   return { errors, warnings };
 }
 
-// A point's box: a player's standing on its feet, a lamp's 16 units round it.
+// A point's box: a player's standing on its feet, a lamp's or a logic point's 16 units round it.
 export function pointBounds(q) {
   const [x, y, z] = q.o;
-  if (POINTS[q.kind].lamp) return [x - 16, y - 16, z - 16, x + 16, y + 16, z + 16];
+  if (POINTS[q.kind].lamp || POINTS[q.kind].logic) return [x - 16, y - 16, z - 16, x + 16, y + 16, z + 16];
   return [x - 16, y - 16, z, x + 16, y + 16, z + 72];
 }
 
@@ -476,18 +513,24 @@ export function projectToBuilder(p) {
       const keys = { classname: cls };
       for (const [k, v] of Object.entries(list[0].keys)) if (v !== '' && k !== 'hinge') keys[k] = v;
       if (cls === 'func_door_rotating') keys.origin = hingeOf(b).join(' ');
-      if (cls === 'func_rot_button' || cls === 'momentary_rot_button') { // turning about the shape's middle
+      if (cls === 'func_rot_button' || cls === 'momentary_rot_button' || cls === 'func_rotating') { // turning about the shape's middle
         keys.origin = [0, 1, 2].map((a) => (b.b[a] + b.b[a + 3]) / 2).join(' ');
       }
-      if (cls === 'func_water') Object.assign(keys, { skin: '-3', WaveHeight: '0' });
-      map.brushEntity(keys, list.map((pc) => pc.brush), KINDS[cls].water ? { contents: CONTENTS_WATER } : {});
+      if (cls === 'func_pendulum') keys.origin = `${(b.b[0] + b.b[3]) / 2} ${(b.b[1] + b.b[4]) / 2} ${b.b[5]}`; // hung from its top
+      let contents = CONTENTS_WATER;
+      if (cls === 'func_water') { // water by default; slime and lava by GoldSrc's skin
+        keys.skin = keys.skin || '-3';
+        keys.WaveHeight = '0';
+        if (keys.skin === '-4' || keys.skin === '-5') contents = +keys.skin;
+      }
+      map.brushEntity(keys, list.map((pc) => pc.brush), KINDS[cls].water ? { contents } : {});
     }
   }
   for (const q of p.points) {
     const [x, y, z] = q.o;
-    // Spawns are hull centers a unit over the floor; hostages stand on their feet; a lamp
-    // is where it is, with its keys.
-    const oz = q.kind === 'hostage_entity' || POINTS[q.kind].lamp ? z : z + 37;
+    // Spawns are hull centers a unit over the floor; everything else is where it is (a
+    // hostage and a teleport exit by their feet), with its keys.
+    const oz = POINTS[q.kind].hull ? z + 37 : z;
     const keys = { classname: q.kind, origin: `${x} ${y} ${oz}`, angles: `0 ${q.yaw} 0` };
     for (const [k, v] of Object.entries(q.keys || {})) if (v !== '') keys[k] = v;
     map.point(keys);

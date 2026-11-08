@@ -452,7 +452,9 @@ export function decompileBSP(bsp, fileName) {
       report.points++;
       continue;
     }
-    if (POINTS[cls] && POINTS[cls].lamp) { // lamps, with their keys (a pitch in `angles` becomes the pitch key)
+    // Lamps, the map's logic (path corners, relays, texts...) and teleport exits, with their
+    // keys (a spot's pitch in `angles` becomes its pitch key).
+    if (POINTS[cls] && (POINTS[cls].lamp || POINTS[cls].logic || cls === 'info_teleport_destination')) {
       if (!o) continue;
       const keys = { ...POINTS[cls].keys };
       for (const [k, v] of Object.entries(e)) if (!DROP_KEYS.has(k) && k !== 'angles' && /^\w{1,32}$/.test(k)) keys[k] = String(v).replace(/"/g, "'").slice(0, 128);

@@ -59,7 +59,7 @@ Deno.test('a game with bots runs on an editor map', () => {
   for (const c of host.game.clients) if (c && c.alive) assert.ok(c.player.ps.f[2] > 30 && c.player.ps.f[2] < 60, 'bots on the floor');
 });
 
-Deno.test('every kind compiles into its entity: doors, button, breakable, water, ladder, zones, decoration, glass wall', () => {
+Deno.test('every kind compiles into its entity: doors, button, breakable, water, ladder, zones, decoration, glass wall, movers, triggers, logic points', () => {
   const p = newProject();
   let id = 1000;
   const add = (kind, b, tex = { top: 'crate08', bottom: 'crate08', side: 'crate08' }, keys = {}) =>
@@ -79,11 +79,39 @@ Deno.test('every kind compiles into its entity: doors, button, breakable, water,
   add('func_plat', [100, -200, 112, 180, -120, 128]);
   add('momentary_door', [-200, 500, 0, -184, 628, 128], undefined, { targetname: 'hatch' });
   add('momentary_rot_button', [-260, 540, 36, -256, 564, 60], undefined, { target: 'hatch' });
-  p.points.push({ id: id++, kind: 'hostage_entity', o: [500, 0, 0], yaw: 90 });
+  add('func_train', [700, 200, 0, 764, 264, 16], undefined, { target: 'c1' });
+  add('func_rotating', [-700, 200, 140, -500, 216, 150]);
+  add('func_pendulum', [-700, 400, 60, -680, 440, 180]);
+  add('func_pushable', [700, -600, 0, 764, -536, 64]);
+  add('func_water', [400, -600, 0, 600, -400, 30], { top: '!toxicgrn', bottom: null, side: null }, { skin: '-4' });
+  const zone = { top: null, bottom: null, side: null };
+  add('trigger_hurt', [-900, -300, 0, -800, -200, 64], zone);
+  add('trigger_teleport', [-900, 300, 0, -800, 400, 64], zone, { target: 'out' });
+  add('trigger_multiple', [-900, 0, 0, -800, 100, 64], zone, { target: 'hello' });
+  const point = (kind, o, keys) => p.points.push({ id: id++, kind, o, yaw: 90, keys });
+  point('hostage_entity', [500, 0, 0]);
+  point('path_corner', [732, 232, 8], { targetname: 'c1', target: 'c2', wait: '1' });
+  point('path_corner', [732, 600, 8], { targetname: 'c2', target: 'c1' });
+  point('info_teleport_destination', [0, -400, 0], { targetname: 'out' });
+  point('game_text', [-850, 50, 64], { targetname: 'hello', message: 'hello' });
+  point('env_explosion', [0, 0, 32], { targetname: 'boom', iMagnitude: '50' });
+  point('multi_manager', [0, 0, 64], { targetname: 'mm', boom: '1', hello: '2' });
+  point('trigger_relay', [0, 0, 96], { targetname: 'relay', target: 'mm' });
+  point('trigger_auto', [0, 0, 128], { target: 'relay' });
+  point('multisource', [0, 0, 160], { targetname: 'lock' });
   assert.deepEqual(checkProject(p).errors, []);
-  const bsp = compileToBsp(p);
+  assert.deepEqual(checkProject(readProject(JSON.stringify(p))).warnings, [], 'the train and the teleport find their points');
+  const bsp = compileToBsp(readProject(JSON.stringify(p))); // the points' keys go through a file
   const cls = bsp.entities.map((e) => e.classname);
   for (const k of Object.keys(KINDS)) if (k !== 'world') assert.ok(cls.includes(k), k);
+  const ent = (c) => bsp.entities.find((e) => e.classname === c);
+  assert.equal(ent('func_rotating').origin, '-600 208 145', 'a fan turns about its middle');
+  assert.equal(ent('func_pendulum').origin, '-690 420 180', 'a pendulum hangs from the middle of its top');
+  assert.equal(ent('info_teleport_destination').origin, '0 -400 0', 'an exit by its feet');
+  assert.equal(ent('path_corner').origin, '732 232 8', 'a corner where it is');
+  assert.equal(ent('path_corner').wait, '1');
+  assert.equal(ent('multi_manager').boom, '1', 'a relay list keeps its own keys');
+  assert.equal(bsp.entities.filter((e) => e.classname === 'func_water').map((e) => e.skin).join(), '-3,-4', 'water by default, slime by its skin');
   const rot = bsp.entities.find((e) => e.classname === 'func_door_rotating');
   assert.equal(rot.origin, hingeOf(p.brushes.find((b) => b.kind === 'func_door_rotating')).join(' '), 'hinged at its end');
   assert.equal(rot.hinge, undefined, 'the editor\'s own key stays out');
@@ -92,9 +120,11 @@ Deno.test('every kind compiles into its entity: doors, button, breakable, water,
   const valve = bsp.entities.find((e) => e.classname === 'func_rot_button');
   assert.equal(valve.origin, '-258 352 48', 'a valve turns about its middle');
   const game = quiet(() => new Game('my_map', bsp, { rounds: false }));
-  assert.equal(game.doors.count, 7, 'two doors, a button, a valve, a lift, a follower door and its wheel');
+  assert.equal(game.doors.count, 11, 'two doors, a button, a valve, a lift, a follower door, its wheel, a train, a fan, a pendulum, a crate');
   const world = CollisionWorld.fromBSP(bsp);
   assert.equal(pointContents(world, 500, 500, 10), -3, 'water');
+  assert.equal(pointContents(world, 500, -500, 10), -4, 'slime');
+  assert.ok(world.teleports && world.teleports.length === 1, 'the teleport and its exit');
   assert.equal(game.hostages.spots.length, 1);
 });
 
