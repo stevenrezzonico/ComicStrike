@@ -391,12 +391,22 @@ export class Grenades {
       this.age[k] += dt;
       const kind = WEAPONS[this.weapon[k]].grenade;
       const landed = this.move(world, k, kind === 'fire');
-      const o = k * 3, x = this.pos[o], y = this.pos[o + 1], z = this.pos[o + 2];
-      let go = false;
+      const o = k * 3, x = this.pos[o], y = this.pos[o + 1];
+      let z = this.pos[o + 2], go = false;
       if (kind === 'he' || kind === 'flash') go = this.age[k] >= FUSE;
       else if (kind === 'smoke' || kind === 'decoy') {
         // CS:GO checks every 0.2 s whether it stopped.
         go = this.resting[k] === 1 && Math.round(this.age[k] / dt) % Math.round(0.2 / dt) === 0;
+        // A smoke touching a fire goes off at once, in the air too, and puts it out (CS:GO's:
+        // one at your own feet saves you from a molotov); its cloud sits on the fire's floor.
+        if (!go && kind === 'smoke') {
+          for (let f = 0; f < this.fxCount && !go; f++) {
+            if (this.fxKind[f] === FX_FIRE && this.inFire(f, x, y, z)) {
+              go = true;
+              z = this.fxPos[f * 3 + 2];
+            }
+          }
+        }
       } else if (kind === 'fire') go = landed || this.age[k] >= FIRE_FUSE;
       if (!go) continue;
       this.detonate(world, k, kind, x, y, z, landed, targets);
@@ -507,6 +517,12 @@ export class Grenades {
     }
   }
 
+  // Is (x, y, z) in fire k's reach: within its radius, from 24 under its floor to 48 over.
+  inFire(k, x, y, z) {
+    const o = k * 3, fz = this.fxPos[o + 2];
+    return Math.hypot(x - this.fxPos[o], y - this.fxPos[o + 1]) <= fireRadius(this.fxAge[k]) && z >= fz - 24 && z <= fz + 48;
+  }
+
   // Nothing solid between (x, y, z) and point p.
   visible(world, x, y, z, p) {
     traceHull(world, HULL_POINT, x, y, z, p[0], p[1], p[2], tr);
@@ -518,11 +534,10 @@ export class Grenades {
   burn(k, targets) {
     if (Math.round(this.fxAge[k] / TICK_DT) % BURN_TICKS !== 0) return;
     const o = k * 3, x = this.fxPos[o], y = this.fxPos[o + 1], z = this.fxPos[o + 2];
-    const r = fireRadius(this.fxAge[k]);
     for (let i = 0; i < targets.count; i++) {
       if (!targets.alive(i)) continue;
       targets.feet(i, v3);
-      if (Math.hypot(v3[0] - x, v3[1] - y) > r || v3[2] < z - 24 || v3[2] > z + 48) continue;
+      if (!this.inFire(k, v3[0], v3[1], v3[2])) continue;
       targets.hurt(i, FIRE_DPS * BURN_TICKS * TICK_DT, this.fxWeapon[k], this.fxOwner[k], this.fxTeam[k], x, y, z);
     }
   }

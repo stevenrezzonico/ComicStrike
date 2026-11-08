@@ -7,7 +7,7 @@ import { HITGROUP_CHEST } from '../shared/hitgroups.js';
 import { WEAPONS, WEAPON_ID, SLOT_GRENADE, THROW_LONG, THROW_SHORT, giveWeapon } from '../shared/weapons.js';
 import {
   Grenades, heDamage, flashDuration, fireRadius, smokeRadius, FUSE, HE_DAMAGE, HE_RADIUS, FX_HE, FX_SMOKE, FX_FIRE,
-  FX_FIZZLE, FIRE_DPS, SMOKE_TIME, SMOKE_GROW, SMOKE_SHAPES, SMOKE_FLOOR, SMOKE_MARGIN, smokePose,
+  FX_FIZZLE, FIRE_DPS, FIRE_GROW, SMOKE_TIME, SMOKE_GROW, SMOKE_SHAPES, SMOKE_FLOOR, SMOKE_MARGIN, smokePose,
 } from '../shared/grenades.js';
 import { buildSmokeCloud } from '../client/gl/grenadefx.js';
 import { floorWorld } from './worlds.js';
@@ -123,7 +123,7 @@ Deno.test({ name: 'smoke pops once it stops; a molotov burns on the floor and a 
 
   g.throw(world, WEAPON_ID.smokegrenade, 5, TEAM_T, x + 10, y, floor + 40, 89, 0, 0, 0, 0, THROW_SHORT);
   for (let i = 0; i < 128 && g.count; i++) g.update(world, t);
-  assert.equal(g.count, 0, 'the smoke stopped and popped');
+  assert.equal(g.count, 0, 'the smoke popped');
   assert.deepEqual(Array.from(g.fxKind.subarray(0, g.fxCount)), [FX_SMOKE], 'and put the fire out');
   for (let i = 0; i < 64; i++) g.update(world, t);
   assert.ok(g.inSmoke(x, y, floor + 40), 'a second later the cloud covers it');
@@ -203,6 +203,25 @@ Deno.test('smoke: a flashbang behind the edge of a cloud blinds nobody', () => {
   };
   assert.ok(flash(new Grenades()) > 1, 'with no smoke it blinds');
   assert.equal(flash(oneSmoke()), 0, 'through the cloud it does not');
+});
+
+Deno.test('smoke: one touching a fire goes off at once, in the air too, and puts it out', () => {
+  const world = floorWorld(), g = new Grenades(), t = targets([]);
+  g.addEffect(FX_FIRE, WEAPON_ID.molotov, 1, TEAM_T, 0, 0, 0);
+  g.fxAge[0] = FIRE_GROW; // spread out
+  // Two dropped from 200 up, one over the fire and one beside it.
+  g.throw(world, WEAPON_ID.smokegrenade, 2, TEAM_CT, 0, 0, 200, 89, 0, 0, 0, 0, THROW_SHORT);
+  g.throw(world, WEAPON_ID.smokegrenade, 2, TEAM_CT, 300, 0, 200, 89, 0, 0, 0, 0, THROW_SHORT);
+  const over = g.id[0];
+  let z = 0;
+  for (let i = 0; i < 128 && g.id[0] === over; i++) {
+    z = g.pos[2];
+    g.update(world, t);
+  }
+  assert.ok(g.id[0] !== over && z > 30, `the one over the fire popped in the air (${z} up)`);
+  assert.equal(g.count, 1, 'the one beside it flies on');
+  assert.deepEqual(Array.from(g.fxKind.subarray(0, g.fxCount)), [FX_SMOKE], 'the fire is out');
+  assert.equal(g.fxPos[2], 0, 'the cloud on the fire floor');
 });
 
 Deno.test({ name: 'server: a thrown HE flies from the thrower, hurts an enemy, and the kill is credited', ignore: !bsp, fn: () => {
