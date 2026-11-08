@@ -347,13 +347,6 @@ export class Hud {
     hatch.append(svgEl('rect', { width: 8, height: 8, class: 'hatch-bg' }), svgEl('line', { x1: 0, y1: 0, x2: 0, y2: 8,
       class: 'hatch-line' }));
     defs.appendChild(hatch);
-    // Halftone fills: the sectors' paper, the hovered one's yellow, the center's.
-    for (const name of ['dots', 'dots-hot', 'dots-center']) {
-      const p = svgEl('pattern', { id: `buy-${name}`, width: 9, height: 9, patternUnits: 'userSpaceOnUse',
-        patternTransform: 'rotate(45)', class: name });
-      p.append(svgEl('rect', { width: 9, height: 9 }), svgEl('circle', { cx: 4.5, cy: 4.5, r: 1.7 }));
-      defs.appendChild(p);
-    }
     this.ring = svgEl('g', { class: 'ring' });
     this.center = svgEl('g', { class: 'center' });
     this.center.appendChild(svgEl('circle', { r: R_IN - 8 }));
