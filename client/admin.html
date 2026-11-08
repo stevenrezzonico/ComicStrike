@@ -6,7 +6,8 @@
 <title>ComicStrike Admin</title>
 <link rel="icon" type="image/svg+xml" href="/client/favicon.svg">
 <style>
-  /* The admin page (client/admin.js): the game's paper, ink and flat inks. */
+  /* The admin page (client/admin.js): the game's paper, ink and flat inks, drawn like its menus
+     (client/index.html): caption-box headings, inked buttons and fields. */
   :root {
     --paper: #f6eedb; --paper-hi: #fffaf0; --ink: #17130f; --yellow: #ffd23a; --red: #e2402a; --blue: #2f6fc4;
     --muted: #6d665c; --t: #ffb84a; --ct: #7db8ff; --money: #9be15d;
@@ -15,47 +16,66 @@
     color-scheme: light;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; background: var(--paper); color: var(--ink); font: 14px/1.4 var(--body); }
+  body { margin: 0; min-height: 100vh; color: var(--ink); font: 14px/1.4 var(--body);
+    background: radial-gradient(circle, rgba(23, 19, 15, 0.07) 1.2px, transparent 1.7px) 0 0 / 8px 8px, var(--paper); }
   header { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
-    padding: 8px 14px; background: var(--yellow); border-bottom: 3px solid var(--ink); }
-  header .title { display: flex; align-items: center; gap: 8px; font: 24px/1 var(--display); letter-spacing: 1px;
-    text-decoration: none; color: var(--ink); }
-  header .title img { width: 30px; height: 30px; }
+    padding: 8px 14px; border-bottom: 4px solid var(--ink);
+    background: radial-gradient(circle, rgba(226, 64, 42, 0.3) 30%, transparent 33%) 0 0 / 8px 8px, var(--yellow); }
+  header .title { display: flex; align-items: center; gap: 10px; font: 30px/1 var(--display); letter-spacing: 0.04em;
+    text-decoration: none; color: var(--paper-hi); -webkit-text-stroke: 1.5px var(--ink); paint-order: stroke fill;
+    text-shadow: 2px 2px 0 var(--ink), 3px 3px 0 var(--ink); transform: rotate(-2deg); }
+  header .title img { width: 34px; height: 34px; transform: rotate(-6deg); }
   #summary { flex: 1; min-width: 200px; font-weight: 700; }
   #summary .score { font: 20px/1 var(--display); letter-spacing: 1px; margin: 0 6px; }
   .t { color: #a35a00; } .ct { color: #1f5aa8; } .spec { color: var(--muted); }
   nav { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 14px 0; }
-  nav button { border-bottom-width: 0; box-shadow: none; }
-  nav button.active { background: var(--ink); color: var(--yellow); }
+  nav { gap: 8px; padding-top: 12px; }
+  nav button.active { background: var(--yellow); }
   main { padding: 10px 14px 80px; max-width: 1100px; }
   button, select, input { font: inherit; color: var(--ink); }
-  button { padding: 4px 10px; background: var(--paper-hi); border: 2px solid var(--ink); box-shadow: 2px 2px 0 var(--ink);
-    cursor: pointer; font-weight: 700; }
-  button:hover { background: var(--yellow); }
-  button:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--ink); }
-  button.go { background: var(--red); color: var(--paper-hi); }
-  button.small { padding: 1px 6px; font-size: 12px; box-shadow: 1px 1px 0 var(--ink); }
-  button.on { background: var(--ink); color: var(--yellow); }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
-  select, input { background: var(--paper-hi); border: 2px solid var(--ink); padding: 3px 5px; }
+  button { padding: 6px 11px 4px; background: var(--paper-hi); border: 3px solid var(--ink); box-shadow: 3px 3px 0 var(--ink);
+    cursor: pointer; font: 16px/1 var(--display); letter-spacing: 0.04em; transition: transform 80ms, box-shadow 80ms; }
+  button:hover { background: var(--yellow); transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--ink); }
+  button:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+  button.go { padding: 8px 16px 6px; font-size: 20px; background: var(--red); color: var(--yellow);
+    -webkit-text-stroke: 1px var(--ink); paint-order: stroke fill; text-shadow: 2px 2px 0 var(--ink); }
+  button.small { padding: 3px 7px 1px; font-size: 13px; border-width: 2px; box-shadow: 2px 2px 0 var(--ink); }
+  button.on { background: var(--yellow); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+  select, input { background: var(--paper-hi); border: 3px solid var(--ink); box-shadow: 2px 2px 0 var(--ink); padding: 4px 7px;
+    border-radius: 0; }
+  select { -webkit-appearance: none; appearance: none; padding-right: 28px; cursor: pointer;
+    background: var(--paper-hi) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%2317130f' stroke-width='2.5'/%3E%3C/svg%3E") right 8px center / 12px no-repeat; }
+  input[type=checkbox], input[type=radio] { -webkit-appearance: none; appearance: none; flex: none; width: 22px; height: 22px;
+    margin: 0 2px; padding: 0; vertical-align: middle; cursor: pointer; }
+  input[type=checkbox]:checked { background: var(--yellow) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M3 10l5 5 9-11' fill='none' stroke='%2317130f' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M3 10l5 5 9-11' fill='none' stroke='%23e2402a' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% no-repeat; }
+  input[type=radio] { border-radius: 50%; }
+  input[type=radio]:checked { background: radial-gradient(circle, var(--red) 0 36%, var(--ink) 37% 50%, var(--yellow) 51%); }
   input[type=number] { width: 90px; }
-  h2 { margin: 16px 0 6px; font: 20px/1.1 var(--display); letter-spacing: 1px; text-transform: uppercase; }
-  h2:first-child { margin-top: 4px; }
-  .card { padding: 10px 12px; margin-bottom: 12px; background: var(--paper-hi); border: 3px solid var(--ink);
-    box-shadow: 4px 4px 0 var(--ink); }
+  h2 { display: inline-block; margin: 18px 0 10px; padding: 6px 12px 3px; font: 20px/1.1 var(--display); letter-spacing: 0.05em;
+    text-transform: uppercase; background: var(--yellow); border: 3px solid var(--ink); box-shadow: 3px 3px 0 var(--ink);
+    transform: rotate(-1.2deg); transform-origin: left; }
+  h2:first-child { margin-top: 6px; }
+  .card { padding: 12px 14px; margin-bottom: 14px; background: var(--paper-hi); border: 4px solid var(--ink);
+    box-shadow: 6px 6px 0 var(--ink); }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
   .note { color: var(--muted); font-size: 12px; }
   table { width: 100%; border-collapse: collapse; }
   th, td { padding: 3px 6px; text-align: left; border-bottom: 1px solid rgba(23, 19, 15, 0.15); white-space: nowrap; }
-  th { font: 14px var(--display); letter-spacing: 1px; text-transform: uppercase; }
+  th { font: 15px var(--display); letter-spacing: 0.05em; text-transform: uppercase; }
   td.num, th.num { text-align: right; }
   tr.dead td { opacity: 0.55; }
   .maps { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 5px; }
-  .maps button { text-align: left; font-weight: 400; box-shadow: 1px 1px 0 var(--ink); overflow: hidden; text-overflow: ellipsis; }
-  .maps button.current { outline: 3px solid var(--red); }
+  .maps button { text-align: left; font-size: 15px; box-shadow: 2px 2px 0 var(--ink); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; border-left: 8px solid #e8a91c; }
+  .maps button[title^="de_"] { border-left-color: var(--red); }
+  .maps button[title^="cs_"] { border-left-color: var(--blue); }
+  .maps button[title^="css_"] { border-left-color: #3f9a5a; }
+  .maps button.current { outline: 3px solid var(--red); outline-offset: 1px; }
   /* The new room's Your map tile: a drop zone for a .bsp, shaped like the map buttons. */
-  .maps .drop { padding: 4px 10px; border: 2px dashed var(--ink); background: var(--paper-hi); cursor: pointer;
-    font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .maps .drop { padding: 6px 10px 4px; border: 3px dashed var(--ink); background: var(--paper-hi); cursor: pointer;
+    font: 15px/1 var(--display); letter-spacing: 0.04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .maps .drop:hover, .maps .drop.over { background: var(--yellow); }
   .maps .drop input { display: none; }
   .setting { display: grid; grid-template-columns: minmax(180px, 230px) 130px 1fr; align-items: center; gap: 4px 10px;
@@ -64,7 +84,7 @@
   .setting input[type=text] { width: 100%; }
   .setting code { font: 12px ui-monospace, monospace; }
   .setting .help { font-size: 12px; }
-  .setting .when { margin-left: 4px; padding: 0 4px; background: var(--yellow); border: 1px solid var(--ink); font-size: 11px; }
+  .setting .when { margin-left: 4px; padding: 0 4px; background: var(--yellow); border: 2px solid var(--ink); font-size: 11px; }
   .setting.changed code { color: var(--red); font-weight: 700; }
   #log { position: fixed; left: 0; right: 0; bottom: 0; max-height: 72px; overflow-y: auto; margin: 0; padding: 6px 14px;
     background: var(--ink); color: var(--paper); font: 12px/1.35 ui-monospace, monospace; white-space: pre-wrap; }

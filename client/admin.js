@@ -537,7 +537,7 @@ const BUILD = {
     }, 'go');
     const draw = () => {
       grid.replaceChildren(...(state ? state.maps : []).map((m) =>
-        h('button', { class: [m === picked ? 'on' : '', m === state.map ? 'current' : ''].join(' '), onclick: () => {
+        h('button', { class: [m === picked ? 'on' : '', m === state.map ? 'current' : ''].join(' '), title: m, onclick: () => {
           picked = m;
           draw();
         } }, m)));
