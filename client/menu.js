@@ -235,11 +235,14 @@ export class Menu {
     this.demoPlayers = 0; // the demo: no bots unless asked for (targets)
     this.practiceDifficulty = 1;
     this.practiceArmoury = true; // the map's own weapons laid out (armoury_entity, the fy_ maps)
-    this.roomListed = false; // Host for friends: the room in everyone's Play panel (else the link only)
-    this.panel = ''; // open panel: '', 'play', 'practice', 'own', 'recordings', 'team', 'settings'
+    this.roomListed = false; // Host your map: the room in everyone's Play panel (else the link only)
+    this.roomPassword = ''; // and its join password ('' none)
+    this.hosting = false; // Play Online shows Host your map instead of the rooms
+    this.panel = ''; // open panel: '', 'play', 'practice', 'recordings', 'team', 'settings'
     this.room = ''; // a room's code (a hosted map, server/rooms.js): Play joins it
     this.roomGone = false; // the room's code did not answer (it closed)
-    this.ownMap = ''; // the map file picked in Your map (its name; the page holds the bytes)
+    this.ownMap = ''; // the .bsp of the player's own picked (its name; the page holds the bytes)
+    this.practiceOwn = false; // Play Offline starts it (else practiceMap)
     this.ownError = '';
     this.tab = 0;
     this.shownAt = 0;
@@ -263,12 +266,12 @@ export class Menu {
     this.comparing = null; // the print cvar values put back when the compare button is released
     // Set by the game.
     this.onPlay = (_team) => {};
-    this.onPractice = (_map, _team, _opts) => {}; // opts.own: our own map (Your map)
+    this.onPractice = (_map, _team, _opts) => {}; // opts.own: the .bsp of the player's own (ownMap)
     this.onResume = () => {};
     this.onLeave = () => {};
     this.onTeam = (_team) => {};
     this.onMapFile = (_file) => Promise.resolve(''); // a map file picked: its name, or rejects with why not
-    this.onHost = (_map, _team, _opts) => {};
+    this.onHost = (_map, _team, _opts) => {}; // Host your map: opts as onPractice's, plus listed and password
     this.onRoom = (_code) => {}; // a listed room picked ('' the server's own game)
     this.onWindow = (_open) => {}; // the Video tab's window opened or closed
     // Recordings (client/demo.js): the saved demos, and what to do with one.
@@ -448,6 +451,7 @@ export class Menu {
     const item = (label, panel, action) => {
       const b = button(label, action || (() => {
         this.panel = this.panel === panel ? '' : panel;
+        this.hosting = false;
         this.render();
       }));
       if (panel && panel === this.panel) b.classList.add('active');
@@ -465,7 +469,6 @@ export class Menu {
     } else {
       item('Play Online', 'play');
       item('Play Offline', 'practice');
-      item('Your map', 'own');
       item('Recordings', 'recordings');
       item('Map editor', '', () => open('/client/editor.html', '_blank'));
       item('Server admin', '', admin);
@@ -478,7 +481,6 @@ export class Menu {
     body.innerHTML = '';
     if (this.panel === 'play') this.renderPlay(body);
     else if (this.panel === 'practice') this.renderPractice(body);
-    else if (this.panel === 'own') this.renderPractice(body, 'own');
     else if (this.panel === 'recordings') this.renderRecordings(body);
     else if (this.panel === 'team') this.renderTeam(body, (team) => this.onTeam(team));
     else if (this.panel === 'settings') this.renderSettings(body);
@@ -522,6 +524,10 @@ export class Menu {
   }
 
   renderPlay(body) {
+    if (this.hosting) { // Host your map, from the rooms below
+      body.append(el('h2', '', 'Host your map'));
+      return this.renderHost(body);
+    }
     body.append(el('h2', '', this.room && !this.roomGone ? `Room ${this.room}` : 'Play Online'));
     if (this.room) {
       body.append(el('p', 'menu-hint', this.roomGone
@@ -561,9 +567,17 @@ export class Menu {
       button('Join', () => this.onRoom(r.room)));
       body.append(row);
     }
+    const make = el('div', 'menu-teams');
     const create = button('Create a room', () => open('/admin?new', '_blank')); // the admin page's new room
-    create.disabled = live >= max;
-    body.append(create);
+    create.title = 'A room on one of this server\'s maps';
+    const host = button('Host your map', () => {
+      this.hosting = true;
+      this.render();
+    });
+    host.title = 'A room on a .bsp of your own';
+    create.disabled = host.disabled = live >= max;
+    make.append(create, host);
+    body.append(make);
     if (live >= max) body.append(el('p', 'menu-hint', 'Every room on this server is taken: try again when one closes.'));
   }
 
@@ -635,53 +649,48 @@ export class Menu {
     });
   }
 
-  // Your map: a .bsp from the disk, played alone (practice: nothing leaves the page) or
-  // hosted for friends (a room on the server).
-  renderOwn(body) {
-    body.append(el('p', 'menu-hint', 'Play any GoldSrc map (CS 1.6, BSP version 30) you have: alone against bots, ' +
-      'all in this page, or host it for friends. Hosting sends the file to this server, which keeps it in memory ' +
-      'only while people play.'));
-    const pick = dropZone('.bsp', this.ownMap ? `${this.ownMap}.bsp (drop or click for another)` :
-      'Drop a .bsp file here, or click to choose one', (file) => {
+  // A drop zone for a .bsp of the player's own (Your map), checked and kept in the page by
+  // onMapFile; picked, it is the map Play Offline starts.
+  ownDrop(text) {
+    const pick = dropZone('.bsp', text, (file) => {
       if (!file) return;
       this.ownError = '';
       pick.classList.add('busy');
       this.onMapFile(file).then((name) => {
         this.ownMap = name;
+        this.practiceOwn = true;
       }, (err) => {
         this.ownError = err.message || String(err);
       }).finally(() => this.render());
     });
-    body.append(pick);
-    if (this.ownError) body.append(el('p', 'menu-hint menu-error', this.ownError));
+    pick.title = 'Any GoldSrc map (CS 1.6, BSP version 30) you have';
+    return pick;
   }
 
-  // Practice, or (own) a map of the player's own: a file instead of the list of maps. The
-  // demo mode is one of the modes, its bots optional (targets, counted apart).
-  renderPractice(body, kind = 'practice') {
-    const own = kind === 'own', demo = this.practiceMode === 'demo';
-    body.append(el('h2', '', own ? 'Your map' : 'Play Offline'));
-    if (own) {
-      this.renderOwn(body);
-      if (!this.ownMap) return;
-    }
-    const maps = own ? [this.ownMap] : this.maps || [];
-    if (!maps.length) {
-      body.append(el('p', 'menu-hint', this.maps ? 'No maps found in maps/.' : 'Loading maps...'));
-      return;
-    }
-    if (!own && !maps.includes(this.practiceMap)) this.practiceMap = defaultMap(maps);
-    const grid = el('div', 'menu-maps');
-    for (const m of own ? [] : maps) {
-      const b = button(m, () => {
-        this.practiceMap = m;
+  // A row of buttons, one picked.
+  choice(body, label, options, value, set, tip = '') {
+    const row = el('div', 'menu-row menu-choice');
+    const name = el('span', '', label);
+    if (tip) name.title = tip;
+    row.append(name);
+    const opts = el('div', 'menu-opts'); // wraps onto more lines in a narrow panel
+    for (const [v, text] of options) {
+      const b = button(text, () => {
+        set(v);
         this.render();
       });
-      b.title = m;
-      if (m === this.practiceMap) b.classList.add('active');
-      grid.append(b);
+      if (v === value) b.classList.add('active');
+      opts.append(b);
     }
-    if (!own) body.append(grid);
+    row.append(opts);
+    body.append(row);
+  }
+
+  // The game's settings, Play Offline's and a hosted map's: the team, the mode (the demo's bots
+  // optional, targets counted apart), the bots and their difficulty, the map's weapons. Returns
+  // them as onPractice and onHost take them.
+  renderGame(body) {
+    const demo = this.practiceMode === 'demo';
     const teams = el('div', 'menu-teams');
     for (const [n, label, cls] of [[2, 'Terrorists', 't'], [3, 'Counter-Terrorists', 'ct']]) {
       const b = button(label, () => {
@@ -692,24 +701,7 @@ export class Menu {
       teams.append(b);
     }
     body.append(teams);
-    const choice = (label, options, value, set, tip = '') => { // a row of buttons, one picked
-      const row = el('div', 'menu-row menu-choice');
-      const name = el('span', '', label);
-      if (tip) name.title = tip;
-      row.append(name);
-      const opts = el('div', 'menu-opts'); // wraps onto more lines in a narrow panel
-      for (const [v, text] of options) {
-        const b = button(text, () => {
-          set(v);
-          this.render();
-        });
-        if (v === value) b.classList.add('active');
-        opts.append(b);
-      }
-      row.append(opts);
-      body.append(row);
-    };
-    choice('Mode', Object.entries(MODE_LABELS), this.practiceMode, (v) => {
+    this.choice(body, 'Mode', Object.entries(MODE_LABELS), this.practiceMode, (v) => {
       this.practiceMode = v;
     });
     if (demo) {
@@ -723,40 +715,95 @@ export class Menu {
       if (demo) this.demoPlayers = players;
       else this.practicePlayers = players;
     }
-    choice(botLabel, botOpts, players, (v) => {
+    this.choice(body, botLabel, botOpts, players, (v) => {
       if (demo) this.demoPlayers = v;
       else this.practicePlayers = v;
     });
     if (players) {
-      choice('Difficulty', [[0, 'Easy'], [1, 'Normal'], [2, 'Hard'], [3, 'Expert']], this.practiceDifficulty, (v) => {
+      this.choice(body, 'Difficulty', [[0, 'Easy'], [1, 'Normal'], [2, 'Hard'], [3, 'Expert']], this.practiceDifficulty, (v) => {
         this.practiceDifficulty = v;
       });
     }
     const mode = this.practiceMode;
     if (!modeNamed(mode).ladder) { // the gun games arm by level: never laid out
-      choice('Map weapons', [[true, 'Laid out'], [false, 'None']], this.practiceArmoury, (v) => {
+      this.choice(body, 'Map weapons', [[true, 'Laid out'], [false, 'None']], this.practiceArmoury, (v) => {
         this.practiceArmoury = v;
       }, 'Weapons some maps leave lying at the spawns (the fy_ maps), back every round');
     }
-    if (own) {
-      choice('Room', [[false, 'Link only'], [true, 'Listed']], this.roomListed, (v) => {
-        this.roomListed = v;
-      }, 'Host for friends: a listed room shows in Play Online for anyone on this server; else only the link brings players in');
-    }
-    const opts = {
-      mode, players, difficulty: this.practiceDifficulty, armoury: this.practiceArmoury, listed: this.roomListed, own,
+    return { mode, players, difficulty: this.practiceDifficulty, armoury: this.practiceArmoury };
+  }
+
+  // Play Offline: practice in this page on one of the server's maps or (practiceOwn) on a .bsp of
+  // the player's own, its Your map tile in the grid (nothing leaves the page).
+  renderPractice(body) {
+    body.append(el('h2', '', 'Play Offline'));
+    const maps = this.maps || [];
+    if (!maps.includes(this.practiceMap)) this.practiceMap = defaultMap(maps);
+    if (!this.ownMap) this.practiceOwn = false;
+    else if (!maps.length) this.practiceOwn = true;
+    const grid = el('div', 'menu-maps');
+    const tile = (label, own, m) => {
+      const b = button(label, () => {
+        this.practiceOwn = own;
+        if (!own) this.practiceMap = m;
+        this.render();
+      });
+      b.title = label;
+      if (own ? this.practiceOwn : !this.practiceOwn && m === this.practiceMap) b.classList.add('active');
+      grid.append(b);
     };
-    if (!own) {
-      body.append(button('Start', () => this.onPractice(this.practiceMap, this.practiceTeam, opts), 'menu-go'));
-      return;
+    grid.append(this.ownDrop(this.ownMap ? 'Another .bsp...' : 'Your map (.bsp)...')); // first: the grid scrolls
+    if (this.ownMap) tile(`${this.ownMap} (yours)`, true);
+    for (const m of maps) tile(m, false, m);
+    body.append(grid);
+    if (!maps.length) {
+      body.append(el('p', 'menu-hint', this.maps ? 'No maps found in maps/: drop a .bsp of your own on Your map.'
+        : 'Loading maps...'));
     }
+    if (this.ownError) body.append(el('p', 'menu-hint menu-error', this.ownError));
+    const own = this.practiceOwn;
+    if (own) {
+      body.append(el('p', 'menu-hint', 'Your map plays in this page: nothing is sent anywhere. Host it for friends ' +
+        'from Play Online.'));
+    } else if (!maps.length) return;
+    const opts = this.renderGame(body);
+    body.append(button('Start', () => this.onPractice(own ? this.ownMap : this.practiceMap, this.practiceTeam,
+      { ...opts, own }), 'menu-go'));
+  }
+
+  // Play Online's Host your map: a .bsp of the player's own sent to this server, which runs a room
+  // on it (held in memory only, server/rooms.js), listed or by link only, with a join password if
+  // asked; then the player joins it.
+  renderHost(body) {
+    body.append(el('p', 'menu-hint', 'Host any GoldSrc map (CS 1.6, BSP version 30) you have: the file goes to ' +
+      'this server, which keeps it in memory only while people play in the room.'));
+    body.append(this.ownDrop(this.ownMap ? `${this.ownMap}.bsp (drop or click for another)` :
+      'Drop a .bsp file here, or click to choose one'));
+    if (this.ownError) body.append(el('p', 'menu-hint menu-error', this.ownError));
+    const back = button('Back to the rooms', () => {
+      this.hosting = false;
+      this.render();
+    });
+    if (!this.ownMap) return body.append(back);
+    const opts = this.renderGame(body);
+    this.choice(body, 'Room', [[true, 'Public'], [false, 'Link only']], this.roomListed, (v) => {
+      this.roomListed = v;
+    }, 'Public: listed in Play Online for anyone on this server; link only: only its link brings players in');
+    const row = el('label', 'menu-row');
+    const pw = el('input');
+    pw.type = 'password';
+    pw.autocomplete = 'new-password';
+    pw.maxLength = 63; // sv_password's bytes at most (a few less with accents: the server says so)
+    pw.placeholder = 'none';
+    pw.value = this.roomPassword;
+    pw.addEventListener('input', () => {
+      this.roomPassword = pw.value;
+    });
+    row.append(el('span', '', 'Join password'), pw);
+    body.append(row);
     const go = el('div', 'menu-teams');
-    go.append(button('Play alone', () => this.onPractice(this.ownMap, this.practiceTeam, opts), 'menu-go'));
-    const host = button('Host for friends', () => this.onHost(this.ownMap, this.practiceTeam, opts), 'menu-go');
-    host.disabled = !this.server || !hasWebTransport();
-    if (!this.server) host.title = 'Hosting needs the server, which did not answer';
-    else if (!hasWebTransport()) host.title = NO_WEBTRANSPORT;
-    go.append(host);
+    go.append(button('Host', () => this.onHost(this.ownMap, this.practiceTeam,
+      { ...opts, listed: this.roomListed, password: this.roomPassword }), 'menu-go'), back);
     body.append(go);
   }
 

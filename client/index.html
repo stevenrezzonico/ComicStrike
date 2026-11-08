@@ -494,12 +494,15 @@
   .menu-features li { margin: 2px 0; }
   .menu-hint { font-size: 13px; opacity: 0.7; }
   #menu button.menu-go:disabled { opacity: 0.45; cursor: not-allowed; }
-  /* Your map: a drop zone for a .bsp file; an error under it; the room's invite link. */
+  /* A drop zone for a file (a .bsp of your own, a .csdemo); an error under it; the room's invite link. */
   .menu-drop { display: block; margin: 10px 0; padding: 22px 16px; text-align: center; font-weight: 700;
     border: 3px dashed var(--ink); background: var(--paper-hi); cursor: pointer; }
   .menu-drop:hover, .menu-drop.over { background: var(--yellow); }
   .menu-drop.busy { opacity: 0.6; }
   .menu-drop input { display: none; }
+  /* Play Offline's Your map tile: the drop zone shaped like the map buttons beside it. */
+  .menu-maps .menu-drop { margin: 0; padding: 8px 12px 6px; font: 17px/1 var(--display); letter-spacing: 0.04em;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .menu-error { background: var(--red); color: var(--paper-hi); opacity: 1; padding: 4px 8px; }
   .menu-invite input { font-family: Consolas, monospace; }
   /* A narrow or short screen (a phone either way round, a small tablet): the actions in a row
@@ -536,7 +539,7 @@
   }
   @media (pointer: coarse) {
     #menu button { min-height: 44px; }
-    #menu .menu-choice button, .menu-maps button, .menu-tabs button { min-height: 40px; }
+    #menu .menu-choice button, .menu-maps button, .menu-maps .menu-drop, .menu-tabs button { min-height: 40px; }
     .menu-row input[type=checkbox] { width: 26px; height: 26px; }
     .menu-row input[type=range] { height: 28px; }
     .menu-row select { padding: 8px 6px; }

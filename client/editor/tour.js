@@ -32,7 +32,7 @@ const STEPS = [
   ['#problems', 'Problems', 'What would keep the map from playing well, such as missing spawns or a spawn stuck in a ' +
     'wall. Click one to select the shape at fault.'],
   ['#try', 'Try it', 'Walk your map in a new tab in demo mode: any gun for free, endless ammo, no dying. Export ' +
-    'the .bsp to play it with bots or host it for friends from the game’s Your map. Your work saves itself in ' +
+    'the .bsp to play it with bots (the game’s Play Offline) or host it for friends (Play Online). Your work saves itself in ' +
     'this browser; Save writes a file.'],
 ];
 

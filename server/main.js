@@ -264,15 +264,24 @@ async function readBody(req, max, ms, tooLarge = `the map is too large (${max >>
   return out;
 }
 
-// POST /rooms?file=<name>&mode=<mode>&players=<n>&difficulty=<0-3>&armoury=<0|1>, the map file as the
-// body: a new room; answers its code, the map name, the room's rcon password (the uploader's
-// console uses it) and the room console's catalog (the console's suggestions).
+// POST /rooms?file=<name>&mode=<mode>&players=<n>&difficulty=<0-3>&armoury=<0|1>&listed=<0|1>, the map
+// file as the body and the join password, if any, URI-encoded in the `x-room-password` header (the body
+// is the file, and the address would put it in the logs): a new room; answers its code, the map name,
+// the room's rcon password (the uploader's console uses it) and the room console's catalog (the
+// console's suggestions).
 async function createRoom(req, url, address) {
   try {
     const q = url.searchParams;
+    let password = req.headers.get('x-room-password') || '';
+    try { // a header holds only Latin-1
+      password = decodeURIComponent(password);
+    } catch {
+      // not encoded: as it is
+    }
     const room = await rooms.upload((max, ms) => readBody(req, max, ms), {
       fileName: q.get('file') || '', mode: q.get('mode') || 'competitive', players: +q.get('players') || 0,
-      difficulty: +(q.get('difficulty') ?? 1), armoury: q.get('armoury') !== '0', listed: q.get('listed') === '1', address,
+      difficulty: +(q.get('difficulty') ?? 1), armoury: q.get('armoury') !== '0', listed: q.get('listed') === '1',
+      password, address,
     });
     return Response.json({ code: room.code, map: room.name, rcon: room.rcon, names: room.host.con.catalog() });
   } catch (err) {

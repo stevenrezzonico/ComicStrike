@@ -236,6 +236,12 @@ Deno.test('listed rooms: only those their host listed, each with its connect.jso
   assert.equal(rooms.list()[0].password, true);
   quietly(() => rooms.close(open, 'bye'));
   assert.deepEqual(rooms.list(), []);
+  // A join password sent with the upload (Play Online's Host your map).
+  assert.throws(() => rooms.create(PLAYGROUND, { fileName: 'long.bsp', password: 'x'.repeat(64), address: '9.9.9.9' }), /too long/);
+  clock.ms += 60000;
+  const locked = quietly(() => rooms.create(PLAYGROUND, { fileName: 'locked.bsp', listed: true, password: 'sesame', address: '9.9.9.9' }));
+  assert.equal(locked.host.joinPassword.value, 'sesame');
+  assert.equal(rooms.list()[0].password, true);
 });
 
 Deno.test('a room changes its map by rcon at most once per upload cooldown (each rebuilds the game and navigation)', () => {
