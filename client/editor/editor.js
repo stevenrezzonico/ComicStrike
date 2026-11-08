@@ -22,7 +22,9 @@ import { downloadFile } from '../demostore.js';
 const STORE_KEY = 'comicstrike.editor';
 const STALE_KEY = 'comicstrike.editor.stale'; // set while the autosave is older than the map (a failed save)
 const CLIP_KEY = 'comicstrike.editor.clipboard';
-const LAYOUT_KEY = 'comicstrike.editor.layout';
+// The view the user picked. (The old key, comicstrike.editor.layout, was written at every load,
+// so it held the old default, Simple, for everyone who ever opened the editor.)
+const LAYOUT_KEY = 'comicstrike.editor.view';
 const UNDO = 200;
 // Characters of JSON the undo (and redo) steps hold together, the newest kept: a decompiled
 // Valve map (~1 MB a step) held ~200 MB after 200 edits, a 16 MB project tens of MB an edit.
@@ -721,11 +723,11 @@ export class Editor {
     addEventListener('pointerdown', (e) => {
       if (this.menu && !this.menu.contains(e.target)) this.closeMenu();
     });
-    let layout = 'simple';
+    let layout = 'four'; // Advanced view (top, front, side and 3D) by default
     try {
       layout = localStorage.getItem(LAYOUT_KEY) || layout;
     } catch { /* default */ }
-    this.setLayout(layout);
+    this.setLayout(layout, false);
     this.refreshChrome();
     installTips();
   }
@@ -749,13 +751,16 @@ export class Editor {
     this.remove();
   }
 
-  setLayout(layout) {
+  // `save`: the user switched (kept for the next visit); the layout at load is not written back.
+  setLayout(layout, save = true) {
     this.layout = layout;
     $('views').classList.toggle('simple', layout === 'simple');
     $('layout').textContent = layout === 'simple' ? 'Advanced view' : 'Simple view';
-    try {
-      localStorage.setItem(LAYOUT_KEY, layout);
-    } catch { /* not kept */ }
+    if (save) {
+      try {
+        localStorage.setItem(LAYOUT_KEY, layout);
+      } catch { /* not kept */ }
+    }
     requestAnimationFrame(() => this.redraw());
   }
 
