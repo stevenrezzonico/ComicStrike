@@ -2229,10 +2229,12 @@ function draw(now, dt) {
   deathPanel.show(dying);
   renderer.style.dead += ((dying ? 1 : 0) - renderer.style.dead) * Math.min(1, dt * (dying ? 6 : 10));
   if (renderer.style.dead < 0.005) renderer.style.dead = 0;
-  // The camera inside a smoke cloud: the print fogs over (eased, so crossing the cloud's
-  // shell is a short fade, not a pop).
+  // The camera nearing or inside a smoke cloud: the print fogs over, all of it at the
+  // cloud's surface (smokeDepth). Going in it follows at once (eased, it lagged ~20 units
+  // behind a runner, who saw into the cloud for that moment); coming out it eases away.
   const smoked = fx.cur.smokeDepthAt(eye);
-  renderer.style.smoke += (smoked - renderer.style.smoke) * Math.min(1, dt * 12);
+  if (smoked >= renderer.style.smoke) renderer.style.smoke = smoked;
+  else renderer.style.smoke += (smoked - renderer.style.smoke) * Math.min(1, dt * 12);
   if (renderer.style.smoke < 0.005) renderer.style.smoke = 0;
   const deathDisplay = dead && net ? 'block' : 'none';
   if (deathDisplay !== deathShown) deathNotice.style.display = deathShown = deathDisplay;

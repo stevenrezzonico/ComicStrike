@@ -31,7 +31,6 @@ export const SMOKE_TIME = 18;
 export const SMOKE_RADIUS = 144; // a cloud's radius once grown
 export const SMOKE_GROW = 1; // seconds to grow (approx.)
 export const SMOKE_FADE = 3; // shrinking away at the end (approx.)
-const SMOKE_DEEP = 12; // this far inside a cloud the view is all smoke (smokeDepth)
 const DEPTH_AT = new Float64Array(3); // smokeDepth's point (see smokeDepthAt)
 export const FIRE_TIME = 7; // inferno_flame_lifetime
 export const FIRE_RADIUS = 130; // the spread fire's reach (approx.: CS:GO's spreads irregularly)
@@ -54,6 +53,135 @@ export function smokeRadius(age) {
   if (age < 0 || age > SMOKE_TIME) return 0;
   const grow = Math.min(1, age / SMOKE_GROW), fade = Math.min(1, (SMOKE_TIME - age) / SMOKE_FADE);
   return SMOKE_RADIUS * Math.sqrt(grow) * Math.sqrt(fade);
+}
+
+// A smoke cloud's shape: the one the client draws (client/gl/grenadefx.js buildSmokeCloud)
+// and the one the rules test (inSmoke, smokeDepth, smokeBetween), so a cloud blocks the
+// sight it is drawn over and no other. A unit sphere bulged out by SMOKE_LOBES lobes
+// (centers on a golden spiral from a little under the equator to the top, each with its
+// own height and width, the lowest higher and wider: a skirt), squashed to SMOKE_SQUASH and
+// cut flat at SMOKE_FLOOR, which rests where the grenade lies; it turns, breathes and
+// grows as smokePose says. Before, the rules used an ellipsoid 144 wide and 96 tall
+// centered on the grenade, half of it under the floor: at a standing eye's height it
+// reached 107 units out where the cloud is drawn 131-181 out, and above 96 nothing. In
+// that band the view was inside the drawn shell with no fog and saw everything in the
+// cloud, and the bots saw through it.
+export const SMOKE_LOBES = 22;
+export const SMOKE_SHAPES = 3; // an effect's id picks one (smokeLobesOf)
+export const SMOKE_SQUASH = 0.6; // height over width
+export const SMOKE_FLOOR = -0.36; // the flat underside, in sphere radii under the cloud's middle
+const SMOKE_SKIRT = 1.4; // the lowest lobes this much higher and wider
+const SMOKE_SIZE = 0.9; // the sphere's radius over smokeRadius
+// The view fogs over from SMOKE_MARGIN units outside a cloud and is all smoke from SMOKE_FULL
+// out (smokeDepth), both along the line from the cloud's middle: beside a lobe its surface
+// is up to ~2.3 times nearer than that says, and the view must be all smoke before the near
+// plane (4 units) cuts into the cloud, which would open its inside to view.
+export const SMOKE_MARGIN = 26;
+export const SMOKE_FULL = 10;
+const SMOKE_STEP = 4; // smokeBetween tests points this far apart along a line through a cloud
+const LOBE = 6; // numbers a lobe: its center's direction x, y, z, height, half width (radians), its cosine
+// A cloud posed (smokePose) and a point in it (cloudDepth): the middle x, y, z, the turn,
+// its cosine and sine, the scale (0: not drawn), the point's depth, the point x, y, z, and
+// smokeDepthAt's deepest so far. Numbers cross the calls here (doubles passed or returned
+// are boxed in V8's Maglev tier).
+const SP = new Float64Array(12);
+const DIR = new Float64Array(4); // reachAlong's direction and its reach
+
+// Deterministic 0..1 noise (the clouds' lobes and turns; the client's fires use it too).
+export function hash01(n) {
+  const s = Math.sin(n * 12.9898 + 78.233) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+// The lobes of the cloud built with `seed` (LOBE numbers each).
+export function smokeLobes(seed) {
+  const l = new Float64Array(SMOKE_LOBES * LOBE);
+  for (let i = 0; i < SMOKE_LOBES; i++) {
+    const e = Math.asin(-0.2 + 1.2 * (i + 0.5) / SMOKE_LOBES), a = i * 2.39996 + seed * 1.7;
+    const skirt = e < 15 * Math.PI / 180 ? SMOKE_SKIRT : 1, o = i * LOBE;
+    l[o] = Math.cos(e) * Math.cos(a);
+    l[o + 1] = Math.cos(e) * Math.sin(a);
+    l[o + 2] = Math.sin(e);
+    l[o + 3] = (0.18 + 0.17 * hash01(seed * 7.3 + i * 2.1)) * skirt;
+    l[o + 4] = (18 + 10 * hash01(seed * 3.1 + i * 5.7)) * skirt * Math.PI / 180;
+    l[o + 5] = Math.cos(l[o + 4]);
+  }
+  return l;
+}
+
+// How far the cloud of `lobes` reaches along the unit direction d[0..2], in sphere radii
+// before its squash, into d[3].
+export function reachAlong(lobes, d) {
+  d[3] = 1;
+  for (let o = 0; o < lobes.length; o += LOBE) {
+    const c = d[0] * lobes[o] + d[1] * lobes[o + 1] + d[2] * lobes[o + 2];
+    if (c <= lobes[o + 5]) continue; // outside this lobe
+    const q = Math.cos(Math.PI * Math.acos(Math.min(1, c)) / (2 * lobes[o + 4]));
+    d[3] += lobes[o + 3] * q * q;
+  }
+}
+
+// The farthest the cloud of `lobes` reaches from its middle, squashed, in sphere radii,
+// with a margin for the directions between the samples (smokeBetween's bound).
+function farthest(lobes) {
+  let far = 0;
+  for (let i = 0; i <= 64; i++) {
+    for (let j = 0; j < 128; j++) {
+      const e = (i / 64 - 0.5) * Math.PI, a = j / 128 * 2 * Math.PI;
+      DIR[0] = Math.cos(e) * Math.cos(a);
+      DIR[1] = Math.cos(e) * Math.sin(a);
+      DIR[2] = Math.sin(e);
+      reachAlong(lobes, DIR);
+      far = Math.max(far, DIR[3] * Math.hypot(DIR[0], DIR[1], DIR[2] * SMOKE_SQUASH));
+    }
+  }
+  return far * 1.05;
+}
+
+// The client's cloud meshes are built with seeds 1..SMOKE_SHAPES, effect id % SMOKE_SHAPES
+// picking one.
+const CLOUDS = Array.from({ length: SMOKE_SHAPES }, (_, i) => smokeLobes(i + 1));
+const CLOUD_FAR = CLOUDS.map(farthest);
+export const smokeLobesOf = (id) => CLOUDS[id % SMOKE_SHAPES];
+
+// Where smoke effect `id`, `age` seconds old and resting at pos[o..o+2], is drawn, into P:
+// its middle x, y, z, its turn (radians), the turn's cosine and sine, and its scale (the
+// sphere's radius in units; 0 while too small to draw). It bulges out as it pops, breathes
+// and turns slowly.
+export function smokePose(P, id, age, pos, o) {
+  const R = smokeRadius(age);
+  if (R < 1) {
+    P[6] = 0;
+    return;
+  }
+  const pop = 1 + Math.sin(Math.min(1, age / 1.2) * Math.PI) * 0.18;
+  const s = R * SMOKE_SIZE * pop * (1 + 0.03 * Math.sin(age * 1.9 + id));
+  P[0] = pos[o];
+  P[1] = pos[o + 1];
+  P[2] = pos[o + 2] - SMOKE_FLOOR * s;
+  P[3] = hash01(id) * 6.283 + age * 0.04;
+  P[4] = Math.cos(P[3]);
+  P[5] = Math.sin(P[3]);
+  P[6] = s;
+}
+
+// How far the point SP[8..10] is inside the cloud of `lobes` posed in SP, in units, into
+// SP[7]: along the line from the cloud's middle, or up from its flat base; below 0 outside.
+function cloudDepth(lobes) {
+  const s = SP[6], wx = SP[8] - SP[0], wy = SP[9] - SP[1];
+  const ux = (SP[4] * wx + SP[5] * wy) / s, uy = (SP[4] * wy - SP[5] * wx) / s, uz = (SP[10] - SP[2]) / s;
+  const vz = uz / SMOKE_SQUASH, len = Math.sqrt(ux * ux + uy * uy + vz * vz);
+  const base = (uz - SMOKE_FLOOR) * s;
+  if (len < 1e-9) {
+    SP[7] = base;
+    return;
+  }
+  DIR[0] = ux / len;
+  DIR[1] = uy / len;
+  DIR[2] = vz / len;
+  reachAlong(lobes, DIR);
+  const along = Math.sqrt(DIR[0] * DIR[0] + DIR[1] * DIR[1] + DIR[2] * DIR[2] * SMOKE_SQUASH * SMOKE_SQUASH);
+  SP[7] = Math.min((DIR[3] - len) * s * along, base);
 }
 
 // Fire radius `age` seconds after it caught.
@@ -185,20 +313,28 @@ export class Grenades {
     this.fxCount--;
   }
 
-  // Is (x, y, z) inside a smoke cloud.
+  // Effect k's cloud posed into SP (smokePose); false while it is too small to draw.
+  cloud(k) {
+    smokePose(SP, this.fxId[k], this.fxAge[k], this.fxPos, k * 3);
+    return SP[6] > 0;
+  }
+
+  // Is (x, y, z) inside a smoke cloud as it is drawn.
   inSmoke(x, y, z) {
     for (let k = 0; k < this.fxCount; k++) {
-      if (this.fxKind[k] !== FX_SMOKE) continue;
-      const o = k * 3;
-      if (Math.hypot(x - this.fxPos[o], y - this.fxPos[o + 1], (z - this.fxPos[o + 2]) * 1.5) < smokeRadius(this.fxAge[k])) {
-        return true;
-      }
+      if (this.fxKind[k] !== FX_SMOKE || !this.cloud(k)) continue;
+      SP[8] = x;
+      SP[9] = y;
+      SP[10] = z;
+      cloudDepth(smokeLobesOf(this.fxId[k]));
+      if (SP[7] >= 0) return true;
     }
     return false;
   }
 
-  // How deep inside a smoke cloud (x, y, z) is: 0 outside, 1 from SMOKE_DEEP units in,
-  // between near the cloud's surface (the print fogs the view by it).
+  // How far into a smoke cloud (x, y, z) is, for the print's fog: 0 from SMOKE_MARGIN
+  // outside its drawn surface, 1 from SMOKE_FULL outside and inside it, so the view never
+  // shows the cloud's inside (its inner faces are drawn and would frame everything in it).
   smokeDepth(x, y, z) {
     const p = DEPTH_AT;
     p[0] = x;
@@ -208,27 +344,42 @@ export class Grenades {
   }
 
   // smokeDepth of the point in p (x, y, z): the client asks every frame, and its three
-  // doubles were boxed as arguments. Nothing but the clouds' smoke radius is called.
+  // doubles were boxed as arguments.
   smokeDepthAt(p) {
-    const x = p[0], y = p[1], z = p[2];
-    let deep = 0;
+    SP[11] = -SMOKE_MARGIN;
     for (let k = 0; k < this.fxCount; k++) {
-      if (this.fxKind[k] !== FX_SMOKE) continue;
-      const o = k * 3, r = smokeRadius(this.fxAge[k]);
-      const d = r - Math.hypot(x - this.fxPos[o], y - this.fxPos[o + 1], (z - this.fxPos[o + 2]) * 1.5);
-      if (d > deep) deep = d;
+      if (this.fxKind[k] !== FX_SMOKE || !this.cloud(k)) continue;
+      SP[8] = p[0];
+      SP[9] = p[1];
+      SP[10] = p[2];
+      cloudDepth(smokeLobesOf(this.fxId[k]));
+      SP[11] = Math.max(SP[11], SP[7]);
     }
-    return Math.min(1, deep / SMOKE_DEEP);
+    return Math.min(1, (SP[11] + SMOKE_MARGIN) / (SMOKE_MARGIN - SMOKE_FULL));
   }
 
-  // Does a smoke cloud cut the line between two points?
+  // Does a smoke cloud as drawn cut the line between two points? The stretch of the line
+  // within reach of a cloud's middle is tested every SMOKE_STEP units.
   smokeBetween(x0, y0, z0, x1, y1, z1) {
-    const dx = x1 - x0, dy = y1 - y0, dz = (z1 - z0) * 1.5, len2 = dx * dx + dy * dy + dz * dz;
+    const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0, len2 = dx * dx + dy * dy + dz * dz, len = Math.sqrt(len2);
     for (let k = 0; k < this.fxCount; k++) {
-      if (this.fxKind[k] !== FX_SMOKE) continue;
-      const o = k * 3, cx = this.fxPos[o] - x0, cy = this.fxPos[o + 1] - y0, cz = (this.fxPos[o + 2] - z0) * 1.5;
-      const t = len2 > 0 ? Math.min(Math.max((cx * dx + cy * dy + cz * dz) / len2, 0), 1) : 0;
-      if (Math.hypot(cx - dx * t, cy - dy * t, cz - dz * t) < smokeRadius(this.fxAge[k])) return true;
+      if (this.fxKind[k] !== FX_SMOKE || !this.cloud(k)) continue;
+      const shape = this.fxId[k] % SMOKE_SHAPES, far = CLOUD_FAR[shape] * SP[6];
+      const cx = SP[0] - x0, cy = SP[1] - y0, cz = SP[2] - z0;
+      const t = len2 > 0 ? (cx * dx + cy * dy + cz * dz) / len2 : 0; // the nearest point, unclamped
+      const ex = cx - dx * t, ey = cy - dy * t, ez = cz - dz * t, miss = far * far - (ex * ex + ey * ey + ez * ez);
+      if (miss <= 0) continue;
+      const half = len > 0 ? Math.sqrt(miss) / len : 1, t0 = Math.max(0, t - half), t1 = Math.min(1, t + half);
+      if (t0 > t1) continue;
+      const n = Math.ceil((t1 - t0) * len / SMOKE_STEP);
+      for (let i = 0; i <= n; i++) {
+        const u = n > 0 ? t0 + (t1 - t0) * i / n : t0;
+        SP[8] = x0 + dx * u;
+        SP[9] = y0 + dy * u;
+        SP[10] = z0 + dz * u;
+        cloudDepth(CLOUDS[shape]);
+        if (SP[7] >= 0) return true;
+      }
     }
     return false;
   }
@@ -323,7 +474,7 @@ export class Grenades {
         if (!targets.alive(i)) continue;
         targets.eye(i, v3);
         const dx = x - v3[0], dy = y - v3[1], dz = z - v3[2], dist = Math.hypot(dx, dy, dz) || 1;
-        if (!this.visible(world, x, y, z, v3) || this.inSmoke((x + v3[0]) / 2, (y + v3[1]) / 2, (z + v3[2]) / 2)) continue;
+        if (!this.visible(world, x, y, z, v3) || this.smokeBetween(x, y, z, v3[0], v3[1], v3[2])) continue;
         const pitch = targets.pitch(i) * DEG, yaw = targets.yaw(i) * DEG, cp = Math.cos(pitch);
         const facing = (cp * Math.cos(yaw) * dx + cp * Math.sin(yaw) * dy - Math.sin(pitch) * dz) / dist;
         const t = flashDuration(dist, facing);

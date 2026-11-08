@@ -7,8 +7,10 @@ import { HITGROUP_CHEST } from '../shared/hitgroups.js';
 import { WEAPONS, WEAPON_ID, SLOT_GRENADE, THROW_LONG, THROW_SHORT, giveWeapon } from '../shared/weapons.js';
 import {
   Grenades, heDamage, flashDuration, fireRadius, smokeRadius, FUSE, HE_DAMAGE, HE_RADIUS, FX_HE, FX_SMOKE, FX_FIRE,
-  FX_FIZZLE, FIRE_DPS, SMOKE_TIME,
+  FX_FIZZLE, FIRE_DPS, SMOKE_TIME, SMOKE_GROW, SMOKE_SHAPES, SMOKE_FLOOR, SMOKE_MARGIN, smokePose,
 } from '../shared/grenades.js';
+import { buildSmokeCloud } from '../client/gl/grenadefx.js';
+import { floorWorld } from './worlds.js';
 import { Writer, writeCmds } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
 import { mapOrNull, loadMap, joinClient } from './harness.js';
@@ -125,13 +127,83 @@ Deno.test({ name: 'smoke pops once it stops; a molotov burns on the floor and a 
   assert.deepEqual(Array.from(g.fxKind.subarray(0, g.fxCount)), [FX_SMOKE], 'and put the fire out');
   for (let i = 0; i < 64; i++) g.update(world, t);
   assert.ok(g.inSmoke(x, y, floor + 40), 'a second later the cloud covers it');
-  // How deep a point is in the cloud: nothing outside, all smoke a little way in.
-  const cx = g.fxPos[0], cy = g.fxPos[1], cz = g.fxPos[2], r = smokeRadius(g.fxAge[0]);
-  assert.equal(g.smokeDepth(cx + r + 5, cy, cz), 0, 'outside');
-  assert.equal(g.smokeDepth(cx, cy, cz), 1, 'at the center');
-  const near = g.smokeDepth(cx + r - 6, cy, cz);
-  assert.ok(near > 0.3 && near < 0.7, `half way at 6 units in (${near})`);
+  // How far into the cloud a point is, for the fog: nothing well outside, all smoke inside.
+  const cx = g.fxPos[0], cy = g.fxPos[1], cz = g.fxPos[2];
+  assert.equal(g.smokeDepth(cx + 300, cy, cz + 40), 0, 'outside');
+  assert.equal(g.smokeDepth(cx, cy, cz + 40), 1, 'in the middle');
 } });
+
+// A grown smoke at (x, y, z) whose id picks cloud shape `shape`, `age` seconds old.
+function oneSmoke(shape = 0, x = 0, y = 0, z = 0, age = SMOKE_GROW + 3) {
+  const g = new Grenades();
+  g.nextId = SMOKE_SHAPES + shape;
+  g.addEffect(FX_SMOKE, 0, 0, TEAM_T, x, y, z);
+  g.fxAge[0] = age;
+  return g;
+}
+
+Deno.test('smoke: the rules take the cloud as it is drawn, every corner of it', () => {
+  const P = new Float64Array(7);
+  for (let shape = 0; shape < SMOKE_SHAPES; shape++) {
+    for (const age of [0.5, SMOKE_GROW + 3, SMOKE_TIME - 1]) { // popping, grown, shrinking away
+      const g = oneSmoke(shape, 100, -200, 30, age), id = g.fxId[0];
+      smokePose(P, id, age, g.fxPos, 0);
+      const cloud = buildSmokeCloud([1, 1, 1], id % SMOKE_SHAPES + 1), q = cloud.positions; // as GrenadeFx builds it
+      let n = 0;
+      for (let v = 0; v < q.length; v += 3) {
+        if (q[v + 2] <= SMOKE_FLOOR + 1e-6) continue; // the flat base
+        // The corner where the client draws it (GrenadeFx.smoke), and points along the line
+        // from the cloud's middle through it.
+        const ox = (P[4] * q[v] - P[5] * q[v + 1]) * P[6], oy = (P[5] * q[v] + P[4] * q[v + 1]) * P[6], oz = q[v + 2] * P[6];
+        const d = Math.hypot(ox, oy, oz), at = (u) => [P[0] + ox * (1 + u / d), P[1] + oy * (1 + u / d), P[2] + oz * (1 + u / d)];
+        const where = `shape ${shape} at ${age} s, corner ${v / 3}`;
+        assert.ok(g.inSmoke(...at(-2)), `${where}: smoke 2 units in`);
+        assert.ok(!g.inSmoke(...at(2)), `${where}: none 2 units out`);
+        assert.equal(g.smokeDepth(...at(-2)), 1, `${where}: the view all smoke inside`);
+        assert.equal(g.smokeDepth(...at(SMOKE_MARGIN + 2)), 0, `${where}: no fog well outside`);
+        // 4 units off the surface (the near plane: closer, it cuts the cloud open) the view
+        // is all smoke, beside a lobe too.
+        const nx = P[4] * cloud.normals[v] - P[5] * cloud.normals[v + 1], ny = P[5] * cloud.normals[v] + P[4] * cloud.normals[v + 1];
+        const nz = cloud.normals[v + 2], nl = Math.hypot(nx, ny, nz) / 4;
+        assert.equal(g.smokeDepth(P[0] + ox + nx / nl, P[1] + oy + ny / nl, P[2] + oz + nz / nl), 1, `${where}: all smoke 4 units off`);
+        n++;
+      }
+      assert.ok(n > 600, `${n} corners`);
+    }
+  }
+});
+
+Deno.test('smoke: lines through the cloud are blocked at every height it is drawn, not beyond', () => {
+  for (let shape = 0; shape < SMOKE_SHAPES; shape++) {
+    const g = oneSmoke(shape);
+    for (let a = 0; a < 12; a++) {
+      const c = Math.cos(a * Math.PI / 6), s = Math.sin(a * Math.PI / 6);
+      // A line across the cloud passing `off` from its middle, `h` over the floor.
+      const across = (off, h) => g.smokeBetween(-s * off - c * 600, c * off - s * 600, h, -s * off + c * 600, c * off + s * 600, h);
+      // At a standing eye's height the cloud is drawn 131-181 out (the old rules stopped at
+      // 107 and saw through the rest), up to ~140 high (they stopped at 96).
+      assert.ok(across(120, 64), `shape ${shape}, ${a * 30} deg: 120 out at eye height`);
+      assert.ok(across(0, 110), `shape ${shape}, ${a * 30} deg: over 96 high`);
+      assert.ok(!across(220, 64), `shape ${shape}, ${a * 30} deg: beside it`);
+      assert.ok(!across(0, 170), `shape ${shape}, ${a * 30} deg: over it`);
+      assert.ok(!g.smokeBetween(-s * 600, c * 600, 64, -s * 260, c * 260, 64), `shape ${shape}, ${a * 30} deg: stops short`);
+    }
+  }
+});
+
+Deno.test('smoke: a flashbang behind the edge of a cloud blinds nobody', () => {
+  const world = floorWorld();
+  // A line 120 from the cloud's middle at eye height: its midpoint was out of the old
+  // rules' cloud, so the flash went through.
+  const flash = (g) => {
+    const t = targets([[400, 120, 0, 180]]);
+    g.throw(world, WEAPON_ID.flashbang, 1, TEAM_CT, -400, 120, 64, 0, 0, 0, 0, 0, THROW_LONG);
+    g.detonate(world, g.count - 1, 'flash', -400, 120, 64, true, t);
+    return t.flashed[0];
+  };
+  assert.ok(flash(new Grenades()) > 1, 'with no smoke it blinds');
+  assert.equal(flash(oneSmoke()), 0, 'through the cloud it does not');
+});
 
 Deno.test({ name: 'server: a thrown HE flies from the thrower, hurts an enemy, and the kill is credited', ignore: !bsp, fn: () => {
   const game = new Game('de_dust2', bsp, { rounds: false });
