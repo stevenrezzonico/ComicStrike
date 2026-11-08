@@ -460,7 +460,7 @@
   .menu-panel > button { align-self: flex-start; }
   .menu-foot { position: sticky; bottom: calc(-1 * var(--pb)); z-index: 1; display: flex; flex-wrap: wrap;
     align-items: center; gap: 8px 10px; margin: 12px calc(-1 * var(--px)) calc(-1 * var(--pb));
-    padding: 12px var(--px) var(--pb); background: var(--paper); border-top: 3px solid var(--ink); }
+    padding: 12px var(--px) var(--pb); background: var(--paper); }
   .menu-foot .menu-row { padding: 0; }
   .menu-foot > .menu-hint { flex-basis: 100%; margin: 0; }
   .menu-badge { display: inline-block; vertical-align: 2px; margin-left: 6px; padding: 3px 7px 1px;
@@ -559,7 +559,7 @@
   #menu button.menu-go:hover { background: none; box-shadow: none; transform: rotate(-5deg) scale(1.07); }
   #menu button.menu-go:hover::after { background: #f2583a; }
   #menu button.menu-go:active { transform: rotate(-3deg) scale(0.97); }
-  .menu-foot:has(.menu-go) { padding-top: 6px; padding-bottom: 8px; }
+  .menu-foot:has(.menu-go) { justify-content: flex-end; padding-top: 6px; padding-bottom: 8px; }
   #menu button.menu-reset { font-size: 14px; }
   .menu-server { font-weight: 700; }
   .menu-tagline { margin: 0 0 14px; font-size: 17px; }
