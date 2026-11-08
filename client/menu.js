@@ -20,6 +20,13 @@ const MODE_LABELS = Object.fromEntries(MODES.map((m) => [m.name, m.label]));
 // fill both sides (bot_quota_mode fill: the player counts); Wingman is 2 a side
 // (mp_teamsize_max 2: more would sit as spectators); free-for-all modes count players, not
 // sides; the demo's bots are respawning targets on the enemy team.
+// Play Offline's maps by kind, from the name's prefix (de_ defusal, cs_ hostages, css_ the
+// Source ports; aim_, awp_, fy_, usp_, as_ and the rest are fun maps).
+const MAP_KINDS = [['de', 'Defusal'], ['cs', 'Hostages'], ['fun', 'Fun'], ['css', 'Source ports']];
+const mapKind = (m) => {
+  const p = m.slice(0, m.indexOf('_'));
+  return p === 'de' || p === 'cs' || p === 'css' ? p : 'fun';
+};
 // The map a game starts on unless one is picked: de_dust2 (a Valve map, kept out of the
 // repository), else our own de_inkwell, else the first in `maps` (the names in maps/).
 export const defaultMap = (maps) => ['de_dust2', 'de_inkwell'].find((m) => maps.includes(m)) || maps[0];
@@ -491,18 +498,10 @@ export class Menu {
   renderWelcome(body) {
     body.append(el('h2', '', 'A comic strip you can shoot in'));
     body.append(el('p', 'menu-tagline', 'CS:GO’s movement, guns and economy on the classic CS 1.6 maps, ' +
-      'printed live as a comic: flat colors and ink lines. Nothing to install: it runs in this tab.'));
-    const feats = el('ul', 'menu-features');
-    for (const t of [
-      'Play online against others, or practice against bots in your browser.',
-      'Competitive, casual, wingman, deathmatch, arms race, demolition, retakes and a demo playground.',
-      'Procedural everything: no textures, models or sounds are downloaded.',
-    ]) feats.append(el('li', '', t));
-    body.append(feats);
+      'printed live as a comic. Nothing to install.'));
     const n = this.listedRooms.length;
-    body.append(el('p', 'menu-server', this.roomCount
-      ? `Online: ${n} public room${n === 1 ? '' : 's'} · ${this.roomCount[0]}/${this.roomCount[1]} rooms open`
-      : this.maps ? 'No server answered: practice works offline.' : 'Looking for the server...'));
+    body.append(el('p', 'menu-server', this.roomCount ? `Online now: ${n} public room${n === 1 ? '' : 's'}`
+      : this.maps ? 'No server answered: Play Offline still works.' : 'Looking for the server...'));
     const row = el('label', 'menu-row');
     row.append(el('span', '', 'Name'));
     const name = el('input');
@@ -515,7 +514,6 @@ export class Menu {
     });
     row.append(name);
     body.append(row);
-    body.append(el('p', 'menu-hint', 'In a game: Esc opens this menu, B buys, Tab shows the scores, ` opens the console.'));
   }
 
   // Play Online: the rooms (every game on the server is one), or the room picked (a link, Join)
@@ -524,8 +522,7 @@ export class Menu {
     const s = this.roomInfo;
     if (s) return this.renderRoom(body, s);
     if (this.roomGone) {
-      body.append(el('p', 'menu-hint', `Room ${this.room} has closed (rooms close once nobody plays in them): join another ` +
-        'or make one.'));
+      body.append(el('p', 'menu-hint', `Room ${this.room} has closed: join another or make one.`));
     }
     if (!this.roomCount) return body.append(el('p', 'menu-server', this.maps ? 'No server answered.' : 'Looking for the server...'));
     if (!hasWebTransport()) return body.append(el('p', 'menu-hint', NO_WEBTRANSPORT));
@@ -533,8 +530,7 @@ export class Menu {
     const head = el('h2', '', 'Rooms ');
     head.append(el('span', 'menu-badge', `${live}/${max} open`));
     body.append(head);
-    body.append(el('p', 'menu-hint', listed.length ? 'Games on this server, listed by their hosts.'
-      : 'No public room right now. Make one: a map, a mode, bots, public or by link only, a password if you like.'));
+    if (!listed.length) body.append(el('p', 'menu-hint', 'No public room right now: make one.'));
     for (const r of listed) {
       const row = el('div', 'menu-row menu-demo');
       row.append(el('span', '', r.map), el('span', 'menu-hint',
@@ -546,13 +542,13 @@ export class Menu {
     create.title = 'A room on one of this server\'s maps or a .bsp of your own';
     create.disabled = live >= max;
     body.append(create);
-    if (live >= max) body.append(el('p', 'menu-hint', 'Every room on this server is taken: try again when one closes.'));
+    if (live >= max) body.append(el('p', 'menu-hint', 'Every room is taken: try again when one closes.'));
   }
 
   // The room picked: its line (s: its connect.json), its password field and its teams.
   renderRoom(body, s) {
     body.append(el('h2', '', `Room ${this.room}`));
-    body.append(el('p', 'menu-hint', 'A game of its own on this server. Share this page\'s address to invite more players.'));
+    body.append(el('p', 'menu-hint', 'Share this page\'s address to invite friends.'));
     body.append(el('p', 'menu-server', `${s.map} · ${MODE_LABELS[s.mode] || s.mode || 'Competitive'} · ` +
       `${s.players}/${s.maxPlayers} players` + (s.password ? ' · password' : '')));
     const back = button('Back to the rooms', () => this.onRoom(''));
@@ -603,16 +599,16 @@ export class Menu {
     });
     row.append(link, copy);
     body.append(row);
-    body.append(el('p', 'menu-hint', 'The room closes a couple of minutes after the last player leaves (a map brought ' +
-      'for it is held in memory only and goes with it).'));
+    body.append(el('p', 'menu-hint', 'It closes a few minutes after the last player leaves.'));
   }
 
   // Settings' Recordings tab: the demos recorded in this browser (record <name> ... stop in a
   // game), each played back, downloaded or deleted, and a .csdemo file from the disk to play.
   renderRecordings(body) {
-    body.append(el('p', 'menu-hint', 'In a game, type record <name> in the console (`) to record it as a demo, and stop ' +
-      'to end it. A demo plays back as a spectator: fly freely, or jump to watch through a player\'s eyes. ' +
-      'demo_pause and demo_timescale control it.'));
+    const how = el('p', 'menu-hint', 'To record a game, type record <name> in the console (`), then stop.');
+    how.title = 'A demo plays back as a spectator: fly freely, or jump to watch through a player\'s eyes. ' +
+      'demo_pause and demo_timescale control it.';
+    body.append(how);
     body.append(dropZone('.csdemo', 'Drop a .csdemo file here, or click to choose one', (file) => {
       if (file) this.onDemoFile(file);
     }));
@@ -694,8 +690,8 @@ export class Menu {
       this.practiceMode = v;
     });
     if (demo) {
-      body.append(el('p', 'menu-hint', 'Try everything out: buy anything for free, anywhere, infinite ammo and ' +
-        'grenades, you cannot die, plant and defuse the bomb yourself. Targets are enemy bots that respawn.'));
+      body.append(el('p', 'menu-hint', 'Free buys anywhere, endless ammo, no dying: try everything. ' +
+        'Targets are bots that respawn.'));
     }
     const [botLabel, botOpts] = botOptions(this.practiceMode);
     let players = demo ? this.demoPlayers : this.practicePlayers;
@@ -742,7 +738,11 @@ export class Menu {
     };
     grid.append(this.ownDrop(this.ownMap ? 'Another .bsp...' : 'Your map (.bsp)...')); // first: the grid scrolls
     if (this.ownMap) tile(`${this.ownMap} (yours)`, true);
-    for (const m of maps) tile(m, false, m);
+    for (const [kind, label] of MAP_KINDS) {
+      const some = maps.filter((m) => mapKind(m) === kind);
+      if (some.length) grid.append(el('h3', '', label));
+      for (const m of some) tile(m, false, m);
+    }
     body.append(grid);
     if (!maps.length) {
       body.append(el('p', 'menu-hint', this.maps ? 'No maps found in maps/: drop a .bsp of your own on Your map.'
@@ -751,8 +751,7 @@ export class Menu {
     if (this.ownError) body.append(el('p', 'menu-hint menu-error', this.ownError));
     const own = this.practiceOwn;
     if (own) {
-      body.append(el('p', 'menu-hint', 'Your map plays in this page: nothing is sent anywhere. Play Online\'s ' +
-        'Create a room takes it too, for friends.'));
+      body.append(el('p', 'menu-hint', 'Your map plays in this page: nothing is sent anywhere.'));
     } else if (!maps.length) return;
     const opts = this.renderGame(body);
     this.foot(body).append(button('Start', () => this.onPractice(own ? this.ownMap : this.practiceMap, this.practiceTeam,
@@ -876,11 +875,11 @@ export class Menu {
       }, () => done(`Could not read ${file.name}.`, true));
     });
     const row = el('div', 'menu-row menu-config');
-    row.append(
-      button('Export settings', () => downloadFile('comicstrike.cfg', this.config.text() + '\n', 'text/plain')),
-      button('Import settings', () => input.click()),
-      input,
-    );
+    const exp = button('Export', () => downloadFile('comicstrike.cfg', this.config.text() + '\n', 'text/plain'), 'menu-reset');
+    exp.title = 'Every setting and key as a file (comicstrike.cfg)';
+    const imp = button('Import', () => input.click(), 'menu-reset');
+    imp.title = 'Settings and keys from such a file';
+    row.append(exp, imp, input);
     body.append(row);
     const note = this.configNote;
     if (note) body.append(el('p', note[1] ? 'menu-hint menu-error' : 'menu-hint', note[0]));
@@ -900,7 +899,8 @@ export class Menu {
       for (const ev of ['mouseup', 'mouseleave', 'touchend', 'touchcancel']) {
         hold.addEventListener(ev, () => this.compare(false));
       }
-      row.append(hold, el('span', 'menu-hint', 'The window shows the game as printed with the settings below.'));
+      wrap.title = 'The game as printed with the settings below';
+      row.append(hold);
       const box = el('div', 'menu-window-box');
       box.append(wrap, row);
       return box;
@@ -910,7 +910,7 @@ export class Menu {
       const wrap = el('div', 'menu-gun');
       this.gunFrame = el('iframe');
       this.gunFrame.title = 'Weapon preview';
-      wrap.append(this.gunFrame, el('span', 'menu-hint', 'Drag the gun to turn it. Your looks show in your own hands only.'));
+      wrap.append(this.gunFrame, el('span', 'menu-hint', 'Drag it to turn it. Only you see your looks.'));
       if (!LOOK_GUNS.includes(this.gunShown)) {
         this.gunShown = LOOK_GUNS.find((n) => this.cv[`cl_finish_${n}`].number > 0) || 'ak47';
       }
@@ -1055,10 +1055,9 @@ export class Menu {
         list.insertBefore(row, after);
       }
     }
-    list.insertBefore(el('p', 'menu-hint', 'Click a key, then press the new key, mouse button or gamepad button. ' +
-      'Backspace clears it, Escape cancels. Everything else is in the console (bind, unbind).'), after);
-    list.insertBefore(el('p', 'menu-hint', 'Crouch on Ctrl: Ctrl+W closes the tab in Firefox, and in Chrome and Edge ' +
-      'unless Fullscreen is on (Video). Bind crouch to C there, or play fullscreen.'), after);
+    list.insertBefore(el('p', 'menu-hint', 'Click a key, then press the new one. Backspace clears it, Escape cancels.'), after);
+    list.insertBefore(el('p', 'menu-hint', 'Ctrl+W closes the tab in Firefox, and in Chrome and Edge unless Fullscreen ' +
+      'is on (Video): bind crouch to C there.'), after);
   }
 
   startCapture(cell, command, key) {
