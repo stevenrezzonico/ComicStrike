@@ -315,7 +315,10 @@ Deno.serve({ hostname: BIND, port: HTTP_PORT, ...tls, onListen: () => {} }, asyn
     return room ? serveRoomMap(room, req) : new Response('no such room', { status: 404 });
   }
   if (pathname === '/maps.json') return Response.json(host.opts.listMaps()); // for offline practice
-  if (pathname.startsWith('/admin/')) { // the admin page (client/admin.html)
+  if (pathname === '/admin' || pathname === '/admin/') { // the admin page itself (its calls are under /admin/)
+    return (await serveStatic('/client/admin.html', req)) || new Response('not found', { status: 404 });
+  }
+  if (pathname.startsWith('/admin/')) { // the admin page's calls (client/admin.html)
     return adminResponse(req, url, {
       address: info.remoteAddr.hostname, secure: !!TLS_CERT,
       hostFor: (code) => (code ? rooms.get(code)?.host ?? null : host),
@@ -339,7 +342,7 @@ const site = TLS_CERT ? `https://${HOSTNAMES[0]}${HTTP_PORT === 443 ? '' : `:${H
 console.log(`${site}   webtransport: udp/${GAME_PORT}   ${TLS_CERT ? 'certificate: ' + TLS_CERT : 'self-signed certificate (development)'}` +
   `   map: ${MAP}   ${TICK_RATE} tick`);
 // (after the #: the browser never sends it; the page takes it off the address)
-console.log(`admin page: ${site}client/admin.html${madePassword ? `#password=${madePassword}` : '   (with the rcon password)'}`);
+console.log(`admin page: ${site}admin${madePassword ? `#password=${madePassword}` : '   (with the rcon password)'}`);
 
 // The terminal is a server console.
 (async () => {

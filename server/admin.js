@@ -55,7 +55,7 @@ export async function adminResponse(req, url, { address, secure, hostFor }) {
   } catch {
     // not encoded: as it is
   }
-  const refused = host.rconRefusal(address, password, `the admin page (${address})`);
+  const refused = host.rconRefusal(address, password, 'the admin page') // (it adds the address);
   if (refused !== '') return json({ error: refused ?? 'Bad rcon_password.' }, 403);
   if (op === 'state') return json(host.adminState());
   if (op === 'catalog') return json(host.con.catalog());

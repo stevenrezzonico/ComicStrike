@@ -452,7 +452,7 @@ export class Menu {
       nav.append(b);
     };
     // The admin page (client/admin.html) in a new tab: this practice game's, this room's or the server's.
-    const admin = () => open(`/client/admin.html${this.inGame && !this.online ? '?practice' : this.room ? `?room=${this.room}` : ''}`,
+    const admin = () => open(`/admin${this.inGame && !this.online ? '?practice' : this.room ? `?room=${this.room}` : ''}`,
       '_blank');
     if (this.inGame) {
       item('Resume', '', () => this.onResume());

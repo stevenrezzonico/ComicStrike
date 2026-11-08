@@ -5,9 +5,9 @@
 // which asks its worker, client/localserver.js). The state is read once a second while the
 // page shows.
 //
-//   /client/admin.html             the server's own game
-//   /client/admin.html?room=<code> a room (the tab that hosts it hands the password over)
-//   /client/admin.html?practice    the practice game running in another tab
+//   /admin                 the server's own game (server/main.js serves this file there)
+//   /admin?room=<code>     a room (the tab that hosts it hands the password over)
+//   /admin?practice        the practice game running in another tab
 
 import { cvarCommand, who, modeCommands, botCommands, PRACTICE_PRESET, resetCommands, GROUPS, groupOf, whenApplies, controlOf }
   from './admincmd.js';
