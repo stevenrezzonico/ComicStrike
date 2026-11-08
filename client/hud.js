@@ -22,6 +22,7 @@ const pips = (alive, all) => '\u25cf'.repeat(Math.min(alive, 10)) + '\u25cb'.rep
 export class Hud {
   constructor(onBuy) {
     this.onBuy = onBuy; // (item) => void
+    this.iconOf = null; // (item) => [url, width, height] of a weapon's silhouette (the kill feed's), or null
     this.elMoney = $('hud-money');
     this.elRound = $('roundbar');
     this.elBanner = $('banner');
@@ -346,6 +347,13 @@ export class Hud {
     hatch.append(svgEl('rect', { width: 8, height: 8, class: 'hatch-bg' }), svgEl('line', { x1: 0, y1: 0, x2: 0, y2: 8,
       class: 'hatch-line' }));
     defs.appendChild(hatch);
+    // Halftone fills: the sectors' paper, the hovered one's yellow, the center's.
+    for (const name of ['dots', 'dots-hot', 'dots-center']) {
+      const p = svgEl('pattern', { id: `buy-${name}`, width: 9, height: 9, patternUnits: 'userSpaceOnUse',
+        patternTransform: 'rotate(45)', class: name });
+      p.append(svgEl('rect', { width: 9, height: 9 }), svgEl('circle', { cx: 4.5, cy: 4.5, r: 1.7 }));
+      defs.appendChild(p);
+    }
     this.ring = svgEl('g', { class: 'ring' });
     this.center = svgEl('g', { class: 'center' });
     this.center.appendChild(svgEl('circle', { r: R_IN - 8 }));
@@ -398,6 +406,13 @@ export class Hud {
       const kr = R_OUT - 14, key = svgEl('text', { x: Math.cos(rad) * kr, y: Math.sin(rad) * kr + 4, class: 'key' });
       key.textContent = i < 9 ? String(i + 1) : i === 9 ? '0' : '';
       g.append(path, label, price, key);
+      // The weapon's silhouette over its name, inked (the kill feed's paper icon through brightness(0)).
+      const icon = cat >= 0 && this.iconOf ? this.iconOf(en.item) : null;
+      if (icon) {
+        const k = Math.min(1, ICON_H / icon[2], (n > 8 ? 56 : 76) / icon[1]), w = icon[1] * k, h = icon[2] * k;
+        const top = ty - (lines.length - 1) * 9 - 26 - h;
+        g.appendChild(svgEl('image', { href: icon[0], x: tx - w / 2, y: top, width: w, height: h, class: 'icon' }));
+      }
       g.dataset.dx = (Math.cos(rad) * 8).toFixed(1);
       g.dataset.dy = (Math.sin(rad) * 8).toFixed(1);
       this.ring.appendChild(g);
@@ -515,6 +530,7 @@ export class Hud {
 const WHEEL = 300; // view box half size
 const R_OUT = 286, R_IN = 118; // ring radii
 const GAP = 1.2; // degrees between sectors
+const ICON_H = 24; // a weapon's silhouette in a sector, at most this tall
 
 function svgEl(name, attrs = {}) {
   const el = document.createElementNS('http://www.w3.org/2000/svg', name);

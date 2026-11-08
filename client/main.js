@@ -239,6 +239,7 @@ const hud = new Hud((item) => { // a buy from the menu closes it
   buy(item);
   closeBuyMenu();
 });
+hud.iconOf = (item) => item < WEAPONS.length && WEAPONS[item] ? [killIcons.url(item), killIcons.widths[item], killIcons.heights[item]] : null;
 const menu = new Menu(document.getElementById('menu'), con, cv, binds, { text: configText, load: importConfig });
 const radar = new Radar(document.getElementById('radar'), cv);
 onNewGame(() => {

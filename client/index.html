@@ -215,9 +215,13 @@
     min-width: 400px; max-width: 80vw; padding: 10px 22px 14px; font: 15px/1.5 var(--body); text-align: center;
     pointer-events: none; }
   #roundpanel.on { display: block; }
-  #roundpanel h2 { margin: 0 0 4px; color: var(--yellow); font: 38px/1.15 var(--display); letter-spacing: 0.03em;
-    -webkit-text-stroke: 2px var(--ink); paint-order: stroke fill;
-    text-shadow: 1px 1px 0 var(--ink), 2px 2px 0 var(--ink), 3px 3px 0 var(--ink); }
+  #roundpanel { --band: #514638; }
+  #roundpanel.ct { --band: var(--blue); }
+  #roundpanel.t { --band: var(--red); }
+  #roundpanel h2 { margin: -10px -22px 8px; padding: 10px 22px 6px; color: var(--yellow); font: 38px/1.15 var(--display);
+    letter-spacing: 0.03em; -webkit-text-stroke: 2px var(--ink); paint-order: stroke fill;
+    text-shadow: 1px 1px 0 var(--ink), 2px 2px 0 var(--ink), 3px 3px 0 var(--ink); border-bottom: 4px solid var(--ink);
+    background: radial-gradient(circle, rgba(23, 19, 15, 0.22) 30%, transparent 33%) 0 0 / 8px 8px, var(--band); }
   #roundpanel .score { font: 28px/1.2 var(--display); letter-spacing: 0.05em; margin-bottom: 4px; }
   #roundpanel .ct { color: var(--blue); }
   #roundpanel .t { color: var(--red); }
@@ -229,15 +233,19 @@
     border-bottom: 3px solid var(--ink); color: var(--ink); }
   #roundpanel tr.me td { font-weight: 700; }
   body.nohud #roundpanel, body.dying #roundpanel { display: none !important; }
-  #scoreboard { position: fixed; left: 50%; top: 14%; transform: translateX(-50%); display: none; min-width: 440px;
-    padding: 10px 16px 12px; font: 15px/1.6 var(--body); pointer-events: none; }
+  #scoreboard { position: fixed; left: 50%; top: 14%; transform: translateX(-50%) rotate(-0.6deg); display: none;
+    min-width: 440px; padding: 12px 16px 12px; font: 15px/1.6 var(--body); pointer-events: none; box-shadow: 10px 10px 0 var(--ink); }
   #scoreboard table { width: 100%; border-collapse: collapse; }
+  #scoreboard td { padding: 1px 8px; }
   #scoreboard td:not(:first-child) { text-align: right; width: 44px; font-variant-numeric: tabular-nums; }
   #scoreboard tr.ct td, #scoreboard tr.t td, #scoreboard tr.ffa td, #scoreboard tr.spec td {
-    padding-top: 10px; font: 20px/1.4 var(--display); letter-spacing: 0.05em; border-bottom: 3px solid var(--ink); }
-  #scoreboard tr.ct td { color: var(--blue); }
-  #scoreboard tr.t td { color: var(--red); }
-  #scoreboard tr.ffa td { color: var(--ink); }
+    padding: 7px 8px 3px; font: 20px/1.4 var(--display); letter-spacing: 0.05em; border-bottom: 3px solid var(--ink); }
+  #scoreboard tr.ct td, #scoreboard tr.t td, #scoreboard tr.ffa td { color: var(--paper-hi);
+    background: radial-gradient(circle, rgba(23, 19, 15, 0.2) 30%, transparent 33%) 0 0 / 8px 8px, var(--band); }
+  #scoreboard tr.ct td { --band: var(--blue); }
+  #scoreboard tr.t td { --band: var(--red); }
+  #scoreboard tr.ffa td { --band: #514638; }
+  #scoreboard tr + tr.t td { border-top: 10px solid var(--paper); }
   #scoreboard tr.spec td { color: #6d665c; }
   #scoreboard tr.me td { background: var(--yellow); font-weight: 700; }
   #scoreboard tr.dead td { opacity: 0.45; text-decoration: line-through; }
@@ -251,9 +259,17 @@
   #buymenu .ring { transform-box: view-box; transform-origin: 50% 50%; }
   #buymenu .ring.pop { animation: wheel-pop 160ms cubic-bezier(0.2, 1.4, 0.4, 1); }
   @keyframes wheel-pop { from { transform: scale(0.82) rotate(-10deg); opacity: 0; } }
-  #buymenu .sector path { fill: var(--paper-hi); stroke: var(--ink); stroke-width: 4; stroke-linejoin: round; }
+  #buymenu .sector path { fill: url(#buy-dots); stroke: var(--ink); stroke-width: 4; stroke-linejoin: round; }
+  #buymenu .dots rect { fill: var(--paper-hi); }
+  #buymenu .dots circle { fill: rgba(23, 19, 15, 0.1); }
+  #buymenu .dots-hot rect { fill: var(--yellow); }
+  #buymenu .dots-hot circle { fill: rgba(226, 64, 42, 0.45); }
+  #buymenu .dots-center rect { fill: var(--paper); }
+  #buymenu .dots-center circle { fill: rgba(47, 111, 196, 0.22); }
+  #buymenu .icon { filter: brightness(0); pointer-events: none; }
+  #buymenu .sector.off .icon { opacity: 0.35; }
   #buymenu .sector { transition: transform 70ms ease-out; cursor: pointer; }
-  #buymenu .sector.hot path { fill: var(--yellow); }
+  #buymenu .sector.hot path { fill: url(#buy-dots-hot); }
   #buymenu .sector.off path { fill: url(#buy-hatch); }
   #buymenu .sector.off text { opacity: 0.5; }
   #buymenu .sector.off.hot path { fill: #e9dfb8; }
@@ -265,8 +281,9 @@
   #buymenu text.name { font-size: 17px; }
   #buymenu text.price { font-size: 17px; fill: var(--red); }
   #buymenu text.key { font-size: 13px; opacity: 0.55; }
-  #buymenu .center circle { fill: var(--paper); stroke: var(--ink); stroke-width: 4; }
-  #buymenu .center text.big { font-size: 24px; }
+  #buymenu .center circle { fill: url(#buy-dots-center); stroke: var(--ink); stroke-width: 5; }
+  #buymenu .center text.big { font-size: 28px; fill: var(--yellow); stroke: var(--ink); stroke-width: 5px; paint-order: stroke;
+    stroke-linejoin: round; }
   #buymenu .center text.price { font-size: 22px; }
   #buymenu .center text.small { font: 14px var(--body); letter-spacing: 0; }
   #buymenu .center text.warn { fill: var(--red); font-weight: 700; }
@@ -599,7 +616,7 @@
     .hud { font-size: 28px; }
     #banner { font-size: 32px; }
     #roundpanel { min-width: 0; width: 90vw; top: 12%; padding: 6px 12px 10px; font-size: 13px; }
-    #roundpanel h2 { font-size: 26px; }
+    #roundpanel h2 { font-size: 26px; margin: -6px -12px 6px; padding: 6px 12px 4px; }
     #roundpanel .score { font-size: 22px; }
   }
   @media (max-height: 560px) { .menu-foot { position: static; } } /* (a phone on its side: it hid half the panel) */
