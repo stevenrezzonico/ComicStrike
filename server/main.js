@@ -105,8 +105,11 @@ const madePassword = host.password.value ? '' :
 if (madePassword) host.password.set(madePassword);
 host.start(MAP);
 
-// Rooms: games on maps players upload (server/rooms.js), held in memory only.
-const rooms = new Rooms({ readCfg: (name) => readText(new URL(`cfg/${name}`, ROOT)) });
+// Rooms (server/rooms.js): games beside the server's own, on maps players upload (held in
+// memory only) or on the server's maps.
+const rooms = new Rooms({
+  readCfg: (name) => readText(new URL(`cfg/${name}`, ROOT)), maps: { loadMap: host.opts.loadMap, listMaps },
+});
 
 // A session belongs to the game its first HELLO asks for: the server's own (no room code)
 // or a room's. Datagrams before it are dropped. At most SESSIONS_PER_ADDRESS players from one
@@ -230,9 +233,9 @@ async function serveStatic(pathname, req) {
 const tls = TLS_CERT ? { cert: certInfo.cert, key: certInfo.key } : {};
 // A request body, refused past `max` bytes (whatever content-length says) or when it has
 // not arrived within `ms` (a slow upload would hold one of the few upload slots).
-async function readBody(req, max, ms) {
+async function readBody(req, max, ms, tooLarge = `the map is too large (${max >> 20} MB at most)`) {
   const declared = Number(req.headers.get('content-length') || 0);
-  if (declared > max) throw new RoomError(`the map is too large (${max >> 20} MB at most)`, 413);
+  if (declared > max) throw new RoomError(tooLarge, 413);
   const parts = [];
   let size = 0, late = false;
   const reader = req.body ? req.body.getReader() : null;
@@ -246,7 +249,7 @@ async function readBody(req, max, ms) {
       if (late) throw new RoomError('the upload took too long', 408);
       if (done) break;
       size += value.byteLength;
-      if (size > max) throw new RoomError(`the map is too large (${max >> 20} MB at most)`, 413);
+      if (size > max) throw new RoomError(tooLarge, 413);
       parts.push(value);
     }
   } finally {
@@ -279,7 +282,34 @@ async function createRoom(req, url, address) {
   }
 }
 
+// POST /rooms with a JSON body { map, mode, players, difficulty, armoury, listed, password }: a
+// new room on one of the server's maps (the admin page's new room); answers as createRoom.
+// JSON, not the query: the join password stays out of the address and the logs.
+async function openRoom(req, address) {
+  try {
+    let o;
+    try {
+      o = JSON.parse(new TextDecoder().decode(await readBody(req, 4096, 10000, 'the request is too large')));
+    } catch (err) {
+      if (err instanceof RoomError) throw err;
+      throw new RoomError('the request is not JSON');
+    }
+    if (!o || typeof o !== 'object') throw new RoomError('the request is not a room');
+    const room = rooms.open(String(o.map || ''), {
+      mode: String(o.mode || 'competitive'), players: +o.players || 0, difficulty: +(o.difficulty ?? 1),
+      armoury: o.armoury !== false, listed: o.listed === true, password: String(o.password || ''), address,
+    });
+    return Response.json({ code: room.code, map: room.name, rcon: room.rcon, names: room.host.con.catalog() });
+  } catch (err) {
+    if (!(err instanceof RoomError)) console.warn('room failed:', err);
+    return Response.json({ error: err instanceof RoomError ? err.message : 'the room could not be made' },
+      { status: err instanceof RoomError ? err.status : 500 });
+  }
+}
+
 async function serveRoomMap(room, req) {
+  // A server map: the room's current one from maps/ (it may have changed level since).
+  if (!room.bytes) return (await serveStatic(`/maps/${room.host.game.mapName}.bsp`, req)) || new Response('no map', { status: 404 });
   const headers = { 'content-type': 'application/octet-stream', 'cache-control': 'no-store', 'vary': 'accept-encoding' };
   if (/\bgzip\b/.test(req.headers.get('accept-encoding') || '')) {
     return new Response(await rooms.gzipped(room), { headers: { ...headers, 'content-encoding': 'gzip' } });
@@ -301,14 +331,19 @@ Deno.serve({ hostname: BIND, port: HTTP_PORT, ...tls, onListen: () => {} }, asyn
     return Response.json({ port: GAME_PORT, certHash, ...host.info() });
   }
   if (pathname === '/rooms' && req.method === 'POST') {
-    // Our page sends the map as application/octet-stream, a type that needs a CORS preflight
-    // this server never answers: any other site's page could make its visitors upload rooms.
-    if (req.headers.get('content-type') !== 'application/octet-stream') {
+    // Our pages send the map as application/octet-stream and a server map's room as
+    // application/json, types that need a CORS preflight this server never answers: any other
+    // site's page could make its visitors upload rooms.
+    const type = req.headers.get('content-type') || '';
+    if (/^application\/json\b/.test(type)) return openRoom(req, info.remoteAddr.hostname);
+    if (type !== 'application/octet-stream') {
       return Response.json({ error: 'send the map as application/octet-stream' }, { status: 415 });
     }
     return createRoom(req, url, info.remoteAddr.hostname);
   }
-  if (pathname === '/rooms.json') return Response.json(rooms.list());
+  if (pathname === '/rooms.json') { // the listed rooms, and how many of the server's are taken
+    return Response.json({ rooms: rooms.list(), live: rooms.rooms.size, max: rooms.limits.rooms });
+  }
   const roomMap = /^\/rooms\/([a-z0-9]+)\/map\.bsp$/.exec(pathname);
   if (roomMap) {
     const room = rooms.get(roomMap[1]);

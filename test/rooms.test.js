@@ -7,7 +7,7 @@ import { CollisionWorld } from '../shared/trace.js';
 import { FloorGrid, MAX_CELLS, floorFaces } from '../shared/floorgrid.js';
 import { Writer, Reader, writeHello, readHello, helloRoom, C2S_HELLO, S2C_WELCOME, S2C_REJECT, readWelcome } from '../shared/protocol.js';
 import { TEAM_T } from '../shared/player.js';
-import { quiet as quietly, readCfg } from './harness.js';
+import { quiet as quietly, readCfg, loadMap } from './harness.js';
 
 const PLAYGROUND = Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url));
 
@@ -247,4 +247,42 @@ Deno.test('a Competitive (short) room plays the short match', () => {
   assert.equal(room.host.game.rules.maxRounds, 16);
   assert.equal(room.host.game.rules.overtime, false);
   rooms.close(room, 'done');
+});
+
+// Rooms on the server's own maps (the admin page's new room, a JSON POST /rooms): no upload,
+// public or by link only (sv_listed, changeable later), a join password, the same limits, and
+// a change of map among the server's.
+Deno.test('rooms on the server\'s maps: listed by sv_listed, a join password, the limits, a map change', () => {
+  const { rooms, clock } = makeRooms();
+  assert.throws(() => rooms.open('de_playground', { address: '1.2.3.4' }), /only on maps players bring/);
+  rooms.opts.maps = { loadMap, listMaps: () => ['de_playground', 'de_inkwell'] };
+  assert.throws(() => rooms.open('de_nosuch', { address: '1.2.3.4' }), /no map de_nosuch/);
+  assert.throws(() => rooms.open('../de_playground', { address: '1.2.3.4' }), /no map/);
+  assert.throws(() => rooms.open('de_playground', { address: '1.2.3.4', password: 'x'.repeat(64) }), /too long/);
+  clock.ms += 60000;
+  const room = quietly(() => rooms.open('de_playground', { mode: 'deathmatch', listed: true, password: 'sesame', address: '1.2.3.4' }));
+  assert.equal(room.bytes, null, 'served from maps/');
+  assert.equal(room.host.game.mapName, 'de_playground');
+  assert.equal(room.host.modeName, 'deathmatch');
+  assert.equal(rooms.list().length, 1);
+  assert.equal(rooms.list()[0].password, true);
+  room.host.con.exec('sv_listed 0'); // the admin page's switch
+  assert.deepEqual(rooms.list(), [], 'by link only');
+  room.host.con.exec('sv_listed 1');
+  assert.equal(rooms.list().length, 1);
+  // The join password: refused without it, let in with it.
+  const w = new Writer();
+  const join = (password) => {
+    const s = session(), c = room.host.game.connect(s);
+    quietly(() => room.host.game.receive(c, writeHello(w, TEAM_T, 0, 0, 'guest', room.code, password).slice()));
+    return c;
+  };
+  assert.ok(!join('').joined);
+  assert.ok(join('sesame').joined);
+  // One live room an address, as for uploads.
+  clock.ms += 60000;
+  assert.throws(() => rooms.open('de_inkwell', { address: '1.2.3.4' }), /already host a room/);
+  // Its rcon may change to another of the server's maps.
+  quietly(() => room.host.con.exec('changelevel de_inkwell'));
+  assert.equal(room.host.game.mapName, 'de_inkwell');
 });

@@ -26,7 +26,7 @@ function ask(host, op, { password = 'hunter2', address = '127.0.0.1', secure = f
   const url = new URL(`http://127.0.0.1/admin/${op}${room ? `?room=${room}` : ''}`);
   const headers = password === null ? {} : { 'x-rcon-password': encodeURIComponent(password) };
   const req = new Request(url, { method: method || (op === 'exec' ? 'POST' : 'GET'), headers, body });
-  return adminResponse(req, url, { address, secure, hostFor: (code) => (code ? null : host) });
+  return adminResponse(req, url, { address, secure, hostFor: (code) => (!code || code === 'abcdef' ? host : null) });
 }
 
 Deno.test('admin: the page\'s commands parse back to what was meant', () => {
@@ -70,6 +70,8 @@ Deno.test('admin: /admin answers only with the rcon password, over HTTPS or from
   assert.equal(await status(ask(host, 'exec', { method: 'GET' })), 405);
   assert.equal(await status(ask(host, 'secrets')), 404);
   assert.equal(await status(ask(host, 'state', { room: 'nosuch' })), 404);
+  // A room is answered over plain HTTP from anywhere: its password came back that way when it was made.
+  assert.equal(await status(ask(host, 'state', { address: '203.0.113.9', room: 'abcdef' })), 200);
   // Bad passwords count like rcon's: the fifth from one address blocks it for a minute.
   const away = { address: '203.0.113.9', secure: true };
   for (let i = 0; i < 5; i++) assert.equal(await error(quiet(() => ask(host, 'state', { ...away, password: 'guess' }))), 'Bad rcon_password.');

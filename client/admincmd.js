@@ -39,7 +39,7 @@ export const resetCommands = (mode) => `sv_cheats 0; exec gamemode_${mode}; exec
 // The settings' groups, in the page's order: the first whose test a name passes. Names the
 // other tabs show (bots, the mode) are left out of the settings.
 export const GROUPS = [
-  ['Server', /^(hostname|sv_password|sv_cheats|sv_talk_)/],
+  ['Server', /^(hostname|sv_password|sv_listed|sv_cheats|sv_talk_)/],
   ['Rounds', /^mp_(freezetime|roundtime|buytime|round_restart|maxrounds|c4timer|warmuptime|halftime|overtime|match_restart|timelimit|ignore_round|team_timeout)/],
   ['Economy', /^mp_(startmoney|maxmoney|buy_|free_armor|death_drop|give_player_c4|armoury)/],
   ['Teams', /^(mp_(limitteams|autoteambalance|teamsize_max|solid_teammates|teammates_are_enemies|friendlyfire)|ff_)/],

@@ -8,7 +8,7 @@
 // custom header needs a CORS preflight, which this server never answers (an OPTIONS gets a
 // 405), so no other site's page can send these requests from its visitors' browsers. The
 // password would cross the network in the clear over plain HTTP, so without TLS only this
-// machine (loopback) is answered.
+// machine (loopback) is answered for the server's own game.
 
 import { isLoopback } from './host.js';
 
@@ -43,10 +43,13 @@ export async function adminResponse(req, url, { address, secure, hostFor }) {
   const op = url.pathname.slice('/admin/'.length);
   if (op !== 'state' && op !== 'catalog' && op !== 'exec') return json({ error: 'not found' }, 404);
   if (req.method !== (op === 'exec' ? 'POST' : 'GET')) return json({ error: 'method not allowed' }, 405);
-  if (!secure && !isLoopback(address)) {
+  // (a room's password came back over this same connection when the room was made, and it
+  // reaches that room alone: rooms are answered over plain HTTP too)
+  const code = (url.searchParams.get('room') || '').toLowerCase();
+  if (!secure && !isLoopback(address) && !code) {
     return json({ error: 'the admin page needs HTTPS (TLS_CERT) when it is not on the server\'s own machine' }, 403);
   }
-  const host = hostFor((url.searchParams.get('room') || '').toLowerCase());
+  const host = hostFor(code);
   if (!host) return json({ error: 'no such room: it may have closed' }, 404);
   let password = req.headers.get('x-rcon-password');
   if (password === null) return json({ error: 'the rcon password is needed' }, 401);

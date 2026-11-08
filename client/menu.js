@@ -245,6 +245,7 @@ export class Menu {
     this.shownAt = 0;
     this.server = null; // connect.json, once fetched
     this.listedRooms = []; // rooms.json: the server's listed rooms
+    this.roomCount = null; // and [rooms live, the most it holds], null when it did not answer
     this.maps = null; // maps.json
     this.practiceMap = '';
     this.practiceTeam = 2;
@@ -425,11 +426,12 @@ export class Menu {
           return this.roomGone ? fetch('/connect.json').then((m) => m.json()) : r.json();
         }),
         fetch('/maps.json').then((r) => r.json()),
-        fetch('/rooms.json').then((r) => r.json()).catch(() => []),
+        fetch('/rooms.json').then((r) => r.json()).catch(() => null),
       ]);
       this.server = server;
       this.maps = maps;
-      this.listedRooms = rooms;
+      this.listedRooms = (rooms && rooms.rooms) || [];
+      this.roomCount = rooms && rooms.rooms ? [rooms.live, rooms.max] : null;
     } catch {
       this.server = null;
       this.maps = this.maps || [];
@@ -524,7 +526,7 @@ export class Menu {
     if (this.room) {
       body.append(el('p', 'menu-hint', this.roomGone
         ? `Room ${this.room} has closed (rooms close once nobody plays in them). This is the server's own game.`
-        : 'A game on a map someone brought, on this server. Share this page\'s address to invite more players.'));
+        : 'A game of its own on this server. Share this page\'s address to invite more players.'));
       body.append(button(this.roomGone ? 'OK' : 'Play the server\'s own game instead', () => this.onRoom('')));
     }
     const s = this.server;
@@ -546,11 +548,12 @@ export class Menu {
       body.append(row);
     }
     this.renderTeam(body, (team) => this.onPlay(team), true);
-    if (this.room && !this.roomGone) return;
-    const listed = this.listedRooms;
-    if (!listed.length) return;
-    body.append(el('h2', '', 'Rooms'));
-    body.append(el('p', 'menu-hint', 'Games on maps players brought, listed by their hosts.'));
+    if ((this.room && !this.roomGone) || !this.roomCount) return;
+    // Rooms: games of their own on this server, those their hosts made public listed here.
+    const [live, max] = this.roomCount, listed = this.listedRooms;
+    body.append(el('h2', '', `Rooms (${live}/${max})`));
+    body.append(el('p', 'menu-hint', listed.length ? 'Games of their own on this server, listed by their hosts.'
+      : 'No public room right now. Make one: a map, a mode, bots, public or by link only, a password if you like.'));
     for (const r of listed) {
       const row = el('div', 'menu-row menu-demo');
       row.append(el('span', '', r.map), el('span', 'menu-hint',
@@ -558,6 +561,10 @@ export class Menu {
       button('Join', () => this.onRoom(r.room)));
       body.append(row);
     }
+    const create = button('Create a room', () => open('/admin?new', '_blank')); // the admin page's new room
+    create.disabled = live >= max;
+    body.append(create);
+    if (live >= max) body.append(el('p', 'menu-hint', 'Every room on this server is taken: try again when one closes.'));
   }
 
   // Team buttons, CS:GO jointeam numbers: 1 spectators (online only), 2 Terrorists,
@@ -591,8 +598,8 @@ export class Menu {
     });
     row.append(link, copy);
     body.append(row);
-    body.append(el('p', 'menu-hint', 'The server holds the map in memory only and drops it a couple of minutes ' +
-      'after the last player leaves.'));
+    body.append(el('p', 'menu-hint', 'The room closes a couple of minutes after the last player leaves (a map brought ' +
+      'for it is held in memory only and goes with it).'));
   }
 
   // Recordings: the demos recorded in this browser (record <name> ... stop in a game), each

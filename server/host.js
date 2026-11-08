@@ -27,7 +27,7 @@ const RCON_MAP_GAP_MS = 1000; // rcon map changes: each builds a new game (40 in
 const RCON_OUTPUT = 65536;
 // sv_password's most: what a HELLO carries (Writer.str, shared/protocol.js). Longer, it never
 // matched, and every try counted as a bad guess.
-const PASSWORD_BYTES = 63;
+export const PASSWORD_BYTES = 63;
 
 // CS:GO game modes by game_type / game_mode (shared/modes.js). A mode is a cfg of mode
 // convars run when a map loads (cfg/gamemode_<name>.cfg, then cfg/gamemode_<name>_server.cfg

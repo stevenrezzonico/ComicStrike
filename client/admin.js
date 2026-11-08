@@ -8,6 +8,7 @@
 //   /admin                 the server's own game (server/main.js serves this file there)
 //   /admin?room=<code>     a room (the tab that hosts it hands the password over)
 //   /admin?practice        the practice game running in another tab
+//   /admin?new             a new room on one of the server's maps (Play Online's Create a room)
 
 import { cvarCommand, who, modeCommands, botCommands, PRACTICE_PRESET, resetCommands, GROUPS, groupOf, whenApplies, controlOf }
   from './admincmd.js';
@@ -21,6 +22,7 @@ const TABS = ['Match', 'Players', 'Bots', 'Map & mode', 'Settings', 'Cheats', 'C
 const params = new URLSearchParams(location.search);
 const room = (params.get('room') || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const practice = params.has('practice');
+const creating = params.has('new') && !room;
 const KEY = `comicstrike.admin.${room || 'server'}`; // the password, for this tab's life only
 let password = practice ? '' : sessionStorage.getItem(KEY) || '';
 // The link the server prints at startup carries a password it made up after the # (never sent
@@ -118,6 +120,7 @@ const sure = (question) => confirm(question);
 // --- Starting, logging in, polling ---------------------------------------------------
 
 async function start() {
+  if (creating) return newRoom();
   if (!practice && !password) password = await passwordFromTab();
   if (!practice && !password) return showLogin('');
   try {
@@ -232,8 +235,8 @@ function setting(r) {
     input = h('select', { onchange: () => run(cvarCommand(name, input.value)) },
       hint.map((o) => (Array.isArray(o) ? h('option', { value: o[0] }, `${o[0]}: ${o[1]}`) : h('option', { value: o }, o))));
   } else {
-    input = h('input', { type: kind === 'number' ? 'number' : 'text', onchange: () => run(cvarCommand(name, input.value)),
-      placeholder: r[2] === null ? '(hidden)' : null });
+    input = h('input', { type: r[2] === null ? 'password' : kind === 'number' ? 'number' : 'text', autocomplete: 'off',
+      onchange: () => run(cvarCommand(name, input.value)), placeholder: r[2] === null ? '(hidden: type a new one)' : null });
     if (kind === 'number') {
       input.step = 'any';
       if (min !== null) input.min = min;
@@ -282,6 +285,83 @@ function region(key, make) {
   };
 }
 
+// The room's invite: its link with a Copy button and a way in.
+function invite() {
+  const link = h('input', { value: `${location.origin}/?room=${room}`, readOnly: true, style: 'flex: 1; min-width: 240px',
+    onfocus: () => link.select() });
+  const copy = btn('Copy', () => {
+    link.select();
+    if (navigator.clipboard) navigator.clipboard.writeText(link.value).then(() => (copy.textContent = 'Copied'), () => {});
+  });
+  return h('div', {}, row(link, copy, h('a', { href: `/?room=${room}`, target: '_blank' }, 'Play in this room')),
+    h('p', { class: 'note' }, 'Friends who open the link join the room. sv_listed 1 lists it in Play Online; with 0 only the ' +
+      'link brings players in. The room closes a couple of minutes after its last player leaves.'));
+}
+
+// --- A new room (/admin?new): one of the server's maps, a mode, bots, public or link only, a
+// join password; made by POST /rooms (server/main.js openRoom), then managed here with the
+// room's rcon password, which comes back with it.
+
+async function newRoom() {
+  $('summary').textContent = 'New room';
+  let maps = [], count = null;
+  try {
+    [maps, count] = await Promise.all([fetch('/maps.json').then((r) => r.json()), fetch('/rooms.json').then((r) => r.json())]);
+  } catch {
+    // shown as no maps
+  }
+  let picked = maps.includes('de_dust2') ? 'de_dust2' : maps[0] || '';
+  const grid = h('div', { class: 'maps' });
+  const draw = () => grid.replaceChildren(...maps.map((m) => h('button', { class: m === picked ? 'on' : '', onclick: () => {
+    picked = m;
+    draw();
+  } }, m)));
+  draw();
+  const mode = h('select', {}, MODES.map((m) => h('option', { value: m.name }, m.label)));
+  mode.value = 'competitive';
+  const bots = h('select', {}, [['0', 'no bots'], ['2', '1 vs 1'], ['4', '2 vs 2'], ['6', '3 vs 3'], ['10', '5 vs 5']]
+    .map(([v, l]) => h('option', { value: v }, l)));
+  bots.value = '10';
+  const level = h('select', {}, LEVELS.map((l, i) => h('option', { value: String(i) }, l)));
+  level.value = '1';
+  const armoury = h('input', { type: 'checkbox', checked: true });
+  const listed = h('input', { type: 'radio', name: 'visibility', checked: true });
+  const hidden = h('input', { type: 'radio', name: 'visibility' });
+  const password = h('input', { type: 'password', maxLength: 63, placeholder: 'none', autocomplete: 'new-password' });
+  const error = h('p', { class: 'note', style: 'color: var(--red)' });
+  const full = !!count && count.live >= count.max;
+  const go = btn('Create the room', async () => {
+    go.disabled = true;
+    error.textContent = '';
+    try {
+      const res = await fetch('/rooms', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ map: picked, mode: mode.value, players: +bots.value, difficulty: +level.value,
+          armoury: armoury.checked, listed: listed.checked, password: password.value }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
+      location.replace(`/admin?room=${out.code}#password=${encodeURIComponent(out.rcon)}`); // logs in (start)
+    } catch (err) {
+      error.textContent = err.message;
+      go.disabled = false;
+    }
+  }, 'go');
+  go.disabled = full || !picked;
+  const label = (input, text) => h('label', {}, input, ` ${text}`);
+  $('body').replaceChildren(h('div', {},
+    h('h2', {}, 'New room'),
+    card(
+      h('p', { class: 'note' }, `A game of its own on this server${count ? `: ${count.live} of its ${count.max} rooms are taken` : ''}. ` +
+        'It closes a couple of minutes after its last player leaves, or 10 minutes after it is made if nobody comes.'),
+      row('Mode', mode, 'Bots', bots, 'Difficulty', level, label(armoury, 'the map\'s own weapons')),
+      row('Who sees it', label(listed, 'public: listed in Play Online'), label(hidden, 'private: only its link brings players in')),
+      row('Join password', password, h('span', { class: 'note' }, '(optional)')),
+      row(go), error,
+      full ? h('p', { class: 'note' }, 'Every room on this server is taken: try again when one closes.') : null),
+    h('h2', {}, 'Map'), card(maps.length ? grid : h('p', { class: 'note' }, 'No maps answered.'))));
+}
+
 const BUILD = {
   Match() {
     const info = region(() => JSON.stringify([state.round, state.map, state.mode, state.players.length]), () => {
@@ -292,6 +372,7 @@ const BUILD = {
         ['Time left', clock(r.secondsLeft)], ['Cheats', r.cheats ? 'on' : 'off'], ['Join password', state.password ? 'yes' : 'none'],
       ].map(([k, v]) => h('tr', {}, h('th', {}, k), h('td', {}, String(v)))));
     });
+    const roomOpts = room ? settings(['sv_listed', 'sv_password']) : null;
     const say = h('input', { placeholder: 'a message to everyone', maxLength: 127, style: 'flex: 1; min-width: 200px' });
     const send = () => {
       if (say.value.trim()) run(`say ${say.value}`);
@@ -302,6 +383,7 @@ const BUILD = {
     });
     return {
       el: h('div', {},
+        room ? [h('h2', {}, `Room ${room}`), card(invite(), roomOpts.el)] : null,
         h('h2', {}, 'Match'), card(info.el),
         h('h2', {}, 'Rounds'),
         card(
@@ -315,7 +397,10 @@ const BUILD = {
         ),
         h('h2', {}, 'Chat'), card(row(say, btn('Say', send))),
       ),
-      update: () => info.update(),
+      update() {
+        info.update();
+        if (roomOpts) roomOpts.update();
+      },
     };
   },
 
