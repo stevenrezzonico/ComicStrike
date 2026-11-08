@@ -4,7 +4,7 @@
 
 import { Console, FCVAR_PROTECTED } from '../shared/cvars.js';
 import { writeChangelevel, cleanName, MAX_PLAYERS } from '../shared/protocol.js';
-import { TEAM_NAMES, TEAM_T, TEAM_CT } from '../shared/player.js';
+import { TEAM_NAMES, TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import { PHASE_WARMUP } from '../shared/economy.js';
 import { Game, DEFAULT_RULES, CHAT_FLOOD_TICKS } from './game.js';
 import { Votes } from './votes.js';
@@ -164,7 +164,7 @@ export class Host {
     this.game = null;
     this.rconGuesses = new Guesses(this.now);
     this.joinGuesses = new Guesses(this.now); // sv_password
-    this.bans = new Map(); // address key -> ms: voted out until then (sv_vote_kick_ban_duration)
+    this.bans = new Map(); // address key -> ms: voted out (sv_vote_kick_ban_duration) or banned (banid) until then
     this.votes = new Votes(this);
     this.failedTicks = 0; // ticks that threw since the last report
     this.failReportAt = -Infinity;
@@ -290,18 +290,18 @@ export class Host {
       const which = q === 'all' || !q ? bots.list.map((b) => b.c)
         : q.toLowerCase() === 't' || q.toLowerCase() === 'ct'
         ? bots.list.filter((b) => b.c.team === (q.toLowerCase() === 't' ? TEAM_T : TEAM_CT)).map((b) => b.c)
-        : bots.list.filter((b) => b.c.name === q || b.c.name === `BOT ${q}`).map((b) => b.c);
+        : bots.list.filter((b) => b.c.name === q || b.c.name === `BOT ${q}` || q === `#${b.c.id}`).map((b) => b.c);
       for (const c of which) bots.kick(c);
       this.syncBotQuota();
       con.out(ctx, which.length ? `kicked ${which.length} bot(s)` : 'bot_kick [name|t|ct|all]: no such bot');
-    }, 'bot_kick [name|t|ct|all]: removes bots');
+    }, 'bot_kick [name|#id|t|ct|all]: removes bots');
     con.command('bot_kill', (a, ctx) => {
       const q = a.slice(1).join(' ');
       for (const b of this.game.bots.list) {
-        if ((!q || q === 'all' || b.c.name === q || b.c.name === `BOT ${q}`) && b.c.alive) this.game.kill(b.c, b.c, 0, false);
+        if ((!q || q === 'all' || b.c.name === q || b.c.name === `BOT ${q}` || q === `#${b.c.id}`) && b.c.alive) this.game.kill(b.c, b.c, 0, false);
       }
       con.out(ctx, 'bots killed');
-    }, 'bot_kill [name|all]: kills bots');
+    }, 'bot_kill [name|#id|all]: kills bots');
 
     con.command('bot_place', (a, ctx) => {
       const r = this.rules();
@@ -333,6 +333,36 @@ export class Host {
       if (!c) return con.out(ctx, 'kick <name or #id>: no such player, or several have that name (status lists the ids)');
       this.game.kick(c, 'kicked by the server');
     }, 'kick <name or #id>');
+    // The admin page's player management (client/admin.html), also for the console and rcon.
+    const JOIN = { t: 2, ct: 3, spec: 1 };
+    con.command('switchteam', (a, ctx) => {
+      const c = this.findClient(a.slice(2).join(' ')), n = JOIN[(a[1] || '').toLowerCase()];
+      if (!c || !n) return con.out(ctx, 'switchteam <t|ct|spec> <name or #id>: no such player or team');
+      this.game.joinTeam(c, n, true);
+      con.out(ctx, `${c.name} is on the ${c.team === TEAM_SPECTATOR ? 'spectators' : `${TEAM_NAMES[c.team]}s`}`);
+    }, 'switchteam <t|ct|spec> <name or #id>: moves a player to a team, past the team limits');
+    con.command('slay', (a, ctx) => {
+      const c = this.findClient(a.slice(1).join(' '));
+      if (!c) return con.out(ctx, 'slay <name or #id>: no such player');
+      if (!c.alive) return con.out(ctx, `slay: ${c.name} is not alive`);
+      this.game.kill(c, c, 0, false); // as the player's own kill command
+      con.out(ctx, `slayed ${c.name}`);
+    }, 'slay <name or #id>: kills a player (counted as his own death)');
+    con.command('banid', (a, ctx) => {
+      const minutes = Number(a[1]), c = this.findClient(a.slice(2).join(' '));
+      if (!(minutes >= 0) || !c) return con.out(ctx, 'banid <minutes (0: until the server restarts)> <name or #id>');
+      if (c.bot) return con.out(ctx, 'banid: a bot (bot_kick removes it)');
+      const why = this.ban(c, minutes || Infinity, true);
+      this.game.kick(c, minutes ? `banned for ${minutes} min` : 'banned');
+      con.out(ctx, why ? `kicked ${c.name}, not banned: ${why}` : `banned ${c.name}${minutes ? ` for ${minutes} min` : ''}`);
+    }, 'banid <minutes> <name or #id>: kicks a player and keeps his address out (0: until the server restarts)');
+    con.command('removeip', (a, ctx) => {
+      con.out(ctx, this.bans.delete(a[1] || '') ? `unbanned ${a[1]}` : 'removeip <address>: not banned (listip lists them)');
+    }, 'removeip <address>: lifts a ban');
+    con.command('listip', (_a, ctx) => {
+      const list = this.banList();
+      con.out(ctx, list.length ? list.map((b) => `${b.address}  ${b.minutes === null ? 'until restart' : `${b.minutes} min`}`).join('\n') : 'no bans');
+    }, 'Lists the banned addresses');
     // One line per CHAT_FLOOD_TICKS per caller, as the players' chat: a room's uploader holds
     // its rcon password, and one line of `say a;say a;...` sent ~160 chat lines to everyone.
     con.command('say', (a, ctx) => {
@@ -366,6 +396,8 @@ export class Host {
     const mapNames = (i) => (i === 1 ? opts.listMaps() : []);
     con.hint('map', mapNames);
     con.hint('changelevel', mapNames);
+    con.hint('switchteam', ['t', 'ct', 'spec']);
+    con.hint('removeip', (i) => (i === 1 ? this.banList().map((b) => b.address) : []));
   }
 
   // bot_add / bot_kick change bot_quota to what is there now (fill: bots and the humans
@@ -532,25 +564,45 @@ export class Host {
   // rcon from a client: null if the password is wrong, else the command's output (or
   // why it was not run).
   rcon(c, password, command) {
+    return this.rconAs(c.session && c.session.address, `player ${c.id} "${c.name}"`, password, command, c);
+  }
+
+  // rcon from `address` (a player's console; the admin page, client null), `who` naming the
+  // caller in the log: null if the password is wrong, else the output or why it was not run.
+  rconAs(address, who, password, command, client = null) {
+    const refused = this.rconRefusal(address, password, who);
+    if (refused !== '') return refused;
+    console.log(`rcon from ${who}: ${command}`);
+    return this.capture(command, client);
+  }
+
+  // Why rcon from `address` with `password` may not run now: '' when it may, null for a
+  // wrong password (counted against the address), else the reason.
+  rconRefusal(address, password, who) {
     const pw = this.password.value;
     if (!pw) return 'rcon is disabled on this server (no rcon_password)';
-    const key = addressKey(c.session && c.session.address);
+    const key = addressKey(address);
     const refused = this.rconGuesses.refused(key);
     if (refused) return `rcon: too many bad passwords${refused === 'server' ? ' on this server' : ''}, try later`;
     if (password !== pw) {
       this.rconGuesses.fail(key);
-      console.log(`rcon: bad password from player ${c.id} "${c.name}"${key ? ` (${key})` : ''}`);
+      console.log(`rcon: bad password from ${who}${key ? ` (${key})` : ''}`);
       return null;
     }
     this.rconGuesses.ok(key);
-    console.log(`rcon from player ${c.id} "${c.name}": ${command}`);
+    return '';
+  }
+
+  // Runs a command line as rcon does (its budget, its output cut at RCON_OUTPUT) and returns
+  // what it printed. `client`: the player it runs as (bot_place), or null.
+  capture(command, client = null) {
     const out = [];
     let left = RCON_OUTPUT;
     const print = (s) => {
       if (left > 0) out.push(s.length <= left ? s : `${s.slice(0, left)}\n(the rest cut: ${RCON_OUTPUT} characters at most)`);
       left -= s.length + 1; // and its line break
     };
-    const ctx = this.execCtx = { print, source: 'rcon', client: c, budget: RCON_BUDGET };
+    const ctx = this.execCtx = { print, source: 'rcon', client, budget: RCON_BUDGET };
     try {
       this.con.exec(command, ctx);
     } finally {
@@ -571,9 +623,12 @@ export class Host {
   // sv_password for a joining session: '' to let it in, else why not (its HELLO is refused).
   // Guesses are limited like rcon's.
   admit(c, password) {
+    // (a bot sends no password: on a server with one, every bot_add left a bot in the list
+    // with no player behind it)
+    if (c.bot) return '';
     const key = addressKey(c.session && c.session.address), until = this.bans.get(key);
     if (until !== undefined) {
-      if (this.now() < until) return `voted out: you can come back in ${Math.ceil((until - this.now()) / 60000)} min`;
+      if (this.now() < until) return until === Infinity ? 'banned from this server' : `banned: you can come back in ${Math.ceil((until - this.now()) / 60000)} min`;
       this.bans.delete(key);
     }
     const pw = this.joinPassword.value;
@@ -592,13 +647,28 @@ export class Host {
 
   // A player voted out: his address cannot join for `minutes` (loopback never). Not while
   // another human from that address stays in the game: a housemate would be refused at the
-  // next map change, every player rejoining then.
-  ban(c, minutes) {
+  // next map change, every player rejoining then (`force`, banid: the server's own choice).
+  // Returns '' when banned, else why not.
+  ban(c, minutes, force = false) {
     const address = c.session && c.session.address, key = addressKey(address);
-    if (!(minutes > 0) || !address || isLoopback(address)) return;
+    if (!(minutes > 0) || !address) return 'no address';
+    if (isLoopback(address)) return 'this machine (loopback) is never banned';
     const shared = (o) => o && o !== c && o.joined && !o.bot && o.session && addressKey(o.session.address) === key;
-    if (this.game.clients.some(shared)) return console.log(`vote: ${key} not banned, another player shares it`);
+    if (!force && this.game.clients.some(shared)) {
+      console.log(`vote: ${key} not banned, another player shares it`);
+      return 'another player shares the address';
+    }
     remember(this.bans, key, this.now() + minutes * 60000, ADDRESSES_KEEP);
+    return '';
+  }
+
+  // The bans in force: { address, minutes left (null: until the server restarts) }.
+  banList() {
+    const now = this.now(), out = [];
+    for (const [address, until] of this.bans) {
+      if (until > now) out.push({ address, minutes: until === Infinity ? null : Math.ceil((until - now) / 60000) });
+    }
+    return out;
   }
 
   // What the start menu shows before joining (connect.json).
@@ -606,6 +676,32 @@ export class Host {
     return {
       hostname: this.hostname.value, map: this.game.mapName, mode: this.modeName, players: this.game.playerCount,
       maxPlayers: MAX_PLAYERS, password: !!this.joinPassword.value,
+    };
+  }
+
+  // What the admin page shows (client/admin.html; server/admin.js serves it): the server,
+  // the round, every player, the cvars' values (not the protected ones) and the bans.
+  adminState() {
+    const g = this.game, rs = g.round, players = [], cvars = {};
+    for (const c of g.clients) {
+      if (!c || !c.joined) continue;
+      const p = c.player;
+      players.push({
+        id: c.id, name: c.name, team: c.team, bot: !!c.bot, difficulty: c.bot ? c.bot.difficulty : -1, alive: c.alive,
+        health: Math.max(0, p.health), armor: p.armor, helmet: p.helmet, money: p.money, kills: c.kills,
+        assists: c.assists, deaths: c.deaths, score: c.score, mvps: c.mvps, level: c.level,
+        address: c.bot || !c.session ? '' : addressKey(c.session.address),
+      });
+    }
+    for (const cv of this.con.cvars.values()) if (!(cv.flags & FCVAR_PROTECTED)) cvars[cv.name] = cv.value;
+    return {
+      hostname: this.hostname.value, map: g.mapName, mode: this.modeName, maps: this.opts.listMaps(), maxPlayers: MAX_PLAYERS,
+      round: {
+        phase: PHASE_NAMES[rs.phase], round: rs.round, scoreT: rs.scoreT, scoreCT: rs.scoreCT,
+        secondsLeft: Math.max(0, Math.ceil((g.phaseEnd - g.tick) / TICK_RATE)), paused: g.paused,
+        cheats: this.rules().cheats,
+      },
+      players, cvars, bans: this.banList(), password: !!this.joinPassword.value,
     };
   }
 

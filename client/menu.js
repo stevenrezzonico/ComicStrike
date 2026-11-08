@@ -451,10 +451,14 @@ export class Menu {
       if (panel && panel === this.panel) b.classList.add('active');
       nav.append(b);
     };
+    // The admin page (client/admin.html) in a new tab: this practice game's, this room's or the server's.
+    const admin = () => open(`/client/admin.html${this.inGame && !this.online ? '?practice' : this.room ? `?room=${this.room}` : ''}`,
+      '_blank');
     if (this.inGame) {
       item('Resume', '', () => this.onResume());
       item('Choose team', 'team');
       item('Settings', 'settings');
+      item('Server admin', '', admin);
       item(this.online ? 'Disconnect' : 'Quit practice', '', () => this.onLeave());
     } else {
       item('Play Online', 'play');
@@ -462,6 +466,7 @@ export class Menu {
       item('Your map', 'own');
       item('Recordings', 'recordings');
       item('Map editor', '', () => open('/client/editor.html', '_blank'));
+      item('Server admin', '', admin);
       item('Settings', 'settings');
     }
     this.note.textContent = this.message;

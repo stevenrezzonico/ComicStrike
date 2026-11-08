@@ -23,6 +23,7 @@ import { staticPath } from './static.js';
 import { listen } from './transport.js';
 import { Host, GAME_MODES, AddressCounts, runDue } from './host.js';
 import { Rooms, RoomError } from './rooms.js';
+import { adminResponse } from './admin.js';
 import { parseBSP } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
 import { Writer, writeReject, helloRoom } from '../shared/protocol.js';
@@ -309,6 +310,12 @@ Deno.serve({ hostname: BIND, port: HTTP_PORT, ...tls, onListen: () => {} }, asyn
     return room ? serveRoomMap(room, req) : new Response('no such room', { status: 404 });
   }
   if (pathname === '/maps.json') return Response.json(host.opts.listMaps()); // for offline practice
+  if (pathname.startsWith('/admin/')) { // the admin page (client/admin.html)
+    return adminResponse(req, url, {
+      address: info.remoteAddr.hostname, secure: !!TLS_CERT,
+      hostFor: (code) => (code ? rooms.get(code)?.host ?? null : host),
+    });
+  }
   return (await serveStatic(pathname, req)) || new Response('not found', { status: 404 });
 });
 

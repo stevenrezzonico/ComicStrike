@@ -148,9 +148,11 @@ Deno.test('catalog: names, help, values and hints for another console', () => {
   con.command('map', () => {}, 'map <name>');
   con.hint('map', (i) => (i === 1 ? ['de_dust2'] : []));
   const cat = new Map(con.catalog().map(([n, ...rest]) => [n, rest]));
-  assert.deepEqual(cat.get('bot_quota'), ['Bots', '3', null]);
-  assert.deepEqual(cat.get('map'), ['map <name>', null, ['de_dust2']]);
+  // help, value, hint, then min, max and default (the admin page's forms)
+  assert.deepEqual(cat.get('bot_quota'), ['Bots', '3', null, null, null, '3']);
+  assert.deepEqual(cat.get('map'), ['map <name>', null, ['de_dust2'], null, null, null]);
   assert.equal(cat.get('rcon_password')[1], null, 'protected values stay out');
+  assert.equal(cat.get('rcon_password')[5], null, 'and their defaults');
 });
 
 Deno.test('binds: defaults added later are adopted where a saved config left their keys free', async () => {

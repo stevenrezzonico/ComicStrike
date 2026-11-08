@@ -1,0 +1,145 @@
+// The admin page (client/admin.html): the commands it builds (client/admincmd.js), its HTTP
+// side (server/admin.js) and the server's state and player commands it drives (server/host.js).
+import assert from 'node:assert/strict';
+import { Writer } from '../shared/protocol.js';
+import { parse } from '../shared/cvars.js';
+import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
+import { Host } from '../server/host.js';
+import { adminResponse, ADMIN_BODY } from '../server/admin.js';
+import { cvarCommand, who, modeCommands, botCommands, groupOf, whenApplies, controlOf } from '../client/admincmd.js';
+import { loadMap, joinClient, quiet } from './harness.js';
+
+function setup() {
+  const clock = { ms: 0 };
+  const host = new Host({
+    loadMap, listMaps: () => ['de_playground', 'de_inkwell'], readCfg: () => null, print: () => {}, now: () => clock.ms,
+  });
+  host.start('de_playground');
+  host.con.exec('rcon_password hunter2');
+  const w = new Writer();
+  const join = (name, team, address) => joinClient(host.game, w, name, team, { send() {}, close() {}, address });
+  return { host, clock, join };
+}
+
+// A request to /admin/<op> as the page sends it.
+function ask(host, op, { password = 'hunter2', address = '127.0.0.1', secure = false, method, body, room = '' } = {}) {
+  const url = new URL(`http://127.0.0.1/admin/${op}${room ? `?room=${room}` : ''}`);
+  const headers = password === null ? {} : { 'x-rcon-password': encodeURIComponent(password) };
+  const req = new Request(url, { method: method || (op === 'exec' ? 'POST' : 'GET'), headers, body });
+  return adminResponse(req, url, { address, secure, hostFor: (code) => (code ? null : host) });
+}
+
+Deno.test('admin: the page\'s commands parse back to what was meant', () => {
+  assert.deepEqual(parse(cvarCommand('hostname', 'My "best"; server // 1')), [['hostname', "My 'best'; server // 1"]]);
+  assert.equal(who(7), '#7');
+  assert.equal(modeCommands('deathmatch', 'de_dust2'), 'game_type 1; game_mode 2; sv_game_mode_flags 0; changelevel "de_dust2"');
+  assert.match(modeCommands('competitive_short', 'de_inkwell'), /^game_type 0; game_mode 1; sv_game_mode_flags 32;/);
+  assert.equal(botCommands('t', 'hard', 3), 'bot_add t hard; bot_add t hard; bot_add t hard');
+  assert.equal(botCommands('', 'easy', 50).split(';').length, 20, 'at most 20 at once');
+  assert.deepEqual(parse(botCommands('ct', 'expert', 4, 'Bob; quit')), [['bot_add', 'ct', 'expert', 'Bob; quit']], 'a name: one bot');
+  assert.equal(groupOf('mp_startmoney'), 'Economy');
+  assert.equal(groupOf('sv_vote_timer_duration'), 'Votes');
+  assert.equal(groupOf('mp_roundtime_defuse'), 'Rounds');
+  assert.equal(groupOf('bot_quota'), null, 'the Bots tab shows them');
+  assert.equal(whenApplies('game_mode'), 'next map');
+  assert.equal(whenApplies('mp_freezetime'), 'next round');
+  assert.equal(whenApplies('hostname'), '');
+  const { host } = setup();
+  const rows = new Map(host.con.catalog().map((r) => [r[0], r]));
+  assert.equal(controlOf(rows.get('sv_cheats')), 'switch');
+  assert.equal(controlOf(rows.get('ff_damage_reduction_grenade_self')), 'number', 'a 0..1 share is no switch');
+  assert.equal(controlOf(rows.get('mp_death_drop_grenade')), 'number');
+  assert.equal(controlOf(rows.get('hostname')), 'text');
+  assert.deepEqual(rows.get('mp_maxrounds').slice(4), [1, 100, '30']);
+  assert.deepEqual(rows.get('sv_password').slice(4), [null, null, null], 'a protected default is not sent');
+  // The mode change the page sends switches the mode and the map.
+  quiet(() => host.capture(modeCommands('deathmatch', 'de_inkwell')));
+  assert.equal(host.modeName, 'deathmatch');
+  assert.equal(host.game.mapName, 'de_inkwell');
+});
+
+Deno.test('admin: /admin answers only with the rcon password, over HTTPS or from this machine', async () => {
+  const { host, clock } = setup();
+  const status = async (p) => (await p).status;
+  const error = async (p) => (await (await p).json()).error;
+  assert.equal(await status(ask(host, 'state')), 200);
+  assert.equal(await status(ask(host, 'state', { password: null })), 401);
+  assert.match(await error(ask(host, 'state', { address: '203.0.113.9' })), /HTTPS/, 'plain HTTP from elsewhere');
+  assert.equal(await status(ask(host, 'state', { address: '203.0.113.9', secure: true })), 200);
+  assert.equal(await status(ask(host, 'exec', { method: 'OPTIONS' })), 405, 'no preflight is answered');
+  assert.equal(await status(ask(host, 'exec', { method: 'GET' })), 405);
+  assert.equal(await status(ask(host, 'secrets')), 404);
+  assert.equal(await status(ask(host, 'state', { room: 'nosuch' })), 404);
+  // Bad passwords count like rcon's: the fifth from one address blocks it for a minute.
+  const away = { address: '203.0.113.9', secure: true };
+  for (let i = 0; i < 5; i++) assert.equal(await error(quiet(() => ask(host, 'state', { ...away, password: 'guess' }))), 'Bad rcon_password.');
+  assert.match(await error(ask(host, 'state', away)), /too many bad passwords/);
+  clock.ms += 60001;
+  assert.equal(await status(ask(host, 'state', away)), 200);
+  // A command line, bounded; any password a header cannot hold as it is.
+  const out = await (await quiet(() => ask(host, 'exec', { body: 'bot_add_ct expert Gus; mp_freezetime 7' }))).json();
+  assert.match(out.output, /added .*Gus \(CT\)/);
+  assert.equal(host.con.get('mp_freezetime').value, '7');
+  assert.equal(await status(ask(host, 'exec', { body: 'say '.padEnd(ADMIN_BODY + 1, 'a') })), 413);
+  host.con.exec('rcon_password "pä%ss wörd"');
+  assert.equal(await status(ask(host, 'catalog', { password: 'pä%ss wörd' })), 200);
+  host.con.exec('rcon_password ""');
+  assert.match(await error(ask(host, 'state', { password: '' })), /rcon is disabled/);
+});
+
+Deno.test('admin: the state lists players, bots, the round and the cvars, never a password', () => {
+  const { host, join } = setup();
+  const c = join('Alice', TEAM_T, '198.51.100.4');
+  host.con.exec('sv_password letmein'); // (after the join: Alice sent none)
+  quiet(() => host.capture('bot_add_ct expert Gus'));
+  const s = host.adminState();
+  assert.equal(s.map, 'de_playground');
+  assert.equal(s.mode, 'competitive');
+  assert.deepEqual(s.maps, ['de_playground', 'de_inkwell']);
+  assert.equal(s.round.phase, 'warmup');
+  const alice = s.players.find((p) => p.id === c.id), gus = s.players.find((p) => p.bot);
+  assert.equal(alice.team, TEAM_T);
+  assert.equal(alice.address, '198.51.100.4');
+  assert.equal(gus.team, TEAM_CT);
+  assert.equal(gus.difficulty, 3);
+  assert.equal(gus.address, '');
+  assert.equal(s.cvars.mp_maxrounds, '30');
+  assert.equal(s.password, true);
+  assert.ok(!('rcon_password' in s.cvars) && !('sv_password' in s.cvars));
+  const text = JSON.stringify(s);
+  assert.ok(!text.includes('hunter2') && !text.includes('letmein'));
+});
+
+Deno.test('admin: switchteam, slay, banid and removeip; bots by id', () => {
+  const { host, join } = setup();
+  const run = (line) => quiet(() => host.capture(line));
+  const c = join('Alice', TEAM_T, '198.51.100.4');
+  assert.equal(c.team, TEAM_T);
+  assert.match(run(`switchteam spec ${who(c.id)}`), /Alice is on the spectators/);
+  assert.equal(c.team, TEAM_SPECTATOR);
+  run(`switchteam ct ${who(c.id)}`); // at once: past the change gap a player has
+  assert.equal(c.team, TEAM_CT);
+  assert.ok(c.alive, 'warmup: back at once');
+  assert.match(run(`slay ${who(c.id)}`), /slayed Alice/);
+  assert.ok(!c.alive);
+  assert.match(run(`slay ${who(c.id)}`), /not alive/);
+  assert.match(run('switchteam x #99'), /no such player or team/);
+  // A ban kicks and keeps the address out until removeip; 0 is until the server restarts.
+  assert.match(run(`banid 30 ${who(c.id)}`), /banned Alice for 30 min/);
+  assert.ok(!c.joined);
+  assert.equal(host.admit({ session: { address: '198.51.100.4' } }, ''), 'banned: you can come back in 30 min');
+  assert.deepEqual(host.banList(), [{ address: '198.51.100.4', minutes: 30 }]);
+  assert.match(run('listip'), /198\.51\.100\.4 {2}30 min/);
+  assert.match(run('removeip 198.51.100.4'), /unbanned/);
+  assert.equal(host.admit({ session: { address: '198.51.100.4' } }, ''), '');
+  const d = join('Bob', TEAM_CT, '198.51.100.5');
+  run(`banid 0 ${who(d.id)}`);
+  assert.deepEqual(host.banList(), [{ address: '198.51.100.5', minutes: null }]);
+  assert.equal(host.admit({ session: { address: '198.51.100.5' } }, ''), 'banned from this server');
+  const e = join('Local', TEAM_T, '127.0.0.1');
+  assert.match(run(`banid 5 ${who(e.id)}`), /not banned: this machine/);
+  run('bot_add_t easy Zed');
+  const bot = host.game.bots.list[0].c;
+  run(`bot_kick ${who(bot.id)}`);
+  assert.equal(host.game.bots.list.length, 0);
+});

@@ -129,7 +129,7 @@ Deno.test('callvote kick: the team votes, the target left out; passed, the addre
   cmd(c, 'vote option1');
   assert.equal(vote(b).state, VOTE_PASSED);
   assert.ok(!d.c.joined, 'kicked');
-  assert.equal(hello('delta again', '', '203.0.113.4').why, 'voted out: you can come back in 15 min');
+  assert.equal(hello('delta again', '', '203.0.113.4').why, 'banned: you can come back in 15 min');
   clock.ms += 15 * 60000;
   assert.ok(hello('delta later', '', '203.0.113.4').joined, 'after sv_vote_kick_ban_duration');
 });

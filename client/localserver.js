@@ -18,9 +18,11 @@
 //                 them; else as below,
 //               a Uint8Array (the session id, the length, a datagram), close { id },
 //               pause { on }: the page's pause menu; the ticks stop (bots, the round clock,
-//                 timeouts) and go on from where they were
+//                 timeouts) and go on from where they were,
+//               admin { req, op: 'state' | 'catalog' | 'exec', command }: the admin page's call
 // Messages out: ready { rcon, names: the server console's catalog() } | failed { error },
-//               an ArrayBuffer (the session id, then each datagram after its length; little-endian), close { id, reason }
+//               an ArrayBuffer (the session id, then each datagram after its length; little-endian), close { id, reason },
+//               admin { req, result | error }
 
 import { Host, GAME_MODES, runDue, TICK_MS } from '../server/host.js';
 import { parseBSP, parseUntrustedBSP } from '../shared/bsp.js';
@@ -180,5 +182,14 @@ onmessage = (e) => {
     sessions.delete(m.id);
   } else if (m.type === 'pause') {
     paused = m.on;
+  } else if (m.type === 'admin') { // the admin page, through the game's tab (client/admin.js): no password, our own server
+    try {
+      if (!host) throw new Error('the practice game is starting');
+      const result = m.op === 'state' ? host.adminState() : m.op === 'catalog' ? host.con.catalog()
+        : { output: host.capture(String(m.command || '')) };
+      postMessage({ type: 'admin', req: m.req, result });
+    } catch (err) {
+      postMessage({ type: 'admin', req: m.req, error: String(err.message || err) });
+    }
   }
 };

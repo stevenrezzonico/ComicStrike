@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ComicStrike Server Admin</title>
+<link rel="icon" type="image/svg+xml" href="/client/favicon.svg">
+<style>
+  /* The server admin page (client/admin.js): the game's paper, ink and flat inks. */
+  :root {
+    --paper: #f6eedb; --paper-hi: #fffaf0; --ink: #17130f; --yellow: #ffd23a; --red: #e2402a; --blue: #2f6fc4;
+    --muted: #6d665c; --t: #ffb84a; --ct: #7db8ff; --money: #9be15d;
+    --display: Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif;
+    --body: 'Comic Sans MS', 'Comic Neue', 'Chalkboard SE', sans-serif;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--paper); color: var(--ink); font: 14px/1.4 var(--body); }
+  header { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+    padding: 8px 14px; background: var(--yellow); border-bottom: 3px solid var(--ink); }
+  header .title { display: flex; align-items: center; gap: 8px; font: 24px/1 var(--display); letter-spacing: 1px;
+    text-decoration: none; color: var(--ink); }
+  header .title img { width: 30px; height: 30px; }
+  #summary { flex: 1; min-width: 200px; font-weight: 700; }
+  #summary .score { font: 20px/1 var(--display); letter-spacing: 1px; margin: 0 6px; }
+  .t { color: #a35a00; } .ct { color: #1f5aa8; } .spec { color: var(--muted); }
+  nav { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 14px 0; }
+  nav button { border-bottom-width: 0; box-shadow: none; }
+  nav button.active { background: var(--ink); color: var(--yellow); }
+  main { padding: 10px 14px 80px; max-width: 1100px; }
+  button, select, input { font: inherit; color: var(--ink); }
+  button { padding: 4px 10px; background: var(--paper-hi); border: 2px solid var(--ink); box-shadow: 2px 2px 0 var(--ink);
+    cursor: pointer; font-weight: 700; }
+  button:hover { background: var(--yellow); }
+  button:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--ink); }
+  button.go { background: var(--red); color: var(--paper-hi); }
+  button.small { padding: 1px 6px; font-size: 12px; box-shadow: 1px 1px 0 var(--ink); }
+  button.on { background: var(--ink); color: var(--yellow); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  select, input { background: var(--paper-hi); border: 2px solid var(--ink); padding: 3px 5px; }
+  input[type=number] { width: 90px; }
+  h2 { margin: 16px 0 6px; font: 20px/1.1 var(--display); letter-spacing: 1px; text-transform: uppercase; }
+  h2:first-child { margin-top: 4px; }
+  .card { padding: 10px 12px; margin-bottom: 12px; background: var(--paper-hi); border: 3px solid var(--ink);
+    box-shadow: 4px 4px 0 var(--ink); }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+  .note { color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 3px 6px; text-align: left; border-bottom: 1px solid rgba(23, 19, 15, 0.15); white-space: nowrap; }
+  th { font: 14px var(--display); letter-spacing: 1px; text-transform: uppercase; }
+  td.num, th.num { text-align: right; }
+  tr.dead td { opacity: 0.55; }
+  .maps { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 5px; }
+  .maps button { text-align: left; font-weight: 400; box-shadow: 1px 1px 0 var(--ink); overflow: hidden; text-overflow: ellipsis; }
+  .maps button.current { outline: 3px solid var(--red); }
+  .setting { display: grid; grid-template-columns: minmax(180px, 230px) 130px 1fr; align-items: center; gap: 4px 10px;
+    padding: 4px 0; border-bottom: 1px solid rgba(23, 19, 15, 0.1); }
+  .setting input, .setting select { max-width: 100%; }
+  .setting input[type=text] { width: 100%; }
+  .setting code { font: 12px ui-monospace, monospace; }
+  .setting .help { font-size: 12px; }
+  .setting .when { margin-left: 4px; padding: 0 4px; background: var(--yellow); border: 1px solid var(--ink); font-size: 11px; }
+  .setting.changed code { color: var(--red); font-weight: 700; }
+  #log { position: fixed; left: 0; right: 0; bottom: 0; max-height: 72px; overflow-y: auto; margin: 0; padding: 6px 14px;
+    background: var(--ink); color: var(--paper); font: 12px/1.35 ui-monospace, monospace; white-space: pre-wrap; }
+  #log .err { color: #ff9b8a; }
+  #console-out { height: 360px; overflow-y: auto; margin: 0 0 6px; padding: 6px; background: var(--ink); color: var(--paper);
+    font: 12px/1.35 ui-monospace, monospace; white-space: pre-wrap; }
+  #login { max-width: 420px; margin: 40px auto; }
+  #login input { width: 100%; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <a class="title" href="/"><img src="/client/favicon.svg" alt="">SERVER ADMIN</a>
+  <div id="summary">connecting...</div>
+  <button id="logout" class="small hidden">Log out</button>
+</header>
+<div id="login" class="card hidden">
+  <h2>Log in</h2>
+  <p id="login-what"></p>
+  <div class="row"><input id="password" type="password" placeholder="rcon_password" autocomplete="current-password"></div>
+  <div class="row"><button id="login-go" class="go">Log in</button></div>
+  <p class="note">The server's rcon_password (cfg/server.cfg or RCON_PASSWORD). Over plain HTTP the page works only on
+    the server's own machine; a server with a certificate (TLS_CERT) works from anywhere.</p>
+  <p id="login-error" class="note" style="color: var(--red)"></p>
+</div>
+<nav id="tabs" class="hidden"></nav>
+<main id="body"></main>
+<pre id="log"></pre>
+<script type="module" src="/client/admin.js"></script>
+</body>
+</html>

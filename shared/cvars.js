@@ -271,14 +271,16 @@ export class Console {
   }
 
   // Every name with its help, current value and argument options, for another console's
-  // suggestions (remote): function hints are asked for their first argument's options.
+  // suggestions (remote): function hints are asked for their first argument's options. Then
+  // a cvar's min, max and default (the admin page's forms; null for a command or none).
   catalog() {
     const out = [];
     for (const n of this.names()) {
-      const cv = this.cvars.get(n);
+      const cv = this.cvars.get(n), open = cv && !(cv.flags & FCVAR_PROTECTED);
       let hint = this.hints.get(n);
       if (typeof hint === 'function') hint = hint(1, [n]);
-      out.push([n, this.helpOf(n), cv && !(cv.flags & FCVAR_PROTECTED) ? cv.value : null, hint || null]);
+      out.push([n, this.helpOf(n), open ? cv.value : null, hint || null, cv ? cv.min ?? null : null, cv ? cv.max ?? null : null,
+        open ? cv.defaultValue : null]);
     }
     return out;
   }

@@ -1682,15 +1682,16 @@ export class Game {
 
   // CS:GO jointeam: 1 = spectators, 2 = T, 3 = CT. Switching while alive costs the life
   // (no death counted); you play from the next round (at once in warmup or freeze time).
-  joinTeam(c, n) {
+  // `force`: the server moves him (switchteam), past the change gap and the team limits.
+  joinTeam(c, n, force = false) {
     const team = teamOfJoin(n);
     if (!team) return this.print(c, 'jointeam 1 (Spectators), 2 (Terrorists) or 3 (Counter-Terrorists)');
     if (team === c.team) return;
-    if (this.tick - c.lastTeamChange < ROSTER_CHANGE_TICKS) return this.print(c, 'jointeam: too soon after the last change');
-    if (team !== TEAM_SPECTATOR && this.teamFull(team, c)) {
+    if (!force && this.tick - c.lastTeamChange < ROSTER_CHANGE_TICKS) return this.print(c, 'jointeam: too soon after the last change');
+    if (!force && team !== TEAM_SPECTATOR && this.teamFull(team, c)) {
       return this.print(c, `The ${TEAM_NAMES[team]}s are full (mp_teamsize_max ${this.rules.teamSizeMax})`);
     }
-    if (team !== TEAM_SPECTATOR && this.stacked(team, c)) {
+    if (!force && team !== TEAM_SPECTATOR && this.stacked(team, c)) {
       return this.print(c, `Too many players on the ${TEAM_NAMES[team]}s (mp_limitteams ${this.rules.limitTeams})`);
     }
     if (this.bombCarrier === c) this.dropBomb(c, false);

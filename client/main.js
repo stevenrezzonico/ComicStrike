@@ -3003,6 +3003,20 @@ function setRoom(code, rcon = '', names = null) {
   history.replaceState(null, '', url);
 }
 
+// The admin page (client/admin.html) in another tab of this browser: `hello` asks which game
+// this tab plays and the rcon password it holds (a room we host, else our rcon_password);
+// `call` runs in the practice game, through its worker (no password: our own server).
+const adminChannel = new BroadcastChannel('comicstrike-admin');
+adminChannel.onmessage = (e) => {
+  const m = e.data || {};
+  if (m.type === 'hello' && playing && net) {
+    adminChannel.postMessage({ type: 'here', kind: localWorker ? 'practice' : roomCode ? 'room' : 'online', room: roomCode,
+      rcon: localWorker ? '' : roomCode ? roomRcon : cv.rcon_password.value });
+  } else if (m.type === 'call' && localWorker && playing) {
+    localWorker.postMessage({ type: 'admin', req: m.req, op: m.op, command: m.command });
+  }
+};
+
 // Practice: the game server in a Web Worker (client/localserver.js) on `map` in `mode`,
 // bots filling the teams to `players` at `difficulty` (bot_quota fill, bot_difficulty);
 // then join it like a server, on `team` (2 T, 3 CT, 1 spectators, 0 auto).
@@ -3031,6 +3045,10 @@ async function startPractice(map, team, { mode = 'competitive', players = 10, di
     throw err;
   }
   worker.onmessage = worker.onerror = null;
+  worker.addEventListener('message', (e) => { // the admin page's answers (adminChannel)
+    const m = e.data;
+    if (m && m.type === 'admin') adminChannel.postMessage({ type: 'reply', req: m.req, result: m.result, error: m.error });
+  });
   localWorker = worker;
   await joinServer(teamOfJoin(team));
   conWin.print(`practice: ${currentMap} (${mode}); rcon works without a password (bot_add, map ...)`);
