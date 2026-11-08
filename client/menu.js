@@ -116,6 +116,7 @@ const TABS = [
     ...LOOK_GUNS.map((name) => ['looks', `cl_finish_${name}`, WEAPONS[WEAPON_ID[name]].label, name]),
   ]],
   ['Controls', null],
+  ['Recordings', 'recordings'], // the start menu's only, so last (renderSettings)
 ];
 
 // A swatch of look `key` (client/models/looks.js) for the Weapons tab: the paint and the
@@ -235,7 +236,7 @@ export class Menu {
     this.demoPlayers = 0; // the demo: no bots unless asked for (targets)
     this.practiceDifficulty = 1;
     this.practiceArmoury = true; // the map's own weapons laid out (armoury_entity, the fy_ maps)
-    this.panel = ''; // open panel: '', 'play', 'practice', 'recordings', 'team', 'settings'
+    this.panel = ''; // open panel: '', 'play', 'practice', 'team', 'settings'
     this.room = ''; // a room's code (a hosted map, server/rooms.js): Play joins it
     this.roomGone = false; // the room's code did not answer (it closed)
     this.ownMap = ''; // the .bsp of the player's own picked (its name; the page holds the bytes)
@@ -461,7 +462,6 @@ export class Menu {
     } else {
       item('Play Online', 'play');
       item('Play Offline', 'practice');
-      item('Recordings', 'recordings');
       item('Map editor', '', () => open('/client/editor.html', '_blank'));
       item('Settings', 'settings');
     }
@@ -472,7 +472,6 @@ export class Menu {
     body.innerHTML = '';
     if (this.panel === 'play') this.renderPlay(body);
     else if (this.panel === 'practice') this.renderPractice(body);
-    else if (this.panel === 'recordings') this.renderRecordings(body);
     else if (this.panel === 'team') this.renderTeam(body, (team) => this.onTeam(team));
     else if (this.panel === 'settings') this.renderSettings(body);
     else if (!this.inGame) this.renderWelcome(body);
@@ -601,10 +600,9 @@ export class Menu {
       'for it is held in memory only and goes with it).'));
   }
 
-  // Recordings: the demos recorded in this browser (record <name> ... stop in a game), each
-  // played back, downloaded or deleted, and a .csdemo file from the disk to play.
+  // Settings' Recordings tab: the demos recorded in this browser (record <name> ... stop in a
+  // game), each played back, downloaded or deleted, and a .csdemo file from the disk to play.
   renderRecordings(body) {
-    body.append(el('h2', '', 'Recordings'));
     body.append(el('p', 'menu-hint', 'In a game, type record <name> in the console (`) to record it as a demo, and stop ' +
       'to end it. A demo plays back as a spectator: fly freely, or jump to watch through a player\'s eyes. ' +
       'demo_pause and demo_timescale control it.'));
@@ -762,8 +760,11 @@ export class Menu {
     // In a game, with a mouse: a grip to drag the panel aside and watch the view (the gun) while
     // trying the sliders.
     if (this.inGame && matchMedia('(pointer: fine)').matches) body.append(this.grip());
+    // Recordings only at the start menu: playing a demo would leave the game.
+    const shown = this.inGame ? TABS.length - 1 : TABS.length;
+    if (this.tab >= shown) this.tab = 0;
     const tabs = el('div', 'menu-tabs');
-    TABS.forEach(([name], i) => {
+    TABS.slice(0, shown).forEach(([name], i) => {
       const b = button(name, () => {
         this.tab = i;
         this.configNote = null;
@@ -774,6 +775,11 @@ export class Menu {
     });
     body.append(tabs);
     const [, rows] = TABS[this.tab];
+    if (rows === 'recordings') {
+      const list = el('div', 'menu-settings');
+      body.append(list);
+      return this.renderRecordings(list);
+    }
     // The Video tab's window (the start menu only: in a game the print is right there)
     // stays put above the list, which scrolls under it.
     // The Weapons tab's gun preview too, in a game as well.

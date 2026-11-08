@@ -2651,7 +2651,7 @@ async function playDemo(name, bytes) {
   conWin.print(`playing demo ${name}: ${demo.header.map}, ${(dp.length / 1000).toFixed(1)} s (demo_pause, demo_timescale; jump: eyes, chase, free)`);
   enterGame();
 }
-// The start menu's Recordings.
+// Settings' Recordings tab.
 menu.onDemoList = () => listDemos();
 menu.onDemoPlay = (name) => playback(['playback', name], { print: (s) => (menu.demoError = s) });
 menu.onDemoDownload = (name) => loadDemo(name).then((b) => b && downloadDemo(name, b));
