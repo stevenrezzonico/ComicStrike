@@ -347,6 +347,9 @@ export class Game {
     this.logic.onExplode = (x, y, z, magnitude, flags) => this.mapExplosion(x, y, z, magnitude, flags);
     this.logic.onText = (text, act) => this.mapText(text, act);
     this.logic.onStrip = (act) => this.stripWeapons(this.clients[act.id]);
+    // GoldSrc fires trigger_auto when the map loads, before any round: warmup sees de_inkwell's
+    // barge and fans going (each round start fires them again).
+    this.logic.reset(0);
     this.textsSent = new Map(); // game_text -> the players it reached this second (bits by id; textsAt)
     this.textLines = new Uint8Array(MAX_PLAYERS); // map lines each player got this second
     this.textsAt = -Infinity;

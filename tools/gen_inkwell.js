@@ -257,11 +257,18 @@ function car(x, y, z, alongY, tex = 'metal_wall05b') {
   block([x + (l - cl) / 2, y + (w - cw) / 2, z + 48, x + (l + cl) / 2, y + (w + cw) / 2, z + 88], 'steel');
 }
 
-// T spawn: the canal (water 104 deep, ladders out, a railing with gaps at them), bollards,
-// a container stack and crates.
-add([-640, -2624, -128, 640, -2432, -24], { top: '!watergreen', bottom: null, side: null }, 'func_water');
+// T spawn: the canal (water 116 deep, its top 12 under the quay: a swimmer leaps out where
+// the railing has a gap; ladders out at both ends), a barge ferrying between the ladders,
+// bollards, a container stack and crates.
+add([-640, -2624, -128, 640, -2432, -12], { top: '!watergreen', bottom: null, side: null }, 'func_water');
 for (const x of [-576, 448]) add([x, -2456, -128, x + 64, -2432, 0], T('crete3_wall02'), 'world', {}, { shape: 'ladder', up: 'py' });
-for (const [x0, x1] of [[-640, -576], [-512, 448], [512, 640]]) block([x0, -2432, 0, x1, -2424, 40], 'steel');
+for (const [x0, x1] of [[-640, -576], [-512, -96], [-32, 448], [512, 640]]) block([x0, -2432, 0, x1, -2424, 40], 'steel');
+// The barge (a train): floating 8 over the water, waiting 3 s at either end; the round's
+// start sets it off (the harbour's logic below). It carries whoever climbs onto it.
+add([-480, -2560, -20, -352, -2496, -4], { top: 'wdplanks128f', bottom: 'metal_wall05b', side: 'metal_wall05b' }, 'func_train',
+  { target: 'barge1', speed: '60', dmg: '2', targetname: 'barge' });
+point('path_corner', [-416, -2528, -12], { targetname: 'barge1', target: 'barge2', wait: '3' });
+point('path_corner', [352, -2528, -12], { targetname: 'barge2', target: 'barge1', wait: '3' });
 for (const x of [-384, -128, 128, 384]) pillar(x, -2400, 0, 12, 28, 'steel');
 block([384, -2400, 0, 640, -2304, 128], 'metal_wall05b');
 block([448, -2304, 0, 640, -2208, 96], 'bcrate02');
@@ -275,6 +282,15 @@ block([1184, -2112, 0, 1376, -2016, 128], 'metal_wall05b');
 block([1216, -2112, 128, 1344, -2016, 192], 'bcrate02');
 crate(1056, -1888);
 breakCrate(1408, -2112);
+// A crate hangs swinging from a gantry beam off the harbour wall (a pendulum, passable: it
+// swings over everyone's heads); a crate the players can shove sits in the corner by the
+// first container: pushed against it, it is the step for a crouch jump onto the containers.
+block([1072, -2112, 264, 1104, -1920, 280], 'steel');
+add([1056, -1968, 200, 1120, -1904, 264], all('mltrycrtesd'), 'func_pendulum',
+  { distance: '12', speed: '20', damp: '0', spawnflags: '97', targetname: '' });
+add([704, -2112, 0, 768, -2048, 64], { top: 'mltrycrtetp', bottom: 'mltrycrtetp', side: 'mltrycrtesd' }, 'func_pushable');
+// Where the warehouse's paper chute comes out.
+point('info_teleport_destination', [1200, -1888, 0], { targetname: 'chute_out' }, 0);
 // Long: the gate (two swinging doors in an arch), a car, crates by the walls.
 wallWithDoors([1600, -1600, 0, 1984, -1568, 320], [[1728, 1856, 144]], 'brick13');
 add([1728, -1592, 0, 1792, -1576, 144], all('fifties_dr2'), 'func_door_rotating',
@@ -397,9 +413,39 @@ for (const [x, y] of [[-1216, -1888], [-1120, -1888], [-1664, -2176], [-1760, -2
 }
 block([-1408, -2304, 0, -1152, -2240, 160], 'wdplanks128f');
 block([-2240, -1984, 0, -2176, -1824, 128], 'wdplanks128f');
-breakCrate(-1024, -2304);
-breakCrate(-960, -2304);
-crate(-992, -2304, 64, 64, 'bcrate02');
+breakCrate(-1152, -2304);
+breakCrate(-1088, -2304);
+crate(-1120, -2304, 64, 64, 'bcrate02');
+// A mezzanine in the south-east corner, 128 up behind a glass balustrade (a solid entity
+// drawn see-through), reached by a lift at its west end or a ladder at its north edge; in its
+// corner the paper chute (a teleport) drops whoever steps in onto the quay.
+block([-928, -2304, 112, -672, -2176, 128], 'wdplanks128f');
+block([-736, -2192, 0, -672, -2176, 112], 'brick13');
+add([-736, -2176, 0, -672, -2152, 128], T('brick13'), 'world', {}, { shape: 'ladder', up: 'ny' });
+add([-1008, -2304, 112, -928, -2224, 128], { top: 'duct_flr01', bottom: 'steel', side: 'steel' }, 'func_plat',
+  { height: '112', speed: '100' });
+add([-928, -2180, 128, -752, -2176, 168], all('glass_med'), 'func_wall', { rendermode: '2', renderamt: '90' });
+for (const b of [[-736, -2304, 128, -732, -2240, 144], [-736, -2244, 128, -672, -2240, 144]]) block(b, 'stripes2');
+block([-732, -2304, 128, -672, -2244, 129], 'c1a4_fan');
+add([-732, -2304, 129, -672, -2244, 200], { top: null, bottom: null, side: null }, 'trigger_teleport', { target: 'chute_out' });
+sign([-800, -2304, 128, -736, -2224, 200], 'chute_sign', 'Paper chute: one way down to the quay.', [-768, -2264, 192]);
+// Two ceiling fans, switched on by the harbour's logic; a belt along the north wall carrying
+// runners west to the tunnel stairs (the speed's sign sends it and its texture west).
+for (const x of [-1600, -1280]) {
+  add([x - 80, -2056, 216, x + 80, -2040, 220], all('c1a4_fan'), 'func_rotating', { speed: '150', spawnflags: '64', targetname: 'fans' });
+  block([x - 6, -2054, 220, x + 6, -2042, 256], 'steel');
+}
+add([-1760, -1840, 0, -704, -1792, 8], { top: 'scroll_conv', bottom: null, side: 'steel' }, 'func_conveyor',
+  { speed: '-100', angles: '0 0 0' });
+// The tunnel's doors: a wall across the top of its stairs with a garage door that rises when
+// run into.
+wallWithDoors([-2240, -1800, 0, -1792, -1784, 192], [[-2112, -1952, 144]], 'brick13');
+add([-2112, -1796, 0, -1952, -1788, 144], all('out_w8dr1'), 'func_door', { angle: '-1', speed: '200', wait: '3', lip: '8', targetname: '' });
+// The harbour's logic: each round start fires a relay, whose list sets the barge off and,
+// two seconds on, the fans.
+point('trigger_auto', [-704, -2016, 160], { target: 'harbour', delay: '1' });
+point('trigger_relay', [-704, -2016, 176], { targetname: 'harbour', target: 'harbour_list' });
+point('multi_manager', [-704, -2016, 192], { targetname: 'harbour_list', barge: '0', fans: '2' });
 // The tunnel: a zigzag of two overlapping half walls (a straight line ran 3000 units from the
 // warehouse down the tunnel and the B alley onto B; bots fought along it and the bomb never
 // got there), crates, a pipe along the roof.

@@ -8,11 +8,12 @@ import { PS_ORIGIN } from '../shared/pmove.js';
 import { BOMB_PLANTED } from '../shared/bomb.js';
 import { PHASE_LIVE } from '../shared/economy.js';
 import { readProject, checkProject, compileProject } from '../client/editor/project.js';
-import { TEAM_CT } from '../shared/player.js';
+import { TEAM_CT, TEAM_T } from '../shared/player.js';
 import { Writer } from '../shared/protocol.js';
 import { Host } from '../server/host.js';
 import { readCfg, seeded, joinClient, sendCmd, walker } from './harness.js';
-import { IN_USE, TICK_RATE } from '../shared/constants.js';
+import { IN_USE, IN_FORWARD, TICK_RATE } from '../shared/constants.js';
+import { MOVER_PUSH, MOVER_TRAIN, MOVER_SPIN, MOVER_PLAT } from '../shared/doors.js';
 
 // de_inkwell is our own defusal map (tools/gen_inkwell.js), so it is in the repository:
 // its editor project and the map compiled from it.
@@ -35,9 +36,11 @@ Deno.test('de_inkwell: the map is its project compiled; the project reads clean 
 Deno.test('de_inkwell: spawns, zones, ladders, water, doors and breakables; spawns stand on the floor', () => {
   // Every kind of map element the game plays, at least once (tools/gen_inkwell.js).
   const census = {
-    info_player_deathmatch: 10, info_player_start: 10, func_buyzone: 2, func_bomb_target: 2, func_ladder: 3,
-    func_water: 3, func_conveyor: 1, func_door_rotating: 2, func_door: 1, func_button: 1, func_rot_button: 2,
-    multisource: 1, trigger_hurt: 1, trigger_multiple: 1, game_text: 1, func_illusionary: 5,
+    info_player_deathmatch: 10, info_player_start: 10, func_buyzone: 2, func_bomb_target: 2, func_ladder: 4,
+    func_water: 3, func_conveyor: 2, func_door_rotating: 2, func_door: 2, func_button: 1, func_rot_button: 2,
+    multisource: 1, trigger_hurt: 1, trigger_multiple: 2, game_text: 2, func_illusionary: 5, func_train: 1,
+    path_corner: 2, func_pendulum: 1, func_pushable: 1, trigger_teleport: 1, info_teleport_destination: 1,
+    func_plat: 1, func_wall: 1, func_rotating: 2, trigger_auto: 1, trigger_relay: 1, multi_manager: 1,
   };
   for (const [cls, n] of Object.entries(census)) assert.equal(at(cls).length, n, cls);
   assert.equal(at('func_water').map((e) => e.skin).sort().join(), '-3,-4,-5', 'water (the canal), slime (the ink vat), lava (the crucible)');
@@ -134,6 +137,48 @@ Deno.test('de_inkwell: the two-hand press comes down only after both valves are 
   run(2, IN_USE, 180, 20);
   run(TICK_RATE / 2, 0, 180, 20);
   assert.ok(!d.atBottom(platen), 'both valves turned: the platen comes down');
+});
+
+// The harbour: a swimmer leaps out of the canal where the railing has a gap, the paper chute
+// drops whoever steps in onto the quay, the crate in the quay's corner goes where it is
+// pushed, the lift takes whoever stands on it up to the mezzanine.
+Deno.test('de_inkwell: the harbour: a water jump, the paper chute, the pushable crate, the lift', () => {
+  const { game: g, run, put, pos, feet } = walker(bsp);
+  const f = pos(), d = g.doors;
+  put(-64, -2452, -58); // waist deep against the quay's wall, at the railing's gap
+  run(TICK_RATE * 2, IN_FORWARD, 90);
+  assert.ok(f[PS_ORIGIN + 1] > -2432 && Math.abs(feet()) < 1, `out onto the quay (y ${f[PS_ORIGIN + 1].toFixed(0)}, feet ${feet().toFixed(1)})`);
+  put(-790, -2272, 128); // on the mezzanine, walking east into the chute
+  let out = false;
+  for (let i = 0; i < TICK_RATE * 2 && !out; i++) {
+    run(1, IN_FORWARD, 0);
+    out = Math.hypot(f[PS_ORIGIN] - 1200, f[PS_ORIGIN + 1] + 1888) < 32;
+  }
+  assert.ok(out && Math.abs(feet() - 1) < 2, `out of the chute on the quay (${f[PS_ORIGIN].toFixed(0)} ${f[PS_ORIGIN + 1].toFixed(0)})`);
+  const crate = d.kind.indexOf(MOVER_PUSH);
+  put(686, -2080, 0); // against the crate's west side
+  run(TICK_RATE, IN_FORWARD, 0);
+  assert.ok(d.pos[crate * 3] > 24 && d.pos[crate * 3] <= 32 + 1e-3, `shoved up to the container (${d.pos[crate * 3].toFixed(1)})`);
+  assert.ok(d.kind.indexOf(MOVER_PLAT) >= 0);
+  put(-968, -2264, 16); // on the lift at rest
+  run(TICK_RATE * 3, 0, 0);
+  assert.ok(Math.abs(feet() - 128) < 2, `up on the mezzanine (feet ${feet().toFixed(1)})`);
+});
+
+// Each round start fires the harbour's relay: its list sets the barge off at once and the
+// warehouse's fans two seconds on.
+Deno.test('de_inkwell: the round start sets the barge off and switches the fans on', () => {
+  const host = game('mp_warmuptime 0; mp_freezetime 0', 1), g = host.game, d = g.doors, w = new Writer();
+  const barge = d.kind.indexOf(MOVER_TRAIN), fans = [...d.kind].flatMap((k, i) => (k === MOVER_SPIN ? [i] : []));
+  assert.ok(barge >= 0 && fans.length === 2);
+  const players = [joinClient(g, w, 't', TEAM_T), joinClient(g, w, 'ct', TEAM_CT)]; // a match starts
+  for (let i = 0; i < TICK_RATE * 4; i++) {
+    for (const c of players) sendCmd(g, w, c);
+    g.step();
+  }
+  assert.equal(g.phase, PHASE_LIVE);
+  assert.ok(!d.stopped[barge], 'the barge goes');
+  for (const k of fans) assert.equal(d.dir[k], 1, 'the fans turn');
 });
 
 function game(cfg, seed) {

@@ -54,8 +54,10 @@
 <defs><marker id="up" viewBox="0 0 6 6" refX="3" refY="3" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L6 3L0 6z" fill="#222"/></marker></defs>
 <rect x="228" y="620" width="160" height="24" fill="#5e8fb0"/>
 <rect x="228" y="619" width="8" height="1" fill="#3d352e" fill-opacity="0.75"/>
-<rect x="244" y="619" width="120" height="1" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="244" y="619" width="52" height="1" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="304" y="619" width="60" height="1" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="372" y="619" width="16" height="1" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="248" y="628" width="16" height="8" fill="#3d352e" fill-opacity="0.75"/>
 <circle cx="260" cy="616" r="1.5" fill="#3d352e" fill-opacity="0.75"/>
 <circle cx="292" cy="616" r="1.5" fill="#3d352e" fill-opacity="0.75"/>
 <circle cx="324" cy="616" r="1.5" fill="#3d352e" fill-opacity="0.75"/>
@@ -70,6 +72,7 @@
 <rect x="456" y="568" width="24" height="12" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="440" y="544" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="484" y="572" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="396" y="572" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="508" y="512" width="16" height="4" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="540" y="512" width="16" height="4" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="524" y="513" width="8" height="2" fill="#3d352e" fill-opacity="0.75"/>
@@ -164,9 +167,14 @@
 <circle cx="94" cy="578" r="5" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="132" y="596" width="32" height="8" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="28" y="544" width="8" height="20" fill="#3d352e" fill-opacity="0.75"/>
-<rect x="180" y="596" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
-<rect x="188" y="596" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
-<rect x="184" y="596" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="164" y="596" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="172" y="596" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="168" y="596" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="216" y="588" width="8" height="2" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="88" y="540" width="132" height="6" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="28" y="539" width="16" height="2" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="64" y="539" width="20" height="2" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="44" y="539.5" width="20" height="1" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="28" y="460" width="32" height="8" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="52" y="436" width="32" height="8" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="28" y="484" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
@@ -187,8 +195,15 @@
 <text x="524" y="194" font-size="40" font-weight="bold" fill="#e2402a" text-anchor="middle">A</text>
 <rect x="68" y="164" width="64" height="64" fill="#e2402a" fill-opacity="0.25" stroke="#e2402a" stroke-width="2"/>
 <text x="100" y="210" font-size="40" font-weight="bold" fill="#e2402a" text-anchor="middle">B</text>
+<circle cx="256" cy="632" r="3" fill="#f1c232"/>
+<circle cx="352" cy="632" r="3" fill="#f1c232"/>
+<circle cx="458" cy="552" r="3" fill="#f1c232"/>
 <circle cx="408" cy="322" r="3" fill="#f1c232"/>
 <circle cx="422" cy="321" r="3" fill="#f1c232"/>
+<circle cx="212" cy="599" r="3" fill="#f1c232"/>
+<circle cx="220" cy="568" r="3" fill="#f1c232"/>
+<circle cx="220" cy="568" r="3" fill="#f1c232"/>
+<circle cx="220" cy="568" r="3" fill="#f1c232"/>
 <circle cx="276" cy="600" r="3" fill="#c0392b"/>
 <circle cx="292" cy="600" r="3" fill="#c0392b"/>
 <circle cx="308" cy="600" r="3" fill="#c0392b"/>
