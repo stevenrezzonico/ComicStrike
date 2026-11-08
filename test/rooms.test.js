@@ -7,7 +7,7 @@ import { CollisionWorld } from '../shared/trace.js';
 import { FloorGrid, MAX_CELLS, floorFaces } from '../shared/floorgrid.js';
 import { Writer, Reader, writeHello, readHello, helloRoom, C2S_HELLO, S2C_WELCOME, S2C_REJECT, readWelcome } from '../shared/protocol.js';
 import { TEAM_T } from '../shared/player.js';
-import { quiet as quietly, readCfg, loadMap } from './harness.js';
+import { quiet as quietly, readCfg, loadMap, joinClient, sendCmd } from './harness.js';
 
 const PLAYGROUND = Deno.readFileSync(new URL('../maps/de_playground.bsp', import.meta.url));
 
@@ -80,6 +80,34 @@ Deno.test('a room runs the uploaded map, players join it, bots fill in', () => {
     for (let t = 0; t < 100; t++) room.host.step(game);
   });
   assert.equal(game.clients.filter((x) => x && x.bot).length, 3, 'bots fill up to 4 players with the first one in');
+});
+
+// A tab left open sends commands every tick: it keeps no room open, so idle sessions cannot hold
+// every room on the server.
+Deno.test('rooms: a player idle at the keys keeps no room open, one playing does', () => {
+  const { rooms, clock } = makeRooms({ idleMs: 1000, activeMs: 1000, cooldownMs: 0 });
+  const room = quietly(() => rooms.create(PLAYGROUND, { fileName: 'a.bsp', address: '1.1.1.1' }));
+  const game = room.host.game, w = new Writer();
+  const idle = joinClient(game, w, 'idle', TEAM_T, session()), busy = joinClient(game, w, 'busy', TEAM_T, session());
+  rooms.joined(room);
+  const run = (ticks, turning) => quietly(() => {
+    for (let i = 0; i < ticks; i++) {
+      sendCmd(game, w, idle); // nothing pressed, the view still
+      sendCmd(game, w, busy, 0, -1, 0, turning ? i % 90 : 0);
+      game.step();
+    }
+  });
+  run(100, true); // over activeMs: 64 ticks
+  assert.equal(rooms.humans(room), 1, 'only the one turning');
+  run(100, false);
+  assert.equal(rooms.humans(room), 0, 'nobody at the keys');
+  quietly(() => {
+    rooms.sweep();
+    clock.ms += 1001;
+    rooms.sweep();
+  });
+  assert.equal(rooms.get(room.code), null, 'closed idleMs after the last one stopped');
+  assert.match(idle.session.closed, /nobody played/);
 });
 
 Deno.test('rooms close once empty, or unused; closing tells the players', () => {

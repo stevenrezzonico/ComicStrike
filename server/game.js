@@ -157,6 +157,7 @@ class Client {
     this.bank = 2;
     this.ackSeq = 0; // newest snapshot the client has decoded
     this.lastHeard = 0;
+    this.activeTick = 0; // server tick of the last command that changed the buttons or the view (Rooms.humans)
     this.spawnYaw = 0;
     this.respawnTick = Infinity; // while dead in warmup / with respawns: server tick to respawn at
     this.spawnTick = 0; // server tick of the last spawn (deathmatch buy time)
@@ -554,7 +555,7 @@ export class Game {
       return null;
     }
     const c = new Client(id, session);
-    c.lastHeard = this.tick;
+    c.lastHeard = c.activeTick = this.tick;
     this.clients[id] = c;
     return c;
   }
@@ -891,6 +892,7 @@ export class Game {
       let select = -1;
       if (c.inbox.has(t)) {
         const k = t & c.inbox.mask;
+        if (c.inbox.buttons[k] !== c.buttons || c.inbox.pitch[k] !== c.pitch || c.inbox.yaw[k] !== c.yaw) c.activeTick = this.tick;
         c.buttons = c.inbox.buttons[k];
         c.pitch = c.inbox.pitch[k];
         c.yaw = c.inbox.yaw[k];

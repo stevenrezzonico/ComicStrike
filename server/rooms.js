@@ -14,13 +14,15 @@ import { parseUntrustedBSP, mapNameOf } from '../shared/bsp.js';
 import { Writer, writeReject } from '../shared/protocol.js';
 import { Host, addressKey, PASSWORD_BYTES } from './host.js';
 import { modeNamed } from '../shared/modes.js';
+import { TICK_RATE } from '../shared/constants.js';
 
 export const ROOM_LIMITS = {
   rooms: 8, // live rooms on the server
   bytes: 24 << 20, // the largest map file taken
   perAddress: 1, // live rooms one address keeps: a new one replaces its oldest
   cooldownMs: 30000, // between two uploads from one address
-  idleMs: 2 * 60000, // a room closes this long after its last player left
+  idleMs: 2 * 60000, // a room closes this long after its last player left (or went idle)
+  activeMs: 10 * 60000, // a player counts while their buttons or view changed this recently
   unusedMs: 10 * 60000, // ... or after its upload when nobody ever joined
   uploads: 2, // uploads being read at once (each is held in memory until it is checked)
   uploadMs: 120000, // an upload must arrive within this
@@ -197,8 +199,11 @@ export class Rooms {
     return [...this.rooms.values()].filter((r) => r.host.con.get('sv_listed').bool).map((r) => ({ room: r.code, ...r.host.info() }));
   }
 
+  // The players at the keys: an idle tab keeps no room open (one person holding all the rooms
+  // with idle sessions locked everyone else out of the server).
   humans(room) {
-    return room.host.game.clients.filter((c) => c && !c.bot).length;
+    const g = room.host.game, ticks = this.limits.activeMs * TICK_RATE / 1000;
+    return g.clients.filter((c) => c && !c.bot && g.tick - c.activeTick < ticks).length;
   }
 
   // Closes rooms nobody plays in any more (call it now and then).
@@ -212,7 +217,7 @@ export class Rooms {
       }
       if (room.emptySince === null) room.emptySince = now;
       const unused = !room.joined && now - room.created > L.unusedMs;
-      if (unused || (room.joined && now - room.emptySince > L.idleMs)) this.close(room, 'the room closed');
+      if (unused || (room.joined && now - room.emptySince > L.idleMs)) this.close(room, 'the room closed: nobody played in it');
     }
   }
 

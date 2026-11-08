@@ -154,7 +154,7 @@ class Guesses {
 
 export class Host {
   // opts: loadMap(name) -> parsed BSP (throws if missing), listMaps() -> names,
-  //       readCfg(name) -> text or null, quit(), print(text), rules (test overrides),
+  //       readCfg(name) -> text or null, print(text), rules (test overrides),
   //       now() -> ms (default performance.now),
   //       mapGapMs (ms between two rcon map changes; rooms: their upload cooldown, as each
   //       rebuilds the game and its bots' navigation)
@@ -376,8 +376,6 @@ export class Host {
       this.game.chat(null, a.slice(1).join(' '));
     }, 'say <text>: a chat line from Console to everyone');
     con.command('exec', (a, ctx) => this.execCfg(a[1], ctx), 'exec <file>: runs cfg/<file>.cfg');
-    con.command('quit', () => opts.quit && opts.quit(), 'Stops the server');
-    con.command('exit', () => opts.quit && opts.quit(), 'Stops the server');
 
     // Argument suggestions (the client console's list; a practice server sends them over).
     const levels = Object.keys(DIFFICULTY);
