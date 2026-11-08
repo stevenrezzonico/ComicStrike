@@ -23,6 +23,13 @@ const room = (params.get('room') || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const practice = params.has('practice');
 const KEY = `comicstrike.admin.${room || 'server'}`; // the password, for this tab's life only
 let password = practice ? '' : sessionStorage.getItem(KEY) || '';
+// The link the server prints at startup carries a password it made up after the # (never sent
+// to the server, nor kept in the history: taken off the address at once).
+const linked = new URLSearchParams(location.hash.slice(1)).get('password');
+if (linked !== null) {
+  if (!practice) password = linked;
+  history.replaceState(null, '', location.pathname + location.search);
+}
 let catalog = []; // the server console's rows: [name, help, value, hint, min, max, default]
 let state = null; // the newest Host.adminState()
 let tab = sessionStorage.getItem('comicstrike.admin.tab') || 'Match';
@@ -148,7 +155,9 @@ $('login-go').onclick = () => {
   $('password').value = '';
   start();
 };
-$('password').onkeydown = (e) => e.key === 'Enter' && $('login-go').click();
+$('password').addEventListener('keydown', (e) => { // (an onkeydown returning false cancels every other key)
+  if (e.key === 'Enter') $('login-go').click();
+});
 $('logout').onclick = () => {
   password = '';
   showLogin('');
@@ -288,7 +297,9 @@ const BUILD = {
       if (say.value.trim()) run(`say ${say.value}`);
       say.value = '';
     };
-    say.onkeydown = (e) => e.key === 'Enter' && send();
+    say.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') send();
+    });
     return {
       el: h('div', {},
         h('h2', {}, 'Match'), card(info.el),

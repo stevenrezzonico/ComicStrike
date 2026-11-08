@@ -82,8 +82,9 @@
   <p id="login-what"></p>
   <div class="row"><input id="password" type="password" placeholder="rcon_password" autocomplete="current-password"></div>
   <div class="row"><button id="login-go" class="go">Log in</button></div>
-  <p class="note">The server's rcon_password (cfg/server.cfg or RCON_PASSWORD). Over plain HTTP the page works only on
-    the server's own machine; a server with a certificate (TLS_CERT) works from anywhere.</p>
+  <p class="note">The server's rcon_password (cfg/server.cfg or RCON_PASSWORD). With none set, the server makes one up
+    at startup and prints a link that logs in here: look in its terminal for "admin page:". Over plain HTTP the page
+    works only on the server's own machine; a server with a certificate (TLS_CERT) works from anywhere.</p>
   <p id="login-error" class="note" style="color: var(--red)"></p>
 </div>
 <nav id="tabs" class="hidden"></nav>

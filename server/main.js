@@ -98,6 +98,11 @@ const host = new Host({
 if (readText(new URL('cfg/server.cfg', ROOT)) !== null) host.execCfg('server.cfg');
 const envPassword = Deno.env.get('RCON_PASSWORD');
 if (envPassword) host.password.set(envPassword);
+// No rcon password set: one made up for this run, printed with the admin page's link below
+// (as Jupyter's token), so whoever runs the server can manage it without editing a file.
+const madePassword = host.password.value ? '' :
+  Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('');
+if (madePassword) host.password.set(madePassword);
 host.start(MAP);
 
 // Rooms: games on maps players upload (server/rooms.js), held in memory only.
@@ -333,6 +338,8 @@ const site = TLS_CERT ? `https://${HOSTNAMES[0]}${HTTP_PORT === 443 ? '' : `:${H
   `http://127.0.0.1:${HTTP_PORT}/`;
 console.log(`${site}   webtransport: udp/${GAME_PORT}   ${TLS_CERT ? 'certificate: ' + TLS_CERT : 'self-signed certificate (development)'}` +
   `   map: ${MAP}   ${TICK_RATE} tick`);
+// (after the #: the browser never sends it; the page takes it off the address)
+console.log(`admin page: ${site}client/admin.html${madePassword ? `#password=${madePassword}` : '   (with the rcon password)'}`);
 
 // The terminal is a server console.
 (async () => {
