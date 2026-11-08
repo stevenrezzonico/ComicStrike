@@ -393,17 +393,21 @@
   .pop.ticker b { transform-origin: 0 50%; }
   .pop.ticker.old .in { opacity: 0.45; }
   .pop.ticker.out .in { opacity: 0; transform: translate(0, calc(-50% - 30px)) rotate(var(--r)); }
-  /* Start / pause menu (client/menu.js): actions on the left, the open panel beside them, over
-     a dot-screened sky (start) or the dotted, dimmed game (pause). */
-  #menu { position: fixed; inset: 0; z-index: 5; display: none; gap: 32px; padding: 6vh 6vw; box-sizing: border-box;
+  /* Start / pause menu (client/menu.js): the title across the top, the actions on the left and
+     the open panel beside them (as tall as the window leaves it), over a dot-screened sky (start)
+     or the dotted, dimmed game (pause). */
+  #menu { position: fixed; inset: 0; z-index: 5; display: none; grid-template-columns: auto minmax(0, 760px);
+    grid-template-rows: auto auto 1fr; column-gap: 40px; padding: 4vh 5vw; box-sizing: border-box;
     background: radial-gradient(circle, var(--sky-dot) 32%, transparent 34%) 0 0 / 11px 11px, var(--sky);
     color: var(--ink); font: 15px/1.45 var(--body); overflow-y: auto; }
-  #menu.open { display: flex; }
-  #menu.pause { background: radial-gradient(circle, rgba(23, 19, 15, 0.4) 1.5px, transparent 2.2px) 0 0 / 8px 8px,
-    rgba(23, 19, 15, 0.22); }
-  .menu-logo { display: flex; align-items: center; gap: 14px; margin: 0 0 26px; }
+  #menu.open { display: grid; }
+  #menu.pause { background: radial-gradient(circle, rgba(23, 19, 15, 0.45) 1.5px, transparent 2.2px) 0 0 / 8px 8px,
+    rgba(23, 19, 15, 0.45); }
+  #menu.pause .menu-logo { display: none; } /* (it covered the radar and the round bar) */
+  #menu.pause .menu-nav { margin-top: calc(27vh + 30px); } /* under the radar */
+  .menu-logo { grid-column: 1 / -1; contain: inline-size; /* its width sizes no column */ display: flex; align-items: center; gap: 14px; margin: 0 0 22px; }
   .menu-logo img { width: clamp(56px, 7vw, 84px); height: auto; flex: none; transform: rotate(-8deg); }
-  #menu h1 { margin: 0; font: clamp(56px, 8vw, 92px)/0.9 var(--display); letter-spacing: 0.02em;
+  #menu h1 { margin: 0; font: clamp(48px, min(8vw, 12vh), 92px)/0.9 var(--display); letter-spacing: 0.02em;
     color: var(--yellow); -webkit-text-stroke: 3px var(--ink); paint-order: stroke fill; transform: rotate(-3deg);
     transform-origin: left; text-shadow: 1px 1px 0 var(--ink), 2px 2px 0 var(--ink), 3px 3px 0 var(--ink),
       4px 4px 0 var(--ink), 5px 5px 0 var(--ink), 6px 6px 0 var(--ink), 7px 7px 0 var(--ink); }
@@ -416,8 +420,8 @@
   #menu button:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
   #menu button:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
   #menu button.active { background: var(--yellow); }
-  .menu-side { flex: 0 0 240px; display: flex; flex-direction: column; }
-  .menu-nav { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .menu-side { display: contents; } /* its title, actions and note are cells of #menu's grid */
+  .menu-nav { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
   #menu .menu-nav button { font-size: 26px; padding: 8px 18px 5px; background: var(--paper);
     box-shadow: 4px 4px 0 var(--ink); }
   #menu .menu-nav button:nth-child(odd) { transform: rotate(-1deg); }
@@ -425,27 +429,40 @@
   #menu .menu-nav button:hover { background: var(--yellow); }
   #menu .menu-nav button.active { background: var(--red); color: var(--yellow); -webkit-text-stroke: 1px var(--ink);
     paint-order: stroke fill; text-shadow: 2px 2px 0 var(--ink); }
-  .menu-note { margin-top: 18px; min-height: 1.4em; align-self: flex-start; }
+  .menu-note { grid-column: 1; grid-row: 3; margin-top: 18px; min-height: 1.4em; align-self: start; justify-self: start; }
   .menu-note:not(:empty) { padding: 6px 10px; background: var(--yellow); border: 3px solid var(--ink);
     box-shadow: 3px 3px 0 var(--ink); font-weight: 700; transform: rotate(-1deg); }
   .menu-note.error:not(:empty) { background: var(--red); color: var(--paper-hi); }
-  .menu-panel { flex: 0 1 660px; min-width: 0; align-self: flex-start; background: var(--paper);
-    border: 4px solid var(--ink); box-shadow: 10px 10px 0 var(--ink); padding: 20px 24px 24px; }
+  .menu-panel { --px: 24px; --pb: 24px; grid-column: 2; grid-row: 2 / 4; min-width: 0; align-self: start; max-height: 100%;
+    box-sizing: border-box; display: flex; flex-direction: column; overflow-y: auto; background: var(--paper);
+    border: 4px solid var(--ink); box-shadow: 10px 10px 0 var(--ink); padding: 20px var(--px) var(--pb);
+    scrollbar-color: var(--ink) transparent; }
+  .menu-panel > * { flex: none; }
+  .menu-panel > button { align-self: flex-start; }
+  .menu-foot { position: sticky; bottom: calc(-1 * var(--pb)); z-index: 1; display: flex; flex-wrap: wrap;
+    align-items: center; gap: 8px 10px; margin: 12px calc(-1 * var(--px)) calc(-1 * var(--pb));
+    padding: 12px var(--px) var(--pb); background: var(--paper); border-top: 3px solid var(--ink); }
+  .menu-foot .menu-row { padding: 0; }
+  .menu-foot > .menu-hint { flex-basis: 100%; margin: 0; }
+  .menu-badge { display: inline-block; vertical-align: middle; margin-left: 6px; padding: 3px 8px 1px;
+    font: 15px/1 var(--display); letter-spacing: 0.06em; color: var(--ink); -webkit-text-stroke: 0; text-shadow: none;
+    background: var(--yellow); border: 2px solid var(--ink); transform: rotate(2deg); }
   .menu-panel.empty { display: none; }
   .menu-grip { margin: -12px -16px 12px; padding: 4px 8px; cursor: move; user-select: none; touch-action: none;
     font-size: 13px; text-align: center; opacity: 0.7; background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(23, 19, 15, 0.18) 3px 4px); }
   .menu-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
-  .menu-row > span:first-child { flex: 0 0 200px; font-weight: 700; }
+  .menu-row > span:first-child { flex: 0 1 200px; min-width: 0; font-weight: 700; }
   .menu-row input[type=range] { flex: 1; min-width: 80px; accent-color: var(--red); }
   .menu-row input.num { width: 70px; }
   .menu-row input, .menu-row select { font: inherit; color: var(--ink); background: var(--paper-hi);
     border: 2px solid var(--ink); padding: 4px 6px; }
   .menu-row input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--red); }
-  #menu .menu-bind button.key { flex: 0 0 120px; padding: 5px 8px 3px; font: 700 14px/1.2 var(--body);
+  #menu .menu-bind button.key { flex: 0 1 130px; min-width: 0; padding: 5px 8px 3px; font: 700 14px/1.2 var(--body);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-shadow: 2px 2px 0 var(--ink); }
   .menu-settings, .menu-maps { scrollbar-color: var(--ink) transparent; }
   #menu .menu-bind button.key.waiting { background: var(--yellow); }
   .menu-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  #menu .menu-tabs button { padding: 8px 10px 6px; }
   /* The Video tab's window: the game canvas shows through a hole clipped out of #menu. */
   .menu-window { aspect-ratio: 16 / 9; width: min(100%, 53.3vh); margin: 0 auto 8px; border: 3px solid var(--ink); box-shadow: 4px 4px 0 var(--ink);
     background: var(--paper-hi); position: relative; }
@@ -455,13 +472,12 @@
   .menu-compare { gap: 14px; margin-bottom: 6px; }
   #menu button.menu-hold { font-size: 14px; padding: 6px 10px 4px; }
   #menu button.menu-hold:active { background: var(--red); color: var(--paper-hi); }
-  .menu-settings { max-height: calc(100vh - 12vh - 180px); overflow-y: auto; padding-right: 8px; }
-  .menu-window-box ~ .menu-settings { max-height: calc(100vh - 12vh - 215px - min(30vh, 0.5625 * min(612px, 88vw - 48px))); }
+  .menu-panel > .menu-settings, .menu-panel > .menu-maps { flex: 1 1 auto; min-height: 120px; overflow-y: auto; }
+  .menu-settings { padding-right: 8px; }
   /* The Weapons tab: a gallery frame of the gun last touched, and a row of look swatches per gun. */
   .menu-gun { margin: 0 0 8px; }
   .menu-gun iframe { display: block; width: 100%; height: min(150px, 22vh); border: 3px solid var(--ink);
     box-shadow: 4px 4px 0 var(--ink); background: var(--paper-hi); box-sizing: border-box; margin-bottom: 4px; }
-  .menu-gun ~ .menu-settings { max-height: calc(100vh - 12vh - 215px - min(150px, 22vh)); }
   .menu-looks > span:first-child { flex-basis: 150px; }
   /* Recordings: one row a demo (name, what and when, Play / Download / Delete). */
   .menu-demo { flex-wrap: wrap; }
@@ -482,12 +498,12 @@
   #menu .menu-teams button.t { color: var(--red); }
   #menu .menu-teams button.ct { color: var(--blue); }
   .menu-maps button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .menu-maps { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px;
-    max-height: 40vh; overflow-y: auto; padding: 2px 6px 6px 2px; }
-  #menu button.menu-go { margin-top: 12px; padding: 12px 30px 8px; font-size: 34px; background: var(--red);
+  .menu-maps { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); grid-auto-rows: min-content;
+    gap: 8px; padding: 2px 6px 6px 2px; }
+  #menu button.menu-go { padding: 12px 30px 8px; font-size: 34px; background: var(--red);
     color: var(--yellow); border-width: 4px; box-shadow: 6px 6px 0 var(--ink); -webkit-text-stroke: 1.5px var(--ink);
     paint-order: stroke fill; text-shadow: 2px 2px 0 var(--ink); }
-  #menu button.menu-reset { margin-top: 14px; font-size: 14px; }
+  #menu button.menu-reset { font-size: 14px; }
   .menu-server { font-weight: 700; }
   .menu-tagline { margin: 0 0 14px; font-size: 16px; }
   .menu-features { margin: 0 0 12px; padding-left: 22px; }
@@ -509,27 +525,30 @@
      under a small title, the panel full width below, the whole menu scrolling, inside the
      notch's safe area; bigger touch targets on a coarse pointer. */
   @media (max-width: 960px), (max-height: 560px) {
-    #menu { flex-direction: column; gap: 10px;
+    #menu { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; row-gap: 10px;
       padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
         max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
-    .menu-side { flex: none; }
+    .menu-logo, .menu-nav, .menu-note, .menu-panel { grid-column: 1; grid-row: auto; }
     #menu h1 { font-size: 40px; -webkit-text-stroke: 2px var(--ink); text-shadow: 1px 1px 0 var(--ink), 2px 2px 0 var(--ink),
       3px 3px 0 var(--ink), 4px 4px 0 var(--ink); }
     .menu-logo { margin-bottom: 10px; gap: 10px; }
     .menu-logo img { width: 40px; }
-    .menu-nav { flex-direction: row; flex-wrap: wrap; gap: 8px; }
+    .menu-nav, #menu.pause .menu-nav { flex-direction: row; flex-wrap: wrap; gap: 8px; margin-top: 0; }
     #menu .menu-nav button { font-size: 18px; padding: 8px 12px 5px; }
     .menu-note { margin-top: 8px; }
-    .menu-panel { flex: none; width: 100%; box-sizing: border-box; box-shadow: 6px 6px 0 var(--ink); padding: 14px 16px 18px; }
+    .menu-panel { --px: 16px; --pb: 18px; max-height: none; overflow: visible;
+      box-shadow: 6px 6px 0 var(--ink); padding-top: 14px; }
+    .menu-foot { bottom: calc(-1 * max(12px, env(safe-area-inset-bottom))); }
+    #menu .menu-nav button { white-space: nowrap; }
+    .menu-panel > .menu-settings, .menu-panel > .menu-maps { min-height: 0; overflow: visible; }
     #menu h2 { font-size: 24px; margin-bottom: 10px; }
     .menu-row { flex-wrap: wrap; }
     .menu-row > span:first-child { flex-basis: 100%; }
     .menu-row.check > span:first-child { flex: 1; }
     .menu-choice > span:first-child { flex-basis: 100%; }
-    .menu-settings { max-height: none; overflow: visible; padding-right: 0; }
-    .menu-window-box ~ .menu-settings, .menu-gun ~ .menu-settings { max-height: none; }
+    .menu-settings { padding-right: 0; }
     .menu-window { width: min(100%, 40vh * 16 / 9); }
-    .menu-maps { max-height: none; overflow: visible; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+    .menu-maps { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
     .menu-tagline, .menu-features { display: none; }
     .hud { font-size: 28px; }
     #banner { font-size: 32px; }
@@ -537,6 +556,7 @@
     #roundpanel h2 { font-size: 26px; }
     #roundpanel .score { font-size: 22px; }
   }
+  @media (max-height: 560px) { .menu-foot { position: static; } } /* (a phone on its side: it hid half the panel) */
   @media (pointer: coarse) {
     #menu button { min-height: 44px; }
     #menu .menu-choice button, .menu-maps button, .menu-maps .menu-drop, .menu-tabs button { min-height: 40px; }

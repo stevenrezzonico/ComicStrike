@@ -38,12 +38,7 @@ export function botOptions(mode) {
 const STYLES = ['Default', 'Default static', 'Classic', 'Classic dynamic', 'Classic static', 'Legacy'];
 const COLORS = ['Red', 'Green', 'Yellow', 'Blue', 'Cyan', 'Custom'];
 const TABS = [
-  ['Mouse', [
-    ['slider', 'sensitivity', 'Sensitivity', 0.1, 8, 0.01],
-    ['invert', 'm_pitch', 'Invert mouse'],
-    ['slider', 'zoom_sensitivity_ratio_mouse', 'Scoped sensitivity ratio', 0.1, 3, 0.01],
-    ['toggle', 'm_rawinput', 'Raw input'],
-  ]],
+  ['Controls', null], // the mouse, the keys, touch and gamepad (renderSettings)
   ['Crosshair', [
     ['preview'],
     ['toggle', 'crosshair', 'Show crosshair'],
@@ -115,7 +110,6 @@ const TABS = [
     ['gunwindow'],
     ...LOOK_GUNS.map((name) => ['looks', `cl_finish_${name}`, WEAPONS[WEAPON_ID[name]].label, name]),
   ]],
-  ['Controls', null],
   ['Recordings', 'recordings'], // the start menu's only, so last (renderSettings)
 ];
 
@@ -144,12 +138,22 @@ function swatchStyle(key) {
 const PRINT_CVARS = ['r_comic', 'r_inkwidth', 'r_halftone', 'r_halftone_style', 'r_crosshair_clearzone',
   'r_shadebands', 'r_shadowlift', 'mat_viewportscale', 'r_inkaa'];
 
-// The Controls tab's touch settings (client/touch.js).
+// The Controls tab: the mouse first, then the keys; the touch settings (client/touch.js) on a
+// touch screen, the gamepad's once a pad was seen.
+const MOUSE_ROWS = [
+  ['section', null, 'Mouse'],
+  ['slider', 'sensitivity', 'Sensitivity', 0.1, 8, 0.01],
+  ['invert', 'm_pitch', 'Invert mouse'],
+  ['slider', 'zoom_sensitivity_ratio_mouse', 'Scoped sensitivity ratio', 0.1, 3, 0.01],
+  ['toggle', 'm_rawinput', 'Raw input'],
+];
 const TOUCH_ROWS = [
   ['section', null, 'Touch controls (phones and tablets)'],
   ['slider', 'touch_opacity', 'Button opacity', 0.1, 1, 0.05],
   ['slider', 'touch_scale', 'Button size', 0.7, 1.4, 0.05],
   ['toggle', 'touch_fire_left', 'Second fire button on the left'],
+];
+const PAD_ROWS = [
   ['section', null, 'Gamepad'],
   ['slider', 'joy_yaw', 'Look speed (degrees a second)', 30, 540, 10],
   ['slider', 'joy_pitch', 'Look speed up and down', 30, 540, 10],
@@ -173,7 +177,9 @@ const ACTIONS = [
   ['Practice (the demo mode)', [['Noclip', 'noclip'], ['Save position', 'save_pos'], ['Load position', 'load_pos'],
     ['Place a bot where you look', 'bot_place']]],
 ];
-const KEY_COLUMNS = 3; // a keyboard key, a mouse button, a gamepad button
+// The browser lists a pad only once one of its buttons was pressed.
+const padSeen = () => !!navigator.getGamepads && [...navigator.getGamepads()].some(Boolean);
+const touchScreen = () => matchMedia('(any-pointer: coarse)').matches;
 
 // Online play goes over WebTransport (client/net.js): Chrome, Edge and Firefox have it,
 // Safari from 26.4 (macOS and iOS 26.4). Without it the page can still practice (the
@@ -517,7 +523,6 @@ export class Menu {
   renderPlay(body) {
     const s = this.roomInfo;
     if (s) return this.renderRoom(body, s);
-    body.append(el('h2', '', 'Play Online'));
     if (this.roomGone) {
       body.append(el('p', 'menu-hint', `Room ${this.room} has closed (rooms close once nobody plays in them): join another ` +
         'or make one.'));
@@ -525,7 +530,9 @@ export class Menu {
     if (!this.roomCount) return body.append(el('p', 'menu-server', this.maps ? 'No server answered.' : 'Looking for the server...'));
     if (!hasWebTransport()) return body.append(el('p', 'menu-hint', NO_WEBTRANSPORT));
     const [live, max] = this.roomCount, listed = this.listedRooms;
-    body.append(el('h2', '', `Rooms (${live}/${max})`));
+    const head = el('h2', '', 'Rooms ');
+    head.append(el('span', 'menu-badge', `${live}/${max} open`));
+    body.append(head);
     body.append(el('p', 'menu-hint', listed.length ? 'Games on this server, listed by their hosts.'
       : 'No public room right now. Make one: a map, a mode, bots, public or by link only, a password if you like.'));
     for (const r of listed) {
@@ -718,7 +725,6 @@ export class Menu {
   // Play Offline: practice in this page on one of the server's maps or (practiceOwn) on a .bsp of
   // the player's own, its Your map tile in the grid (nothing leaves the page).
   renderPractice(body) {
-    body.append(el('h2', '', 'Play Offline'));
     const maps = this.maps || [];
     if (!maps.includes(this.practiceMap)) this.practiceMap = defaultMap(maps);
     if (!this.ownMap) this.practiceOwn = false;
@@ -749,8 +755,15 @@ export class Menu {
         'Create a room takes it too, for friends.'));
     } else if (!maps.length) return;
     const opts = this.renderGame(body);
-    body.append(button('Start', () => this.onPractice(own ? this.ownMap : this.practiceMap, this.practiceTeam,
+    this.foot(body).append(button('Start', () => this.onPractice(own ? this.ownMap : this.practiceMap, this.practiceTeam,
       { ...opts, own }), 'menu-go'));
+  }
+
+  // The panel's foot: its actions, kept in view at the panel's bottom while the rest scrolls.
+  foot(body) {
+    const f = el('div', 'menu-foot');
+    body.append(f);
+    return f;
   }
 
   // --- Settings ------------------------------------------------------------------------
@@ -775,8 +788,8 @@ export class Menu {
     });
     body.append(tabs);
     const [, rows] = TABS[this.tab];
+    const list = el('div', 'menu-settings');
     if (rows === 'recordings') {
-      const list = el('div', 'menu-settings');
       body.append(list);
       return this.renderRecordings(list);
     }
@@ -785,25 +798,19 @@ export class Menu {
     // The Weapons tab's gun preview too, in a game as well.
     const pinned = (row) => row[0] === 'gunwindow' || (row[0] === 'window' && !this.inGame);
     if (rows) for (const row of rows) if (pinned(row)) body.append(this.settingRow(row));
-    const list = el('div', 'menu-settings');
     body.append(list);
-    if (!rows) {
-      this.renderControls(list);
-      for (const row of TOUCH_ROWS) list.append(this.settingRow(row));
-      body.append(button('Restore default keys', () => {
-        this.con.exec('binddefaults');
-        this.render();
-      }, 'menu-reset'));
-      this.configRow(body);
-      this.refresh();
-      return;
-    }
-    for (const row of rows) if (row[0] !== 'window' && row[0] !== 'gunwindow') list.append(this.settingRow(row));
-    body.append(button('Restore defaults', () => {
-      for (const row of rows) if (row[1]) this.cv[row[1]].set(this.cv[row[1]].defaultValue);
-      this.refresh();
+    const pad = !rows && padSeen();
+    const all = rows || [...MOUSE_ROWS, ...(touchScreen() ? TOUCH_ROWS : []), ...(pad ? PAD_ROWS : [])];
+    for (const row of all) if (row[0] !== 'window' && row[0] !== 'gunwindow') list.append(this.settingRow(row));
+    if (!rows) this.renderControls(list, pad, MOUSE_ROWS.length);
+    const foot = this.foot(body);
+    foot.append(button('Restore defaults', () => {
+      for (const row of all) if (row[1]) this.cv[row[1]].set(this.cv[row[1]].defaultValue);
+      if (rows) return this.refresh();
+      this.con.exec('binddefaults');
+      this.render();
     }, 'menu-reset'));
-    this.configRow(body);
+    this.configRow(foot);
     this.refresh();
   }
 
@@ -1029,26 +1036,29 @@ export class Menu {
     return keys.sort((a, b) => rank(a) - rank(b));
   }
 
-  renderControls(list) {
+  // The keys, after the first `at` rows of the list: a keyboard key and a mouse button a row,
+  // a gamepad button too once a pad was seen (`pad`).
+  renderControls(list, pad, at) {
+    const after = list.children[at] || null;
     for (const [group, actions] of ACTIONS) {
-      list.append(el('h3', '', group));
+      list.insertBefore(el('h3', '', group), after);
       for (const [label, command] of actions) {
         const row = el('div', 'menu-row menu-bind');
         row.title = command;
         row.append(el('span', '', label));
-        const keys = this.keysOf(command);
-        for (let i = 0; i < KEY_COLUMNS; i++) {
+        const keys = this.keysOf(command).filter((k) => pad || !PAD_NAMES.includes(k));
+        for (let i = 0; i < (pad ? 3 : 2); i++) {
           const key = keys[i] || '';
           const cell = button(key ? key.toUpperCase() : '-', () => this.startCapture(cell, command, key), 'key');
           row.append(cell);
         }
-        list.append(row);
+        list.insertBefore(row, after);
       }
     }
-    list.append(el('p', 'menu-hint', 'Click a key, then press the new key, mouse button or gamepad button. ' +
-      'Backspace clears it, Escape cancels. Everything else is in the console (bind, unbind).'));
-    list.append(el('p', 'menu-hint', 'Crouch on Ctrl: Ctrl+W closes the tab in Firefox, and in Chrome and Edge ' +
-      'unless Fullscreen is on (Video). Bind crouch to C there, or play fullscreen.'));
+    list.insertBefore(el('p', 'menu-hint', 'Click a key, then press the new key, mouse button or gamepad button. ' +
+      'Backspace clears it, Escape cancels. Everything else is in the console (bind, unbind).'), after);
+    list.insertBefore(el('p', 'menu-hint', 'Crouch on Ctrl: Ctrl+W closes the tab in Firefox, and in Chrome and Edge ' +
+      'unless Fullscreen is on (Video). Bind crouch to C there, or play fullscreen.'), after);
   }
 
   startCapture(cell, command, key) {
