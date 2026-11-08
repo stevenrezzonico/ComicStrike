@@ -345,9 +345,8 @@
   #menu .menu-teams button.spec { color: #6d665c; }
   body.nohud .hud, body.nohud #hud-money, body.nohud #hud-bomb, body.nohud #roundbar, body.nohud #targetid, body.nohud #killfeed,
   body.nohud #fx, body.nohud #chat, body.nohud #callouts, body.nohud #radiomenu, body.nohud #vote { display: none; }
-  /* The start menu shows the cover scene through itself: no HUD over it. */
-  body.startmenu .hud, body.startmenu #hud-money, body.startmenu #hud-bomb, body.startmenu #roundbar, body.startmenu #radar,
-  body.startmenu #killfeed, body.startmenu #chat { display: none; }
+  /* The start menu shows the cover scene through itself: no HUD over it (nor what a game left there). */
+  body.startmenu > :not(#view, #menu, #console, #status, script) { visibility: hidden !important; }
   /* Death and spectator notice: a caption box. */
   #death {
     position: fixed; left: 50%; top: 30%; transform: translateX(-50%) rotate(-1deg); display: none; max-width: 80vw;
