@@ -12,7 +12,7 @@
 // T spawn ~17-20 s from either site at a run, CT spawn ~8-11 s, sites ~400 units across.
 // Deterministic: the same files every run.
 
-import { makeBrush, FORMAT, VERSION, POINTS, checkProject, compileProject } from '../client/editor/project.js';
+import { makeBrush, FORMAT, VERSION, KINDS, POINTS, checkProject, compileProject } from '../client/editor/project.js';
 
 const OUT = new URL('../maps/', import.meta.url);
 const NAME = 'de_inkwell';
@@ -542,8 +542,16 @@ const LABELS = {
 };
 const FILL = new Map([[M.docks, '#c9c3b8'], [M.street, '#ecd9a8'], [M.plaza, '#e3cfa0'], [M.works, '#d9a58f'],
   [M.shed, '#b8a993'], [M.yard, '#efe0b4'], [M.vat, '#9a9a9a']]);
+// The legend's swatches: water by its skin, the machines, the hazards and the points.
+const LIQUID = { '-3': '#5e8fb0', '-4': '#6aa84f', '-5': '#e69138' };
+const MACHINE = '#f6b26b', HURT = '#e2402a', TELEPORT = '#8e44ad';
+const MOVERS = new Set(['func_door', 'func_door_rotating', 'func_button', 'func_rot_button', 'func_plat', 'func_train',
+  'func_rotating', 'func_pendulum', 'func_pushable', 'momentary_door', 'momentary_rot_button', 'func_conveyor']);
+const LEGEND = [['rect', LIQUID['-3'], 'water'], ['rect', LIQUID['-4'], 'slime'], ['rect', LIQUID['-5'], 'lava'],
+  ['rect', MACHINE, 'machine'], ['rect', HURT, 'hurts'], ['rect', TELEPORT, 'chute'], ['dot', '#c0392b', 'T spawn'],
+  ['dot', '#2f6fc4', 'CT spawn'], ['dot', '#f1c232', 'lamp'], ['dot', TELEPORT, 'chute exit']];
 function planSVG() {
-  const s = 1 / 8, pad = 20, w = (X1 - X0) * s + pad * 2, h = (Y1 - Y0) * s + pad * 2;
+  const s = 1 / 8, pad = 20, w = (X1 - X0) * s + pad * 2, h = (Y1 - Y0) * s + pad * 2 + 24;
   const px = (x) => (x - X0) * s + pad, py = (y) => (Y1 - y) * s + pad; // north up
   const out = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" font-family="sans-serif">`,
     `<rect width="${w}" height="${h}" fill="#5b5148"/>`,
@@ -566,17 +574,22 @@ function planSVG() {
     '<path d="M0 0L6 3L0 6z" fill="#222"/></marker></defs>');
   // The details on the floor (cover, walls, doors): dark shapes, the water blue; not the
   // roofs' skylights, awnings or porticoes (their bottoms are high above the floor).
+  // The details: cover and walls on the floor dark; the machines (at any height) orange;
+  // liquids by their skin; hurt zones and the chute; not the zones (sites drawn below), signs,
+  // ladders, roofs' skylights, awnings or porticoes.
   for (const br of project.brushes.slice(firstDetail)) {
     const [x0, y0, z0, x1, y1] = br.b;
-    if (br.kind === 'func_water') {
-      out.push(`<rect x="${px(x0)}" y="${py(y1)}" width="${(x1 - x0) * s}" height="${(y1 - y0) * s}" fill="#5e8fb0"/>`);
-      continue;
-    }
-    if (z0 > 100 || br.shape === 'ladder') continue;
-    const cx = px((x0 + x1) / 2), cy = py((y0 + y1) / 2), fill = 'fill="#3d352e" fill-opacity="0.75"';
+    let fill;
+    if (br.kind === 'func_water') fill = `fill="${LIQUID[br.keys.skin || '-3']}"`;
+    else if (br.kind === 'trigger_hurt') fill = `fill="${HURT}"`;
+    else if (br.kind === 'trigger_teleport') fill = `fill="${TELEPORT}"`;
+    else if (MOVERS.has(br.kind)) fill = `fill="${MACHINE}" stroke="#17130f" stroke-width="0.75"`;
+    else if (KINDS[br.kind].trigger || z0 > 100 || br.shape === 'ladder') continue;
+    else fill = 'fill="#3d352e" fill-opacity="0.75"';
+    const cx = px((x0 + x1) / 2), cy = py((y0 + y1) / 2);
     if (br.shape === 'pillar') out.push(`<circle cx="${cx}" cy="${cy}" r="${(x1 - x0) * s / 2}" ${fill}/>`);
     else {
-      out.push(`<rect x="${px(x0)}" y="${py(y1)}" width="${(x1 - x0) * s}" height="${(y1 - y0) * s}" ${fill}` +
+      out.push(`<rect x="${px(x0)}" y="${py(y1)}" width="${Math.max(1, (x1 - x0) * s)}" height="${Math.max(1, (y1 - y0) * s)}" ${fill}` +
         `${br.yaw ? ` transform="rotate(${-br.yaw} ${cx} ${cy})"` : ''}/>`);
     }
   }
@@ -586,10 +599,17 @@ function planSVG() {
     out.push(`<text x="${px((x0 + x1) / 2)}" y="${py((y0 + y1) / 2) + 14}" font-size="40" font-weight="bold" ` +
       `fill="#e2402a" text-anchor="middle">${'AB'[i]}</text>`);
   });
-  for (const q of project.points) { // spawns red and blue, lamps yellow
-    const color = q.kind === 'info_player_deathmatch' ? '#c0392b' : q.kind === 'info_player_start' ? '#2f6fc4' : '#f1c232';
+  for (const q of project.points) { // spawns red and blue, lamps yellow, the chute's exit; not the logic
+    if (POINTS[q.kind].logic) continue;
+    const color = { info_player_deathmatch: '#c0392b', info_player_start: '#2f6fc4', info_teleport_destination: TELEPORT }[q.kind] || '#f1c232';
     out.push(`<circle cx="${px(q.o[0])}" cy="${py(q.o[1])}" r="3" fill="${color}"/>`);
   }
+  LEGEND.forEach(([kind, color, label], i) => {
+    const x = pad + i * ((w - pad * 2) / LEGEND.length), y = h - 18;
+    out.push(kind === 'dot' ? `<circle cx="${x + 5}" cy="${y}" r="4" fill="${color}"/>`
+      : `<rect x="${x}" y="${y - 5}" width="10" height="10" fill="${color}"/>`);
+    out.push(`<text x="${x + 14}" y="${y + 4}" font-size="10" fill="#f3ead8">${label}</text>`);
+  });
   for (const [name, label] of Object.entries(LABELS)) {
     if (name === 'a_site' || name === 'b_site') continue;
     const r = roomOf.get(name), tall = r[4] - r[2] > r[3] - r[1];
