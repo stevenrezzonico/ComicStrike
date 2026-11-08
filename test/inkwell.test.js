@@ -75,10 +75,11 @@ Deno.test('de_inkwell: spawns, zones, ladders, water, doors and breakables; spaw
 // Run times (250 units a second) along the navigation's paths, doors open as bots walk them.
 Deno.test('de_inkwell: timings like a Valve defusal map, by every lane', () => {
   const nav = new Nav(bsp, world, NAV_CELL, true);
-  const out = new Int32Array(8192);
+  const out = new Int32Array(8192), lane = []; // every node on the paths measured
   const secs = (a, b) => {
     const n = nav.path(a, b, out);
     assert.ok(n > 0, 'a way');
+    for (let i = 0; i < n; i++) lane.push(out[i]);
     let d = 0;
     for (let i = 1; i < n; i++) d += Math.hypot(nav.x[out[i]] - nav.x[out[i - 1]], nav.y[out[i]] - nav.y[out[i - 1]]);
     return d / 250;
@@ -107,6 +108,22 @@ Deno.test('de_inkwell: timings like a Valve defusal map, by every lane', () => {
   inRange(via(1216, 384, 0, a), 17, 21, 'T to A by Short (the press hall)');
   inRange(via(-2016, -1300, -64, b), 17, 22, 'T to B by the tunnel');
   inRange(via(-900, -320, 0, b), 17, 22, 'T to B by the Fish alley');
+  // No lane runs through a hazard, the chute or a machine bots do not work: the hurt zones, the
+  // teleport, the slime and lava, the lift, the barge, the crate, the loft's gate and its wheel
+  // (their boxes from the top, grown by a player's half width).
+  const keepOut = new Set(['trigger_hurt', 'trigger_teleport', 'func_plat', 'func_train', 'func_pushable', 'momentary_door', 'momentary_rot_button']);
+  const boxes = [];
+  for (const e of bsp.entities) {
+    if (!/^\*\d+$/.test(e.model || '') || !(keepOut.has(e.classname) || (e.classname === 'func_water' && e.skin !== '-3'))) continue;
+    const m = +e.model.slice(1), o = (e.origin || '0 0 0').split(' ').map(Number);
+    boxes.push([e.classname, f[m * 16] + o[0] - 16, f[m * 16 + 1] + o[1] - 16, f[m * 16 + 3] + o[0] + 16, f[m * 16 + 4] + o[1] + 16]);
+  }
+  assert.equal(boxes.length, 9);
+  for (const n of lane) {
+    for (const [cls, x0, y0, x1, y1] of boxes) {
+      assert.ok(!(nav.x[n] > x0 && nav.x[n] < x1 && nav.y[n] > y0 && nav.y[n] < y1), `a lane through the ${cls} at ${nav.x[n]} ${nav.y[n]}`);
+    }
+  }
 });
 
 Deno.test('de_inkwell: the radar overview shows both sites and both spawns', () => {
