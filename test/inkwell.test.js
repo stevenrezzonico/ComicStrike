@@ -11,7 +11,8 @@ import { readProject, checkProject, compileProject } from '../client/editor/proj
 import { TEAM_CT } from '../shared/player.js';
 import { Writer } from '../shared/protocol.js';
 import { Host } from '../server/host.js';
-import { readCfg, seeded, joinClient, sendCmd } from './harness.js';
+import { readCfg, seeded, joinClient, sendCmd, walker } from './harness.js';
+import { IN_USE, TICK_RATE } from '../shared/constants.js';
 
 // de_inkwell is our own defusal map (tools/gen_inkwell.js), so it is in the repository:
 // its editor project and the map compiled from it.
@@ -32,15 +33,16 @@ Deno.test('de_inkwell: the map is its project compiled; the project reads clean 
 });
 
 Deno.test('de_inkwell: spawns, zones, ladders, water, doors and breakables; spawns stand on the floor', () => {
-  assert.equal(at('info_player_deathmatch').length, 10);
-  assert.equal(at('info_player_start').length, 10);
-  assert.equal(at('func_buyzone').length, 2);
-  assert.equal(at('func_bomb_target').length, 2);
-  assert.equal(at('func_ladder').length, 3);
-  assert.equal(at('func_water').length, 1);
-  assert.equal(at('func_conveyor').length, 1);
-  assert.equal(at('func_door_rotating').length, 2);
+  // Every kind of map element the game plays, at least once (tools/gen_inkwell.js).
+  const census = {
+    info_player_deathmatch: 10, info_player_start: 10, func_buyzone: 2, func_bomb_target: 2, func_ladder: 3,
+    func_water: 3, func_conveyor: 1, func_door_rotating: 2, func_door: 1, func_button: 1, func_rot_button: 2,
+    multisource: 1, trigger_hurt: 1, trigger_multiple: 1, game_text: 1, func_illusionary: 5,
+  };
+  for (const [cls, n] of Object.entries(census)) assert.equal(at(cls).length, n, cls);
+  assert.equal(at('func_water').map((e) => e.skin).sort().join(), '-3,-4,-5', 'water (the canal), slime (the ink vat), lava (the crucible)');
   assert.ok(at('func_breakable').length >= 10);
+  assert.equal(at('func_breakable').filter((e) => e.explodemagnitude).length, 2, 'the press hall\'s exploding drums');
   // Lamps under every roof: the press hall's spot lamps and the warehouse's bulbs light
   // floors the sun never reaches (they were pitch dark: 20 20 24).
   assert.equal(at('light_spot').length, 3);
@@ -108,6 +110,30 @@ Deno.test('de_inkwell: the radar overview shows both sites and both spawns', () 
     assert.ok(shown(x, y), `spawn at ${e.origin}`);
   }
   assert.ok(shown(1536, 1296) && shown(-1536, 800), 'the sites');
+});
+
+// The press hall's two-hand press: the button works the platen only while both valves
+// have been turned (its master is a multisource the valves feed).
+Deno.test('de_inkwell: the two-hand press comes down only after both valves are turned', () => {
+  const { game: g, run, put } = walker(bsp);
+  const d = g.doors, platen = d.name.indexOf('press');
+  assert.ok(platen >= 0);
+  const use = (x, y, yaw, pitch) => {
+    put(x, y, 0);
+    run(2, IN_USE, yaw, pitch);
+    run(TICK_RATE * 2, 0, yaw, pitch);
+  };
+  const button = () => use(900, -52, 180, 20);
+  button();
+  assert.ok(d.atBottom(platen) && d.dir[platen] === 0, 'locked: the button alone does nothing');
+  use(590, -88, 180, 25); // the valve on the west wall
+  button();
+  assert.ok(d.atBottom(platen) && d.dir[platen] === 0, 'one valve is not enough');
+  use(690, 188, 0, 25); // the valve on the other press
+  put(900, -52, 0);
+  run(2, IN_USE, 180, 20);
+  run(TICK_RATE / 2, 0, 180, 20);
+  assert.ok(!d.atBottom(platen), 'both valves turned: the platen comes down');
 });
 
 function game(cfg, seed) {

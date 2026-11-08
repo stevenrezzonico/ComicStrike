@@ -18,6 +18,8 @@
 <text x="264" y="128" dx="18" font-size="9" fill="#222">ramp 0→64</text>
 <rect x="372" y="284" width="104" height="48" fill="#d9a58f"/>
 <rect x="372" y="284" width="104" height="48" fill="url(#roof)"/>
+<rect x="444" y="312" width="20" height="12" fill="#9a9a9a"/>
+<rect x="444" y="312" width="20" height="12" fill="url(#roof)"/>
 <rect x="444" y="252" width="32" height="32" fill="#ecd9a8"/>
 <rect x="444" y="220" width="32" height="32" fill="#ecd9a8"/>
 <line x1="460" y1="250" x2="460" y2="222" stroke="#222" stroke-width="2" marker-end="url(#up)"/>
@@ -95,12 +97,28 @@
 <rect x="372" y="308" width="4" height="4" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="372" y="284" width="4" height="8" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="392" y="316" width="24" height="12" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="416" y="321" width="0.5" height="3" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="376" y="325.5" width="0.5" height="3" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="399.5" y="291" width="0.5" height="3" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="416" y="316" width="12" height="10" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="400" y="284" width="20" height="12" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="420" y="326" width="56" height="6" fill="#3d352e" fill-opacity="0.75"/>
-<circle cx="388" cy="288" r="2.5" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="470" y="326" width="6" height="6" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="466" y="326" width="4" height="6" fill="#3d352e" fill-opacity="0.75"/>
+<circle cx="393" cy="288" r="2.5" fill="#3d352e" fill-opacity="0.75"/>
+<circle cx="472" cy="288" r="2.5" fill="#3d352e" fill-opacity="0.75"/>
 <circle cx="433" cy="316" r="2.5" fill="#3d352e" fill-opacity="0.75"/>
 <circle cx="438" cy="311" r="2.5" fill="#3d352e" fill-opacity="0.75"/>
-<circle cx="472" cy="288" r="2.5" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="444" y="312" width="20" height="12" fill="#5e8fb0"/>
+<rect x="443.5" y="324" width="21" height="0.5" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="443.5" y="311.5" width="21" height="0.5" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="443.5" y="312" width="0.5" height="12" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="464" y="312" width="0.5" height="12" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="378" y="290" width="10" height="0.5" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="378" y="284" width="0.5" height="6" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="387.5" y="284" width="0.5" height="6" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="378.5" y="284" width="9" height="6" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="378.5" y="284" width="9" height="6" fill="#5e8fb0"/>
 <rect x="468" y="296" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="468" y="268" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="516" y="180" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
@@ -169,6 +187,8 @@
 <text x="524" y="194" font-size="40" font-weight="bold" fill="#e2402a" text-anchor="middle">A</text>
 <rect x="68" y="164" width="64" height="64" fill="#e2402a" fill-opacity="0.25" stroke="#e2402a" stroke-width="2"/>
 <text x="100" y="210" font-size="40" font-weight="bold" fill="#e2402a" text-anchor="middle">B</text>
+<circle cx="408" cy="322" r="3" fill="#f1c232"/>
+<circle cx="422" cy="321" r="3" fill="#f1c232"/>
 <circle cx="276" cy="600" r="3" fill="#c0392b"/>
 <circle cx="292" cy="600" r="3" fill="#c0392b"/>
 <circle cx="308" cy="600" r="3" fill="#c0392b"/>

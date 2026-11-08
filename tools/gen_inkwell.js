@@ -12,7 +12,7 @@
 // T spawn ~17-20 s from either site at a run, CT spawn ~8-11 s, sites ~400 units across.
 // Deterministic: the same files every run.
 
-import { makeBrush, FORMAT, VERSION, checkProject, compileProject } from '../client/editor/project.js';
+import { makeBrush, FORMAT, VERSION, POINTS, checkProject, compileProject } from '../client/editor/project.js';
 
 const OUT = new URL('../maps/', import.meta.url);
 const NAME = 'de_inkwell';
@@ -28,12 +28,13 @@ const M = {
   works: { floor: 'flor_wood_lt_r3', wall: 'brick07', top: 'brick07', ceil: 'wdplanks128f' },
   shed: { floor: 'wdplanks128f', wall: 'brick13', top: 'metal_wall05b', ceil: 'wdplanks128f' },
   yard: { floor: '-0sand', wall: 'cssandwallbta', top: 'claytile1' },
+  vat: { floor: 'steel', wall: 'steel', top: 'steel', ceil: 'wdplanks128f' },
 };
 
 // The rooms: [name, x0, y0, x1, y1, floor z, material, opts]. Later rooms cut into
 // earlier ones. opts: wall (wall height over the floor, 320), roof (a ceiling this high
-// over the floor) with skylights (sky: rectangles of glass in it), ramp / stairs: { up: the
-// high side, z1: the high end's height }.
+// over the floor) with skylights (sky: rectangles of glass in it) and lamps under it (but
+// noLamps), ramp / stairs: { up: the high side, z1: the high end's height }.
 const ROOMS = [
   // T spawn: the docks, south, over the canal (a low harbour wall beyond it).
   ['t_spawn', -640, -2432, 640, -1792, 0, M.docks],
@@ -52,6 +53,8 @@ const ROOMS = [
   ['ct_mid_ramp', -512, 1408, -192, 1664, 0, M.street, { ramp: { up: 'py', z1: 64 } }],
   // A short: through the print works' press hall, up stairs onto A.
   ['press_hall', 512, -128, 1344, 256, 0, M.works, { roof: 224, sky: [[736, -32, 832, 64], [1024, -32, 1120, 64]] }],
+  // The press hall's ink vat: a pit of slime beside the presses, under the hall's roof.
+  ['ink_vat', 1088, -64, 1248, 32, -40, M.vat, { roof: 264, noLamps: true }],
   ['short', 1088, 256, 1344, 512, 0, M.street],
   ['short_stairs', 1088, 512, 1344, 768, 0, M.street, { stairs: { up: 'py', z1: 96 } }],
   // CT spawn: north, with ways to both sites.
@@ -184,6 +187,7 @@ for (const { k, b } of rects((c) => (room[c] < 0 ? `${wallTop(ROOMS[solidOf[c]])
 }
 // Roofs over the indoor rooms, with holes for the skylights (glass panes: a shot breaks them).
 const inRect = (x, y, [x0, y0, x1, y1]) => x >= x0 && x < x1 && y >= y0 && y < y1;
+const SEE_THROUGH = { rendermode: '2', renderamt: '110' }; // glass drawn see-through, letting the light in
 for (const { k, b } of rects((c) => {
   const r = room[c] >= 0 && ROOMS[room[c]];
   if (!r || !r[7] || !r[7].roof) return null;
@@ -197,7 +201,7 @@ for (const { k, b } of rects((c) => {
 for (const r of ROOMS) {
   for (const [x0, y0, x1, y1] of (r[7] && r[7].sky) || []) {
     const z = r[5] + r[7].roof;
-    add([x0, y0, z + 12, x1, y1, z + 20], all('glass_med'), 'func_breakable', { material: '0', health: '20' });
+    add([x0, y0, z + 12, x1, y1, z + 20], all('glass_med'), 'func_breakable', { material: '0', health: '20', ...SEE_THROUGH });
   }
 }
 // Ramps and stairs, on their rooms' floors.
@@ -215,7 +219,14 @@ const block = (b, tex) => add(b, all(tex));
 const crate = (x, y, z = 0, s = 64, tex = 'crate08') => block([x, y, z, x + s, y + s, z + s], tex);
 const breakCrate = (x, y, z = 0, s = 64) => add([x, y, z, x + s, y + s, z + s], all('crate08'), 'func_breakable',
   { material: '1', health: '40' });
-const glass = (b) => add(b, all('glass_med'), 'func_breakable', { material: '0', health: '20' });
+const glass = (b) => add(b, all('glass_med'), 'func_breakable', { material: '0', health: '20', ...SEE_THROUGH });
+// A point of the map's logic with its kind's keys (the project's file holds them all).
+const point = (kind, o, keys = {}, yaw = 0) => project.points.push({ id: project.nextId++, kind, o, yaw, keys: { ...POINTS[kind].keys, ...keys } });
+// A sign: a trigger round `b` that sends whoever walks in `message` (once in `wait` seconds).
+const sign = (b, name, message, at, wait = '30') => {
+  add(b, { top: null, bottom: null, side: null }, 'trigger_multiple', { target: name, delay: '0', wait, killtarget: '' });
+  point('game_text', at, { targetname: name, message });
+};
 const pillar = (x, y, z, r, h, tex, sides = 8) => add([x - r, y - r, z, x + r, y + r, z + h], T(tex), 'world', {},
   { shape: 'pillar', sides });
 // A wall `len` long and `th` thick centered on (x, y), turned `yaw` degrees.
@@ -293,13 +304,49 @@ block([512, -32, 0, 544, 32, 48], 'brick07');
 block([512, -32, 112, 544, 32, 224], 'brick07');
 glass([524, -32, 48, 532, 32, 112]);
 wallWithDoors([512, 32, 0, 544, 256, 224], [[64, 192, 128]], 'brick07');
-// The press hall: two presses, a conveyor carrying paper east, ink drums, crates.
+// The press hall: two presses, a conveyor carrying paper east into a shredder, ink drums
+// (the two in the middle explode, one setting the other off), an ink vat of slime, a
+// crucible of molten type metal (lava), paper sheets drying overhead, crates.
+// The big press is a two-hand machine: its platen (a door) comes down when the button on
+// the press is pressed, but only while both valves, on opposite walls, have been turned
+// (the button's master is a multisource the valves feed; turning one again locks it).
 block([672, -96, 0, 864, 0, 112], 'steel');
-block([704, -96, 112, 832, 0, 160], 'metal_wall05b');
+add([704, -96, 152, 832, 0, 200], all('metal_wall05b'), 'func_door',
+  { angle: '-2', speed: '160', wait: '2', lip: '6', targetname: 'press' });
+block([744, -64, 200, 792, -32, 224], 'steel');
+add([864, -64, 40, 868, -40, 56], all('lab1_comp3d'), 'func_button',
+  { target: 'press', master: 'press_lock', speed: '40', wait: '1', lip: '2', angle: '180' });
+const valve = (b, spawnflags) => add(b, all('lab1_comp3d'), 'func_rot_button',
+  { target: 'press_lock', distance: '90', speed: '90', wait: '1', spawnflags });
+valve([544, -100, 32, 548, -76, 56], '64'); // on the west wall, turning about x
+valve([732, 176, 32, 736, 200, 56], '64'); // on the other press's west side
+point('multisource', [800, -48, 210], { targetname: 'press_lock' });
+sign([864, -80, 0, 960, 0, 72], 'press_sign', 'Two-hand press: turn both valves (on the west wall and on the other press), then press the button.',
+  [912, -40, 96]);
 block([736, 160, 0, 896, 256, 96], 'steel');
 add([896, -128, 0, 1344, -80, 24], { top: 'scroll_conv', bottom: null, side: 'steel' }, 'func_conveyor',
   { speed: '100', angles: '0 0 0' });
-for (const [x, y] of [[640, 224], [1000, 0], [1040, 40], [1312, 224]]) pillar(x, y, 0, 20, 48, 'metal_wall05b', 12);
+block([1296, -128, 24, 1344, -80, 120], 'stripes2'); // the shredder over the belt's end
+add([1264, -128, 24, 1296, -80, 96], { top: null, bottom: null, side: null }, 'trigger_hurt', { dmg: '20', targetname: '', spawnflags: '0' });
+const drum = (x, y, keys = {}) => add([x - 20, y - 20, 0, x + 20, y + 20, 48], T('metal_wall05b'), 'func_breakable',
+  { material: '2', health: '60', ...keys }, { shape: 'pillar', sides: 12 });
+drum(680, 224);
+drum(1312, 224);
+drum(1000, 0, { explodemagnitude: '100' });
+drum(1040, 40, { explodemagnitude: '100' });
+// The vat: slime 38 deep (waist deep: it burns), behind a rim a player steps over.
+add([1088, -64, -40, 1248, 32, -2], { top: '!toxicgrn', bottom: null, side: null }, 'func_water', { skin: '-4' });
+for (const b of [[1084, -68, 0, 1252, -64, 16], [1084, 32, 0, 1252, 36, 16], [1084, -64, 0, 1088, 32, 16], [1248, -64, 0, 1252, 32, 16]]) {
+  block(b, 'steel');
+}
+// The crucible in the north-west corner: lava 20 deep in a steel pot 32 high.
+for (const b of [[560, 204, 0, 640, 208, 32], [560, 208, 0, 564, 256, 32], [636, 208, 0, 640, 256, 32], [564, 208, 0, 636, 256, 8]]) {
+  block(b, 'steel');
+}
+add([564, 208, 8, 636, 256, 28], { top: '!fluid2', bottom: null, side: null }, 'func_water', { skin: '-5' });
+// Printed sheets drying on a line over the hall (decoration: nothing stops at them).
+block([920, 108, 196, 1248, 112, 200], 'steel');
+for (let x = 936; x < 1240; x += 64) add([x, 109, 150, x + 48, 111, 196], all('snow'), 'func_illusionary');
 crate(1280, 96);
 // Short: a crate at the stairs.
 crate(1280, 320);
@@ -382,7 +429,7 @@ for (const [kind, [x, y, z], yaw] of SPAWNS) {
 const LAMP_SPACING = 320;
 for (const r of ROOMS) {
   const o = r[7] || {};
-  if (!o.roof) continue;
+  if (!o.roof || o.noLamps) continue;
   const [, x0, y0, x1, y1, z] = r;
   const nx = Math.max(1, Math.round((x1 - x0) / LAMP_SPACING)), ny = Math.max(1, Math.round((y1 - y0) / LAMP_SPACING));
   // A spot inside a detail shape (the tunnel's half walls reach the roof) moves along the
@@ -418,7 +465,7 @@ const LABELS = {
   b_site: 'B', warehouse: 'Paper warehouse', tunnel: 'Lower tunnel', b_alley: 'B alley', fish_alley: 'Fish alley',
 };
 const FILL = new Map([[M.docks, '#c9c3b8'], [M.street, '#ecd9a8'], [M.plaza, '#e3cfa0'], [M.works, '#d9a58f'],
-  [M.shed, '#b8a993'], [M.yard, '#efe0b4']]);
+  [M.shed, '#b8a993'], [M.yard, '#efe0b4'], [M.vat, '#9a9a9a']]);
 function planSVG() {
   const s = 1 / 8, pad = 20, w = (X1 - X0) * s + pad * 2, h = (Y1 - Y0) * s + pad * 2;
   const px = (x) => (x - X0) * s + pad, py = (y) => (Y1 - y) * s + pad; // north up
