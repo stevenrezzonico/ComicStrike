@@ -1,15 +1,13 @@
-// The server admin page (client/admin.html): the server's game run with buttons and forms
-// instead of rcon lines. Every action is a console line (client/admincmd.js) run as rcon:
-// the server's own game and a room's over HTTP (server/admin.js, the rcon password in a
-// header), a practice game through the game's own tab (a BroadcastChannel to client/main.js,
-// which asks its worker, client/localserver.js). The state is read once a second while the
-// page shows.
+// The admin page (client/admin.html): a game run with buttons and forms instead of rcon
+// lines. Every action is a console line (client/admincmd.js) run as rcon: a room's over HTTP
+// (server/admin.js, the room's rcon password in a header), a practice game through the game's
+// own tab (a BroadcastChannel to client/main.js, which asks its worker, client/localserver.js).
+// The state is read once a second while the page shows.
 //
-//   /admin                 the server's own game (server/main.js serves this file there)
-//   /admin?room=<code>     a room (the tab that hosts it hands the password over)
+//   /admin?room=<code>     a room (made here: the page keeps its password for the tab's life)
 //   /admin?practice        the practice game running in another tab
-//   /admin?new             a new room on one of the server's maps or a .bsp of our own (Play Online's
-//                          Create a room)
+//   /admin?new, /admin     a new room on one of the server's maps or a .bsp of our own (Play
+//                          Online's Create a room)
 
 import { cvarCommand, who, modeCommands, botCommands, PRACTICE_PRESET, resetCommands, GROUPS, groupOf, whenApplies, controlOf }
   from './admincmd.js';
@@ -25,11 +23,11 @@ const OWN_MAP_MAX = 24 << 20; // a room's map at most (server/rooms.js ROOM_LIMI
 const params = new URLSearchParams(location.search);
 const room = (params.get('room') || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const practice = params.has('practice');
-const creating = params.has('new') && !room;
-const KEY = `comicstrike.admin.${room || 'server'}`; // the password, for this tab's life only
+const creating = !room && !practice;
+const KEY = `comicstrike.admin.${room}`; // the password, for this tab's life only
 let password = practice ? '' : sessionStorage.getItem(KEY) || '';
-// The link the server prints at startup carries a password it made up after the # (never sent
-// to the server, nor kept in the history: taken off the address at once).
+// A new room's page reloads with the room's rcon password after the # (never sent to the
+// server, nor kept in the history: taken off the address at once).
 const linked = new URLSearchParams(location.hash.slice(1)).get('password');
 if (linked !== null) {
   if (!practice) password = linked;
@@ -79,7 +77,7 @@ function viaTab(op, command) {
 // op: 'state', 'catalog' or 'exec' (command: the line). Throws with .status (401/403: log in).
 async function call(op, command = '') {
   if (practice) return viaTab(op, command);
-  const res = await fetch(`/admin/${op}${room ? `?room=${room}` : ''}`, {
+  const res = await fetch(`/admin/${op}?room=${room}`, {
     method: op === 'exec' ? 'POST' : 'GET', cache: 'no-store', body: op === 'exec' ? command : undefined,
     headers: { 'x-rcon-password': encodeURIComponent(password), ...(op === 'exec' ? { 'content-type': 'text/plain' } : {}) },
   });
@@ -88,11 +86,11 @@ async function call(op, command = '') {
   return out;
 }
 
-// The rcon password a game tab of this browser holds for this server or room, or ''.
+// The rcon password a game tab of this browser holds for this room, or ''.
 async function passwordFromTab() {
   channel.postMessage({ type: 'hello' });
   await new Promise((r) => setTimeout(r, 300));
-  const t = tabsHere.find((m) => m.rcon && (room ? m.kind === 'room' && m.room === room : m.kind === 'online'));
+  const t = tabsHere.find((m) => m.rcon && m.kind === 'room' && m.room === room);
   return t ? t.rcon : '';
 }
 
@@ -149,8 +147,7 @@ function showLogin(error) {
   $('body').replaceChildren();
   $('logout').classList.add('hidden');
   $('login').classList.remove('hidden');
-  $('login-what').textContent = room ? `Room ${room}: its rcon password (the console of the tab that hosts it knows it).`
-    : 'This server.';
+  $('login-what').textContent = `Room ${room}: its rcon password.`;
   $('login-error').textContent = error || '';
   $('summary').textContent = 'not logged in';
   $('password').focus();

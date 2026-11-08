@@ -22,11 +22,11 @@ function setup() {
 }
 
 // A request to /admin/<op> as the page sends it.
-function ask(host, op, { password = 'hunter2', address = '127.0.0.1', secure = false, method, body, room = '' } = {}) {
+function ask(host, op, { password = 'hunter2', address = '127.0.0.1', method, body, room = 'abcdef' } = {}) {
   const url = new URL(`http://127.0.0.1/admin/${op}${room ? `?room=${room}` : ''}`);
   const headers = password === null ? {} : { 'x-rcon-password': encodeURIComponent(password) };
   const req = new Request(url, { method: method || (op === 'exec' ? 'POST' : 'GET'), headers, body });
-  return adminResponse(req, url, { address, secure, hostFor: (code) => (!code || code === 'abcdef' ? host : null) });
+  return adminResponse(req, url, { address, hostFor: (code) => (code === 'abcdef' ? host : null) });
 }
 
 Deno.test('admin: the page\'s commands parse back to what was meant', () => {
@@ -58,22 +58,21 @@ Deno.test('admin: the page\'s commands parse back to what was meant', () => {
   assert.equal(host.game.mapName, 'de_inkwell');
 });
 
-Deno.test('admin: /admin answers only with the rcon password, over HTTPS or from this machine', async () => {
+Deno.test('admin: /admin answers a room only, with its rcon password', async () => {
   const { host, clock } = setup();
   const status = async (p) => (await p).status;
   const error = async (p) => (await (await p).json()).error;
   assert.equal(await status(ask(host, 'state')), 200);
   assert.equal(await status(ask(host, 'state', { password: null })), 401);
-  assert.match(await error(ask(host, 'state', { address: '203.0.113.9' })), /HTTPS/, 'plain HTTP from elsewhere');
-  assert.equal(await status(ask(host, 'state', { address: '203.0.113.9', secure: true })), 200);
+  assert.equal(await status(ask(host, 'state', { room: '' })), 404, 'no game but the rooms');
   assert.equal(await status(ask(host, 'exec', { method: 'OPTIONS' })), 405, 'no preflight is answered');
   assert.equal(await status(ask(host, 'exec', { method: 'GET' })), 405);
   assert.equal(await status(ask(host, 'secrets')), 404);
   assert.equal(await status(ask(host, 'state', { room: 'nosuch' })), 404);
-  // A room is answered over plain HTTP from anywhere: its password came back that way when it was made.
-  assert.equal(await status(ask(host, 'state', { address: '203.0.113.9', room: 'abcdef' })), 200);
+  // Over plain HTTP from anywhere: the room's password came back that way when it was made.
+  assert.equal(await status(ask(host, 'state', { address: '203.0.113.9' })), 200);
   // Bad passwords count like rcon's: the fifth from one address blocks it for a minute.
-  const away = { address: '203.0.113.9', secure: true };
+  const away = { address: '203.0.113.9' };
   for (let i = 0; i < 5; i++) assert.equal(await error(quiet(() => ask(host, 'state', { ...away, password: 'guess' }))), 'Bad rcon_password.');
   assert.match(await error(ask(host, 'state', away)), /too many bad passwords/);
   clock.ms += 60001;

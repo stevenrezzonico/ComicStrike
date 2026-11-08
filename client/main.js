@@ -2678,7 +2678,7 @@ con.command('record', (a, ctx) => {
   const name = demoName(a[1]);
   if (!name) return con.out(ctx, 'record <name>: letters, digits, _ and - (up to 40)');
   if (!net || net.playback || !synced) return con.out(ctx, 'record: in a game (online or practice)');
-  if (useOwn || net.room) return con.out(ctx, 'record: a room or your own map cannot be played back (the demo keeps only the map name)');
+  if (useOwn || net.upload) return con.out(ctx, 'record: a map a player brought cannot be played back (the demo keeps only its name)');
   if (recorder) return con.out(ctx, `record: already recording ${recorder.name} (stop first)`);
   listDemos().catch(() => []).then((list) => {
     if (list.some((d) => d.name === name)) return con.out(ctx, `record: a demo named ${name} exists (demo_delete ${name} first, or pick another name)`);
@@ -2885,12 +2885,9 @@ conWin.onToggle = (open) => {
 document.addEventListener('pointerlockchange', updateOverlay);
 document.addEventListener('pointerdown', () => sounds.resume()); // audio may only start after a user gesture
 
-menu.onPlay = (team) => {
-  if (menu.roomGone) setRoom(''); // the link's room closed: the Play panel shows the server's own game
-  run(() => startOnline(team));
-};
+menu.onPlay = (team) => run(() => startOnline(team)); // the room picked in the Play panel
 menu.onMapFile = (file) => addOwnMap(file);
-menu.onRoom = (code) => { // a listed room picked in the Play panel, '' the server's own game
+menu.onRoom = (code) => { // a listed room picked in the Play panel, '' back to the list
   setRoom(code);
   menu.fetchServer();
 };
@@ -2944,7 +2941,7 @@ function resetSession(own = false) {
   for (let i = 0; i < newGameResets.length; i++) newGameResets[i]();
 }
 
-// Play: join the server on a team (CS:GO numbers: 1 spectators, 2 T, 3 CT; 0 auto).
+// Play: join the room picked (roomCode) on a team (CS:GO numbers: 1 spectators, 2 T, 3 CT; 0 auto).
 async function startOnline(team) {
   if (playing) leaveGame();
   resetSession();
@@ -2955,16 +2952,16 @@ async function startOnline(team) {
     net = null;
     throw new Error(`could not connect (${err.message})`);
   }
-  if (roomCode && roomRcon && !roomNames) { // our room's console catalog, for the suggestions (server/admin.js)
+  if (roomRcon && !roomNames) { // our room's console catalog, for the suggestions (server/admin.js)
     const res = await fetch(`/admin/catalog?room=${roomCode}`, { headers: { 'x-rcon-password': encodeURIComponent(roomRcon) } })
       .catch(() => null);
     if (res && res.ok) roomNames = await res.json().catch(() => null);
   }
-  if (roomCode && roomNames) { // our room: its console's cvars and commands join the suggestions
+  if (roomNames) { // our room: its console's cvars and commands join the suggestions
     con.remote = new Map(roomNames.map(([name, help, value, hint]) => [name, { help, value, hint }]));
   }
-  conWin.print(roomCode ? `connected: room ${roomCode}, ${currentMap}` : `connected: ${currentMap}`);
-  if (roomCode && roomRcon) conWin.print('your room: its console is yours (bot_add, mp_restartgame, ... no rcon needed)');
+  conWin.print(`connected: room ${roomCode}, ${currentMap}`);
+  if (roomRcon) conWin.print('your room: its console is yours (bot_add, mp_restartgame, ... no rcon needed)');
   enterGame();
 }
 
@@ -2985,7 +2982,7 @@ async function addOwnMap(file) {
 }
 const OWN_MAP_MAX = 24 << 20; // the server's room limit (server/rooms.js ROOM_LIMITS.bytes)
 
-// The room the Play panel and the next join go to ('' the server's own game), kept in the
+// The room the Play panel and the next join go to ('' none: the panel lists them), kept in the
 // page's address (the link to share; a reload joins it again). Its rcon password comes only with
 // the admin page's link (above, where roomRcon is declared).
 function setRoom(code) {
@@ -3000,14 +2997,14 @@ function setRoom(code) {
 }
 
 // The admin page (client/admin.html) in another tab of this browser: `hello` asks which game
-// this tab plays and the rcon password it holds (a room we host, else our rcon_password);
+// this tab plays and the rcon password it holds (a room we host);
 // `call` runs in the practice game, through its worker (no password: our own server).
 const adminChannel = new BroadcastChannel('comicstrike-admin');
 adminChannel.onmessage = (e) => {
   const m = e.data || {};
   if (m.type === 'hello' && playing && net) {
-    adminChannel.postMessage({ type: 'here', kind: localWorker ? 'practice' : roomCode ? 'room' : 'online', room: roomCode,
-      rcon: localWorker ? '' : roomCode ? roomRcon : cv.rcon_password.value });
+    adminChannel.postMessage({ type: 'here', kind: localWorker ? 'practice' : 'room', room: roomCode,
+      rcon: localWorker ? '' : roomRcon });
   } else if (m.type === 'call' && localWorker && playing) {
     localWorker.postMessage({ type: 'admin', req: m.req, op: m.op, command: m.command });
   }
@@ -3217,8 +3214,8 @@ async function start() {
   requestAnimationFrame(frame);
   if (preview && parent !== globalThis) return startPreview();
   if (params.has('fromeditor')) return startFromEditor();
-  // URL parameters skip the menu (testing): join at once (the sandbox if no server
-  // answers), practice, or the sandbox.
+  // URL parameters skip the menu (testing): join the room at once (?room=code&team=; the
+  // sandbox without a room or if it does not answer), practice, or the sandbox.
   // A room link (?room=code) opens on the Play panel: that room's teams.
   if (!['team', 'offline', 'map', 'practice'].some((p) => params.has(p))) return menu.showStart('', roomCode ? 'play' : '');
   const team = { spec: 1, t: 2, ct: 3 }[params.get('team')] || 0;
@@ -3227,7 +3224,7 @@ async function start() {
     return await startPractice(map, team, { mode: params.get('mode') || 'deathmatch',
       players: +(params.get('players') ?? 10), difficulty: +(params.get('difficulty') ?? 1), armoury: params.get('armoury') !== '0' });
   }
-  if (!params.has('offline')) {
+  if (!params.has('offline') && roomCode) {
     try {
       return await startOnline(team);
     } catch (err) {

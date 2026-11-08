@@ -28,7 +28,8 @@ export class NetClient {
     this.local = null; // the practice worker, when connected to it
     this.localId = 0;
     this.localRcon = ''; // an rcon password the page holds (practice, a room we host): the console uses it
-    this.room = ''; // the room (a hosted map) this session is in; '' the server's own game
+    this.room = ''; // the room this session is in ('' practice or a demo)
+    this.upload = false; // the room plays a map its host brought (connect.json)
     this.onLocal = null;
     this.writer = null;
     this.closed = false;
@@ -100,6 +101,7 @@ export class NetClient {
     const info = await res.json();
     if (!res.ok) throw new Error(info.error || `HTTP ${res.status}`);
     this.room = room;
+    this.upload = !!info.upload;
     // Chrome resolves "localhost" to ::1 first; the server listens on IPv4.
     const host = location.hostname === 'localhost' ? '127.0.0.1' : location.hostname;
     const url = `https://${host.includes(':') ? `[${host}]` : host}:${info.port}`;

@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ComicStrike Server Admin</title>
+<title>ComicStrike Admin</title>
 <link rel="icon" type="image/svg+xml" href="/client/favicon.svg">
 <style>
-  /* The server admin page (client/admin.js): the game's paper, ink and flat inks. */
+  /* The admin page (client/admin.js): the game's paper, ink and flat inks. */
   :root {
     --paper: #f6eedb; --paper-hi: #fffaf0; --ink: #17130f; --yellow: #ffd23a; --red: #e2402a; --blue: #2f6fc4;
     --muted: #6d665c; --t: #ffb84a; --ct: #7db8ff; --money: #9be15d;
@@ -78,7 +78,7 @@
 </head>
 <body>
 <header>
-  <a class="title" href="/"><img src="/client/favicon.svg" alt="">SERVER ADMIN</a>
+  <a class="title" href="/"><img src="/client/favicon.svg" alt="">ADMIN</a>
   <div id="summary">connecting...</div>
   <button id="logout" class="small hidden">Log out</button>
 </header>
@@ -87,9 +87,8 @@
   <p id="login-what"></p>
   <div class="row"><input id="password" type="password" placeholder="rcon_password" autocomplete="current-password"></div>
   <div class="row"><button id="login-go" class="go">Log in</button></div>
-  <p class="note">The server's rcon_password (cfg/server.cfg or RCON_PASSWORD). With none set, the server makes one up
-    at startup and prints a link that logs in here: look in its terminal for "admin page:". Over plain HTTP the page
-    works only on the server's own machine; a server with a certificate (TLS_CERT) works from anywhere.</p>
+  <p class="note">The page that made the room logs in with its password, and a game tab opened from its Play in this
+    room link hands it over. A player who only joined the room has none.</p>
   <p id="login-error" class="note" style="color: var(--red)"></p>
 </div>
 <nav id="tabs" class="hidden"></nav>

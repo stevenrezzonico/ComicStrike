@@ -76,7 +76,7 @@ Certbot's timer renews the certificate about every 60 days. That takes the game 
 ```bash
 sudo cp /opt/comicstrike/deploy/comicstrike.env.example /etc/comicstrike/comicstrike.env
 sudo chmod 600 /etc/comicstrike/comicstrike.env
-sudo nano /etc/comicstrike/comicstrike.env          # set RCON_PASSWORD (and MAP)
+sudo nano /etc/comicstrike/comicstrike.env          # the ports and the site's name
 sudo cp /opt/comicstrike/deploy/comicstrike.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now comicstrike
@@ -90,10 +90,10 @@ To use a different domain, change it in `comicstrike.service` (two `LoadCredenti
 systemctl status comicstrike
 journalctl -u comicstrike -f        # the server's log (joins, rounds, errors)
 curl -I http://cstrike.click/          # 301 to https://
-curl -s https://cstrike.click/connect.json   # "certHash":null and the server info
+curl -s https://cstrike.click/rooms.json     # the rooms: {"rooms":[],"live":0,"max":8}
 ```
 
-Then open `https://cstrike.click/` in Chrome or Edge and click Play.
+Then open `https://cstrike.click/` in Chrome or Edge, make a room in Play Online and play in it.
 
 | Symptom | Likely cause |
 |---|---|
@@ -102,7 +102,7 @@ Then open `https://cstrike.click/` in Chrome or Edge and click Play.
 
 ## Running it
 
-- **Console:** the server has no terminal under systemd. Use the admin page, `https://<your site>/admin` (also Server admin in the start menu), with the rcon password, or rcon from the game console (`rcon_password <password>`, then `rcon status`, `rcon map de_inferno`, `rcon mp_restartgame 1`). Startup settings go in `/opt/comicstrike/cfg/server.cfg` and `cfg/gamemode_<mode>_server.cfg`.
+- **Games:** the server has no game of its own: every game is a room a player makes in Play Online, run from its own admin page by whoever made it. Mode settings for every room go in `/opt/comicstrike/cfg/gamemode_<mode>_server.cfg`.
 - **Updating:** the server follows the repository's `main` by itself: `/opt/comicstrike` is a `git clone` of it, and `comicstrike-update.timer` runs `deploy/update.sh` (installed as `/usr/local/bin/comicstrike-update`) every minute, which fetches, resets to `origin/main` when a new commit is there and restarts the game when the commit changed what the running game uses (`server/`, `shared/`, `cfg/`, `maps/`, `deno.json`; a restart drops whoever is playing; pages under `client/`, docs and tests go live without one). After changing `deploy/update.sh` itself, install it again (below). `journalctl -u comicstrike-update` lists the deployments. To set it up on a fresh server, clone instead of unpacking an archive in step 2 (`sudo git clone https://github.com/stevenrezzonico/ComicStrike.git /opt/comicstrike`, then copy the maps in), and:
 
   ```bash

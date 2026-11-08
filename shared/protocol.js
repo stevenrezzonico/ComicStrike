@@ -4,7 +4,7 @@
 //
 // Client -> server
 //   HELLO    u8 type, u16 version, u8 team, u8 primary, u8 secondary, str name, str room (the
-//            room code of a hosted map, server/rooms.js; empty: the server's own game)
+//            room code, server/rooms.js; the server refuses none or a closed one, practice reads none)
 //   BYE      u8 type (leaving: free my player now; sent best-effort on page hide)
 //   BUY      u8 type, u16 buyId, u8 item (sent 3 times; the server acts once per buyId)
 //   COMMAND  u8 type, u16 cmdId, lstr text (a console command for the server: name, jointeam,

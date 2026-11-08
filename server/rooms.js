@@ -1,6 +1,6 @@
-// Rooms: games of their own beside the server's. A player uploads a .bsp (POST /rooms) or
-// picks one of the server's maps (the admin page's new room, a JSON POST /rooms) and gets a
-// code; the server runs a game of its own on that map (a Host like the main one, with bots),
+// Rooms: the server's games. A player uploads a .bsp (POST /rooms) or picks one of the
+// server's maps (the admin page's new room, a JSON POST /rooms) and gets a code; the server
+// runs a game of its own on that map (a Host, as practice runs in the page, with bots),
 // friends join with the code (`?room=` in the link, the code in HELLO). An uploaded map is
 // held in memory only: never written to disk, served to the room's players from memory, and
 // dropped with the room once nobody has played in it for a while.
@@ -113,7 +113,7 @@ export class Rooms {
     const rcon = Array.from({ length: 16 }, () => Math.floor(this.random() * 16).toString(16)).join('');
     const host = new Host({
       ...maps,
-      // Only the mode cfgs (exec in a room's rcon must not read the server's own cfgs).
+      // Only the mode cfgs and their _server overrides (exec in a room's rcon reads no other file).
       readCfg: (n) => (/^gamemode_[a-z_]+\.cfg$/.test(n) && this.opts.readCfg ? this.opts.readCfg(n) : null),
       print: (s) => console.log(`[room ${code}] ${s}`),
       now: this.opts.now,

@@ -1,11 +1,11 @@
 // Game server entry point.
 // HTTP(S) (TCP) serves the client files and connection info; WebTransport (UDP/QUIC)
-// carries game traffic.
+// carries game traffic. Every game is a room (server/rooms.js): players make them from Play
+// Online, each with its own map, mode and settings; the server has no game of its own.
 //
 //   deno run --unstable-net -A server/main.js
 //
 // Env: HTTP_PORT (tcp 27015), GAME_PORT (udp 27015), BIND (0.0.0.0),
-//      MAP (de_dust2, else de_inkwell) - maps/<MAP>.bsp, RCON_PASSWORD - enables rcon,
 //      TLS_CERT, TLS_KEY - PEM files of a real certificate (e.g. Let's Encrypt fullchain.pem
 //        and privkey.pem): the pages go over HTTPS and WebTransport uses it as browsers
 //        check any site's. Without them: plain HTTP and a self-signed certificate made in
@@ -13,15 +13,15 @@
 //      HOSTNAMES ("localhost,127.0.0.1,::1") - names/IPs the self-signed certificate covers,
 //      REDIRECT_PORT - with TLS, a plain HTTP port (80) that redirects to the HTTPS site.
 // See deploy/README.md for a server with its own domain.
-// cfg/server.cfg runs at startup; the terminal is a server console (status, map,
-// mp_restartgame, ...).
+// A room runs its mode's cfg/gamemode_<mode>.cfg, then cfg/gamemode_<mode>_server.cfg (this
+// server's own overrides, as in CS:GO).
 
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { ensureCert, renewCert } from './cert.js';
 import { staticPath } from './static.js';
 import { listen } from './transport.js';
-import { Host, GAME_MODES, AddressCounts, runDue } from './host.js';
+import { GAME_MODES, AddressCounts, runDue } from './host.js';
 import { Rooms, RoomError } from './rooms.js';
 import { adminResponse } from './admin.js';
 import { parseBSP } from '../shared/bsp.js';
@@ -34,21 +34,12 @@ const HTTP_PORT = Number(Deno.env.get('HTTP_PORT') || 27015);
 const GAME_PORT = Number(Deno.env.get('GAME_PORT') || 27015);
 const HOSTNAMES = (Deno.env.get('HOSTNAMES') || 'localhost,127.0.0.1,::1').split(',');
 const BIND = Deno.env.get('BIND') || '0.0.0.0';
-const hasMap = (name) => {
-  try {
-    return Deno.statSync(new URL(`maps/${name}.bsp`, ROOT)).isFile;
-  } catch {
-    return false;
-  }
-};
-// de_dust2 (a Valve map, not in the repository), else our own de_inkwell.
-const MAP = Deno.env.get('MAP') || (hasMap('de_dust2') ? 'de_dust2' : 'de_inkwell');
 const TLS_CERT = Deno.env.get('TLS_CERT'), TLS_KEY = Deno.env.get('TLS_KEY');
 const REDIRECT_PORT = Number(Deno.env.get('REDIRECT_PORT') || 0);
 
 const STATIC_DIRS = ['client/', 'shared/', 'maps/'];
 // The game server code and mode cfgs, for Practice: the browser runs them in a Web Worker
-// (client/localserver.js). Not main.js, the transport, the certificate or server.cfg.
+// (client/localserver.js). Not main.js, the transport or the certificate.
 const STATIC_FILES = new Set(['server/host.js', 'server/game.js', 'server/bots.js', 'server/votes.js',
   ...Object.values(GAME_MODES).map((name) => `cfg/gamemode_${name}.cfg`)]);
 const MIME = {
@@ -69,7 +60,6 @@ const certInfo = TLS_CERT ?
   { cert: Deno.readTextFileSync(TLS_CERT), key: Deno.readTextFileSync(TLS_KEY), hash: null } :
   await ensureCert(fileURLToPath(new URL('certs', ROOT)), HOSTNAMES);
 
-if (!/^[\w-]+$/.test(MAP)) throw new Error(`bad MAP: ${MAP}`);
 const readText = (url) => {
   try {
     return Deno.readTextFileSync(url);
@@ -89,31 +79,15 @@ const listMaps = () => {
   }
   return mapList;
 };
-const host = new Host({
-  loadMap: (name) => parseBSP(Deno.readFileSync(new URL(`maps/${name}.bsp`, ROOT)).buffer),
-  listMaps,
-  readCfg: (name) => readText(new URL(`cfg/${name}`, ROOT)),
-  quit: () => Deno.exit(0),
-});
-if (readText(new URL('cfg/server.cfg', ROOT)) !== null) host.execCfg('server.cfg');
-const envPassword = Deno.env.get('RCON_PASSWORD');
-if (envPassword) host.password.set(envPassword);
-// No rcon password set: one made up for this run, printed with the admin page's link below
-// (as Jupyter's token), so whoever runs the server can manage it without editing a file.
-const madePassword = host.password.value ? '' :
-  Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('');
-if (madePassword) host.password.set(madePassword);
-host.start(MAP);
+const loadMap = (name) => parseBSP(Deno.readFileSync(new URL(`maps/${name}.bsp`, ROOT)).buffer);
 
-// Rooms (server/rooms.js): games beside the server's own, on maps players upload (held in
-// memory only) or on the server's maps.
-const rooms = new Rooms({
-  readCfg: (name) => readText(new URL(`cfg/${name}`, ROOT)), maps: { loadMap: host.opts.loadMap, listMaps },
-});
+// Rooms (server/rooms.js): the games, on maps players upload (held in memory only) or on the
+// server's maps.
+const rooms = new Rooms({ readCfg: (name) => readText(new URL(`cfg/${name}`, ROOT)), maps: { loadMap, listMaps } });
 
-// A session belongs to the game its first HELLO asks for: the server's own (no room code)
-// or a room's. Datagrams before it are dropped. At most SESSIONS_PER_ADDRESS players from one
-// address in all games (a household behind one IPv4 address fits).
+// A session belongs to the room its first HELLO names; a HELLO with no room or a closed one is
+// refused. Datagrams before it are dropped. At most SESSIONS_PER_ADDRESS players from one
+// address in all rooms (a household behind one IPv4 address fits).
 const SESSIONS_PER_ADDRESS = 5;
 const CONNECTIONS_PER_ADDRESS = 16; // QUIC connections, upgraded or not (transport.js)
 const HELLO_MS = 10000; // a session's first HELLO
@@ -133,13 +107,13 @@ const transport = listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert,
       if (!client) {
         const code = helloRoom(bytes);
         if (code === null) return;
-        const room = code ? rooms.get(code) : null;
-        if (code && !room) return refuse('no such room: it may have closed');
+        const room = rooms.get(code);
+        if (!room) return refuse(code ? 'no such room: it may have closed' : 'this server plays in rooms: pick one in Play Online');
         if (!sessionsByAddress.add(session.address)) return refuse('too many players from your address');
-        game = (room ? room.host : host).game; // a map change replaces the game; this session stays with its own
+        game = room.host.game; // a map change replaces the game; this session stays with its own
         client = game.connect(session);
         if (!client) return sessionsByAddress.remove(session.address); // full: connect closed it
-        if (room) rooms.joined(room);
+        rooms.joined(room);
       }
       game.receive(client, bytes);
     },
@@ -166,12 +140,11 @@ if (!TLS_CERT) {
   }, 6 * 3600e3);
 }
 
-// Fixed-rate loops (runDue), one per game: the server's own and each room's.
-const main = { host, epoch: performance.now() };
+// Fixed-rate loops (runDue), one per room.
 let sweptAt = 0;
 function loop() {
   const now = performance.now();
-  let next = runDue(main, now);
+  let next = now + 1000 / TICK_RATE;
   for (const room of rooms.rooms.values()) next = Math.min(next, runDue(room, now));
   if (now - sweptAt > 1000) {
     sweptAt = now;
@@ -332,12 +305,13 @@ Deno.serve({ hostname: BIND, port: HTTP_PORT, ...tls, onListen: () => {} }, asyn
   if (pathname === '/connect.json') {
     const certHash = certInfo.hash && Array.from(certInfo.hash);
     const code = url.searchParams.get('room');
-    if (code) {
-      const room = rooms.get(code);
-      if (!room) return Response.json({ error: 'no such room: it may have closed' }, { status: 404 });
-      return Response.json({ port: GAME_PORT, certHash, ...room.host.info(), room: room.code });
+    const room = rooms.get(code);
+    if (!room) {
+      return Response.json({ error: code ? 'no such room: it may have closed' : 'this server plays in rooms (/rooms.json)' },
+        { status: 404 });
     }
-    return Response.json({ port: GAME_PORT, certHash, ...host.info() });
+    // upload: the room plays a map its host brought (a demo of it cannot be played back by name)
+    return Response.json({ port: GAME_PORT, certHash, ...room.host.info(), room: room.code, upload: !!room.bytes });
   }
   if (pathname === '/rooms' && req.method === 'POST') {
     // Our pages send the map as application/octet-stream and a server map's room as
@@ -358,15 +332,12 @@ Deno.serve({ hostname: BIND, port: HTTP_PORT, ...tls, onListen: () => {} }, asyn
     const room = rooms.get(roomMap[1]);
     return room ? serveRoomMap(room, req) : new Response('no such room', { status: 404 });
   }
-  if (pathname === '/maps.json') return Response.json(host.opts.listMaps()); // for offline practice
+  if (pathname === '/maps.json') return Response.json(listMaps()); // practice and new rooms
   if (pathname === '/admin' || pathname === '/admin/') { // the admin page itself (its calls are under /admin/)
     return (await serveStatic('/client/admin.html', req)) || new Response('not found', { status: 404 });
   }
   if (pathname.startsWith('/admin/')) { // the admin page's calls (client/admin.html)
-    return adminResponse(req, url, {
-      address: info.remoteAddr.hostname, secure: !!TLS_CERT,
-      hostFor: (code) => (code ? rooms.get(code)?.host ?? null : host),
-    });
+    return adminResponse(req, url, { address: info.remoteAddr.hostname, hostFor: (code) => rooms.get(code)?.host ?? null });
   }
   return (await serveStatic(pathname, req)) || new Response('not found', { status: 404 });
 });
@@ -384,24 +355,4 @@ if (TLS_CERT && REDIRECT_PORT) {
 const site = TLS_CERT ? `https://${HOSTNAMES[0]}${HTTP_PORT === 443 ? '' : `:${HTTP_PORT}`}/` :
   `http://127.0.0.1:${HTTP_PORT}/`;
 console.log(`${site}   webtransport: udp/${GAME_PORT}   ${TLS_CERT ? 'certificate: ' + TLS_CERT : 'self-signed certificate (development)'}` +
-  `   map: ${MAP}   ${TICK_RATE} tick`);
-// (after the #: the browser never sends it; the page takes it off the address)
-console.log(`admin page: ${site}admin${madePassword ? `#password=${madePassword}` : '   (with the rcon password)'}`);
-
-// The terminal is a server console.
-(async () => {
-  try {
-    let buf = '';
-    for await (const chunk of Deno.stdin.readable.pipeThrough(new TextDecoderStream())) {
-      buf += chunk;
-      let nl;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (line) host.con.exec(line);
-      }
-    }
-  } catch {
-    // no terminal (detached): rcon and cfg/server.cfg still work
-  }
-})();
+  `   ${TICK_RATE} tick   rooms only`);

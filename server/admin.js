@@ -1,16 +1,14 @@
-// The admin page's HTTP side (client/admin.html): GET /admin/state answers the server's
-// state as JSON (Host.adminState), GET /admin/catalog the console's names with their help,
-// limits and defaults (Console.catalog: the page's forms), POST /admin/exec runs the body as
-// one rcon line and answers { output }. `?room=<code>` picks a room's game instead of the server's own.
+// The admin page's HTTP side (client/admin.html) for a room, `?room=<code>`: GET /admin/state
+// answers its state as JSON (Host.adminState), GET /admin/catalog the console's names with
+// their help, limits and defaults (Console.catalog: the page's forms), POST /admin/exec runs
+// the body as one rcon line and answers { output }.
 //
 // Each request carries the rcon password in the `x-rcon-password` header, checked and
 // counted like rcon's (Host.rconRefusal: 5 bad guesses an address, 60 a minute in all). A
 // custom header needs a CORS preflight, which this server never answers (an OPTIONS gets a
-// 405), so no other site's page can send these requests from its visitors' browsers. The
-// password would cross the network in the clear over plain HTTP, so without TLS only this
-// machine (loopback) is answered for the server's own game.
-
-import { isLoopback } from './host.js';
+// 405), so no other site's page can send these requests from its visitors' browsers. Over
+// plain HTTP too: a room's password came back over the same kind of connection when the room
+// was made, and it reaches that room alone.
 
 export const ADMIN_BODY = 4096; // bytes of an exec's command line at most
 
@@ -37,19 +35,13 @@ async function readText(req, max) {
   return new TextDecoder().decode(all);
 }
 
-// The answer to a request under /admin/. address: the caller's IP; secure: the site is
-// HTTPS; hostFor(room code or '') -> the Host to run it on, or null (no such room).
-export async function adminResponse(req, url, { address, secure, hostFor }) {
+// The answer to a request under /admin/. address: the caller's IP; hostFor(room code) ->
+// the room's Host, or null (no such room).
+export async function adminResponse(req, url, { address, hostFor }) {
   const op = url.pathname.slice('/admin/'.length);
   if (op !== 'state' && op !== 'catalog' && op !== 'exec') return json({ error: 'not found' }, 404);
   if (req.method !== (op === 'exec' ? 'POST' : 'GET')) return json({ error: 'method not allowed' }, 405);
-  // (a room's password came back over this same connection when the room was made, and it
-  // reaches that room alone: rooms are answered over plain HTTP too)
-  const code = (url.searchParams.get('room') || '').toLowerCase();
-  if (!secure && !isLoopback(address) && !code) {
-    return json({ error: 'the admin page needs HTTPS (TLS_CERT) when it is not on the server\'s own machine' }, 403);
-  }
-  const host = hostFor(code);
+  const host = hostFor((url.searchParams.get('room') || '').toLowerCase());
   if (!host) return json({ error: 'no such room: it may have closed' }, 404);
   let password = req.headers.get('x-rcon-password');
   if (password === null) return json({ error: 'the rcon password is needed' }, 401);

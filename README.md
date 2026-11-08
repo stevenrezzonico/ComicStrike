@@ -56,7 +56,7 @@ Use `127.0.0.1` rather than `localhost`, because Chrome tries IPv6 first and the
 - **Bots** that navigate any map, fight, plant, defuse and rescue hostages, at four difficulties.
 - **Practice anywhere:** the real server runs inside the browser in a Web Worker, so you can play against bots without running a server.
 - **A map editor** in the browser: drag boxes, ramps, stairs, doors, ladders, water, buy zones and bomb sites onto the views, see the map printed live in 3D, try it in one click and export it as a `.bsp`. It also opens any `.bsp`, Valve's maps included, and turns it back into shapes you can edit.
-- **Your own maps:** drop a `.bsp` in the menu to play it against bots, or host it as a room on the server and share the invite link.
+- **Rooms:** every online game is a room with its own map, mode, bots and password. Make one on one of the server's maps or on a `.bsp` of your own and share the invite link; public rooms are listed in Play Online. Play Offline plays a `.bsp` of your own against bots too.
 - **A CS:GO-style console** (`` ` ``) with the familiar commands, cvars and binds.
 - **Also:**
   - spectating, and taking over a bot of your team;
@@ -76,7 +76,7 @@ Use `127.0.0.1` rather than `localhost`, because Chrome tries IPv6 first and the
 | Deathmatch | 1 / 2 | Free for all, instant respawns, points per kill |
 | Demo | 2 / 0 | A playground: free buys, infinite ammo, you can't die |
 
-Pick a mode in the Practice menu. On a server, set `game_type` and `game_mode` in `cfg/server.cfg`, or switch on the fly with `rcon game_type 1; rcon game_mode 0; rcon map de_dust2`.
+Pick a mode in Play Offline, or when you create a room. A room's admin page switches it later.
 
 ## Maps
 
@@ -86,13 +86,7 @@ The repository includes two maps of its own:
 
 A few community maps are included too (`fy_buzzkill`, `fy_snow_pool`, `awp_cs16`, `de_cache_cs2_beta` and some ports of CS:S maps).
 
-Counter-Strike 1.6 maps belong to Valve and are not included. If you own the game, copy the `.bsp` files from its `cstrike/maps` folder into `maps/`. The server starts on `de_dust2` by default; without it, start on an included map:
-
-```bash
-MAP=de_inkwell deno task start
-```
-
-In PowerShell: `$env:MAP = "de_inkwell"; deno task start`.
+Counter-Strike 1.6 maps belong to Valve and are not included. If you own the game, copy the `.bsp` files from its `cstrike/maps` folder into `maps/`: Play Offline and new rooms list every map there.
 
 ### The map editor
 
@@ -115,7 +109,7 @@ The defaults are CS:GO's. Change them in Settings, then Controls, or with `bind`
 
 ### Console
 
-In practice, server commands work without a password, typed with or without `rcon`. Some useful ones:
+In practice, and in a room you made, server commands work without a password, typed with or without `rcon`. Some useful ones:
 
 | Command | What it does |
 |---|---|
@@ -132,21 +126,19 @@ In practice, server commands work without a password, typed with or without `rco
 
 ## Running a server
 
-`deno task start` serves the pages on TCP 27015 and the game on UDP 27015. In development it creates its own short-lived certificate, which browsers accept by its hash.
+`deno task start` serves the pages on TCP 27015 and the games on UDP 27015. In development it creates its own short-lived certificate, which browsers accept by its hash. The server has no game of its own: players make rooms (Play Online, Create a room), up to 8 at once, each closing a couple of minutes after its last player leaves.
 
 It reads these environment variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MAP` | `de_dust2` | The map to start on (`maps/<MAP>.bsp`) |
 | `HTTP_PORT`, `GAME_PORT` | `27015` | TCP port for the pages, UDP port for the game |
 | `BIND` | `0.0.0.0` | The address to listen on |
 | `HOSTNAMES` | `localhost,127.0.0.1,::1` | Names the server answers to |
-| `RCON_PASSWORD` | none | Enables `rcon` for players who know it |
 | `TLS_CERT`, `TLS_KEY` | none | A real certificate: HTTPS pages, no certificate pinning |
 | `REDIRECT_PORT` | none | Redirects plain HTTP on this port (e.g. 80) to the site |
 
-Server settings go in `cfg/server.cfg`, which uses the same syntax as a CS:GO `server.cfg`. Each mode's settings live in `cfg/gamemode_<mode>.cfg`; put your own overrides for a mode in `cfg/gamemode_<mode>_server.cfg`. The server's terminal is a console too: type `status`, `bot_add`, `changelevel de_nuke`.
+Each mode's settings live in `cfg/gamemode_<mode>.cfg`; put your own overrides for a mode, applied to every room in that mode, in `cfg/gamemode_<mode>_server.cfg` (the same syntax as CS:GO's).
 
 [deploy/README.md](deploy/README.md) covers hosting on a Linux machine as a systemd service: your own domain, a Let's Encrypt certificate and port 443.
 

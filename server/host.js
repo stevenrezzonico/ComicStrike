@@ -1,5 +1,5 @@
 // The server host: owns the running Game and the server console (CS:GO-style cvars and
-// commands, run from cfg/server.cfg, the terminal and rcon), and switches maps.
+// commands, run from rcon, the admin page and cfgs), and switches maps.
 // Transport-agnostic: sessions only need send(bytes) and close(reason).
 
 import { Console, FCVAR_PROTECTED } from '../shared/cvars.js';
@@ -262,7 +262,7 @@ export class Host {
     num('bot_quota', 0, 'Bots on the server (bot_add / bot_kick change it)', 0, MAX_PLAYERS);
     con.cvar('bot_quota_mode', 'normal', { help: 'normal: bot_quota bots; fill: bots fill up to bot_quota players',
       onChange: apply });
-    num('bot_join_after_player', 0, 'Bots join only once a human plays, and leave with the last one (cfg/server.cfg: 1)', 0, 1);
+    num('bot_join_after_player', 0, 'Bots join only once a human plays, and leave with the last one', 0, 1);
     num('bot_difficulty', 1, 'New bots: 0 easy, 1 normal, 2 hard, 3 expert', 0, 3);
     con.cvar('bot_join_team', 'any', { help: 'Team new bots join: any, t, ct', onChange: apply });
     num('bot_stop', 0, 'Bots stand still', 0, 1);

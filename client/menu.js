@@ -243,7 +243,7 @@ export class Menu {
     this.ownError = '';
     this.tab = 0;
     this.shownAt = 0;
-    this.server = null; // connect.json, once fetched
+    this.roomInfo = null; // the room's connect.json, once fetched (null: none picked, or it closed)
     this.listedRooms = []; // rooms.json: the server's listed rooms
     this.roomCount = null; // and [rooms live, the most it holds], null when it did not answer
     this.maps = null; // maps.json
@@ -268,7 +268,7 @@ export class Menu {
     this.onLeave = () => {};
     this.onTeam = (_team) => {};
     this.onMapFile = (_file) => Promise.resolve(''); // a map file picked: its name, or rejects with why not
-    this.onRoom = (_code) => {}; // a listed room picked ('' the server's own game)
+    this.onRoom = (_code) => {}; // a listed room picked ('' back to the list)
     this.onWindow = (_open) => {}; // the Video tab's window opened or closed
     // Recordings (client/demo.js): the saved demos, and what to do with one.
     this.onDemoList = () => Promise.resolve([]); // [{ name, map, seconds, size, at }]
@@ -419,20 +419,18 @@ export class Menu {
   async fetchServer() {
     const room = this.room;
     try {
-      const [server, maps, rooms] = await Promise.all([
-        fetch(room ? `/connect.json?room=${room}` : '/connect.json').then((r) => {
-          this.roomGone = !!room && r.status === 404;
-          return this.roomGone ? fetch('/connect.json').then((m) => m.json()) : r.json();
-        }),
+      const [info, maps, rooms] = await Promise.all([
+        room ? fetch(`/connect.json?room=${room}`).then((r) => (r.ok ? r.json() : null)) : null,
         fetch('/maps.json').then((r) => r.json()),
         fetch('/rooms.json').then((r) => r.json()).catch(() => null),
       ]);
-      this.server = server;
+      this.roomInfo = info;
+      this.roomGone = !!room && !info;
       this.maps = maps;
       this.listedRooms = (rooms && rooms.rooms) || [];
       this.roomCount = rooms && rooms.rooms ? [rooms.live, rooms.max] : null;
     } catch {
-      this.server = null;
+      this.roomInfo = this.roomCount = null;
       this.maps = this.maps || [];
     }
     if (this.visible && !this.inGame) this.render();
@@ -452,21 +450,19 @@ export class Menu {
       if (panel && panel === this.panel) b.classList.add('active');
       nav.append(b);
     };
-    // The admin page (client/admin.html) in a new tab: this practice game's, this room's or the server's.
-    const admin = () => open(`/admin${this.inGame && !this.online ? '?practice' : this.room ? `?room=${this.room}` : ''}`,
-      '_blank');
     if (this.inGame) {
       item('Resume', '', () => this.onResume());
       item('Choose team', 'team');
       item('Settings', 'settings');
-      item('Server admin', '', admin);
+      // The admin page (client/admin.html) in a new tab: this room's or this practice game's.
+      if (!this.online) item('Practice admin', '', () => open('/admin?practice', '_blank'));
+      else if (this.room) item('Room admin', '', () => open(`/admin?room=${this.room}`, '_blank'));
       item(this.online ? 'Disconnect' : 'Quit practice', '', () => this.onLeave());
     } else {
       item('Play Online', 'play');
       item('Play Offline', 'practice');
       item('Recordings', 'recordings');
       item('Map editor', '', () => open('/client/editor.html', '_blank'));
-      item('Server admin', '', admin);
       item('Settings', 'settings');
     }
     this.note.textContent = this.message;
@@ -498,11 +494,10 @@ export class Menu {
       'Procedural everything: no textures, models or sounds are downloaded.',
     ]) feats.append(el('li', '', t));
     body.append(feats);
-    const s = this.server;
-    body.append(el('p', 'menu-server', s
-      ? `Server: ${s.hostname} · ${s.map} · ${MODE_LABELS[s.mode] || s.mode || 'Competitive'} · ` +
-        `${s.players}/${s.maxPlayers} players`
-      : this.server === null && this.maps ? 'No server answered: practice works offline.' : 'Looking for the server...'));
+    const n = this.listedRooms.length;
+    body.append(el('p', 'menu-server', this.roomCount
+      ? `Online: ${n} public room${n === 1 ? '' : 's'} · ${this.roomCount[0]}/${this.roomCount[1]} rooms open`
+      : this.maps ? 'No server answered: practice works offline.' : 'Looking for the server...'));
     const row = el('label', 'menu-row');
     row.append(el('span', '', 'Name'));
     const name = el('input');
@@ -518,38 +513,21 @@ export class Menu {
     body.append(el('p', 'menu-hint', 'In a game: Esc opens this menu, B buys, Tab shows the scores, ` opens the console.'));
   }
 
+  // Play Online: the rooms (every game on the server is one), or the room picked (a link, Join)
+  // with its teams.
   renderPlay(body) {
-    body.append(el('h2', '', this.room && !this.roomGone ? `Room ${this.room}` : 'Play Online'));
-    if (this.room) {
-      body.append(el('p', 'menu-hint', this.roomGone
-        ? `Room ${this.room} has closed (rooms close once nobody plays in them). This is the server's own game.`
-        : 'A game of its own on this server. Share this page\'s address to invite more players.'));
-      body.append(button(this.roomGone ? 'OK' : 'Play the server\'s own game instead', () => this.onRoom('')));
+    const s = this.roomInfo;
+    if (s) return this.renderRoom(body, s);
+    body.append(el('h2', '', 'Play Online'));
+    if (this.roomGone) {
+      body.append(el('p', 'menu-hint', `Room ${this.room} has closed (rooms close once nobody plays in them): join another ` +
+        'or make one.'));
     }
-    const s = this.server;
-    body.append(el('p', 'menu-server', s
-      ? `${s.hostname} · ${s.map} · ${MODE_LABELS[s.mode] || s.mode || 'Competitive'} · ${s.players}/${s.maxPlayers} players` +
-        (s.password ? ' · password' : '')
-      : 'No server answered.'));
-    if (!s) return;
+    if (!this.roomCount) return body.append(el('p', 'menu-server', this.maps ? 'No server answered.' : 'Looking for the server...'));
     if (!hasWebTransport()) return body.append(el('p', 'menu-hint', NO_WEBTRANSPORT));
-    if (s.password) { // sv_password: the `password` cvar goes in the HELLO
-      const row = el('label', 'menu-row');
-      const pw = el('input');
-      pw.type = 'password';
-      pw.autocomplete = 'off';
-      pw.maxLength = 63;
-      pw.value = this.cv.password.value;
-      pw.addEventListener('input', () => this.cv.password.set(pw.value));
-      row.append(el('span', '', 'Password'), pw);
-      body.append(row);
-    }
-    this.renderTeam(body, (team) => this.onPlay(team), true);
-    if ((this.room && !this.roomGone) || !this.roomCount) return;
-    // Rooms: games of their own on this server, those their hosts made public listed here.
     const [live, max] = this.roomCount, listed = this.listedRooms;
     body.append(el('h2', '', `Rooms (${live}/${max})`));
-    body.append(el('p', 'menu-hint', listed.length ? 'Games of their own on this server, listed by their hosts.'
+    body.append(el('p', 'menu-hint', listed.length ? 'Games on this server, listed by their hosts.'
       : 'No public room right now. Make one: a map, a mode, bots, public or by link only, a password if you like.'));
     for (const r of listed) {
       const row = el('div', 'menu-row menu-demo');
@@ -563,6 +541,29 @@ export class Menu {
     create.disabled = live >= max;
     body.append(create);
     if (live >= max) body.append(el('p', 'menu-hint', 'Every room on this server is taken: try again when one closes.'));
+  }
+
+  // The room picked: its line (s: its connect.json), its password field and its teams.
+  renderRoom(body, s) {
+    body.append(el('h2', '', `Room ${this.room}`));
+    body.append(el('p', 'menu-hint', 'A game of its own on this server. Share this page\'s address to invite more players.'));
+    body.append(el('p', 'menu-server', `${s.map} · ${MODE_LABELS[s.mode] || s.mode || 'Competitive'} · ` +
+      `${s.players}/${s.maxPlayers} players` + (s.password ? ' · password' : '')));
+    const back = button('Back to the rooms', () => this.onRoom(''));
+    if (!hasWebTransport()) return body.append(el('p', 'menu-hint', NO_WEBTRANSPORT), back);
+    if (s.password) { // sv_password: the `password` cvar goes in the HELLO
+      const row = el('label', 'menu-row');
+      const pw = el('input');
+      pw.type = 'password';
+      pw.autocomplete = 'off';
+      pw.maxLength = 63;
+      pw.value = this.cv.password.value;
+      pw.addEventListener('input', () => this.cv.password.set(pw.value));
+      row.append(el('span', '', 'Password'), pw);
+      body.append(row);
+    }
+    this.renderTeam(body, (team) => this.onPlay(team), true);
+    body.append(back);
   }
 
   // Team buttons, CS:GO jointeam numbers: 1 spectators (online only), 2 Terrorists,

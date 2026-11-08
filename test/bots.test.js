@@ -101,7 +101,7 @@ Deno.test({ name: 'bots: bot_add / bot_kick / bot_quota fill', ignore: !dust2, f
 
 Deno.test('bots: the server fills up with bots once someone plays, one leaving for each who joins', () => {
   const { g, join, run, humans } = setup('de_playground',
-    'game_type 1; game_mode 2; bot_quota 10; bot_quota_mode fill; bot_join_after_player 1'); // cfg/server.cfg's
+    'game_type 1; game_mode 2; bot_quota 10; bot_quota_mode fill; bot_join_after_player 1'); // a public server's usual setup
   run(64);
   assert.equal(g.bots.list.length, 0, 'no game on an empty server');
   join('first', TEAM_T);
