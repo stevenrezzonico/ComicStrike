@@ -77,6 +77,8 @@ const ROOMS = [
   // Mid to B: the fish market alley west of mid, into B's south-east corner.
   ['fish_alley', -1344, -448, -512, -192, 0, M.street],
   ['fish_north', -1344, -192, -1088, 576, 0, M.street],
+  // The net loft between the Fish alley and the B alley, shut by a gate a wheel raises.
+  ['net_loft', -1792, 192, -1344, 320, 0, M.shed, { roof: 224 }],
 ];
 
 // Spawn areas (10 each), buy zones and bomb sites (A first).
@@ -85,7 +87,7 @@ const SPAWNS = [
   ['info_player_start', [-320, 1920, 64], 270],
 ];
 const BUY_ZONES = [['1', 't_spawn'], ['2', 'ct_spawn']];
-const SITES = [[1472, 832, 1984, 1344, 96], [-1920, 704, -1408, 1216, 0]];
+const SITES = [[1472, 832, 1984, 1344, 96, 'a_blast'], [-1920, 704, -1408, 1216, 0, '']]; // the name A fires when the bomb goes off there
 
 // --- Rasterizing the rooms into boxes -------------------------------------------------
 
@@ -302,6 +304,10 @@ block([1888, -320, 0, 1984, -224, 96], 'bcrate02');
 crate(1920, -224);
 breakCrate(1600, 128);
 crate(1920, 384);
+// A shop sign swinging from a bracket on Long's east wall (a pendulum, over everyone's heads).
+block([1936, -644, 196, 1984, -636, 204], 'steel');
+add([1940, -642, 148, 1980, -638, 196], all('wdplanks128f'), 'func_pendulum',
+  { distance: '15', speed: '25', damp: '0', spawnflags: '97', targetname: '' });
 // Market: stalls along the west wall, counters under tiled awnings (high enough to stand
 // on a counter under them: a lower one trapped bots that jumped up); a cart.
 for (const y of [-1600, -1280, -960]) {
@@ -310,9 +316,19 @@ for (const y of [-1600, -1280, -960]) {
   crate(200, y + 32, 40, 32, 'bcrate02');
 }
 block([432, -1152, 0, 512, -1024, 48], 'wdplanks128f');
-// Mid: a round fountain, crates; the press hall's wall with a doorway and a window.
-pillar(0, -192, 0, 112, 24, 'azwall_a', 16);
-pillar(0, -192, 24, 32, 72, 'azwall_a', 8);
+// Mid: a round fountain (water ankle deep inside a rim, a column in the middle), a balcony
+// on the south wall 128 up behind a parapet (no jump reaches it: a teammate's shoulders do),
+// crates; the press hall's wall with a doorway and a window.
+pillar(0, -192, 0, 112, 8, 'azwall_a', 16);
+for (let i = 0; i < 16; i++) {
+  const yaw = Math.round(i * 22.5), a = yaw * Math.PI / 180; // the rim: 16 slabs round the basin
+  slab(Math.round(108 * Math.cos(a)), Math.round(-192 + 108 * Math.sin(a)), 8, 44, 8, 20, (yaw + 90) % 360, 'azwall_a');
+}
+add([-104, -296, 8, 104, -88, 24], { top: '!watergreen', bottom: null, side: null }, 'func_water', { skin: '-3' },
+  { shape: 'pillar', sides: 16 });
+pillar(0, -192, 8, 32, 88, 'azwall_a', 8);
+block([-256, -640, 112, -64, -592, 128], 'azwall_a');
+block([-256, -596, 128, -64, -592, 152], 'azwall_a');
 crate(-448, -608);
 crate(384, 128);
 block([512, -128, 0, 544, -32, 224], 'brick07');
@@ -367,11 +383,19 @@ crate(1280, 96);
 // Short: a crate at the stairs.
 crate(1280, 320);
 // A: a crate stack in the middle of the site, a low angled wall at the Long ramp, a stage on
-// the east side, a portico on pillars along the north wall.
-crate(1664, 1024, 96);
-crate(1728, 1024, 96);
-crate(1664, 1088, 96);
-crate(1696, 1056, 160);
+// the east side with a poster over it, a portico on pillars along the north wall. The
+// stack's crates break only when the bomb goes off on the site (its target names them, as
+// de_dust2's B crates), each exploding, with a fireball over the stage and the poster torn
+// down (a relay's killtarget) until the next round.
+const bombCrate = (x, y, z) => add([x, y, z, x + 64, y + 64, z + 64], all('crate08'), 'func_breakable',
+  { targetname: 'a_blast', spawnflags: '1', material: '1', health: '1', explodemagnitude: '100' });
+bombCrate(1664, 1024, 96);
+bombCrate(1728, 1024, 96);
+bombCrate(1664, 1088, 96);
+bombCrate(1696, 1056, 160);
+add([2236, 1000, 140, 2240, 1176, 260], all('snow'), 'func_wall', { targetname: 'a_poster' });
+point('env_explosion', [2176, 1088, 160], { targetname: 'a_blast', iMagnitude: '150', spawnflags: '1' });
+point('trigger_relay', [2176, 1088, 200], { targetname: 'a_blast', killtarget: 'a_poster' });
 slab(1856, 912, 96, 160, 24, 48, 45, 'azwall_a');
 block([2112, 896, 96, 2240, 1280, 112], 'crete4_stp01');
 crate(2144, 1152, 112);
@@ -462,6 +486,12 @@ crate(-1856, 320, 0, 64, 'bcrate02');
 for (const x of [-1024, -768]) block([x, -448, 0, x + 96, -400, 48], 'bcrate02');
 add([-1280, -448, 160, -576, -384, 168], { top: 'claytile1', bottom: 'wdplanks128f', side: 'wdplanks128f' });
 crate(-1344, 128);
+// The net loft: a gate (a follower door) across its middle rises as far as the wheel on the
+// Fish alley's side has been turned (4 s for all of it, holding E); it stays where it is left.
+add([-1576, 192, 0, -1560, 320, 128], all('out_w8dr1'), 'momentary_door', { angle: '-1', speed: '60', lip: '30', targetname: 'loft_gate' });
+add([-1536, 192, 40, -1512, 196, 64], all('lab1_comp3d'), 'momentary_rot_button',
+  { target: 'loft_gate', distance: '180', speed: '45', returnspeed: '0', spawnflags: '128' });
+sign([-1560, 192, 0, -1408, 320, 72], 'loft_sign', 'Hold E on the wheel to raise the gate to the B alley.', [-1480, 256, 96]);
 
 // Spawns: two rows of five, 64 apart, facing out.
 for (const [kind, [x, y, z], yaw] of SPAWNS) {
@@ -499,8 +529,8 @@ for (const [team, name] of BUY_ZONES) {
   const r = roomOf.get(name);
   add([r[1], r[2], r[5], r[3], r[4], r[5] + 128], { top: null, bottom: null, side: null }, 'func_buyzone', { team });
 }
-for (const [x0, y0, x1, y1, z] of SITES) {
-  add([x0, y0, z, x1, y1, z + 128], { top: null, bottom: null, side: null }, 'func_bomb_target');
+for (const [x0, y0, x1, y1, z, target] of SITES) {
+  add([x0, y0, z, x1, y1, z + 128], { top: null, bottom: null, side: null }, 'func_bomb_target', target ? { target } : {});
 }
 
 // --- The plan drawing (docs/maps/de_inkwell.svg) ----------------------------------------
@@ -508,7 +538,7 @@ for (const [x0, y0, x1, y1, z] of SITES) {
 const LABELS = {
   t_spawn: 'T spawn (docks)', quay: 'Quay', long_corner: 'Long corner', long: 'Long', a_site: 'A',
   market: 'Market', mid: 'Mid', ct_mid: 'CT mid', press_hall: 'Press hall', short: 'Short', ct_spawn: 'CT spawn',
-  b_site: 'B', warehouse: 'Paper warehouse', tunnel: 'Lower tunnel', b_alley: 'B alley', fish_alley: 'Fish alley',
+  b_site: 'B', warehouse: 'Paper warehouse', tunnel: 'Lower tunnel', b_alley: 'B alley', fish_alley: 'Fish alley', net_loft: 'Net loft',
 };
 const FILL = new Map([[M.docks, '#c9c3b8'], [M.street, '#ecd9a8'], [M.plaza, '#e3cfa0'], [M.works, '#d9a58f'],
   [M.shed, '#b8a993'], [M.yard, '#efe0b4'], [M.vat, '#9a9a9a']]);

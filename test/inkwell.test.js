@@ -13,7 +13,8 @@ import { Writer } from '../shared/protocol.js';
 import { Host } from '../server/host.js';
 import { readCfg, seeded, joinClient, sendCmd, walker } from './harness.js';
 import { IN_USE, IN_FORWARD, TICK_RATE } from '../shared/constants.js';
-import { MOVER_PUSH, MOVER_TRAIN, MOVER_SPIN, MOVER_PLAT } from '../shared/doors.js';
+import { MOVER_PUSH, MOVER_TRAIN, MOVER_SPIN, MOVER_PLAT, MOVER_MOMENTARY, MOVER_WHEEL } from '../shared/doors.js';
+import { FX_BLAST } from '../shared/grenades.js';
 
 // de_inkwell is our own defusal map (tools/gen_inkwell.js), so it is in the repository:
 // its editor project and the map compiled from it.
@@ -37,19 +38,25 @@ Deno.test('de_inkwell: spawns, zones, ladders, water, doors and breakables; spaw
   // Every kind of map element the game plays, at least once (tools/gen_inkwell.js).
   const census = {
     info_player_deathmatch: 10, info_player_start: 10, func_buyzone: 2, func_bomb_target: 2, func_ladder: 4,
-    func_water: 3, func_conveyor: 2, func_door_rotating: 2, func_door: 2, func_button: 1, func_rot_button: 2,
-    multisource: 1, trigger_hurt: 1, trigger_multiple: 2, game_text: 2, func_illusionary: 5, func_train: 1,
-    path_corner: 2, func_pendulum: 1, func_pushable: 1, trigger_teleport: 1, info_teleport_destination: 1,
-    func_plat: 1, func_wall: 1, func_rotating: 2, trigger_auto: 1, trigger_relay: 1, multi_manager: 1,
+    func_water: 4, func_conveyor: 2, func_door_rotating: 2, func_door: 2, func_button: 1, func_rot_button: 2,
+    multisource: 1, trigger_hurt: 1, trigger_multiple: 3, game_text: 3, func_illusionary: 5, func_train: 1,
+    path_corner: 2, func_pendulum: 2, func_pushable: 1, trigger_teleport: 1, info_teleport_destination: 1,
+    func_plat: 1, func_wall: 2, func_rotating: 2, trigger_auto: 1, trigger_relay: 2, multi_manager: 1,
+    momentary_door: 1, momentary_rot_button: 1, env_explosion: 1,
   };
   for (const [cls, n] of Object.entries(census)) assert.equal(at(cls).length, n, cls);
-  assert.equal(at('func_water').map((e) => e.skin).sort().join(), '-3,-4,-5', 'water (the canal), slime (the ink vat), lava (the crucible)');
+  assert.equal(at('func_water').map((e) => e.skin).sort().join(), '-3,-3,-4,-5', 'water (the canal, the fountain), slime (the ink vat), lava (the crucible)');
   assert.ok(at('func_breakable').length >= 10);
-  assert.equal(at('func_breakable').filter((e) => e.explodemagnitude).length, 2, 'the press hall\'s exploding drums');
+  assert.equal(at('func_breakable').filter((e) => e.explodemagnitude).length, 6, 'the press hall\'s drums and A\'s bomb crates explode');
+  // Every name something fires is some entity's name, and every master a multisource.
+  const named = new Set(bsp.entities.map((e) => e.targetname).filter(Boolean));
+  const mm = at('multi_manager').flatMap((e) => Object.keys(e).filter((k) => !['classname', 'targetname', 'origin', 'angles'].includes(k)));
+  for (const name of [...bsp.entities.flatMap((e) => [e.target, e.killtarget]), ...mm].filter(Boolean)) assert.ok(named.has(name), `${name} names something`);
+  for (const e of bsp.entities.filter((e) => e.master)) assert.ok(at('multisource').some((m) => m.targetname === e.master), e.master);
   // Lamps under every roof: the press hall's spot lamps and the warehouse's bulbs light
   // floors the sun never reaches (they were pitch dark: 20 20 24).
   assert.equal(at('light_spot').length, 3);
-  assert.equal(at('light').length, 15);
+  assert.equal(at('light').length, 16);
   const s = new SurfaceMap(bsp, world), out = new Float32Array(3);
   assert.ok(s.lightAt(out, 928, 64, 20) && out[0] > 150 && out[0] > out[2] * 1.15, `under a press hall spot (${out.join(' ')})`);
   assert.ok(s.lightAt(out, -1400, -2000, 20) && out[0] > 100, `between the warehouse's bulbs (${out.join(' ')})`);
@@ -179,6 +186,33 @@ Deno.test('de_inkwell: the round start sets the barge off and switches the fans 
   assert.equal(g.phase, PHASE_LIVE);
   assert.ok(!d.stopped[barge], 'the barge goes');
   for (const k of fans) assert.equal(d.dir[k], 1, 'the fans turn');
+});
+
+// The bomb going off on A fires the site's target: the stack's crates (trigger-only) break and
+// explode, a fireball goes up over the stage and a relay tears its poster down.
+Deno.test('de_inkwell: the bomb going off on A breaks the crate stack, sends up a fireball and tears the poster down', () => {
+  const { game: g, run } = walker(bsp);
+  const b = g.breakables, crates = [];
+  for (let s = 1; s <= b.count; s++) if (b.name[s] === 'a_blast') crates.push(s);
+  assert.equal(crates.length, 4);
+  assert.equal(g.bombSites.targets[0], 'a_blast');
+  const blasts = () => [...g.grenades.fxKind.subarray(0, g.grenades.fxCount)].filter((k) => k === FX_BLAST).length;
+  g.fireTarget(g.bombSites.targets[0], null);
+  run(TICK_RATE / 2);
+  for (const s of crates) assert.equal(b.broken[s], 1, 'a crate of the stack');
+  assert.ok(blasts() >= 5, `the crates' blasts and the fireball (${blasts()})`);
+  assert.ok(g.logic.removed.some((m) => m !== 0), 'the poster torn down');
+});
+
+// The net loft's gate follows the wheel on the Fish alley's side, and stays where it is left.
+Deno.test("de_inkwell: the net loft's gate rises as the wheel is turned and stays up", () => {
+  const { game: g, run, put } = walker(bsp);
+  const d = g.doors, gate = d.kind.indexOf(MOVER_MOMENTARY);
+  assert.ok(gate >= 0 && d.kind.indexOf(MOVER_WHEEL) >= 0);
+  put(-1524, 232, 0); // facing the wheel on the loft's south wall
+  run(TICK_RATE * 5, IN_USE, 270, 20);
+  run(TICK_RATE * 2, 0, 270, 20);
+  assert.ok(d.atTop(gate), 'open');
 });
 
 function game(cfg, seed) {

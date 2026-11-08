@@ -51,6 +51,8 @@
 <rect x="44" y="244" width="40" height="136" fill="#ecd9a8"/>
 <rect x="140" y="340" width="104" height="32" fill="#ecd9a8"/>
 <rect x="140" y="244" width="32" height="96" fill="#ecd9a8"/>
+<rect x="84" y="276" width="56" height="16" fill="#b8a993"/>
+<rect x="84" y="276" width="56" height="16" fill="url(#roof)"/>
 <defs><marker id="up" viewBox="0 0 6 6" refX="3" refY="3" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L6 3L0 6z" fill="#222"/></marker></defs>
 <rect x="228" y="620" width="160" height="24" fill="#5e8fb0"/>
 <rect x="228" y="619" width="8" height="1" fill="#3d352e" fill-opacity="0.75"/>
@@ -91,6 +93,23 @@
 <rect x="333" y="428" width="4" height="4" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="362" y="444" width="10" height="16" fill="#3d352e" fill-opacity="0.75"/>
 <circle cx="308" cy="340" r="14" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="318.75" y="339.5" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-90 321.5 340)"/>
+<rect x="317.625" y="334.25" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-113 320.375 334.75)"/>
+<rect x="314.75" y="330" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-135 317.5 330.5)"/>
+<rect x="310.25" y="327" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-158 313 327.5)"/>
+<rect x="305.25" y="326" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-180 308 326.5)"/>
+<rect x="300" y="327.125" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-203 302.75 327.625)"/>
+<rect x="295.75" y="330" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-225 298.5 330.5)"/>
+<rect x="292.75" y="334.5" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-248 295.5 335)"/>
+<rect x="291.75" y="339.5" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-270 294.5 340)"/>
+<rect x="292.875" y="344.75" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-293 295.625 345.25)"/>
+<rect x="295.75" y="349" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-315 298.5 349.5)"/>
+<rect x="300.25" y="352" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-338 303 352.5)"/>
+<rect x="305.25" y="353" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="310.5" y="351.875" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-23 313.25 352.375)"/>
+<rect x="314.75" y="349" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-45 317.5 349.5)"/>
+<rect x="317.75" y="344.5" width="5.5" height="1" fill="#3d352e" fill-opacity="0.75" transform="rotate(-68 320.5 345)"/>
+<rect x="295" y="327" width="26" height="26" fill="#5e8fb0"/>
 <circle cx="308" cy="340" r="4" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="252" y="384" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="356" y="292" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
@@ -187,6 +206,9 @@
 <rect x="180" y="366" width="12" height="6" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="212" y="366" width="12" height="6" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="140" y="292" width="8" height="8" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="111" y="276" width="2" height="16" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="116" y="291.5" width="3" height="0.5" fill="#3d352e" fill-opacity="0.75"/>
+<rect x="113" y="276" width="19" height="16" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="228" y="540" width="160" height="80" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="228" y="28" width="160" height="80" fill="#3d352e" fill-opacity="0.75"/>
 <rect x="492" y="148" width="64" height="64" fill="#3d352e" fill-opacity="0.75"/>
@@ -200,10 +222,13 @@
 <circle cx="458" cy="552" r="3" fill="#f1c232"/>
 <circle cx="408" cy="322" r="3" fill="#f1c232"/>
 <circle cx="422" cy="321" r="3" fill="#f1c232"/>
+<circle cx="580" cy="180" r="3" fill="#f1c232"/>
+<circle cx="580" cy="180" r="3" fill="#f1c232"/>
 <circle cx="212" cy="599" r="3" fill="#f1c232"/>
 <circle cx="220" cy="568" r="3" fill="#f1c232"/>
 <circle cx="220" cy="568" r="3" fill="#f1c232"/>
 <circle cx="220" cy="568" r="3" fill="#f1c232"/>
+<circle cx="123" cy="284" r="3" fill="#f1c232"/>
 <circle cx="276" cy="600" r="3" fill="#c0392b"/>
 <circle cx="292" cy="600" r="3" fill="#c0392b"/>
 <circle cx="308" cy="600" r="3" fill="#c0392b"/>
@@ -242,6 +267,7 @@
 <circle cx="56" cy="456" r="3" fill="#f1c232"/>
 <circle cx="56" cy="429.375" r="3" fill="#f1c232"/>
 <circle cx="56" cy="396" r="3" fill="#f1c232"/>
+<circle cx="112" cy="284" r="3" fill="#f1c232"/>
 <text x="308" y="580" font-size="12" font-weight="bold" fill="#17130f" text-anchor="middle">T spawn (docks)</text>
 <text x="440" y="562" font-size="12" font-weight="bold" fill="#17130f" text-anchor="middle">Quay</text>
 <text x="524" y="548" font-size="12" font-weight="bold" fill="#17130f" text-anchor="middle">Long corner</text>
@@ -256,4 +282,5 @@
 <text x="56" y="464" font-size="12" font-weight="bold" fill="#17130f" text-anchor="middle">Lower tunnel</text>
 <text x="64" y="312" font-size="12" font-weight="bold" fill="#17130f" text-anchor="middle" transform="rotate(-90 64 312)">B alley</text>
 <text x="192" y="356" font-size="12" font-weight="bold" fill="#17130f" text-anchor="middle">Fish alley</text>
+<text x="112" y="284" font-size="12" font-weight="bold" fill="#17130f" text-anchor="middle">Net loft</text>
 </svg>
