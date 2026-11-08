@@ -53,6 +53,11 @@
   .maps { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 5px; }
   .maps button { text-align: left; font-weight: 400; box-shadow: 1px 1px 0 var(--ink); overflow: hidden; text-overflow: ellipsis; }
   .maps button.current { outline: 3px solid var(--red); }
+  /* The new room's Your map tile: a drop zone for a .bsp, shaped like the map buttons. */
+  .maps .drop { padding: 4px 10px; border: 2px dashed var(--ink); background: var(--paper-hi); cursor: pointer;
+    font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .maps .drop:hover, .maps .drop.over { background: var(--yellow); }
+  .maps .drop input { display: none; }
   .setting { display: grid; grid-template-columns: minmax(180px, 230px) 130px 1fr; align-items: center; gap: 4px 10px;
     padding: 4px 0; border-bottom: 1px solid rgba(23, 19, 15, 0.1); }
   .setting input, .setting select { max-width: 100%; }

@@ -8,16 +8,19 @@
 //   /admin                 the server's own game (server/main.js serves this file there)
 //   /admin?room=<code>     a room (the tab that hosts it hands the password over)
 //   /admin?practice        the practice game running in another tab
-//   /admin?new             a new room on one of the server's maps (Play Online's Create a room)
+//   /admin?new             a new room on one of the server's maps or a .bsp of our own (Play Online's
+//                          Create a room)
 
 import { cvarCommand, who, modeCommands, botCommands, PRACTICE_PRESET, resetCommands, GROUPS, groupOf, whenApplies, controlOf }
   from './admincmd.js';
 import { MODES } from '../shared/modes.js';
+import { parseUntrustedBSP, mapNameOf } from '../shared/bsp.js';
 
 const TEAMS = ['none', 'T', 'CT', 'Spectator']; // shared/player.js: TEAM_T 1, TEAM_CT 2, TEAM_SPECTATOR 3
 const TEAM_CLASS = ['', 't', 'ct', 'spec'];
 const LEVELS = ['easy', 'normal', 'hard', 'expert'];
 const TABS = ['Match', 'Players', 'Bots', 'Map & mode', 'Settings', 'Cheats', 'Console'];
+const OWN_MAP_MAX = 24 << 20; // a room's map at most (server/rooms.js ROOM_LIMITS.bytes)
 
 const params = new URLSearchParams(location.search);
 const room = (params.get('room') || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -293,14 +296,16 @@ function invite() {
     link.select();
     if (navigator.clipboard) navigator.clipboard.writeText(link.value).then(() => (copy.textContent = 'Copied'), () => {});
   });
-  return h('div', {}, row(link, copy, h('a', { href: `/?room=${room}`, target: '_blank' }, 'Play in this room')),
+  return h('div', {}, row(link, copy, h('a', { href: `/?room=${room}#rcon=${encodeURIComponent(password)}`, target: '_blank',
+    title: 'Your game tab gets the room\'s console too (bot_add, mp_restartgame, ... no rcon needed)' }, 'Play in this room')),
     h('p', { class: 'note' }, 'Friends who open the link join the room. sv_listed 1 lists it in Play Online; with 0 only the ' +
       'link brings players in. The room closes a couple of minutes after its last player leaves.'));
 }
 
-// --- A new room (/admin?new): one of the server's maps, a mode, bots, public or link only, a
-// join password; made by POST /rooms (server/main.js openRoom), then managed here with the
-// room's rcon password, which comes back with it.
+// --- A new room (/admin?new): one of the server's maps or, on the Your map tile beside them, a
+// .bsp of our own, a mode, bots, public or link only, a join password; made by POST /rooms
+// (server/main.js: openRoom for a server map, createRoom uploading our own), then managed here
+// with the room's rcon password, which comes back with it.
 
 async function newRoom() {
   $('summary').textContent = 'New room';
@@ -311,11 +316,50 @@ async function newRoom() {
     // shown as no maps
   }
   let picked = maps.includes('de_dust2') ? 'de_dust2' : maps[0] || '';
+  let own = null; // a .bsp of our own, { name, bytes }: the room's map while `picked` is null
+  const error = h('p', { class: 'note', style: 'color: var(--red)' });
   const grid = h('div', { class: 'maps' });
-  const draw = () => grid.replaceChildren(...maps.map((m) => h('button', { class: m === picked ? 'on' : '', onclick: () => {
-    picked = m;
+  const pickOwn = async (file) => {
+    if (!file) return;
+    error.textContent = '';
+    try {
+      if (file.size > OWN_MAP_MAX) throw new Error(`${file.name} is too large (${OWN_MAP_MAX >> 20} MB at most)`);
+      const bytes = await file.arrayBuffer();
+      try {
+        parseUntrustedBSP(bytes); // the server checks it again
+      } catch (err) {
+        throw new Error(`${file.name} is not a map this game can play (${err.message})`);
+      }
+      own = { name: mapNameOf(file.name), bytes };
+      picked = null;
+      go.disabled = full;
+    } catch (err) {
+      error.textContent = err.message;
+    }
     draw();
-  } }, m)));
+  };
+  const drop = h('label', {
+    class: 'drop', title: 'Any GoldSrc map (CS 1.6, BSP version 30) you have',
+    ondragover: (e) => {
+      e.preventDefault();
+      drop.classList.add('over');
+    },
+    ondragleave: () => drop.classList.remove('over'),
+    ondrop: (e) => {
+      e.preventDefault();
+      drop.classList.remove('over');
+      pickOwn(e.dataTransfer.files[0]);
+    },
+  }, h('input', { type: 'file', accept: '.bsp', onchange: (e) => pickOwn(e.target.files[0]) }), h('span'));
+  const tile = (label, on, pick) => h('button', { class: on ? 'on' : '', title: label, onclick: () => {
+    pick();
+    draw();
+  } }, label);
+  const draw = () => {
+    drop.lastChild.textContent = own ? 'Another .bsp...' : 'Your map (.bsp)...';
+    grid.replaceChildren(drop, ...(own ? [tile(`${own.name} (yours)`, picked === null, () => (picked = null))] : []),
+      ...maps.map((m) => tile(m, m === picked, () => (picked = m))));
+  };
   draw();
   const mode = h('select', {}, MODES.map((m) => h('option', { value: m.name }, m.label)));
   mode.value = 'competitive';
@@ -328,22 +372,32 @@ async function newRoom() {
   const listed = h('input', { type: 'radio', name: 'visibility', checked: true });
   const hidden = h('input', { type: 'radio', name: 'visibility' });
   const password = h('input', { type: 'password', maxLength: 63, placeholder: 'none', autocomplete: 'new-password' });
-  const error = h('p', { class: 'note', style: 'color: var(--red)' });
   const full = !!count && count.live >= count.max;
   const go = btn('Create the room', async () => {
     go.disabled = true;
     error.textContent = '';
     try {
-      const res = await fetch('/rooms', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ map: picked, mode: mode.value, players: +bots.value, difficulty: +level.value,
-          armoury: armoury.checked, listed: listed.checked, password: password.value }),
-      });
+      let res;
+      if (picked === null) { // our own map: the file is the body, the join password a header (URI-encoded)
+        const q = new URLSearchParams({ file: `${own.name}.bsp`, mode: mode.value, players: bots.value,
+          difficulty: level.value, armoury: armoury.checked ? '1' : '0', listed: listed.checked ? '1' : '0' });
+        const headers = { 'content-type': 'application/octet-stream' };
+        if (password.value) headers['x-room-password'] = encodeURIComponent(password.value);
+        go.textContent = `Sending ${own.name}...`;
+        res = await fetch(`/rooms?${q}`, { method: 'POST', body: own.bytes, headers });
+      } else {
+        res = await fetch('/rooms', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ map: picked, mode: mode.value, players: +bots.value, difficulty: +level.value,
+            armoury: armoury.checked, listed: listed.checked, password: password.value }),
+        });
+      }
       const out = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
       location.replace(`/admin?room=${out.code}#password=${encodeURIComponent(out.rcon)}`); // logs in (start)
     } catch (err) {
       error.textContent = err.message;
+      go.textContent = 'Create the room';
       go.disabled = false;
     }
   }, 'go');
@@ -359,7 +413,9 @@ async function newRoom() {
       row('Join password', password, h('span', { class: 'note' }, '(optional)')),
       row(go), error,
       full ? h('p', { class: 'note' }, 'Every room on this server is taken: try again when one closes.') : null),
-    h('h2', {}, 'Map'), card(maps.length ? grid : h('p', { class: 'note' }, 'No maps answered.'))));
+    h('h2', {}, 'Map'), card(grid, maps.length ? null : h('p', { class: 'note' }, 'No maps answered: bring your own.'),
+      h('p', { class: 'note' }, 'Your map: a .bsp of your own, sent to this server, which keeps it in memory only while ' +
+        'people play in the room.'))));
 }
 
 const BUILD = {

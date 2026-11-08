@@ -573,6 +573,14 @@ const ownMaps = new Map();
 let useOwn = false; // the game on screen plays an ownMaps file (Your map, Try it, the editor's preview), not the server's
 let roomCode = (params.get('room') || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 let roomRcon = '', roomNames = null;
+{ // The admin page's Play in this room hands over the room's rcon password after the # (never sent
+  // to the server; taken off the address at once): our room's console is then ours, no rcon needed.
+  const linked = new URLSearchParams(location.hash.slice(1)).get('rcon');
+  if (linked !== null) {
+    if (roomCode) roomRcon = linked;
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+}
 
 let currentMap = '';
 let mapBuy = 0; // the map's info_map_parameters buying rule (mapBuying), for the B key's answer
@@ -2882,7 +2890,6 @@ menu.onPlay = (team) => {
   run(() => startOnline(team));
 };
 menu.onMapFile = (file) => addOwnMap(file);
-menu.onHost = (map, team, opts) => run(() => hostRoom(map, team, opts));
 menu.onRoom = (code) => { // a listed room picked in the Play panel, '' the server's own game
   setRoom(code);
   menu.fetchServer();
@@ -2948,6 +2955,11 @@ async function startOnline(team) {
     net = null;
     throw new Error(`could not connect (${err.message})`);
   }
+  if (roomCode && roomRcon && !roomNames) { // our room's console catalog, for the suggestions (server/admin.js)
+    const res = await fetch(`/admin/catalog?room=${roomCode}`, { headers: { 'x-rcon-password': encodeURIComponent(roomRcon) } })
+      .catch(() => null);
+    if (res && res.ok) roomNames = await res.json().catch(() => null);
+  }
   if (roomCode && roomNames) { // our room: its console's cvars and commands join the suggestions
     con.remote = new Map(roomNames.map(([name, help, value, hint]) => [name, { help, value, hint }]));
   }
@@ -2973,34 +2985,13 @@ async function addOwnMap(file) {
 }
 const OWN_MAP_MAX = 24 << 20; // the server's room limit (server/rooms.js ROOM_LIMITS.bytes)
 
-// Host your map (Play Online): uploads our own map to the server, which runs a room on it
-// (held in its memory only, server/rooms.js), then joins it. The page's address becomes the
-// invite link. The join password goes in a header, URI-encoded (a header holds Latin-1 only),
-// never in the address.
-async function hostRoom(map, team, { mode = 'competitive', players = 0, difficulty = 1, armoury = true, listed = false,
-  password = '' } = {}) {
-  const bytes = ownMaps.get(map);
-  if (!bytes) throw new Error('pick a map file first');
-  if (playing) leaveGame();
-  menu.busy(`Uploading ${map}...`);
-  const q = new URLSearchParams({ file: `${map}.bsp`, mode, players: String(players), difficulty: String(difficulty),
-    armoury: armoury ? '1' : '0', listed: listed ? '1' : '0' });
-  const headers = { 'content-type': 'application/octet-stream' };
-  if (password) headers['x-room-password'] = encodeURIComponent(password);
-  const res = await fetch(`/rooms?${q}`, { method: 'POST', body: bytes, headers });
-  const out = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(out.error || `the upload failed (HTTP ${res.status})`);
-  setRoom(out.code, out.rcon, out.names);
-  if (password) cv.password.set(password); // the host's own HELLO needs it too
-  await startOnline(team);
-}
-
 // The room the Play panel and the next join go to ('' the server's own game), kept in the
-// page's address (the link to share; a reload joins it again).
-function setRoom(code, rcon = '', names = null) {
+// page's address (the link to share; a reload joins it again). Its rcon password comes only with
+// the admin page's link (above, where roomRcon is declared).
+function setRoom(code) {
   roomCode = code;
-  roomRcon = rcon;
-  roomNames = names;
+  roomRcon = '';
+  roomNames = null;
   menu.room = code;
   const url = new URL(location.href);
   if (code) url.searchParams.set('room', code);
