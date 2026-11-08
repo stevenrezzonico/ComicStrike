@@ -484,6 +484,12 @@ export class Menu {
     this.note.classList.toggle('error', /^(could not|disconnected|failed)/i.test(this.message));
 
     const body = this.body;
+    // The same panel drawn again (a map picked, a setting changed) keeps where the menu, the
+    // panel and its lists were scrolled: rebuilt, Play Offline's map grid snapped to its top.
+    const drawn = `${this.panel}|${this.tab}|${this.inGame}`, same = drawn === this.drawn;
+    const lists = () => body.querySelectorAll('.menu-maps, .menu-settings');
+    const scrolled = same ? [this.root.scrollTop, body.scrollTop, ...[...lists()].map((e) => e.scrollTop)] : null;
+    this.drawn = drawn;
     body.innerHTML = '';
     if (this.panel === 'play') this.renderPlay(body);
     else if (this.panel === 'practice') this.renderPractice(body);
@@ -494,6 +500,10 @@ export class Menu {
     body.classList.toggle('empty', !this.panel && this.inGame && !(this.room && this.online));
     this.placePanel();
     this.updateWindow();
+    if (scrolled) {
+      [this.root.scrollTop, body.scrollTop] = scrolled;
+      lists().forEach((e, i) => (e.scrollTop = scrolled[2 + i] || 0));
+    }
   }
 
   // The start page: what the game is, the server line, the name.
