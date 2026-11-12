@@ -480,6 +480,55 @@ Deno.test('killed relays and spent explosions are not walked past the fire budge
   assert.ok(walked <= 2 * MAX_FIRES, `${walked} entries walked in a tick`);
 });
 
+// A multisource found the input that fired it with indexOf and its state with every(): an
+// uploaded map's 5,000 inputs, the last one fired 256 times a tick, walked 1.3 M entries.
+Deno.test('a multisource finds its input and its state without walking its list', () => {
+  const bsp = yard((map) => {
+    map.point({ classname: 'multisource', targetname: 'ms', origin: '0 0 64' });
+    for (let i = 0; i < 5000; i++) map.point({ classname: 'trigger_relay', target: 'ms', origin: '0 0 64' });
+  });
+  const logic = quiet(() => new Game('yard', bsp, { rounds: false })).logic;
+  logic.reset(0);
+  const ms = logic.masters.get('ms'), last = ms.sources[ms.sources.length - 1];
+  let walked = 0;
+  const counted = (list) => new Proxy(list, {
+    get: (a, k, r) => {
+      if (typeof k === 'string' && /^\d+$/.test(k)) walked++;
+      return Reflect.get(a, k, r);
+    },
+  });
+  ms.sources = counted(ms.sources);
+  ms.state = counted(ms.state);
+  for (let i = 0; i < 300; i++) logic.fireAt(100, 'ms', null, 0, last);
+  assert.ok(walked <= 2 * MAX_FIRES, `${walked} entries walked in a tick`);
+  assert.equal(ms.on, false, 'one input of 5,000 does not turn it on');
+});
+
+// The inputs' order does not matter, and toggling one back off counts.
+Deno.test('a multisource is on once every input is on, whatever the order', () => {
+  const bsp = yard((map) => {
+    map.point({ classname: 'multisource', targetname: 'ms', origin: '0 0 64' });
+    for (let i = 0; i < 3; i++) map.point({ classname: 'trigger_relay', target: 'ms', origin: '0 0 64' });
+  });
+  const logic = quiet(() => new Game('yard', bsp, { rounds: false })).logic;
+  logic.reset(0);
+  const ms = logic.masters.get('ms'), [a, b, c] = ms.sources;
+  logic.fireAt(1, 'ms', null, 0, c);
+  logic.fireAt(2, 'ms', null, 0, a);
+  logic.fireAt(3, 'ms', null, 0, a); // a off again
+  logic.fireAt(4, 'ms', null, 0, b);
+  assert.equal(ms.on, false, 'a was turned off');
+  logic.fireAt(5, 'ms', null, 0, a);
+  assert.equal(ms.on, true);
+  logic.reset(10);
+  assert.equal(ms.on, false, 'off again at the round start');
+  logic.fireAt(11, 'ms', null, 0, a);
+  logic.fireAt(12, 'ms', null, 0, b);
+  assert.equal(ms.on, false, 'the count started over');
+  logic.fireAt(13, 'ms', null, 0, c);
+  assert.equal(ms.on, true);
+});
+
 // A map's explosion traced to every breakable: 254 that never break and a loop firing
 // env_explosions were ~200 blasts a tick, 160-300 ms. Each blast counts the breakables it
 // tests against the budget.

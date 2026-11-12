@@ -1089,7 +1089,9 @@ export class MapLogic {
     this.fires = 0;
     this.named = new Set(); // names something fires on its own (triggers players walk into, relays, autos)
     this.pressed = new Set(); // names only buttons and doors fire
-    this.masters = new Map(); // multisource targetname -> { sources: [bsp entity], on: [bool], target, on }
+    // multisource targetname -> { sources: [bsp entity], index: bsp entity -> its place, state:
+    // [bool], set: how many are on, target, on }
+    this.masters = new Map();
     this.dead = new Set(); // relay targetnames removed by a killtarget
     this.removed = new Uint32Array(8); // their world slots, as a mask like the breakables'
     this.breakableByName = new Map(); // targetname -> [slot]
@@ -1150,7 +1152,7 @@ export class MapLogic {
       } else if (cls === 'player_weaponstrip' && e.targetname) {
         this.strips.add(e.targetname);
       } else if (cls === 'multisource' && e.targetname) {
-        this.masters.set(e.targetname, { sources: [], state: [], target: e.target || '', on: true });
+        this.masters.set(e.targetname, { sources: [], index: new Map(), state: [], set: 0, target: e.target || '', on: true });
       } else if ((cls === 'func_button' || cls === 'func_rot_button' || cls.startsWith('func_door')) && e.target) {
         this.pressed.add(e.target);
       }
@@ -1159,6 +1161,7 @@ export class MapLogic {
     bsp.entities.forEach((e, bi) => {
       if (!e.target || !this.masters.has(e.target)) return;
       const ms = this.masters.get(e.target);
+      ms.index.set(bi, ms.sources.length);
       ms.sources.push(bi);
       ms.state.push(false);
       ms.on = false;
@@ -1183,6 +1186,7 @@ export class MapLogic {
     }
     for (const ms of this.masters.values()) {
       ms.state.fill(false);
+      ms.set = 0;
       ms.on = ms.sources.length === 0;
     }
     this.dead.clear();
@@ -1249,10 +1253,13 @@ export class MapLogic {
     }
     const ms = this.masters.get(name);
     if (ms && !ms.on) {
-      const i = ms.sources.indexOf(src);
-      if (i >= 0) {
+      // Its input and the count of those on, not indexOf and every(): an uploaded map's 5,000
+      // inputs, the last one fired 256 times a tick, walked 1.3 M entries.
+      const i = ms.index.get(src);
+      if (i !== undefined) {
         ms.state[i] = !ms.state[i];
-        if (ms.state.every(Boolean)) {
+        ms.set += ms.state[i] ? 1 : -1;
+        if (ms.set === ms.sources.length) {
           ms.on = true;
           if (ms.target) this.fireAt(tick, ms.target, act, 0, -1);
         }
