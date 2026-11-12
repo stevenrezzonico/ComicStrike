@@ -4,7 +4,7 @@
 // bulk of the world draws with a shader that never discards.
 import assert from 'node:assert/strict';
 import {
-  GBUFFER_SHADERS, WORLD_FS, WORLD_SOLID_FS, DECAL_FS, SHADOW_FS, COMPOSITE_FS, INK_FS, G_FLAGS,
+  GBUFFER_SHADERS, WORLD_VS, WORLD_FS, WORLD_SOLID_FS, DECAL_FS, SHADOW_FS, COMPOSITE_FS, INK_FS, G_FLAGS,
   CLOUD_PERIOD,
 } from '../client/gl/shaders.js';
 import { FlashLights, MAX_FLASHES } from '../client/gl/flashes.js';
@@ -63,6 +63,20 @@ Deno.test('comic: every G-buffer shader writes all three targets through gbuffer
   const smooth = COMPOSITE_FS.slice(COMPOSITE_FS.indexOf('float smoothInk('), COMPOSITE_FS.indexOf('void main()'));
   assert.match(smooth, /if \(m >= 1\.0\) return m;/, 'a pixel on a line keeps its ink, with no fetches');
   assert.equal((smooth.match(/inkOf\(/g) || []).length, 4, 'the four direct neighbors');
+});
+
+Deno.test("comic: the world shader moves only the movers' slots, without TAA's jitter", () => {
+  // The killables' slots come after the movers' (shared/doors.js entitySlots), and only the
+  // movers' matrix rows are uploaded: a test on the base alone moved the killables by unset
+  // rows (de_inkwell's poster at the origin) and flagged them G_MOVING.
+  const main = WORLD_VS.slice(WORLD_VS.indexOf('void main()'));
+  assert.equal((main.match(/slot > u_moverBase/g) || []).length, 1, 'one test of the base');
+  assert.match(main, /bool mover = slot > u_moverBase && slot <= u_moverEnd;/);
+  assert.match(main, /if \(mover\) \{/);
+  assert.match(main, /a_mat\.y \| \(mover \? 256u : 0u\)/);
+  // G_MOVING keeps no TAA history, so the movers are drawn where the unjittered view puts them.
+  const at = main.indexOf('gl_Position = u_viewProj');
+  assert.ok(at > 0 && main.indexOf('if (mover) gl_Position.xy -= u_jitter * gl_Position.w;') > at);
 });
 
 Deno.test('comic: decals paint the albedo target only', () => {

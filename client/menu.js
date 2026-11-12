@@ -440,12 +440,14 @@ export class Menu {
         fetch('/maps.json').then((r) => r.json()),
         fetch('/rooms.json').then((r) => r.json()).catch(() => null),
       ]);
+      if (room !== this.room) return; // another room was picked meanwhile: its own fetch answers
       this.roomInfo = info;
       this.roomGone = !!room && !info;
       this.maps = maps;
       this.listedRooms = (rooms && rooms.rooms) || [];
       this.roomCount = rooms && rooms.rooms ? [rooms.live, rooms.max] : null;
     } catch {
+      if (room !== this.room) return;
       this.roomInfo = this.roomCount = null;
       this.maps = this.maps || [];
     }

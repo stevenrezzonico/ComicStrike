@@ -8,6 +8,7 @@
 // Values marked (approx.) are estimates of CS:GO behavior not found in its data files.
 
 import { parseVec3, entityYaw, modelBox } from './bsp.js';
+import { traceHull, Trace, HULL_POINT } from './trace.js';
 
 export const MAX_HOSTAGES = 4;
 export const HOSTAGES_PER_ROUND = 2; // mp_hostages_max
@@ -99,8 +100,9 @@ export class Hostages {
     return -1;
   }
 
-  // The idle hostage in front of an eye within reach, or -1.
-  inReach(ex, ey, ez, pitch, yaw) {
+  // The idle hostage in front of an eye within reach, nothing solid between (canReachBomb's
+  // test), or -1.
+  inReach(world, ex, ey, ez, pitch, yaw) {
     const cp = Math.cos(pitch * Math.PI / 180), dx = cp * Math.cos(yaw * Math.PI / 180);
     const dy = cp * Math.sin(yaw * Math.PI / 180), dz = -Math.sin(pitch * Math.PI / 180);
     let best = -1, bestD = HOSTAGE_USE_RANGE;
@@ -108,9 +110,14 @@ export class Hostages {
       if (this.state[k] !== HS_IDLE) continue;
       const vx = this.x[k] - ex, vy = this.y[k] - ey, vz = this.z[k] + 36 - ez, d = Math.hypot(vx, vy, vz);
       if (d >= bestD || (vx * dx + vy * dy + vz * dz) / Math.max(d, 1) < HOSTAGE_USE_CONE) continue;
+      traceHull(world, HULL_POINT, ex, ey, ez, this.x[k], this.y[k], this.z[k] + 36, useTrace);
+      const t = useTrace;
+      if (t.fraction < 1 && Math.hypot(t.endx - this.x[k], t.endy - this.y[k], t.endz - this.z[k] - 36) >= 12) continue;
       best = k;
       bestD = d;
     }
     return best;
   }
 }
+
+const useTrace = new Trace();

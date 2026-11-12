@@ -26,7 +26,7 @@ import {
   ShotList, WEAPONS, WEAPON_ID, giveWeapon, silenced, canCarryGrenade, WS_SLOTS, WS_ACTIVE, WS_EVENTS, SLOT_C4,
   WEV_PLANTED, WEV_DEFUSED, WEV_DROP, WEV_FIRE, WEV_MELEE, WEV_THROW, WS_RELOAD_END, WS_ACTION, WS_THROWN, ACTION_PLANT,
   ACTION_DEFUSE, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_KNIFE, SLOT_GRENADE, SLOT_TASER, NUM_SLOTS, WS_GRENADES, GRENADE_IDS, removeWeapon,
-  WS_ZOOM, WS_RESUME_ZOOM,
+  WS_ZOOM, WS_RESUME_ZOOM, DROPPED,
 } from '../shared/weapons.js';
 import { HitTargets, HITGROUP_HEAD, HITGROUP_CHEST, HITGROUP_LEGS, feetOffset } from '../shared/hitgroups.js';
 import { Grenades, FX_BLAST } from '../shared/grenades.js';
@@ -347,9 +347,6 @@ export class Game {
     this.logic.onExplode = (x, y, z, magnitude, flags) => this.mapExplosion(x, y, z, magnitude, flags);
     this.logic.onText = (text, act) => this.mapText(text, act);
     this.logic.onStrip = (act) => this.stripWeapons(this.clients[act.id]);
-    // GoldSrc fires trigger_auto when the map loads, before any round: warmup sees de_inkwell's
-    // barge and fans going (each round start fires them again).
-    this.logic.reset(0);
     this.textsSent = new Map(); // game_text -> the players it reached this second (bits by id; textsAt)
     this.textLines = new Uint8Array(MAX_PLAYERS); // map lines each player got this second
     this.textsAt = -Infinity;
@@ -492,6 +489,10 @@ export class Game {
         }
       },
     };
+    // GoldSrc fires trigger_auto when the map loads, before any round: warmup sees de_inkwell's
+    // barge and fans going (each round start fires them again). Last: what it sets off (an
+    // explosion, a text, a crate) needs the clients, texts and grenades above.
+    this.logic.reset(0);
   }
 
   // HE blasts and fires (hurtBy): HE as a chest hit (armor helps), fire on the legs (armor
@@ -551,6 +552,10 @@ export class Game {
 
   // A new transport session. Returns its Client, or null if the server is full.
   connect(session) {
+    // A human finding every slot taken takes a bot's (the larger team's), as CS:GO's does.
+    if (!session.bot && this.bots.list.length && !this.clients.includes(null)) {
+      this.bots.kick(null, this.bots.largerTeam());
+    }
     const id = this.clients.indexOf(null);
     if (id < 0) {
       session.send(writeReject(new Writer(), 'server full').slice());
@@ -915,8 +920,6 @@ export class Game {
     const p = c.player;
     c.cmdTime = t * TICK_DT;
     if (this.doors.pushables.length && !frozen) this.pushCrates(c);
-    const wf = p.ws.f, held = WS_SLOTS + wf[WS_ACTIVE] * 3;
-    const heldId = wf[held], heldClip = wf[held + 1], heldReserve = wf[held + 2]; // what G may drop
     this.world.bodySelf = c.id;
     this.world.bodyTeam = c.team;
     const pf = p.ps.f, speed0 = Math.hypot(pf[PS_VEL], pf[PS_VEL + 1], pf[PS_VEL + 2]); // as it ran into things
@@ -933,10 +936,10 @@ export class Game {
       this.grenades.throw(this.world, Math.floor(thrown / 4), c.id, c.team, f[PS_ORIGIN], f[PS_ORIGIN + 1],
         f[PS_ORIGIN + 2] + eyeOffset(p.ps), c.pitch, c.yaw, f[PS_VEL], f[PS_VEL + 1], f[PS_VEL + 2], thrown & 3);
     }
-    if (events & WEV_DROP) {
-      if (WEAPONS[heldId]?.c4) this.dropBomb(c, true);
+    if (events & WEV_DROP) { // what weaponTick took out of the hand (a slot key in the same command drew it first)
+      if (WEAPONS[DROPPED[0]]?.c4) this.dropBomb(c, true);
       else if (this.progression()) armLevel(p.ws, this.progression(), c.level, c.team === TEAM_CT, c.cmdTime); // earned, not dropped
-      else this.spawnItem(c, heldId, heldClip, heldReserve, true);
+      else this.spawnItem(c, DROPPED[0], DROPPED[1], DROPPED[2], true);
     }
     // Doors and buttons it ran into, breakables it ran into or stands on.
     for (let i = 0; i < touchedCount; i++) {
@@ -1226,7 +1229,7 @@ export class Game {
     this.pressed.clear();
     this.doors.reset(this.world, this.tick);
     this.killables.reset(this.world);
-    this.logic.reset(this.tick);
+    this.logic.reset(this.tick, false); // trigger_auto fires once everyone is placed (below)
     if (this.rules.autoTeamBalance && this.rules.rounds && !this.rules.teammatesAreEnemies && this.mode !== MODE.demo) {
       this.balanceTeams();
     }
@@ -1281,6 +1284,8 @@ export class Game {
     if (demolition) this.rosterDirty = true; // the new levels
     this.setPhase(PHASE_FREEZE, this.rules.freezeTime);
     if (this.timeoutTeam) this.beginTimeout();
+    // After the spawns: a round-start explosion hit players where the last round left them.
+    this.logic.fireAutos(this.tick);
   }
 
   // --- Match control (votes and their console commands) -------------------------------
@@ -1902,7 +1907,8 @@ export class Game {
   // one in its slot, which drops at c's feet.
   useItem(c) {
     const it = this.items, f = c.player.ps.f;
-    const best = it.inReach(f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2] + eyeOffset(c.player.ps), c.pitch, c.yaw);
+    const ez = f[PS_ORIGIN + 2] + eyeOffset(c.player.ps);
+    const best = it.inReach(this.world, f[PS_ORIGIN], f[PS_ORIGIN + 1], ez, c.pitch, c.yaw);
     if (best < 0) return;
     const o = WS_SLOTS + WEAPONS[it.weapon[best]].slot * 3, ws = c.player.ws.f;
     const old = ws[o], oldClip = ws[o + 1], oldReserve = ws[o + 2];
@@ -2020,7 +2026,8 @@ export class Game {
   }
 
   // An explosion of the map's (RadiusDamage): `damage` at (x, y, z) falling off to
-  // nothing at `radius`, blocked by walls, on every living player and breakable.
+  // nothing at `radius`, blocked by walls, on every living player and breakable. Returns
+  // the breakables it traced to.
   blast(x, y, z, damage, radius, by) {
     for (const c of this.clients) {
       if (!c || !c.joined || !c.alive) continue;
@@ -2031,14 +2038,15 @@ export class Game {
       if (this.bombTrace.fraction < 1) continue;
       this.hurtBy(c, d, by, 0, x, y, z);
     }
-    this.blastBreakables(x, y, z, damage, radius, by);
+    return this.blastBreakables(x, y, z, damage, radius, by);
   }
 
   blastBreakables(x, y, z, damage, radius, by) {
     const out = this.blastOut, first = out.length;
-    this.breakables.blast(this.world, x, y, z, damage, radius, out);
+    const tested = this.breakables.blast(this.world, x, y, z, damage, radius, out);
     const broke = out.splice(first);
     for (const s of broke) this.brokeSlot(s, null, by);
+    return tested;
   }
 
   // A trigger_hurt's dose (MapLogic.onHurt): the map's damage, armor as a chest hit, a death
@@ -2050,12 +2058,14 @@ export class Game {
   }
 
   // An env_explosion fired (CEnvExplosion::Use): a fireball sized by its magnitude and
-  // RadiusDamage of it to 2.5 times it, by its flags (no damage 1, no fireball 4).
+  // RadiusDamage of it to 2.5 times it, by its flags (no damage 1, no fireball 4). Returns
+  // the breakables it traced to, which the map logic counts against its fire budget.
   mapExplosion(x, y, z, magnitude, flags) {
     if (!(flags & SF_EXPLOSION_NOFIREBALL) && magnitude > 0) {
       this.grenades.addEffect(FX_BLAST, Math.min(255, Math.round(magnitude)), -1, 0, x, y, z);
     }
-    if (!(flags & SF_EXPLOSION_NODAMAGE) && magnitude > 0) this.blast(x, y, z, magnitude, magnitude * EXPLODE_RANGE, null);
+    if (flags & SF_EXPLOSION_NODAMAGE || magnitude <= 0) return 0;
+    return this.blast(x, y, z, magnitude, magnitude * EXPLODE_RANGE, null);
   }
 
   // A game_text fired: its lines (a backslash and n in the map's text break them; at most
@@ -2181,7 +2191,7 @@ export class Game {
       return;
     }
     const f = p.ps.f;
-    const k = h.inReach(f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2] + eyeOffset(p.ps), c.pitch, c.yaw);
+    const k = h.inReach(this.world, f[PS_ORIGIN], f[PS_ORIGIN + 1], f[PS_ORIGIN + 2] + eyeOffset(p.ps), c.pitch, c.yaw);
     if (k < 0) {
       c.picking = -1;
       return;

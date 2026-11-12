@@ -147,7 +147,8 @@ export class Breakables {
 
   // A blast at (x, y, z): every breakable in `radius` with nothing solid between the
   // blast and its center takes blastDamage (HL RadiusDamage; the ones only a trigger
-  // breaks are left alone). The slots it broke are pushed to `out`; returns their number.
+  // breaks are left alone). The slots it broke are pushed to `out`; returns how many it
+  // traced to (the map logic charges a blast for them).
   blast(world, x, y, z, damage, radius, out) {
     let n = 0;
     for (let s = 1; s <= this.count; s++) {
@@ -156,9 +157,10 @@ export class Breakables {
       const dist = Math.hypot(blastCenter[0] - x, blastCenter[1] - y, blastCenter[2] - z);
       const d = blastDamage(damage, radius, dist);
       if (d <= 0) continue;
+      n++;
       traceHull(world, HULL_POINT, x, y, z, blastCenter[0], blastCenter[1], blastCenter[2], blastTrace);
       if (blastTrace.fraction < 1 && blastTrace.ent !== this.ent[s]) continue; // a wall between
-      if (this.hurt(world, s, d)) out.push(s), n++;
+      if (this.hurt(world, s, d)) out.push(s);
     }
     return n;
   }

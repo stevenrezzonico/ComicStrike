@@ -80,8 +80,11 @@ export class TeamMarks {
     return true;
   }
 
-  // One draw, off the screen: the program's first draw at map load, not in a game.
+  // One draw, off the screen: the program's first draw at map load, not in a game. On the
+  // canvas, where the marks print: the map load warms with the G-buffer bound, whose three
+  // draw buffers this one-output shader cannot feed (GL_INVALID_OPERATION, nothing warmed).
   warm() {
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
     this.inst[0] = this.inst[1] = -1000;
     this.count = 1;
     this.draw(64, 64);

@@ -265,6 +265,22 @@ Deno.test('a texture of another map, pasted, survives a reload at a default size
   compileToBsp(back);
 });
 
+Deno.test('water with no top texture compiles as water', () => {
+  // The properties panel lets the Top be (none): the compiler's water is then !watergreen.
+  const p = newProject();
+  p.brushes.push({ id: 999, b: [300, 300, 0, 556, 556, 32], tex: { top: null, bottom: null, side: null }, kind: 'func_water', keys: { skin: '-3' },
+    shape: 'box' });
+  assert.equal(pointContents(CollisionWorld.fromBSP(compileToBsp(readProject(JSON.stringify(p)))), 400, 400, 16), -3);
+});
+
+Deno.test('a teleport and an exit both with no name warn: the teleport goes nowhere', () => {
+  const p = newProject();
+  p.brushes.push({ id: 998, b: [0, 300, 0, 64, 364, 72], tex: { top: null, bottom: null, side: null }, kind: 'trigger_teleport',
+    keys: { ...KINDS.trigger_teleport.keys }, shape: 'box' });
+  p.points.push({ id: 999, kind: 'info_teleport_destination', o: [500, 500, 0], yaw: 0, keys: { targetname: '' } });
+  assert.ok(checkProject(p).warnings.some((w) => w.id === 998 && /Teleport exit/.test(w.text)));
+});
+
 // The editor page itself (client/editor/editor.js) without its page: its methods on an object
 // with stubs for the panels, the worker, and the browser's storage and dialogs.
 async function bareEditor(fields = {}) {
@@ -355,4 +371,39 @@ Deno.test('editor: the undo history keeps at most UNDO_CHARS of projects, the ne
   assert.ok(chars <= UNDO_CHARS, `${chars} characters kept`);
   assert.equal(ed.undoStack.length, 10);
   assert.equal(JSON.parse(ed.undoStack.at(-1)).n, 13, 'the newest step kept');
+});
+
+Deno.test('editor: copies of an entity\'s shapes are an entity of their own, and turning or mirroring takes its hinge along', async () => {
+  const store = new Map();
+  const localStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) };
+  await withGlobals({ localStorage }, async () => {
+    // A door in two shapes as an opened map brings it, hinged at 0 0 64 (`origin`: from each
+    // shape's low corner).
+    const q = newProject();
+    const steel = { top: 'steel', bottom: 'steel', side: 'steel' };
+    for (const [id, b] of [[900, [0, -4, 0, 64, 4, 128]], [901, [48, 4, 56, 56, 10, 64]]]) {
+      q.brushes.push({ id, b, tex: steel, kind: 'func_door_rotating', keys: { distance: '90', speed: '100' }, shape: 'box',
+        entity: 7, origin: [-b[0], -b[1], 64 - b[2]] });
+    }
+    const ed = await bareEditor({ project: readProject(JSON.stringify(q)), grid: 16,
+      commit() {}, changed() {}, redraw() {}, renderProps() {}, tellPreviewSelection() {} });
+    const doors = () => ed.project.brushes.filter((b) => b.kind === 'func_door_rotating');
+    const hinges = () => compileToBsp(ed.project).entities.filter((e) => e.classname === 'func_door_rotating').map((e) => e.origin);
+    assert.deepEqual(hinges(), ['0 0 64']);
+    ed.select(doors().map((b) => b.id));
+    ed.copy();
+    ed.duplicate();
+    const copies = doors().slice(2);
+    assert.ok(copies[0].entity === copies[1].entity && copies[0].entity !== doors()[0].entity, 'a new entity of both copies');
+    assert.deepEqual(hinges(), ['0 0 64', '16 16 64']);
+    ed.paste();
+    assert.equal(new Set(doors().map((b) => b.entity)).size, 3);
+    assert.deepEqual(hinges(), ['0 0 64', '16 16 64', '16 16 64']);
+    // The copies (x 16..80, y 12..26) a quarter turn about their middle, then mirrored.
+    ed.select(copies.map((b) => b.id));
+    ed.rotate90();
+    assert.equal(hinges()[1], '51 -13 64');
+    ed.mirror();
+    assert.equal(hinges()[1], '45 -13 64');
+  });
 });

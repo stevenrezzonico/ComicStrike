@@ -1090,7 +1090,7 @@ export class MapLogic {
     this.named = new Set(); // names something fires on its own (triggers players walk into, relays, autos)
     this.pressed = new Set(); // names only buttons and doors fire
     this.masters = new Map(); // multisource targetname -> { sources: [bsp entity], on: [bool], target, on }
-    this.dead = new Set(); // bsp entity indices removed by a killtarget
+    this.dead = new Set(); // relay targetnames removed by a killtarget
     this.removed = new Uint32Array(8); // their world slots, as a mask like the breakables'
     this.breakableByName = new Map(); // targetname -> [slot]
     doors.masters = this.masters;
@@ -1117,8 +1117,9 @@ export class MapLogic {
         !(+(e.spawnflags || 0) & SF_TRIGGER_NOCLIENTS)) {
         const b = box(e);
         if (!b) return;
+        // wait -1: once and gone (HL; ticksOf(-1) fired it every tick).
         this.triggers.push({ ...b, name: e.targetname || '', target: e.target || '', kill, master: e.master || '', delay,
-          wait: +(e.wait || 0) || 0.2, once: cls === 'trigger_once', next: 0, done: false, src: bi });
+          wait: +(e.wait || 0) || 0.2, once: cls === 'trigger_once' || +e.wait < 0, next: 0, done: false, src: bi });
         if (e.target) this.named.add(e.target);
       } else if (cls === 'trigger_relay') {
         relay(e.targetname, e.target || '', delay, kill, bi);
@@ -1173,8 +1174,8 @@ export class MapLogic {
   }
 
   // Round start: triggers rearm, multisources go off, the removed come back, trigger_auto
-  // fires.
-  reset(tick) {
+  // fires (unless `autos` is false: the game fires them once the players are placed).
+  reset(tick, autos = true) {
     this.queue.length = 0;
     for (const t of this.triggers) {
       t.next = 0;
@@ -1191,6 +1192,10 @@ export class MapLogic {
       h.next.clear();
     }
     for (const list of this.explosions.values()) for (const x of list) x.done = false;
+    if (autos) this.fireAutos(tick);
+  }
+
+  fireAutos(tick) {
     for (const a of this.autos) this.fireAt(tick, a.target, null, a.delay, a.src, a.kill);
   }
 
@@ -1216,11 +1221,13 @@ export class MapLogic {
     for (const h of this.hurts) if (h.name === name) h.on = !h.on; // CTriggerHurt's ToggleUse
     const ex = this.explosions.get(name);
     if (ex && this.onExplode) {
-      for (const x of ex) { // each one counts as a fire: 8,000 sharing a name were 0.4 s a tick
-        if (x.done) continue;
+      // Each one counts as a fire, spent or not: 8,000 sharing a name were 0.4 s a tick. A
+      // blast also pays for the breakables it tests (onExplode returns their number).
+      for (const x of ex) {
         if (++this.fires > MAX_FIRES) break;
+        if (x.done) continue;
         x.done = !(x.flags & SF_EXPLOSION_REPEATABLE); // once a round unless repeatable
-        this.onExplode(x.x, x.y, x.z, x.magnitude, x.flags);
+        this.fires += this.onExplode(x.x, x.y, x.z, x.magnitude, x.flags) || 0;
       }
     }
     const tx = this.texts.get(name);
@@ -1233,11 +1240,11 @@ export class MapLogic {
     if (act && this.onStrip && this.strips.has(name)) this.onStrip(act);
     const slots = this.breakableByName.get(name);
     if (slots && this.onBreak) for (const s of slots) if (!this.breakables.broken[s]) this.onBreak(s, act);
-    const r = this.relays.get(name);
+    const r = this.dead.has(name) ? undefined : this.relays.get(name); // killed: not walked again
     if (r) {
       for (const q of r) {
         if (this.fires >= MAX_FIRES) break; // a multi_manager naming itself 60,000 times was 15M calls a tick
-        if (!this.dead.has(q.src)) this.fireAt(tick, q.target, act, q.delay, q.src, q.kill);
+        this.fireAt(tick, q.target, act, q.delay, q.src, q.kill);
       }
     }
     const ms = this.masters.get(name);
@@ -1281,8 +1288,8 @@ export class MapLogic {
     const b = this.breakables, slots = this.breakableByName.get(name);
     if (b && slots) for (const s of slots) if (b.setBroken(this.world, s, true)) this.mark(s);
     for (const t of this.triggers) if (t.name === name) t.done = true;
-    const relays = this.relays.get(name);
-    if (relays) for (const q of relays) this.dead.add(q.src);
+    // Every relay under the name at once (its list walked at each kill was 51 ms a tick).
+    if (this.relays.has(name)) this.dead.add(name);
     const ms = this.masters.get(name);
     if (ms) ms.on = true; // no master left: nothing is locked (UTIL_IsMasterTriggered)
   }

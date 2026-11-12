@@ -3,11 +3,14 @@ import { IN_USE, IN_ATTACK, TICK_RATE } from '../shared/constants.js';
 import { PS_ORIGIN, PS_VEL } from '../shared/pmove.js';
 import { traceHull, hullFits, Trace, HULL_POINT, HULL_STAND } from '../shared/trace.js';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
-import { HS_IDLE, HS_CARRIED, HS_RESCUED, HS_DEAD, HOSTAGES_PER_ROUND, PICKUP_TIME, CARRY_SPEED } from '../shared/hostages.js';
+import {
+  Hostages, HS_IDLE, HS_CARRIED, HS_RESCUED, HS_DEAD, HOSTAGES_PER_ROUND, PICKUP_TIME, CARRY_SPEED,
+} from '../shared/hostages.js';
 import { PHASE_LIVE, PHASE_OVER, END_RESCUE, RESCUE_REWARD, HOSTAGE_KILL_PENALTY } from '../shared/economy.js';
 import { Writer } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
 import { mapOrNull, joinClient, runInputs, teleport } from './harness.js';
+import { boxWorld, FLOOR } from './worlds.js';
 
 const bsp = mapOrNull('cs_office');
 
@@ -120,3 +123,13 @@ Deno.test({ name: 'hostages: a dead carrier drops his hostage; shooting one cost
   assert.equal(h.state[1], HS_DEAD);
   assert.ok(t.player.money <= Math.max(0, money - HOSTAGE_KILL_PENALTY), `paid for it (never below $0): ${money} -> ${t.player.money}`);
 } });
+
+// E picked up a hostage through a wall: inReach never traced from the eye to it.
+Deno.test('hostages: E reaches none behind a wall', () => {
+  const open = boxWorld([FLOOR]), walled = boxWorld([FLOOR, { min: [16, -500, 0], max: [32, 500, 200] }]);
+  const h = new Hostages();
+  h.count = 1;
+  h.place(0, 48, 0, 0, 0);
+  assert.equal(h.inReach(open, 0, 0, 64, 15, 0), 0, 'in the open');
+  assert.equal(h.inReach(walled, 0, 0, 64, 15, 0), -1, 'behind the wall');
+});

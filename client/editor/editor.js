@@ -357,10 +357,14 @@ export class Editor {
 
   // Copies of `items` moved by `d` ([dx, dy, dz]), selected.
   insertCopies(items, d) {
-    const ids = [];
+    const ids = [], tags = new Map(); // copies of one entity's shapes: an entity of their own
     for (const it of items) {
       const copy = JSON.parse(JSON.stringify(it));
       copy.id = this.project.nextId++;
+      if (copy.entity !== undefined) {
+        if (!tags.has(copy.entity)) tags.set(copy.entity, this.project.nextId++);
+        copy.entity = tags.get(copy.entity);
+      }
       const t = copy.b || copy.o;
       for (let k = 0; k < 3; k++) {
         t[k] += d[k];
@@ -442,10 +446,12 @@ export class Editor {
         continue;
       }
       const b = it.b, [mx, my] = turn((b[0] + b[3]) / 2, (b[1] + b[4]) / 2), hx = (b[4] - b[1]) / 2, hy = (b[3] - b[0]) / 2;
+      const o = it.origin && turn(b[0] + it.origin[0], b[1] + it.origin[1]); // an opened entity's pivot turns along
       b[0] = Math.round(mx - hx);
       b[3] = b[0] + hx * 2;
       b[1] = Math.round(my - hy);
       b[4] = b[1] + hy * 2;
+      if (o) [it.origin[0], it.origin[1]] = [Math.round(o[0] - b[0]), Math.round(o[1] - b[1])];
       it.up = UPS[(UPS.indexOf(it.up) + 1) % 4];
       if (it.shape === 'convex') it.faces = turnFaces(it.faces);
       if (it.kind === 'func_button' || it.kind === 'func_door') {
@@ -469,7 +475,9 @@ export class Editor {
         it.yaw = ((180 - it.yaw) % 360 + 360) % 360;
         continue;
       }
+      const ox = it.origin && c2 - (it.b[0] + it.origin[0]);
       [it.b[0], it.b[3]] = [c2 - it.b[3], c2 - it.b[0]];
+      if (it.origin) it.origin[0] = ox - it.b[0];
       it.yaw = ((360 - it.yaw) % 360 + 360) % 360;
       if (it.shape === 'convex') it.faces = mirrorFaces(it.faces);
       if (it.up === 'px' || it.up === 'nx') it.up = it.up === 'px' ? 'nx' : 'px';

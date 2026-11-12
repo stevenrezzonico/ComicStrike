@@ -219,7 +219,12 @@ export class PlayerAnimator {
     this.py = y;
     this.pz = z;
     if (alive) { // (hold stays: the kill event comes while the row, drawn behind, still lives)
-      if (this.dead > 0) this.blown = false; // a new life
+      if (this.dead > 0) { // a new life: a death with no die() (a fall) must not replay the last one's
+        this.blown = false;
+        this.headshot = false;
+        this.deathDir[0] = this.deathDir[1] = 0;
+        this.deathDist = -0;
+      }
       this.dead = 0;
     } else if (this.blown) this.dead += dt * clock.rate;
     else if (!this.hold) this.dead += dt;

@@ -22,7 +22,7 @@ import { ensureCert, renewCert } from './cert.js';
 import { staticPath } from './static.js';
 import { listen } from './transport.js';
 import { GAME_MODES, AddressCounts, runDue } from './host.js';
-import { Rooms, RoomError } from './rooms.js';
+import { Rooms, RoomError, readBody } from './rooms.js';
 import { adminResponse } from './admin.js';
 import { parseBSP } from '../shared/bsp.js';
 import { TICK_RATE } from '../shared/constants.js';
@@ -95,6 +95,7 @@ const sessionsByAddress = new AddressCounts(SESSIONS_PER_ADDRESS);
 const connections = new AddressCounts(CONNECTIONS_PER_ADDRESS);
 const transport = listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert, key: certInfo.key, connections }, (session) => {
   let game = null, client = null;
+  let joining = null; // the room its HELLO named, until the room lets it in
   setTimeout(() => { // a session that never says HELLO is let go
     if (!client) session.close('no hello');
   }, HELLO_MS);
@@ -113,9 +114,13 @@ const transport = listen({ hostname: BIND, port: GAME_PORT, cert: certInfo.cert,
         game = room.host.game; // a map change replaces the game; this session stays with its own
         client = game.connect(session);
         if (!client) return sessionsByAddress.remove(session.address); // full: connect closed it
-        rooms.joined(room);
+        joining = room;
       }
       game.receive(client, bytes);
+      if (joining && client.joined) { // (a refused HELLO, a bad password or a ban, joins nothing)
+        rooms.joined(joining, client);
+        joining = null;
+      }
     },
     onClose() {
       if (!client) return;
@@ -204,38 +209,6 @@ async function serveStatic(pathname, req) {
 }
 
 const tls = TLS_CERT ? { cert: certInfo.cert, key: certInfo.key } : {};
-// A request body, refused past `max` bytes (whatever content-length says) or when it has
-// not arrived within `ms` (a slow upload would hold one of the few upload slots).
-async function readBody(req, max, ms, tooLarge = `the map is too large (${max >> 20} MB at most)`) {
-  const declared = Number(req.headers.get('content-length') || 0);
-  if (declared > max) throw new RoomError(tooLarge, 413);
-  const parts = [];
-  let size = 0, late = false;
-  const reader = req.body ? req.body.getReader() : null;
-  const timer = reader && setTimeout(() => {
-    late = true;
-    reader.cancel().catch(() => {});
-  }, ms);
-  try {
-    while (reader) {
-      const { value, done } = await reader.read();
-      if (late) throw new RoomError('the upload took too long', 408);
-      if (done) break;
-      size += value.byteLength;
-      if (size > max) throw new RoomError(tooLarge, 413);
-      parts.push(value);
-    }
-  } finally {
-    clearTimeout(timer);
-  }
-  const out = new Uint8Array(size);
-  let o = 0;
-  for (const p of parts) {
-    out.set(p, o);
-    o += p.byteLength;
-  }
-  return out;
-}
 
 // POST /rooms?file=<name>&mode=<mode>&players=<n>&difficulty=<0-3>&armoury=<0|1>&listed=<0|1>, the map
 // file as the body and the join password, if any, URI-encoded in the `x-room-password` header (the body

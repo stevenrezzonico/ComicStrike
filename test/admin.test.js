@@ -6,7 +6,8 @@ import { parse } from '../shared/cvars.js';
 import { TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import { Host } from '../server/host.js';
 import { adminResponse, ADMIN_BODY } from '../server/admin.js';
-import { cvarCommand, who, modeCommands, botCommands, groupOf, whenApplies, controlOf } from '../client/admincmd.js';
+import { cvarCommand, who, modeCommands, botCommands, groupOf, whenApplies, controlOf, banMinutes, samePlayer, playerRowsKey, clock }
+  from '../client/admincmd.js';
 import { loadMap, joinClient, quiet } from './harness.js';
 
 function setup() {
@@ -109,6 +110,53 @@ Deno.test('admin: the state lists players, bots, the round and the cvars, never 
   assert.ok(!('rcon_password' in s.cvars) && !('sv_password' in s.cvars));
   const text = JSON.stringify(s);
   assert.ok(!text.includes('hunter2') && !text.includes('letmein'));
+  assert.ok(s.round.secondsLeft >= 0);
+  // A phase with no end (the demo's round, deathmatch with no time limit): Infinity reached
+  // practice's page as it is.
+  host.game.setPhase(host.game.round.phase, Infinity);
+  assert.equal(host.adminState().round.secondsLeft, null);
+});
+
+// A 4 KB line costs 3-6 ms of the thread every room shares: 160-340 lines a second from the
+// admin page froze every room. Rcon and the admin page share one limit a Host.
+Deno.test('admin: rcon and the admin page run at most 10 lines a second, 20 at once', async () => {
+  const { host, clock } = setup();
+  const freeze = () => host.con.get('mp_freezetime').value;
+  for (let i = 1; i <= 20; i++) assert.equal(host.capture(`mp_freezetime ${i}`), '');
+  assert.equal(freeze(), '20');
+  const out = await (await quiet(() => ask(host, 'exec', { body: 'mp_freezetime 30' }))).json();
+  assert.match(out.output, /too many commands/);
+  assert.match(quiet(() => host.rconAs('198.51.100.4', 'player', 'hunter2', 'mp_freezetime 30')), /too many commands/);
+  assert.equal(freeze(), '20', 'neither ran');
+  clock.ms += 100; // a line's worth
+  assert.equal(host.capture('mp_freezetime 31'), '');
+  assert.match(host.capture('mp_freezetime 32'), /too many commands/);
+  assert.equal(freeze(), '31');
+  clock.ms += 60000;
+  for (let i = 0; i < 20; i++) host.capture('mp_freezetime 5');
+  assert.match(host.capture('mp_freezetime 6'), /too many commands/, 'a long pause still gives 20 at most');
+});
+
+// sv_password and rcon_password set by rcon or the admin page were logged in plain text.
+Deno.test('admin: a protected cvar\'s value never reaches the log', async () => {
+  const { host } = setup();
+  const logged = [], log = console.log;
+  console.log = (...a) => logged.push(a.join(' '));
+  try {
+    await ask(host, 'exec', { body: 'sv_password letmein; hostname "x y"' });
+    host.rconAs('198.51.100.4', 'player 1 "Alice"', 'hunter2',
+      'alias p "sv_password opensesame"; sv_pass"word" letmein2; RCON_PASSWORD "s3cr3t pw"');
+    host.rconAs('198.51.100.4', 'player 1 "Alice"', 's3cr3t pw', 'mp_freezetime 3; echo "hi there"');
+  } finally {
+    console.log = log;
+  }
+  const text = logged.join('\n');
+  assert.ok(!/letmein|opensesame|s3cr3t/.test(text), text);
+  assert.match(text, /admin page \(127\.0\.0\.1\): sv_password \*\*\*; hostname \*\*\*$/m);
+  assert.match(text, /Alice": alias \*\*\*; sv_password \*\*\*; RCON_PASSWORD \*\*\*$/m);
+  assert.match(text, /Alice": mp_freezetime 3; echo "hi there"$/m, 'other lines as they came');
+  assert.equal(host.joinPassword.value, 'letmein2', 'run all the same');
+  assert.equal(host.password.value, 's3cr3t pw');
 });
 
 Deno.test('admin: switchteam, slay, banid and removeip; bots by id', () => {
@@ -143,4 +191,53 @@ Deno.test('admin: switchteam, slay, banid and removeip; bots by id', () => {
   const bot = host.game.bots.list[0].c;
   run(`bot_kick ${who(bot.id)}`);
   assert.equal(host.game.bots.list.length, 0);
+});
+
+Deno.test('admin: the chat field and the ban prompt send what was typed, or nothing', () => {
+  const { host, join } = setup();
+  // The chat field's text is one argument: a `;` ran the rest as a command, `//` cut a URL.
+  for (const text of ['gg; wp', 'join us at http://example.com/discord', 'two  spaces']) {
+    assert.deepEqual(parse(cvarCommand('say', text)), [['say', text]]);
+  }
+  // A number of minutes, else nothing: "30m" became 0, a ban until the server restarts.
+  assert.equal(banMinutes('60'), 60);
+  assert.equal(banMinutes(' 15 '), 15);
+  assert.equal(banMinutes('0'), 0);
+  for (const typed of ['30m', '1h', '', ' ', '-5', 'Infinity', 'abc']) assert.equal(banMinutes(typed), null, typed);
+  const c = join('Alice', TEAM_T, '198.51.100.4');
+  quiet(() => host.capture(`banid ${banMinutes('30')} ${who(c.id)}`));
+  assert.deepEqual(host.banList(), [{ address: '198.51.100.4', minutes: 30 }]);
+});
+
+Deno.test('admin: a player\'s row is checked again before an action by his id', () => {
+  const { host, join } = setup();
+  const alice = join('Alice', TEAM_T, '198.51.100.4');
+  const row = host.adminState().players.find((p) => p.id === alice.id);
+  assert.ok(samePlayer(host.adminState().players, row));
+  // Alice leaves while the ban prompt is open and Bob takes her slot at once: #id is Bob now.
+  host.game.disconnect(alice);
+  const bob = join('Bob', TEAM_T, '198.51.100.77');
+  assert.equal(bob.id, alice.id);
+  assert.ok(!samePlayer(host.adminState().players, row));
+});
+
+Deno.test('admin: the players\' table is rebuilt for its rows and buttons, not their numbers', () => {
+  const { host, join } = setup();
+  const c = join('Alice', TEAM_T, '198.51.100.4');
+  const key = () => playerRowsKey(host.adminState());
+  const before = key();
+  c.player.money += 300;
+  c.player.health -= 20;
+  c.player.kills++;
+  c.player.score += 2;
+  assert.equal(key(), before, 'money, health and score are written in place');
+  quiet(() => host.capture(`switchteam ct ${who(c.id)}`));
+  assert.notEqual(key(), before, 'a team change moves the row and its buttons');
+});
+
+Deno.test('admin: the clock shows a dash with no end in sight', () => {
+  assert.equal(clock(95), '1:35');
+  assert.equal(clock(0), '0:00');
+  assert.equal(clock(null), '-', 'a room: JSON has no Infinity');
+  assert.equal(clock(Infinity), '-', 'practice: through the channel');
 });

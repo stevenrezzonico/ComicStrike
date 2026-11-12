@@ -90,7 +90,7 @@ export class Renderer {
     this.canvas = canvas;
     this.gbuf = new GBuffer(gl); // first: it sets the shader defines (DEPTH_PACKED)
     const worldUniforms = ['u_viewProj', 'u_lightmap', 'u_time', 'u_zoom', 'u_dot', 'u_lightFull', 'u_broken',
-      'u_moverBase', 'u_movers', 'u_flash', 'u_flashK', 'u_flashN'];
+      'u_moverBase', 'u_moverEnd', 'u_movers', 'u_jitter', 'u_flash', 'u_flashK', 'u_flashN'];
     this.flashes = new FlashLights(); // muzzle flashes and explosions lighting the world
     // The opaque bulk with a shader that never discards; alpha-tested and see-through faces
     // with the one that does.
@@ -317,6 +317,8 @@ export class Renderer {
     gl.uniform1i(w.loc.u_lightmap, 0);
     gl.uniform4uiv(w.loc.u_broken, this.broken);
     gl.uniform1ui(w.loc.u_moverBase, this.movers ? this.movers.slotBase : 255);
+    gl.uniform1ui(w.loc.u_moverEnd, this.movers ? this.movers.slotBase + this.movers.count : 255);
+    gl.uniform2fv(w.loc.u_jitter, this.jitter);
     if (this.movers) gl.uniform4fv(w.loc.u_movers, this.movers.matrix, 0, this.movers.count * 12); // the movers there are
     const f = this.flashes;
     gl.uniform1i(w.loc.u_flashN, f.count);
@@ -375,6 +377,9 @@ export class Renderer {
       invert(this.jInvViewProj, this.jViewProj);
       viewProj = this.jViewProj;
       invViewProj = this.jInvViewProj;
+    } else {
+      this.jitter[0] = 0;
+      this.jitter[1] = 0;
     }
     const w = this.world;
     const t = this.timer;

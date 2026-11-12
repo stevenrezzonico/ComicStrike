@@ -38,6 +38,23 @@ Deno.test('cvars: set, clamp, print, change callbacks, archive', () => {
   assert.equal(lines.at(-1), 'Unknown command "nonsense"');
 });
 
+// A cleared admin field sent `mp_c4timer ""`: a bounded cvar took the empty text and the
+// number 0, under its min (a bomb that went off at once).
+Deno.test('cvars: a bounded cvar given no number keeps its value; an unbounded one takes the text', () => {
+  const { con } = make();
+  let changed = 0;
+  const c4 = con.cvar('mp_c4timer', 40, { min: 10, max: 90, onChange: () => changed++ });
+  con.exec('mp_c4timer ""; mp_c4timer abc');
+  assert.equal(c4.value, '40');
+  assert.equal(c4.number, 40);
+  assert.equal(changed, 0, 'no change');
+  con.exec('mp_c4timer 5');
+  assert.equal(c4.number, 10, 'numbers still clamp');
+  const name = con.cvar('hostname', 'server');
+  con.exec('hostname ""');
+  assert.equal(name.value, '');
+});
+
 Deno.test('commands, aliases (with recursion guard), toggle, incrementvar', () => {
   const { con, lines } = make();
   const got = [];

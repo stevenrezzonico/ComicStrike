@@ -22,11 +22,14 @@ export class Cvar {
     this.onChange = onChange; // not for the default value
   }
 
-  // Sets from a string or number; numbers clamp to [min, max] like Source's FCVAR bounds.
+  // Sets from a string or number; numbers clamp to [min, max] like Source's FCVAR bounds. A
+  // bounded cvar given no number keeps its value (a cleared field made mp_c4timer 0).
   set(v) {
     let s = String(v);
     let n = Number.parseFloat(s);
-    if (Number.isFinite(n) && (this.min !== undefined || this.max !== undefined)) {
+    const bounded = this.min !== undefined || this.max !== undefined;
+    if (bounded && !Number.isFinite(n) && this.value !== '') return;
+    if (Number.isFinite(n) && bounded) {
       if (this.min !== undefined && n < this.min) n = this.min;
       if (this.max !== undefined && n > this.max) n = this.max;
       if (String(n) !== s) s = String(n);

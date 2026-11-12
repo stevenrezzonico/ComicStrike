@@ -11,7 +11,7 @@ import { BOMB_PLANTED } from '../shared/bomb.js';
 import { PHASE_LIVE, END_DEFUSE, END_RESCUE } from '../shared/economy.js';
 import { HS_CARRIED, HS_RESCUED } from '../shared/hostages.js';
 import { Nav, EDGE_WALK } from '../shared/nav.js';
-import { Writer } from '../shared/protocol.js';
+import { Writer, MAX_PLAYERS } from '../shared/protocol.js';
 import { Host } from '../server/host.js';
 import { loadMap, mapOrNull, readCfg, seeded, joinClient, sendCmd, teleport } from './harness.js';
 
@@ -113,6 +113,19 @@ Deno.test('bots: the server fills up with bots once someone plays, one leaving f
   for (const c of humans.splice(0)) g.disconnect(c);
   run(200);
   assert.equal(g.bots.list.length, 0, 'gone with the last player');
+});
+
+// With bot_quota fill at the server's size the bots took every slot, and the next human was
+// refused "server full" (CS:GO kicks a bot for him).
+Deno.test('bots: a server full of bots makes room for a human', () => {
+  const { g, run } = setup('de_playground', `bot_quota ${MAX_PLAYERS}; bot_quota_mode fill`);
+  run(MAX_PLAYERS * 16 + 32);
+  assert.equal(g.bots.list.length, MAX_PLAYERS, 'every slot a bot');
+  const w = new Writer(), c = joinClient(g, w, 'late', TEAM_CT);
+  assert.ok(c && c.joined, 'the human got in');
+  assert.equal(g.bots.list.length, MAX_PLAYERS - 1, 'a bot left for him');
+  run(64);
+  assert.equal(g.bots.list.length, MAX_PLAYERS - 1, 'and fill keeps it so');
 });
 
 Deno.test({ name: 'bots: a T walks from its spawn to a bomb site', ignore: !dust2, fn: () => {

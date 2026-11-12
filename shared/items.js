@@ -140,8 +140,9 @@ export class Items {
   }
 
   // E: the nearest weapon lying still in front of eyes at (ex, ey, ez) looking along
-  // (pitch, yaw), within USE_RANGE and USE_CONE; -1 for none. Grenades are walked over.
-  inReach(ex, ey, ez, pitch, yaw) {
+  // (pitch, yaw), within USE_RANGE and USE_CONE, nothing solid between (canReachBomb's
+  // test); -1 for none. Grenades are walked over.
+  inReach(world, ex, ey, ez, pitch, yaw) {
     const cp = Math.cos(pitch * DEG);
     const dx = cp * Math.cos(yaw * DEG), dy = cp * Math.sin(yaw * DEG), dz = -Math.sin(pitch * DEG);
     let best = -1, bestD = USE_RANGE;
@@ -150,6 +151,10 @@ export class Items {
       if (this.flying[i] || !w || w.grenade) continue; // (a defuse kit is walked over, as a grenade)
       const vx = this.x[i] - ex, vy = this.y[i] - ey, vz = this.z[i] + 2 - ez, d = Math.sqrt(vx * vx + vy * vy + vz * vz);
       if (d >= bestD || (vx * dx + vy * dy + vz * dz) / d < USE_CONE) continue;
+      traceHull(world, HULL_POINT, ex, ey, ez, this.x[i], this.y[i], this.z[i] + 2, tr);
+      if (tr.fraction < 1 && Math.hypot(tr.endx - this.x[i], tr.endy - this.y[i], tr.endz - this.z[i] - 2) >= 12) {
+        continue; // a wall between
+      }
       best = i;
       bestD = d;
     }

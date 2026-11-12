@@ -245,6 +245,20 @@ Deno.test('player animation: a headshot throws the body back along the shot, ont
   assert.ok(bone(c, 'pelvis')[0] > -12 && bone(c, 'head_0')[2] < 14);
 });
 
+Deno.test('player animation: a death with no die() after a respawn collapses, not the last life\'s headshot', () => {
+  // A fall or the kill command names no killer, so nothing calls die() for that death.
+  const a = new PlayerAnimator();
+  run(a, 8, () => [0, 0, 0]);
+  a.die(1, 0, true, 40, 0, 3);
+  run(a, 80, () => [0, 0, 0], { alive: false });
+  run(a, 60, () => [2000, 0, 0]); // respawned elsewhere
+  assert.equal(a.headshot, false);
+  assert.ok(a.deathDist === 0); // (-0, a double field)
+  run(a, 80, () => [2000, 0, 0], { alive: false });
+  const pelvis = bone(a, 'pelvis');
+  assert.ok(Math.abs(pelvis[0]) < 20, `collapsed in place, not thrown along the old shot (${pelvis})`);
+});
+
 Deno.test('player animation: a shot kicks, then settles', () => {
   const a = run(new PlayerAnimator(), 32, () => [0, 0, 0], { shots: 5 });
   assert.equal(a.kick, 0);

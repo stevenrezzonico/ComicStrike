@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { IN_ATTACK, IN_USE, IN_DROP, IN_FORWARD } from '../shared/constants.js';
-import { PS_ORIGIN } from '../shared/pmove.js';
+import { PS_ORIGIN, PS_FLAGS, FL_ONGROUND, createPlayerState } from '../shared/pmove.js';
 import { traceHull, hullFits, Trace, HULL_POINT, HULL_STAND } from '../shared/trace.js';
 import {
   WEAPON_ID, WS_SLOTS, WS_ACTION, WS_ACTIVE, SLOT_C4, SLOT_SECONDARY, ACTION_PLANT, ACTION_DEFUSE,
 } from '../shared/weapons.js';
-import { TEAM_T, TEAM_CT } from '../shared/player.js';
+import { TEAM_T, TEAM_CT, canReachBomb } from '../shared/player.js';
 import {
-  BombSites, bombDamage, PLANT_TIME, BOMB_CARRIED, BOMB_DROPPED, BOMB_PLANTED, BOMB_DEFUSED, BOMB_EXPLODED,
+  BombState, BombSites, bombDamage, PLANT_TIME, BOMB_CARRIED, BOMB_DROPPED, BOMB_PLANTED, BOMB_DEFUSED, BOMB_EXPLODED,
 } from '../shared/bomb.js';
 import {
   PHASE_LIVE, PHASE_OVER, START_MONEY, WIN_REWARD, BOMB_WIN_REWARD, PLANT_REWARD, DEFUSE_REWARD, PLANT_LOSS_BONUS,
@@ -16,6 +16,7 @@ import {
 import { Writer } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
 import { loadBSP, joinClient, runInputs, teleport } from './harness.js';
+import { boxWorld, FLOOR } from './worlds.js';
 
 const loadDust2 = (t) => loadBSP(t, 'de_dust2');
 
@@ -223,4 +224,21 @@ Deno.test('the bomb drops when thrown (G) or when its carrier dies; another T pi
   teleport(players.ceetee, game.bomb.x, game.bomb.y, game.bomb.z + 37);
   run(2);
   assert.equal(game.bomb.state, BOMB_DROPPED, 'CTs cannot pick it up');
+});
+
+// The line of sight to the bomb passed when the trace stopped within 12 units of it across,
+// whatever the height: a CT under a 16-unit slab defused the bomb planted on top of it.
+Deno.test('defusing: no reaching the bomb through the floor it lies on', () => {
+  const bomb = new BombState();
+  bomb.state = BOMB_PLANTED;
+  bomb.z = 116;
+  const ps = createPlayerState();
+  ps.i[PS_FLAGS] = FL_ONGROUND;
+  ps.f[PS_ORIGIN] = 4;
+  ps.f[PS_ORIGIN + 2] = 36; // standing on the floor 116 under it, looking up
+  const open = boxWorld([FLOOR]), slab = boxWorld([FLOOR, { min: [-500, -500, 100], max: [500, 500, 116] }]);
+  assert.ok(canReachBomb(open, ps, -89, 0, bomb), 'nothing between: in reach');
+  assert.ok(!canReachBomb(slab, ps, -89, 0, bomb), 'the slab between: not');
+  ps.f[PS_ORIGIN + 2] = 116 + 36; // on the slab beside it, looking down
+  assert.ok(canReachBomb(slab, ps, 89, 0, bomb), 'beside it on the slab: in reach');
 });

@@ -10,7 +10,7 @@ import {
   FX_FIZZLE, FIRE_DPS, FIRE_GROW, SMOKE_TIME, SMOKE_GROW, SMOKE_SHAPES, SMOKE_FLOOR, SMOKE_MARGIN, smokePose,
 } from '../shared/grenades.js';
 import { buildSmokeCloud } from '../client/gl/grenadefx.js';
-import { floorWorld } from './worlds.js';
+import { floorWorld, boxWorld, FLOOR } from './worlds.js';
 import { Writer, writeCmds } from '../shared/protocol.js';
 import { Game } from '../server/game.js';
 import { mapOrNull, loadMap, joinClient } from './harness.js';
@@ -222,6 +222,29 @@ Deno.test('smoke: one touching a fire goes off at once, in the air too, and puts
   assert.equal(g.count, 1, 'the one beside it flies on');
   assert.deepEqual(Array.from(g.fxKind.subarray(0, g.fxCount)), [FX_SMOKE], 'the fire is out');
   assert.equal(g.fxPos[2], 0, 'the cloud on the fire floor');
+});
+
+// The fire's reach (24 under its floor, no walls) is for players' feet: a smoke under a
+// 16-unit catwalk with a fire on it, or behind a wall from one, went off and put it out; once
+// at rest, one behind the wall put it out too.
+Deno.test('smoke: no putting out a fire through the floor it burns on or a wall', () => {
+  const t = targets([]);
+  {
+    const world = boxWorld([FLOOR, { min: [-500, -500, 100], max: [500, 500, 116] }]), g = new Grenades();
+    g.addEffect(FX_FIRE, WEAPON_ID.molotov, 1, TEAM_T, 0, 0, 117); // burning on the catwalk
+    g.fxAge[0] = FIRE_GROW;
+    g.throw(world, WEAPON_ID.smokegrenade, 2, TEAM_CT, 40, 0, 40, -89, 0, 0, 0, 0, THROW_SHORT); // lobbed up at its underside
+    for (let i = 0; i < 300 && g.count; i++) g.update(world, t);
+    assert.deepEqual(Array.from(g.fxKind.subarray(0, g.fxCount)), [FX_FIRE, FX_SMOKE], 'it went off on the floor; the fire burns on');
+  }
+  {
+    const world = boxWorld([FLOOR, { min: [40, -500, 0], max: [56, 500, 300] }]), g = new Grenades();
+    g.addEffect(FX_FIRE, WEAPON_ID.molotov, 1, TEAM_T, 0, 0, 1);
+    g.fxAge[0] = FIRE_GROW;
+    g.throw(world, WEAPON_ID.smokegrenade, 2, TEAM_CT, 100, 0, 150, 89, 0, 0, 0, 0, THROW_SHORT); // dropped beyond the wall
+    for (let i = 0; i < 300 && g.count; i++) g.update(world, t);
+    assert.deepEqual(Array.from(g.fxKind.subarray(0, g.fxCount)), [FX_FIRE, FX_SMOKE], 'it went off beyond the wall; the fire burns on');
+  }
 });
 
 Deno.test({ name: 'server: a thrown HE flies from the thrower, hurts an enemy, and the kill is credited', ignore: !bsp, fn: () => {

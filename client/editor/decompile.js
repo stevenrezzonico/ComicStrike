@@ -6,7 +6,8 @@
 // box with the same texture round its sides, else a convex piece (project.js 'convex').
 // A cell's side lying on a node takes the texture of that node's face under the side's
 // middle; sides with no face (inside solid, toward the void) get none. Brush entities the
-// editor knows keep their kind and keys (zones become one box each), func_wall becomes
+// editor knows keep their kind and keys (zones become one box each; one in several shapes
+// stays one entity, with its origin), func_wall becomes
 // solid; spawns and hostages become points, point bomb targets and rescue spots zones.
 // Everything else is left out and counted. Pure (no DOM): the compile worker runs it.
 
@@ -15,7 +16,7 @@ import {
 } from '../../shared/bsp.js';
 import { planeSquare, clip } from '../../shared/bspwriter.js';
 import { dot, sub, cross } from '../../shared/bspvis.js';
-import { FORMAT, VERSION, TEXTURES, KINDS, POINTS, makeBrush } from './project.js';
+import { FORMAT, VERSION, TEXTURES, KINDS, POINTS, KEY_NAME, makeBrush } from './project.js';
 
 const EPS = 0.01;
 const CONTENTS_EMPTY = -1, CONTENTS_SOLID = -2, CONTENTS_WATER = -3, CONTENTS_LAVA = -5, CONTENTS_SKY = -6;
@@ -27,7 +28,7 @@ const DROP_KEYS = new Set(['classname', 'model', 'origin']);
 // The project made from parsed (and checked: parseUntrustedBSP) map `bsp` from file `fileName`:
 // { project, report: { shapes, boxes, points, dropped: { classname: count } } }.
 export function decompileBSP(bsp, fileName) {
-  const p = { format: FORMAT, version: VERSION, name: mapNameOf(fileName), brushes: [], points: [], textures: {}, nextId: 1 };
+  const p = { format: FORMAT, version: VERSION, name: mapNameOf(fileName), brushes: [], points: [], textures: Object.create(null), nextId: 1 };
   const report = { shapes: 0, boxes: 0, points: 0, dropped: {} };
   const drop = (cls) => (report.dropped[cls] = (report.dropped[cls] || 0) + 1);
   const faceLoops = new Map(); // face -> its corners
@@ -354,7 +355,7 @@ export function decompileBSP(bsp, fileName) {
   // A texture name the project can carry (null: none).
   function useTexture(name) {
     if (!name || !/^[\w!{}+~-]{1,15}$/.test(name)) return null;
-    if (!PALETTE.has(name) && !p.textures[name]) {
+    if (!PALETTE.has(name) && !Object.hasOwn(p.textures, name)) {
       const t = bsp.textureNames.indexOf(name);
       p.textures[name] = [bsp.textureSize[t * 2] || 64, bsp.textureSize[t * 2 + 1] || 64];
     }
@@ -424,7 +425,7 @@ export function decompileBSP(bsp, fileName) {
   for (const cell of join(cells(0, root, [0, 0, 0], (c) => c === CONTENTS_SOLID || c === CONTENTS_SKY ||
     (c <= CONTENTS_WATER && c >= CONTENTS_LAVA)))) {
     if (cell.contents === CONTENTS_SOLID || cell.contents === CONTENTS_SKY) add(shapeOf(cell, 'world', {}));
-    else add(shapeOf(cell, 'func_water', {}));
+    else add(shapeOf(cell, 'func_water', { skin: String(cell.contents) })); // GoldSrc's skin: -3 water, -4 slime, -5 lava
   }
 
   // --- Entities ----------------------------------------------------------------------
@@ -454,10 +455,10 @@ export function decompileBSP(bsp, fileName) {
     }
     // Lamps, the map's logic (path corners, relays, texts...) and teleport exits, with their
     // keys (a spot's pitch in `angles` becomes its pitch key).
-    if (POINTS[cls] && (POINTS[cls].lamp || POINTS[cls].logic || cls === 'info_teleport_destination')) {
+    if (Object.hasOwn(POINTS, cls) && (POINTS[cls].lamp || POINTS[cls].logic || cls === 'info_teleport_destination')) {
       if (!o) continue;
       const keys = { ...POINTS[cls].keys };
-      for (const [k, v] of Object.entries(e)) if (!DROP_KEYS.has(k) && k !== 'angles' && /^\w{1,32}$/.test(k)) keys[k] = String(v).replace(/"/g, "'").slice(0, 128);
+      for (const [k, v] of Object.entries(e)) if (!DROP_KEYS.has(k) && k !== 'angles' && KEY_NAME.test(k)) keys[k] = String(v).replace(/"/g, "'").slice(0, 128);
       if (cls === 'light_spot' && e.pitch === undefined && e.angles) {
         const pitch = +e.angles.split(' ')[0];
         if (Number.isFinite(pitch)) keys.pitch = String(pitch);
@@ -475,7 +476,7 @@ export function decompileBSP(bsp, fileName) {
       continue;
     }
     const m = /^\*(\d+)$/.exec(e.model || '') ? +e.model.slice(1) : -1;
-    const kind = AS_WORLD.has(cls) ? 'world' : KINDS[cls] ? cls : null;
+    const kind = AS_WORLD.has(cls) ? 'world' : Object.hasOwn(KINDS, cls) ? cls : null;
     if (m <= 0 || m >= bsp.numModels || !kind) {
       drop(cls || '(none)');
       continue;
@@ -484,7 +485,7 @@ export function decompileBSP(bsp, fileName) {
     const mb = [0, 1, 2, 3, 4, 5].map((k) => bsp.modelsF[m * 16 + k]);
     const keys = {};
     if (kind !== 'world') {
-      for (const [k, v] of Object.entries(e)) if (!DROP_KEYS.has(k) && /^\w{1,32}$/.test(k)) keys[k] = String(v).replace(/"/g, "'").slice(0, 128);
+      for (const [k, v] of Object.entries(e)) if (!DROP_KEYS.has(k) && KEY_NAME.test(k)) keys[k] = String(v).replace(/"/g, "'").slice(0, 128);
     }
     if (KINDS[kind].trigger) { // zones and volumes: one box round the model
       add(makeBrush(p.nextId++, [...mb.slice(0, 3).map((v, k) => Math.floor(v + origin[k])), ...mb.slice(3).map((v, k) => Math.ceil(v + origin[k]))],
@@ -498,7 +499,17 @@ export function decompileBSP(bsp, fileName) {
       const w = [mb[3] - mb[0], mb[4] - mb[1]], ax = w[0] >= w[1] ? 0 : 1;
       keys.hinge = mb[ax] + mb[ax + 3] > 0 ? 'start' : 'end'; // model space: the origin is 0
     }
-    for (const cell of list) add(shapeOf(cell, kind, { ...keys }));
+    // An entity in several shapes stays one (a door and its handle, a cart's bed and cab), its
+    // origin kept (the pivot of what turns), from each shape's low corner (project.js).
+    const shapes = list.map((cell) => shapeOf(cell, kind, { ...keys })).filter(Boolean);
+    const tag = kind !== 'world' && shapes.length > 1 ? p.nextId++ : 0;
+    for (const br of shapes) {
+      if (tag) {
+        br.entity = tag;
+        if (o) br.origin = [0, 1, 2].map((k) => o[k] - br.b[k]);
+      }
+      add(br);
+    }
   }
   return { project: p, report };
 }

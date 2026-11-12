@@ -56,6 +56,6 @@ export async function adminResponse(req, url, { address, hostFor }) {
   if (op === 'catalog') return json(host.con.catalog());
   const command = await readText(req, ADMIN_BODY);
   if (command === null) return json({ error: `the command is too long (${ADMIN_BODY} bytes at most)` }, 413);
-  console.log(`rcon from the admin page (${address}): ${command}`);
+  console.log(`rcon from the admin page (${address}): ${host.redacted(command)}`);
   return json({ output: host.capture(command) });
 }

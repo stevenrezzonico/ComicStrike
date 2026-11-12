@@ -94,6 +94,34 @@ Deno.test('game_playerspawn: CS 1.6 fires it a second after each spawn (a greeti
   assert.deepEqual(said(), ['Welcome']);
 });
 
+// trigger_auto fires at the map's load, in the Game's constructor: it ran before the texts,
+// the clients and the grenades were there, so a round start into an explosion, a text to
+// everyone or an exploding crate threw and the map could not be played. At a round start it
+// fired before the respawns, and its explosion hit players where the last round left them.
+Deno.test('trigger_auto: at the map load into an explosion, a text or a crate; at a round start after the spawns', () => {
+  const maps = [
+    (map) => map.point({ classname: 'env_explosion', targetname: 'go', iMagnitude: '100', origin: '0 0 64' }),
+    (map) => map.point({ classname: 'game_text', targetname: 'go', message: 'hello', spawnflags: '1', origin: '0 0 64' }),
+    (map) => map.brushEntity({ classname: 'func_breakable', targetname: 'go', material: '1', health: '40', explodemagnitude: '50' },
+      [box(64, -32, 0, 128, 32, 64, 'crate08')]),
+  ];
+  for (const extra of maps) {
+    const b = yard((map) => {
+      map.point({ classname: 'trigger_auto', target: 'go', origin: '0 0 64' });
+      extra(map);
+    });
+    quiet(() => new Game('yard', b, {}));
+  }
+  const b = yard((map) => {
+    map.point({ classname: 'trigger_auto', target: 'go', origin: '0 0 64' });
+    map.point({ classname: 'env_explosion', targetname: 'go', iMagnitude: '100', origin: '500 0 16' });
+  });
+  const { game, c, put } = walker(b);
+  put(500, 0, 0); // where the explosion goes off; the spawn is at -900
+  quiet(() => game.startRound(true));
+  assert.equal(c.player.health, 100, 'respawned before it went off');
+});
+
 Deno.test('player_weaponstrip: everything but the knife goes', () => {
   const { c, run, put } = walker(bsp);
   giveWeapon(c.player.ws, WEAPON_ID.ak47);

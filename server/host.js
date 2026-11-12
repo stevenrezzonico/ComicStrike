@@ -2,7 +2,7 @@
 // commands, run from rcon, the admin page and cfgs), and switches maps.
 // Transport-agnostic: sessions only need send(bytes) and close(reason).
 
-import { Console, FCVAR_PROTECTED } from '../shared/cvars.js';
+import { Console, FCVAR_PROTECTED, parse } from '../shared/cvars.js';
 import { writeChangelevel, cleanName, MAX_PLAYERS } from '../shared/protocol.js';
 import { TEAM_NAMES, TEAM_T, TEAM_CT, TEAM_SPECTATOR } from '../shared/player.js';
 import { PHASE_WARMUP } from '../shared/economy.js';
@@ -25,6 +25,10 @@ const RCON_MAP_GAP_MS = 1000; // rcon map changes: each builds a new game (40 in
 // Characters of output one rcon line sends back: a line of `find;find;...` printed ~1 MB,
 // ~1,400 PRINT datagrams encoded on the thread every game shares.
 const RCON_OUTPUT = 65536;
+// Lines rcon and the admin page run (capture), a Host's together: a second's worth, and a burst.
+// A 4 KB line costs 3-6 ms of the thread every room shares: 160-340 a second froze them all.
+const RCON_LINES_PER_SECOND = 10;
+const RCON_LINES_BURST = 20;
 // sv_password's most: what a HELLO carries (Writer.str, shared/protocol.js). Longer, it never
 // matched, and every try counted as a bad guess.
 export const PASSWORD_BYTES = 63;
@@ -169,6 +173,8 @@ export class Host {
     this.failedTicks = 0; // ticks that threw since the last report
     this.failReportAt = -Infinity;
     this.mapChangedAt = -Infinity; // the last map change by rcon
+    this.lineTokens = RCON_LINES_BURST; // capture's lines left, refilled over time (lineAt)
+    this.lineAt = this.now();
     this.execCtx = null; // the rcon line running, so a cvar's refusal reaches its caller
     // Who said (the rcon player; the terminal and cfgs as one: the console) -> ms of the line.
     this.saidAt = new WeakMap();
@@ -570,8 +576,17 @@ export class Host {
   rconAs(address, who, password, command, client = null) {
     const refused = this.rconRefusal(address, password, who);
     if (refused !== '') return refused;
-    console.log(`rcon from ${who}: ${command}`);
+    console.log(`rcon from ${who}: ${this.redacted(command)}`);
     return this.capture(command, client);
+  }
+
+  // A command line as the logs keep it: when any of its words names a protected cvar
+  // (sv_password, rcon_password), every command's arguments as *** (a password set by rcon or
+  // the admin page was logged in plain text; so was one inside an alias or a toggle).
+  redacted(command) {
+    const lines = parse(command), words = lines.flat().join(' ').toLowerCase(); // (as run: `sv_pass"word"` is sv_password)
+    const secret = [...this.con.cvars.values()].some((cv) => cv.flags & FCVAR_PROTECTED && words.includes(cv.name));
+    return secret ? lines.map((a) => (a.length > 1 ? `${a[0]} ***` : a[0])).join('; ') : command;
   }
 
   // Why rcon from `address` with `password` may not run now: '' when it may, null for a
@@ -591,9 +606,15 @@ export class Host {
     return '';
   }
 
-  // Runs a command line as rcon does (its budget, its output cut at RCON_OUTPUT) and returns
-  // what it printed. `client`: the player it runs as (bot_place), or null.
+  // Runs a command line as rcon does (its budget, its output cut at RCON_OUTPUT, at most
+  // RCON_LINES_PER_SECOND lines) and returns what it printed. `client`: the player it runs as
+  // (bot_place), or null.
   capture(command, client = null) {
+    const now = this.now();
+    this.lineTokens = Math.min(RCON_LINES_BURST, this.lineTokens + (now - this.lineAt) * RCON_LINES_PER_SECOND / 1000);
+    this.lineAt = now;
+    if (this.lineTokens < 1) return `rcon: too many commands (${RCON_LINES_PER_SECOND} lines a second at most), try again in a moment`;
+    this.lineTokens--;
     const out = [];
     let left = RCON_OUTPUT;
     const print = (s) => {
@@ -696,7 +717,10 @@ export class Host {
       hostname: this.hostname.value, map: g.mapName, mode: this.modeName, maps: this.opts.listMaps(), maxPlayers: MAX_PLAYERS,
       round: {
         phase: PHASE_NAMES[rs.phase], round: rs.round, scoreT: rs.scoreT, scoreCT: rs.scoreCT,
-        secondsLeft: Math.max(0, Math.ceil((g.phaseEnd - g.tick) / TICK_RATE)), paused: g.paused,
+        // null: no end (the demo's round, deathmatch with no time limit): Infinity reached
+        // practice's admin page as it is and a room's as null
+        secondsLeft: Number.isFinite(g.phaseEnd) ? Math.max(0, Math.ceil((g.phaseEnd - g.tick) / TICK_RATE)) : null,
+        paused: g.paused,
         cheats: this.rules().cheats,
       },
       players, cvars, bans: this.banList(), password: !!this.joinPassword.value,

@@ -603,6 +603,11 @@ export function removeWeapon(ws, slot, time) {
   }
 }
 
+// What the last WEV_DROP took out of the hand: weapon id, clip, reserve. Not weapon state
+// (the prediction never compares it): the server reads it to put that weapon on the ground,
+// which with a slot key in the same command is the newly drawn one, not the one held before.
+export const DROPPED = new Float64Array(3);
+
 // One weapon tick. select = slot to switch to, or -1. tick = command number
 // (also the spread seed, like CS:GO's usercmd random_seed).
 export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
@@ -634,6 +639,10 @@ export function weaponTick(ws, ps, buttons, select, pitch, yaw, tick, shots) {
   // puts it on the ground (or, for the C4, drops the bomb) from WEV_DROP.
   const held = activeWeapon(ws);
   if ((buttons & IN_DROP) && !(f[WS_OLD_BUTTONS] & IN_DROP) && held && !held.melee && !f[WS_THROW]) {
+    const o = WS_SLOTS + f[WS_ACTIVE] * 3;
+    DROPPED[0] = f[o];
+    DROPPED[1] = f[o + 1];
+    DROPPED[2] = f[o + 2];
     if (held.grenade) {
       takeGrenade(ws, f[WS_SLOTS + SLOT_GRENADE * 3]);
       if (f[WS_SLOTS + SLOT_GRENADE * 3]) {

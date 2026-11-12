@@ -54,8 +54,13 @@ export function listen({ hostname = '0.0.0.0', port, cert, key, connections = nu
       if (l === listener) throw err; // a stopped listener's loop may end with an error
     }
   };
+  // The fewest streams a browser's session needs (the game sends datagrams only): the CONNECT
+  // stream, and HTTP/3's control and two QPACK streams. With Deno's defaults (100 each) a client
+  // that never upgraded filled every stream's window, never read: 16 connections held ~1 GB.
   const open = (c, k) => {
-    listener = endpoint.listen({ alpnProtocols: ['h3'], cert: c, key: k });
+    listener = endpoint.listen({
+      alpnProtocols: ['h3'], cert: c, key: k, maxConcurrentBidirectionalStreams: 1, maxConcurrentUnidirectionalStreams: 3,
+    });
     accept(listener);
   };
   open(cert, key);

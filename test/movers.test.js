@@ -446,6 +446,77 @@ Deno.test('a relay with many targets stops at the fire budget', () => {
   assert.ok(calls <= MAX_FIRES + 1, `${calls} calls`);
 });
 
+// The budget counted only the fires that happened: a killtargeted multi_manager's entries and
+// spent explosions were walked for nothing at every fire of their name, and each kill walked
+// the killed relay's whole list again (a 60,000-key one fired ~250 times a tick: 51 ms a tick).
+Deno.test('killed relays and spent explosions are not walked past the fire budget', () => {
+  const keys = {};
+  for (let i = 0; i < 5000; i++) keys[`x#${i}`] = '0';
+  const bsp = yard((map) => {
+    map.point({ classname: 'multi_manager', targetname: 'boom', ...keys, origin: '0 0 64' });
+    map.point({ classname: 'trigger_relay', targetname: 'cut', killtarget: 'boom', origin: '0 0 64' });
+    for (let i = 0; i < 2000; i++) {
+      map.point({ classname: 'env_explosion', targetname: 'bang', iMagnitude: '1', spawnflags: '5', origin: '0 0 64' });
+    }
+  });
+  const logic = quiet(() => new Game('yard', bsp, { rounds: false })).logic;
+  logic.reset(0);
+  logic.fireAt(1, 'cut', null, 0); // boom is gone
+  for (let t = 2; t < 20; t++) logic.fireAt(t, 'bang', null, 0); // every explosion spent
+  let walked = 0;
+  const counted = (list) => new Proxy(list, {
+    get: (a, k, r) => {
+      if (typeof k === 'string' && /^\d+$/.test(k)) walked++;
+      return Reflect.get(a, k, r);
+    },
+  });
+  logic.relays.set('boom', counted(logic.relays.get('boom')));
+  logic.explosions.set('bang', counted(logic.explosions.get('bang')));
+  for (let i = 0; i < 300; i++) {
+    logic.fireAt(100, 'boom', null, 0);
+    logic.fireAt(100, 'cut', null, 0);
+    logic.fireAt(100, 'bang', null, 0);
+  }
+  assert.ok(walked <= 2 * MAX_FIRES, `${walked} entries walked in a tick`);
+});
+
+// A map's explosion traced to every breakable: 254 that never break and a loop firing
+// env_explosions were ~200 blasts a tick, 160-300 ms. Each blast counts the breakables it
+// tests against the budget.
+Deno.test('map explosions pay for the breakables they test', () => {
+  const bsp = yard((map) => {
+    for (let i = 0; i < 100; i++) {
+      const x = -400 + (i % 20) * 40, y = -200 + Math.floor(i / 20) * 80;
+      map.brushEntity({ classname: 'func_breakable', material: '2', health: '1e30' }, [box(x, y, 0, x + 16, y + 16, 16, 'steel')]);
+    }
+    for (let i = 0; i < 300; i++) {
+      map.point({ classname: 'env_explosion', targetname: 'boom', iMagnitude: '1000', spawnflags: '6', origin: `${i - 150} 0 200` });
+    }
+  });
+  const g = quiet(() => new Game('yard', bsp, { rounds: false }));
+  assert.equal(g.breakables.count, 100);
+  let blasts = 0;
+  const explode = g.logic.onExplode;
+  g.logic.onExplode = (...a) => (blasts++, explode(...a));
+  g.logic.fireAt(g.tick + 1, 'boom', null, 0);
+  assert.ok(blasts >= 1 && blasts <= 3, `${blasts} blasts in a tick`);
+});
+
+// HL's trigger_multiple with wait -1 fires once and is gone (ticksOf(-1) made it fire every
+// tick: de_survivor's filled the delayed queue and dropped every other delayed fire).
+Deno.test('a trigger_multiple with wait -1 fires once', () => {
+  const bsp = yard((map) => {
+    map.brushEntity({ classname: 'trigger_multiple', target: 'ping', wait: '-1' }, [box(-100, -100, 0, 100, 100, 100, NONE)]);
+  });
+  const logic = quiet(() => new Game('yard', bsp, { rounds: false })).logic;
+  logic.reset(0);
+  let fires = 0;
+  const fire = logic.fireAt.bind(logic);
+  logic.fireAt = (tick, name, ...a) => (name === 'ping' && fires++, fire(tick, name, ...a));
+  for (let tick = 1; tick < 2 * TICK_RATE; tick++) logic.update(tick, [{ x: 0, y: 0, z: 36, yaw: 0 }]);
+  assert.equal(fires, 1);
+});
+
 // A map with no doors and no triggers skipped the map logic altogether, so a trigger_auto's
 // delayed fire never came (here: it breaks a crate by name half a second into the round).
 Deno.test('delayed fires happen on a map with no doors or triggers', () => {

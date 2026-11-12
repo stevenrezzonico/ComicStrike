@@ -17,18 +17,22 @@ import { modeNamed } from '../shared/modes.js';
 import { TICK_RATE } from '../shared/constants.js';
 
 export const ROOM_LIMITS = {
-  rooms: 8, // live rooms on the server
+  rooms: 8, // live rooms on the server: once full, a new one replaces the oldest nobody ever joined
   bytes: 24 << 20, // the largest map file taken
-  perAddress: 1, // live rooms one address keeps: a new one replaces its oldest
-  cooldownMs: 30000, // between two uploads from one address
+  perAddress: 1, // live rooms one address keeps: a new one replaces its oldest without players
+  cooldownMs: 30000, // between two uploads from one address (and after one that failed)
   idleMs: 2 * 60000, // a room closes this long after its last player left (or went idle)
   activeMs: 10 * 60000, // a player counts while their buttons or view changed this recently
   unusedMs: 10 * 60000, // ... or after its upload when nobody ever joined
   uploads: 2, // uploads being read at once (each is held in memory until it is checked)
   uploadMs: 120000, // an upload must arrive within this
 };
+// An upload slower than this after its first seconds is cut off: two addresses trickling bytes
+// held both upload slots for good.
+export const UPLOAD_RATE = { bytesPerSecond: 64 << 10, afterMs: 10000 };
 const CODE_CHARS = 'abcdefghjkmnpqrstuvwxyz23456789'; // no 0/o, 1/l/i
-const CODE_LENGTH = 6;
+// ~50 bits: /connect.json answers anyone, and 6 characters (~30 bits) could be guessed by asking.
+const CODE_LENGTH = 10;
 
 // A refused upload: the message is for the uploader, status the HTTP status.
 export class RoomError extends Error {
@@ -141,10 +145,9 @@ export class Rooms {
       created: now, emptySince: null, joined: false,
       epoch: performance.now(), // the room's own tick clock (server/main.js)
     };
-    // The address's older rooms past perAddress go, oldest first, only now that the new one
-    // runs (a host who closed the browser left one behind and could not make another).
-    const old = this.mine(key);
-    for (const r of old.slice(0, Math.max(0, old.length - (L.perAddress - 1)))) this.close(r, 'its host made a new room');
+    // What the new room replaces goes only now that it runs (a host who closed the browser left
+    // one behind and could not make another).
+    for (const r of this.replaced(key)) this.close(r, r.address === key ? 'its host made a new room' : 'the room closed: nobody joined it');
     this.rooms.set(code, room);
     console.log(`room ${code}: ${name} (${row.name}${bytes ? `, ${(bytes.byteLength / 1048576).toFixed(1)} MB` : ', a server map'}) for ${key || 'local'}`);
     return room;
@@ -155,14 +158,33 @@ export class Rooms {
     return [...this.rooms.values()].filter((r) => r.address === key);
   }
 
-  // Throws a RoomError when `address` may not make a room now: the server's rooms are taken
-  // (not counting the address's own ones the new room will replace, build) or it made one a
-  // moment ago. Run before an upload is read too (server/main.js: reading 24 MB first let
-  // parallel uploads fill the memory).
+  // The rooms a new room from address key `key` replaces (build closes them): the address's
+  // oldest past perAddress, only those nobody from that address plays in (two people behind
+  // one NAT or VPN ended each other's matches; a host who closed the browser still replaces
+  // the room his friends play on in), and with the server full, the oldest room nobody ever
+  // joined from another address (eight addresses each re-making an unused room every 9 minutes
+  // held every room). Throws a RoomError when that leaves no room.
+  replaced(key) {
+    const L = this.limits, mine = this.mine(key), excess = mine.length - (L.perAddress - 1);
+    const free = mine.filter((r) => this.humans(r, key) === 0);
+    if (excess > free.length) {
+      throw new RoomError('someone at your address plays in the room you made: rejoin it by its link, or make a new one once they leave', 409);
+    }
+    const out = free.slice(0, Math.max(0, excess));
+    if (this.rooms.size - out.length >= L.rooms) {
+      const unused = [...this.rooms.values()].find((r) => !r.joined && r.address !== key);
+      if (!unused) throw new RoomError('every room on this server is taken: try again later', 503);
+      out.push(unused);
+    }
+    return out;
+  }
+
+  // Throws a RoomError when `address` may not make a room now: no room for it (replaced) or it
+  // made one a moment ago. Run before an upload is read too (server/main.js: reading 24 MB first
+  // let parallel uploads fill the memory).
   check(address) {
     const L = this.limits, key = addressKey(address);
-    const replaced = Math.max(0, this.mine(key).length - (L.perAddress - 1));
-    if (this.rooms.size - replaced >= L.rooms) throw new RoomError('every room on this server is taken: try again later', 503);
+    this.replaced(key);
     if (this.now() - (this.lastUpload.get(key) ?? -Infinity) < L.cooldownMs) {
       throw new RoomError('one upload at a time: try again in a few seconds', 429);
     }
@@ -179,14 +201,22 @@ export class Rooms {
     let bytes;
     try {
       bytes = await read(L.bytes, L.uploadMs);
+    } catch (err) {
+      // A failed read starts the cooldown too: one cut off as too slow or too long started none,
+      // and the same address began the next one at once.
+      this.lastUpload.set(key, this.now());
+      throw err;
     } finally {
       this.uploading.delete(key);
     }
     return this.create(bytes, opts);
   }
 
-  // A player's session joined `room` (the bots fill in once the first one is there).
-  joined(room) {
+  // A player's session `client` joined `room` (the bots fill in once the first one is there).
+  // Only once the room let it in: a refused HELLO (a bad password, a ban) made a room that
+  // nobody ever joined close in 2 minutes instead of 10, its bots playing meanwhile.
+  joined(room, client) {
+    if (!client.joined) return;
     room.emptySince = null;
     if (!room.joined) {
       room.joined = true;
@@ -200,10 +230,12 @@ export class Rooms {
   }
 
   // The players at the keys: an idle tab keeps no room open (one person holding all the rooms
-  // with idle sessions locked everyone else out of the server).
-  humans(room) {
+  // with idle sessions locked everyone else out of the server); with `key`, only those from
+  // that address key.
+  humans(room, key = null) {
     const g = room.host.game, ticks = this.limits.activeMs * TICK_RATE / 1000;
-    return g.clients.filter((c) => c && !c.bot && g.tick - c.activeTick < ticks).length;
+    return g.clients.filter((c) => c && !c.bot && g.tick - c.activeTick < ticks &&
+      (key === null || addressKey(c.session && c.session.address) === key)).length;
   }
 
   // Closes rooms nobody plays in any more (call it now and then).
@@ -241,4 +273,43 @@ export class Rooms {
     }
     return await room.gzip;
   }
+}
+
+// A request body (server/main.js: an upload, a new room's JSON), refused past `max` bytes
+// (whatever content-length says), when it has not arrived within `ms`, or once it runs slower
+// than rate.bytesPerSecond after rate.afterMs (a slow upload holds one of the few upload slots).
+export async function readBody(req, max, ms, tooLarge = `the map is too large (${max >> 20} MB at most)`, rate = UPLOAD_RATE) {
+  const declared = Number(req.headers.get('content-length') || 0);
+  if (declared > max) throw new RoomError(tooLarge, 413);
+  const parts = [];
+  let size = 0, late = '';
+  const reader = req.body ? req.body.getReader() : null;
+  const start = performance.now();
+  const timer = reader && setInterval(() => {
+    const t = performance.now() - start;
+    if (t >= ms) late = 'the upload took too long';
+    else if (t >= rate.afterMs && size < rate.bytesPerSecond * t / 1000) late = 'the upload is too slow';
+    else return;
+    clearInterval(timer);
+    reader.cancel().catch(() => {});
+  }, Math.min(1000, rate.afterMs / 10));
+  try {
+    while (reader) {
+      const { value, done } = await reader.read();
+      if (late) throw new RoomError(late, 408);
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) throw new RoomError(tooLarge, 413);
+      parts.push(value);
+    }
+  } finally {
+    clearInterval(timer);
+  }
+  const out = new Uint8Array(size);
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.byteLength;
+  }
+  return out;
 }

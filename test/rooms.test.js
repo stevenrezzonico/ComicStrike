@@ -1,6 +1,6 @@
 // Rooms (server/rooms.js): a game on a map a player uploads, held in memory, with limits.
 import assert from 'node:assert/strict';
-import { Rooms, RoomError } from '../server/rooms.js';
+import { Rooms, RoomError, readBody } from '../server/rooms.js';
 import { Game } from '../server/game.js';
 import { mapNameOf, parseBSP } from '../shared/bsp.js';
 import { CollisionWorld } from '../shared/trace.js';
@@ -22,9 +22,9 @@ function makeRooms(limits = {}) {
 }
 
 // A transport session that keeps what the server sends.
-function session() {
+function session(address = undefined) {
   return {
-    got: [], closed: '',
+    address, got: [], closed: '',
     send(bytes) {
       this.got.push(bytes.slice());
     },
@@ -32,6 +32,13 @@ function session() {
       this.closed = reason;
     },
   };
+}
+
+// A player joins `room` as server/main.js lets one in; returns the client.
+function play(rooms, room, name = 'ann', address = undefined) {
+  const c = quietly(() => joinClient(room.host.game, new Writer(), name, TEAM_T, session(address)));
+  rooms.joined(room, c);
+  return c;
 }
 
 Deno.test('map names from file names', () => {
@@ -55,7 +62,7 @@ Deno.test('HELLO carries the room code', () => {
 Deno.test('a room runs the uploaded map, players join it, bots fill in', () => {
   const { rooms } = makeRooms();
   const room = quietly(() => rooms.create(PLAYGROUND, { fileName: 'My Map.bsp', mode: 'deathmatch', players: 4, address: '1.2.3.4' }));
-  assert.match(room.code, /^[a-z2-9]{6}$/);
+  assert.match(room.code, /^[a-z2-9]{10}$/, '~50 bits: /connect.json answers anyone asking');
   assert.equal(room.name, 'my_map');
   assert.equal(rooms.get(room.code.toUpperCase()), room, 'codes ignore case');
   assert.equal(room.host.game.mapName, 'my_map');
@@ -71,8 +78,8 @@ Deno.test('a room runs the uploaded map, players join it, bots fill in', () => {
   const s = session();
   const game = room.host.game;
   const c = game.connect(s);
-  rooms.joined(room);
   game.receive(c, writeHello(new Writer(), TEAM_T, 0, 0, 'ann', room.code).slice());
+  rooms.joined(room, c);
   const welcome = new Reader().set(s.got.at(-1));
   assert.equal(welcome.u8v(), S2C_WELCOME);
   assert.equal(readWelcome(welcome).map, 'my_map');
@@ -89,7 +96,7 @@ Deno.test('rooms: a player idle at the keys keeps no room open, one playing does
   const room = quietly(() => rooms.create(PLAYGROUND, { fileName: 'a.bsp', address: '1.1.1.1' }));
   const game = room.host.game, w = new Writer();
   const idle = joinClient(game, w, 'idle', TEAM_T, session()), busy = joinClient(game, w, 'busy', TEAM_T, session());
-  rooms.joined(room);
+  rooms.joined(room, idle);
   const run = (ticks, turning) => quietly(() => {
     for (let i = 0; i < ticks; i++) {
       sendCmd(game, w, idle); // nothing pressed, the view still
@@ -114,9 +121,8 @@ Deno.test('rooms close once empty, or unused; closing tells the players', () => 
   const { rooms, clock } = makeRooms({ idleMs: 1000, unusedMs: 5000, cooldownMs: 0, perAddress: 5 });
   const used = quietly(() => rooms.create(PLAYGROUND, { fileName: 'a.bsp', address: '1.1.1.1' }));
   const unused = quietly(() => rooms.create(PLAYGROUND, { fileName: 'b.bsp', address: '1.1.1.1' }));
-  const s = session();
-  const c = used.host.game.connect(s);
-  rooms.joined(used);
+  const c = quietly(() => joinClient(used.host.game, new Writer(), 'ann', TEAM_T, session()));
+  rooms.joined(used, c);
   quietly(() => {
     clock.ms = 4000;
     rooms.sweep();
@@ -155,7 +161,9 @@ Deno.test('uploads are limited: size, rooms, one per address, a cooldown, real m
   const second = quietly(() => rooms.create(PLAYGROUND, { address: '1.1.1.1' }));
   assert.ok(rooms.get(first.code) === null && rooms.get(second.code) === second);
   assert.equal(rooms.rooms.size, 1);
-  quietly(() => rooms.create(PLAYGROUND, { address: '2.2.2.2' }));
+  const other = quietly(() => rooms.create(PLAYGROUND, { address: '2.2.2.2' }));
+  play(rooms, other);
+  second.host.game.disconnect(play(rooms, second)); // played in, empty now
   refused(() => rooms.create(PLAYGROUND, { address: '3.3.3.3' }), /every room/, 503);
   clock.ms += 2000;
   quietly(() => rooms.create(PLAYGROUND, { address: '1.1.1.1' })); // every room taken, but its own one goes
@@ -232,8 +240,10 @@ Deno.test('uploads are refused before their body is read', async () => {
   await refused('3.3.3.3', /busy/, 503);
   reads[0](PLAYGROUND);
   reads[1](PLAYGROUND);
-  await quietly(() => Promise.all([a, b]));
+  const [ra, rb] = await quietly(() => Promise.all([a, b]));
   assert.equal(rooms.rooms.size, 2);
+  ra.host.game.disconnect(play(rooms, ra)); // played in, empty now
+  play(rooms, rb);
   await refused('3.3.3.3', /every room/, 503);
   clock.ms += 1;
   await refused('1.1.1.1', /one upload at a time/, 429); // its own room does not count toward full
@@ -314,8 +324,8 @@ Deno.test('rooms on the server\'s maps: listed by sv_listed, a join password, th
   assert.equal(rooms.list().length, 1);
   // The join password: refused without it, let in with it.
   const w = new Writer();
-  const join = (password) => {
-    const s = session(), c = room.host.game.connect(s);
+  const join = (password, address) => {
+    const s = session(address), c = room.host.game.connect(s);
     quietly(() => room.host.game.receive(c, writeHello(w, TEAM_T, 0, 0, 'guest', room.code, password).slice()));
     c.s = s;
     return c;
@@ -325,11 +335,112 @@ Deno.test('rooms on the server\'s maps: listed by sv_listed, a join password, th
   // Its rcon may change to another of the server's maps.
   quietly(() => room.host.con.exec('changelevel de_inkwell'));
   assert.equal(room.host.game.mapName, 'de_inkwell');
-  // A new room from the same address replaces it, its players told why.
-  const guest = join('sesame');
+  // A new room from the same address while someone from there plays in it is refused (two
+  // people behind one NAT ended each other's matches); once nobody is at the keys there it
+  // replaces the room, whoever is still connected told why.
+  const guest = join('sesame', '1.2.3.4');
   clock.ms += 60000;
+  assert.throws(() => rooms.open('de_inkwell', { address: '1.2.3.4' }), (e) => e.status === 409 && /plays in the room you made/.test(e.message));
+  assert.ok(rooms.get(room.code) === room && guest.s.closed === '');
+  rooms.limits.activeMs = 0; // the guest away from the keys
   const next = quietly(() => rooms.open('de_inkwell', { address: '1.2.3.4' }));
   assert.ok(rooms.get(room.code) === null && rooms.get(next.code) === next);
   assert.equal(guest.s.closed, 'its host made a new room');
   assert.equal(new Reader().set(guest.s.got.at(-1)).u8v(), S2C_REJECT);
+});
+
+// Two people behind one address (a carrier-grade NAT, a VPN exit): the second one's new room
+// closed the first one's while four players were in it.
+Deno.test('rooms: a new room never ends a match in another room from the same address', () => {
+  const { rooms, clock } = makeRooms({ cooldownMs: 1000 });
+  const first = quietly(() => rooms.create(PLAYGROUND, { address: '100.64.7.9' }));
+  const neighbour = play(rooms, first, 'p0', '100.64.7.9');
+  const players = [1, 2, 3].map((i) => play(rooms, first, `p${i}`, `198.51.100.${i}`));
+  clock.ms += 1000;
+  assert.throws(() => rooms.create(PLAYGROUND, { address: '100.64.7.9' }),
+    (e) => e instanceof RoomError && e.status === 409 && /plays in the room you made: rejoin it by its link/.test(e.message));
+  assert.ok(rooms.get(first.code) === first && [neighbour, ...players].every((c) => c.session.closed === ''), 'still playing');
+  assert.equal(rooms.lastUpload.get('100.64.7.9'), 0, 'no cooldown for a refused room');
+  // Nobody from that address plays there any more (a host who closed the browser): the new
+  // room replaces it, its other players told why.
+  first.host.game.disconnect(neighbour);
+  const second = quietly(() => rooms.create(PLAYGROUND, { address: '100.64.7.9' }));
+  assert.ok(rooms.get(first.code) === null && rooms.get(second.code) === second, 'replaced');
+  assert.ok(players.every((c) => c.session.closed === 'its host made a new room'));
+});
+
+// Rooms nobody ever joins lived 10 minutes: eight addresses each re-making one every 9 minutes
+// held every room on the server for good.
+Deno.test('rooms: a full server replaces its oldest room nobody ever joined', () => {
+  const { rooms, clock } = makeRooms({ rooms: 3, cooldownMs: 0 });
+  const make = (address) => quietly(() => rooms.create(PLAYGROUND, { address }));
+  const a = make('203.0.113.1'), b = make('203.0.113.2'), c = make('203.0.113.3');
+  play(rooms, b);
+  clock.ms += 1000;
+  const d = make('198.51.100.5'); // the server full: a, never joined, goes
+  assert.ok(rooms.get(a.code) === null && rooms.get(b.code) === b && rooms.get(c.code) === c && rooms.get(d.code) === d);
+  play(rooms, c);
+  const e = make('198.51.100.6'); // d, the one left that nobody joined
+  assert.ok(rooms.get(d.code) === null && rooms.get(e.code) === e);
+  play(rooms, e);
+  assert.throws(() => make('198.51.100.7'), (err) => err.status === 503 && /every room/.test(err.message), 'all joined: full');
+  assert.equal(rooms.rooms.size, 3);
+});
+
+// A refused HELLO (a bad sv_password, a ban, another protocol) marked a room joined: its bots
+// came in, and a room nobody could join closed 2 minutes after instead of 10.
+Deno.test('rooms: a refused HELLO does not count as joining the room', () => {
+  const { rooms } = makeRooms();
+  const room = quietly(() => rooms.create(PLAYGROUND, { players: 10, password: 'secret', address: '198.51.100.1' }));
+  const game = room.host.game, w = new Writer();
+  const hello = (password) => {
+    const c = game.connect(session());
+    quietly(() => game.receive(c, writeHello(w, TEAM_T, 0, 0, 'probe', room.code, password).slice()));
+    rooms.joined(room, c); // as server/main.js does after each datagram
+    return c;
+  };
+  hello('wrong');
+  quietly(() => {
+    for (let t = 0; t < 64; t++) game.step();
+  });
+  assert.equal(room.joined, false);
+  assert.equal(game.bots.list.length, 0, 'no bots for nobody');
+  assert.ok(hello('secret').joined);
+  assert.equal(room.joined, true);
+});
+
+// An upload that failed while being read (too slow, too long) started no cooldown: the same
+// address began the next one at once, and two addresses held both upload slots for good.
+Deno.test('rooms: a failed upload starts its address\'s cooldown', async () => {
+  const { rooms, clock } = makeRooms({ cooldownMs: 1000 });
+  const slow = () => Promise.reject(new RoomError('the upload is too slow', 408));
+  await assert.rejects(rooms.upload(slow, { address: '203.0.113.1' }), (e) => e.status === 408);
+  let read = false;
+  const fine = () => (read = true) && Promise.resolve(PLAYGROUND);
+  await assert.rejects(rooms.upload(fine, { address: '203.0.113.1' }), (e) => e.status === 429 && /one upload at a time/.test(e.message));
+  assert.ok(!read, 'refused before reading');
+  clock.ms += 1000;
+  assert.ok(await quietly(() => rooms.upload(fine, { address: '203.0.113.1' })));
+});
+
+// The request body: cut off once it runs slower than the least rate after its grace, or past
+// its time; a body within both comes through whole.
+Deno.test('rooms: an upload slower than the least rate is cut off after its grace', async () => {
+  const rate = { bytesPerSecond: 64 << 10, afterMs: 100 };
+  const trickle = () => new Request('http://127.0.0.1/rooms', {
+    method: 'POST',
+    body: new ReadableStream({ // 1 KB, then nothing more
+      start(c) {
+        c.enqueue(new Uint8Array(1024));
+      },
+      pull: () => new Promise(() => {}),
+    }),
+  });
+  const t0 = performance.now();
+  await assert.rejects(readBody(trickle(), 1 << 20, 60000, undefined, rate), (e) => e.status === 408 && /too slow/.test(e.message));
+  assert.ok(performance.now() - t0 < 2000, 'at the end of the grace, not the time limit');
+  await assert.rejects(readBody(trickle(), 1 << 20, 50, undefined, { bytesPerSecond: 0, afterMs: 100 }),
+    (e) => e.status === 408 && /took too long/.test(e.message));
+  const whole = await readBody(new Request('http://127.0.0.1/rooms', { method: 'POST', body: PLAYGROUND }), 24 << 20, 5000);
+  assert.equal(whole.byteLength, PLAYGROUND.byteLength);
 });

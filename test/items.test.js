@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { TEAM_T, TEAM_CT } from '../shared/player.js';
 import { IN_DROP, IN_USE } from '../shared/constants.js';
-import { WEAPONS, WEAPON_ID, WS_SLOTS, WS_ACTIVE, SLOT_PRIMARY, SLOT_SECONDARY, grenadeCount } from '../shared/weapons.js';
+import {
+  WEAPONS, WEAPON_ID, WS_SLOTS, WS_ACTIVE, SLOT_PRIMARY, SLOT_SECONDARY, SLOT_C4, grenadeCount, giveWeapon,
+} from '../shared/weapons.js';
+import { BOMB_DROPPED } from '../shared/bomb.js';
 import { PS_ORIGIN } from '../shared/pmove.js';
 import { Writer, Reader, writeBuy, readItems, S2C_ITEMS } from '../shared/protocol.js';
 import { Items, MAX_ITEMS } from '../shared/items.js';
 import { Game } from '../server/game.js';
 import { loadMap, mapOrNull, joinClient, sendCmd } from './harness.js';
+import { boxWorld, FLOOR } from './worlds.js';
 
 const bsp = mapOrNull('de_dust2');
 
@@ -216,4 +220,53 @@ Deno.test('armoury weapons: no more than the ground holds', () => {
   const many = Array.from({ length: 8000 }, (_, i) => ({ classname: 'armoury_entity', item: '4', count: '32', origin: `${i % 50} 0 64` }));
   const game = new Game('de_playground', { ...playground, entities: [...playground.entities, ...many] }, { rounds: false });
   assert.equal(game.armoury.reduce((n, a) => n + a.count, 0), MAX_ITEMS);
+});
+
+// weaponTick draws the slot a command names, then drops what is in hand; the server put down
+// the weapon held before the command. "slot2; drop" with an AWP in hand dropped the pistol from
+// the inventory and laid a second AWP on the ground; "slot5; drop" holding the Glock took the C4
+// away while its carrier kept the bomb.
+Deno.test('G with a slot key in the same command drops the weapon that key drew', () => {
+  const pg = loadMap('de_playground');
+  {
+    const game = new Game('de_playground', pg, { rounds: false }), w = new Writer();
+    const a = joinClient(game, w, 'alpha', TEAM_CT);
+    for (let i = 0; i < 2; i++) sendCmd(game, w, a), game.step();
+    giveWeapon(a.player.ws, WEAPON_ID.awp);
+    a.player.ws.f[WS_ACTIVE] = SLOT_PRIMARY;
+    for (let i = 0; i < 100; i++) sendCmd(game, w, a), game.step();
+    const pistol = a.player.ws.f[WS_SLOTS + SLOT_SECONDARY * 3];
+    assert.ok(pistol > 0);
+    sendCmd(game, w, a, IN_DROP, SLOT_SECONDARY);
+    game.step();
+    assert.equal(a.player.ws.f[WS_SLOTS + SLOT_PRIMARY * 3], WEAPON_ID.awp, 'the AWP stays');
+    assert.equal(a.player.ws.f[WS_SLOTS + SLOT_SECONDARY * 3], 0, 'the pistol left the hand');
+    assert.equal(game.items.count, 1);
+    assert.equal(game.items.weapon[0], pistol, 'and lies on the ground');
+  }
+  const game = new Game('de_playground', pg, { freezeTime: 0 }), w = new Writer();
+  const t = joinClient(game, w, 'tee', TEAM_T), ct = joinClient(game, w, 'cee', TEAM_CT);
+  for (let i = 0; i < 400 && !game.bombCarrier; i++) sendCmd(game, w, t), sendCmd(game, w, ct), game.step();
+  assert.ok(game.bombCarrier === t);
+  for (let i = 0; i < 100; i++) sendCmd(game, w, t), sendCmd(game, w, ct), game.step();
+  const pistol = t.player.ws.f[WS_SLOTS + SLOT_SECONDARY * 3];
+  assert.ok(t.player.ws.f[WS_ACTIVE] !== SLOT_C4 && pistol > 0);
+  sendCmd(game, w, t, IN_DROP, SLOT_C4);
+  sendCmd(game, w, ct);
+  game.step();
+  assert.equal(t.player.ws.f[WS_SLOTS + SLOT_C4 * 3], 0);
+  assert.equal(game.bomb.state, BOMB_DROPPED, 'the bomb is down');
+  assert.ok(game.bombCarrier === null);
+  assert.equal(t.player.ws.f[WS_SLOTS + SLOT_SECONDARY * 3], pistol, 'the pistol stays');
+  assert.equal(game.items.count, 0, 'and no copy of it lies about');
+});
+
+// E took a weapon through a wall: inReach never traced from the eye to it.
+Deno.test('E reaches no weapon behind a wall', () => {
+  const eye = [0, 0, 64];
+  const open = boxWorld([FLOOR]), walled = boxWorld([FLOOR, { min: [16, -500, 0], max: [32, 500, 200] }]);
+  const it = new Items();
+  it.add(WEAPON_ID.awp, 10, 30, 44, 0, 0, 0);
+  assert.equal(it.inReach(open, eye[0], eye[1], eye[2], 50, 0), 0, 'in the open it is taken');
+  assert.equal(it.inReach(walled, eye[0], eye[1], eye[2], 50, 0), -1, 'behind the wall it is not');
 });

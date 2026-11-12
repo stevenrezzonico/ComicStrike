@@ -9,8 +9,8 @@
 //   /admin?new, /admin     a new room on one of the server's maps or a .bsp of our own (Play
 //                          Online's Create a room)
 
-import { cvarCommand, who, modeCommands, botCommands, PRACTICE_PRESET, resetCommands, GROUPS, groupOf, whenApplies, controlOf }
-  from './admincmd.js';
+import { cvarCommand, who, modeCommands, botCommands, PRACTICE_PRESET, resetCommands, GROUPS, groupOf, whenApplies, controlOf,
+  samePlayer, playerRowsKey, banMinutes, clock } from './admincmd.js';
 import { MODES } from '../shared/modes.js';
 import { parseUntrustedBSP, mapNameOf } from '../shared/bsp.js';
 
@@ -24,15 +24,11 @@ const params = new URLSearchParams(location.search);
 const room = (params.get('room') || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const practice = params.has('practice');
 const creating = !room && !practice;
-const KEY = `comicstrike.admin.${room}`; // the password, for this tab's life only
+// The password, for this tab's life only (a new room's page leaves it here before it loads the
+// room's: an address, even after the #, goes into the history before a page can take it off).
+const keyOf = (code) => `comicstrike.admin.${code}`;
+const KEY = keyOf(room);
 let password = practice ? '' : sessionStorage.getItem(KEY) || '';
-// A new room's page reloads with the room's rcon password after the # (never sent to the
-// server, nor kept in the history: taken off the address at once).
-const linked = new URLSearchParams(location.hash.slice(1)).get('password');
-if (linked !== null) {
-  if (!practice) password = linked;
-  history.replaceState(null, '', location.pathname + location.search);
-}
 let catalog = []; // the server console's rows: [name, help, value, hint, min, max, default]
 let state = null; // the newest Host.adminState()
 let tab = sessionStorage.getItem('comicstrike.admin.tab') || 'Match';
@@ -44,16 +40,22 @@ const $ = (id) => document.getElementById(id);
 // --- Reaching the server ---------------------------------------------------------------
 
 // The game's tabs answer on this channel (client/main.js): `hello` asks which game each
-// plays and the rcon password it holds; `call` runs an op in the practice game.
+// plays (its tab's id) and the rcon password it holds; `call` runs an op in the practice game
+// of the tab it names. A game tab opened on our room asks for its password (`rcon?`): the Play
+// in this room link carries none.
 const channel = new BroadcastChannel('comicstrike-admin');
 const me = Math.random().toString(36).slice(2);
+const NO_PRACTICE = 'no practice game in another tab of this browser';
 let calls = 0;
 const waiting = new Map(); // call id -> { resolve, reject, timer }
 const tabsHere = [];
+let practiceTab = null; // the promise of the tab id our calls go to: one, though several tabs may play practice
 channel.onmessage = (e) => {
   const m = e.data || {};
   if (m.type === 'here') tabsHere.push(m);
-  else if (m.type === 'reply' && waiting.has(m.req)) {
+  else if (m.type === 'rcon?' && !practice && room && m.room === room && password) {
+    channel.postMessage({ type: 'rcon', room, rcon: password });
+  } else if (m.type === 'reply' && waiting.has(m.req)) {
     const w = waiting.get(m.req);
     waiting.delete(m.req);
     clearTimeout(w.timer);
@@ -62,15 +64,30 @@ channel.onmessage = (e) => {
   }
 };
 
-function viaTab(op, command) {
+// The first game tab of this browser whose answer to `hello` passes `test`, or null.
+async function findTab(test) {
+  tabsHere.length = 0;
+  channel.postMessage({ type: 'hello' });
+  await new Promise((r) => setTimeout(r, 300));
+  return tabsHere.find(test) || null;
+}
+
+async function viaTab(op, command) {
+  practiceTab ||= findTab((m) => m.kind === 'practice').then((t) => t && t.tab);
+  const tab = await practiceTab;
+  if (!tab) {
+    practiceTab = null;
+    throw Object.assign(new Error(NO_PRACTICE), { status: 0 });
+  }
   return new Promise((resolve, reject) => {
     const req = `${me}:${++calls}`;
     const timer = setTimeout(() => {
       waiting.delete(req);
-      reject(Object.assign(new Error('no practice game in another tab of this browser'), { status: 0 }));
+      practiceTab = null; // that tab closed or left practice: look again
+      reject(Object.assign(new Error(NO_PRACTICE), { status: 0 }));
     }, 2000);
     waiting.set(req, { resolve, reject, timer });
-    channel.postMessage({ type: 'call', req, op, command });
+    channel.postMessage({ type: 'call', tab, req, op, command });
   });
 }
 
@@ -88,9 +105,7 @@ async function call(op, command = '') {
 
 // The rcon password a game tab of this browser holds for this room, or ''.
 async function passwordFromTab() {
-  channel.postMessage({ type: 'hello' });
-  await new Promise((r) => setTimeout(r, 300));
-  const t = tabsHere.find((m) => m.rcon && m.kind === 'room' && m.room === room);
+  const t = await findTab((m) => m.rcon && m.kind === 'room' && m.room === room);
   return t ? t.rcon : '';
 }
 
@@ -107,6 +122,22 @@ async function run(command, also = null) {
     if (err.status === 401 || err.status === 403) showLogin(err.message);
   }
   poll();
+}
+
+// `command` on player `p` (a row of the table) by his id, sent only while the newest state
+// still has him in that slot: the table is up to a second old and a dialog stays open any
+// time, and the next player to come takes a free slot at once.
+async function onPlayer(p, command) {
+  let players;
+  try {
+    ({ players } = await call('state'));
+  } catch (err) {
+    log(err.message, true);
+    if (err.status === 401 || err.status === 403) showLogin(err.message);
+    return;
+  }
+  if (samePlayer(players, p)) run(command);
+  else log(`${p.name} is no longer #${p.id}: nothing sent`, true);
 }
 
 function log(text, error = false) {
@@ -142,6 +173,8 @@ async function start() {
 
 function showLogin(error) {
   clearTimeout(pollTimer);
+  state = null; // the tab's return polls no more
+  password = '';
   sessionStorage.removeItem(KEY);
   $('tabs').classList.add('hidden');
   $('body').replaceChildren();
@@ -168,8 +201,13 @@ $('logout').onclick = () => {
 
 async function poll() {
   clearTimeout(pollTimer);
+  // Logged out: a call without the password is a bad guess, and 5 lock this address out of
+  // the room's rcon for a minute (a failed command's poll, a poll answered after Log out).
+  if (!practice && !password) return;
   try {
-    state = await call('state');
+    const s = await call('state');
+    if (!practice && !password) return;
+    state = s;
     summary();
     if (view) view.update();
   } catch (err) {
@@ -181,7 +219,6 @@ async function poll() {
 document.addEventListener('visibilitychange', () => !document.hidden && state && poll());
 
 const modeLabel = (name) => (MODES.find((m) => m.name === name) || { label: name }).label;
-const clock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
 function summary() {
   const s = state, r = s.round, bots = s.players.filter((p) => p.bot).length;
@@ -293,7 +330,7 @@ function invite() {
     link.select();
     if (navigator.clipboard) navigator.clipboard.writeText(link.value).then(() => (copy.textContent = 'Copied'), () => {});
   });
-  return h('div', {}, row(link, copy, h('a', { href: `/?room=${room}#rcon=${encodeURIComponent(password)}`, target: '_blank',
+  return h('div', {}, row(link, copy, h('a', { href: `/?room=${room}`, target: '_blank',
     title: 'Your game tab gets the room\'s console too (bot_add, mp_restartgame, ... no rcon needed)' }, 'Play in this room')),
     h('p', { class: 'note' }, 'Friends who open the link join the room. sv_listed 1 lists it in Play Online; with 0 only the ' +
       'link brings players in. The room closes a couple of minutes after its last player leaves.'));
@@ -329,7 +366,7 @@ async function newRoom() {
       }
       own = { name: mapNameOf(file.name), bytes };
       picked = null;
-      go.disabled = full;
+      go.disabled = false;
     } catch (err) {
       error.textContent = err.message;
     }
@@ -391,14 +428,15 @@ async function newRoom() {
       }
       const out = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
-      location.replace(`/admin?room=${out.code}#password=${encodeURIComponent(out.rcon)}`); // logs in (start)
+      sessionStorage.setItem(keyOf(out.code), out.rcon); // the room's page logs in with it (start)
+      location.replace(`/admin?room=${out.code}`);
     } catch (err) {
       error.textContent = err.message;
       go.textContent = 'Create the room';
       go.disabled = false;
     }
   }, 'go');
-  go.disabled = full || !picked;
+  go.disabled = !picked; // not when full: a new room replaces one of this address's own (server/rooms.js check)
   const label = (input, text) => h('label', {}, input, ` ${text}`);
   $('body').replaceChildren(h('div', {},
     h('h2', {}, 'New room'),
@@ -409,7 +447,8 @@ async function newRoom() {
       row('Who sees it', label(listed, 'public: listed in Play Online'), label(hidden, 'private: only its link brings players in')),
       row('Join password', password, h('span', { class: 'note' }, '(optional)')),
       row(go), error,
-      full ? h('p', { class: 'note' }, 'Every room on this server is taken: try again when one closes.') : null),
+      full ? h('p', { class: 'note' }, 'Every room on this server is taken: try again when one closes (a new room replaces ' +
+        'one you made before).') : null),
     h('h2', {}, 'Map'), card(grid, maps.length ? null : h('p', { class: 'note' }, 'No maps answered: bring your own.'),
       h('p', { class: 'note' }, 'Your map: a .bsp of your own, sent to this server, which keeps it in memory only while ' +
         'people play in the room.'))));
@@ -428,7 +467,7 @@ const BUILD = {
     const roomOpts = room ? settings(['sv_listed', 'sv_password']) : null;
     const say = h('input', { placeholder: 'a message to everyone', maxLength: 127, style: 'flex: 1; min-width: 200px' });
     const send = () => {
-      if (say.value.trim()) run(`say ${say.value}`);
+      if (say.value.trim()) run(cvarCommand('say', say.value)); // one argument: a `;` or `//` in it stays text
       say.value = '';
     };
     say.addEventListener('keydown', (e) => {
@@ -458,32 +497,42 @@ const BUILD = {
   },
 
   Players() {
-    const table = region(() => JSON.stringify([state.players, state.bans]), () => {
+    const numbers = (p) => [p.kills, p.assists, p.deaths, p.score, `$${p.money}`, p.alive ? p.health : 'dead'];
+    let cells = new Map(); // player id -> his number cells, written in place between rebuilds
+    const table = region(() => playerRowsKey(state), () => {
       const players = [...state.players].sort((a, b) => a.team - b.team || b.score - a.score || a.id - b.id);
+      cells = new Map();
       const action = (p) => [
         ...[[1, 't', 'T'], [2, 'ct', 'CT'], [3, 'spec', 'Spec']].map(([team, arg, label]) =>
-          h('button', { class: 'small', disabled: p.team === team, onclick: () => run(`switchteam ${arg} ${who(p.id)}`) }, label)),
+          h('button', { class: 'small', disabled: p.team === team, onclick: () => onPlayer(p, `switchteam ${arg} ${who(p.id)}`) },
+            label)),
         ' ',
-        p.alive && p.team !== 3 ? btn('Slay', () => run(`slay ${who(p.id)}`), 'small') : null,
-        p.bot ? btn('Kick', () => run(`bot_kick ${who(p.id)}`), 'small')
-          : btn('Kick', () => sure(`Kick ${p.name}?`) && run(`kick ${who(p.id)}`), 'small'),
+        p.alive && p.team !== 3 ? btn('Slay', () => onPlayer(p, `slay ${who(p.id)}`), 'small') : null,
+        p.bot ? btn('Kick', () => onPlayer(p, `bot_kick ${who(p.id)}`), 'small')
+          : btn('Kick', () => sure(`Kick ${p.name}?`) && onPlayer(p, `kick ${who(p.id)}`), 'small'),
         p.bot ? null : btn('Ban', () => {
           const m = prompt(`Ban ${p.name} for how many minutes? (0: until the server restarts)`, '60');
-          if (m !== null && m.trim() !== '') run(`banid ${Number(m) || 0} ${who(p.id)}`);
+          if (m === null) return;
+          const minutes = banMinutes(m);
+          if (minutes === null) log(`Ban ${p.name}: "${m}" is not a number of minutes; nothing sent`, true);
+          else onPlayer(p, `banid ${minutes} ${who(p.id)}`);
         }, 'small'),
       ];
       return h('div', {},
         h('table', {},
           h('tr', {}, ['#', 'Name', 'Team', 'K', 'A', 'D', 'Score', 'Money', 'HP', 'Address', ''].map((t, i) =>
             h('th', { class: i >= 3 && i <= 8 ? 'num' : '' }, t))),
-          players.map((p) => h('tr', { class: p.alive || p.team === 3 ? '' : 'dead' },
-            h('td', {}, String(p.id)),
-            h('td', {}, p.name, p.bot ? h('span', { class: 'note' }, ` ${LEVELS[p.difficulty] || ''}`) : null),
-            h('td', { class: TEAM_CLASS[p.team] }, TEAMS[p.team]),
-            ...[p.kills, p.assists, p.deaths, p.score, `$${p.money}`, p.alive ? p.health : 'dead'].map((v) =>
-              h('td', { class: 'num' }, String(v))),
-            h('td', { class: 'note' }, p.bot ? 'bot' : p.address || '-'),
-            h('td', {}, action(p))))),
+          players.map((p) => {
+            const nums = numbers(p).map((v) => h('td', { class: 'num' }, String(v)));
+            cells.set(p.id, nums);
+            return h('tr', { class: p.alive || p.team === 3 ? '' : 'dead' },
+              h('td', {}, String(p.id)),
+              h('td', {}, p.name, p.bot ? h('span', { class: 'note' }, ` ${LEVELS[p.difficulty] || ''}`) : null),
+              h('td', { class: TEAM_CLASS[p.team] }, TEAMS[p.team]),
+              ...nums,
+              h('td', { class: 'note' }, p.bot ? 'bot' : p.address || '-'),
+              h('td', {}, action(p)));
+          })),
         players.length ? null : h('p', { class: 'note' }, 'Nobody is on the server.'),
         h('h2', {}, 'Bans'),
         state.bans.length ? h('table', {}, state.bans.map((b) => h('tr', {},
@@ -491,14 +540,26 @@ const BUILD = {
           h('td', {}, btn('Unban', () => run(`removeip ${b.address}`), 'small')))))
           : h('p', { class: 'note' }, 'No bans. Bans last until their time is up or the server restarts.'));
     });
-    return { el: h('div', {}, h('h2', {}, 'Players'), card(table.el)), update: () => table.update() };
+    return {
+      el: h('div', {}, h('h2', {}, 'Players'), card(table.el)),
+      update() {
+        table.update();
+        for (const p of state.players) {
+          const nums = cells.get(p.id);
+          if (!nums) continue;
+          numbers(p).forEach((v, i) => {
+            if (nums[i].textContent !== String(v)) nums[i].textContent = String(v);
+          });
+        }
+      },
+    };
   },
 
   Bots() {
     const team = h('select', {}, h('option', { value: '' }, 'smaller team'), h('option', { value: 't' }, 'Terrorists'),
       h('option', { value: 'ct' }, 'Counter-Terrorists'));
     const level = h('select', {}, LEVELS.map((l) => h('option', { value: l }, l)));
-    level.value = LEVELS[Number(rowOf('bot_difficulty')?.[2]) || 1];
+    level.value = LEVELS[Number(rowOf('bot_difficulty')?.[2])] ?? 'normal'; // (0 is easy)
     const count = h('input', { type: 'number', value: 1, min: 1, max: 20 });
     const name = h('input', { placeholder: 'name (optional)', maxLength: 31 });
     const opts = settings(catalog.map((r) => r[0]).filter((n) => /^bot_/.test(n)));
@@ -507,8 +568,8 @@ const BUILD = {
       if (!bots.length) return h('p', { class: 'note' }, 'No bots.');
       return h('table', {}, bots.map((p) => h('tr', {},
         h('td', {}, p.name), h('td', { class: TEAM_CLASS[p.team] }, TEAMS[p.team]), h('td', { class: 'note' }, LEVELS[p.difficulty]),
-        h('td', {}, btn('Kick', () => run(`bot_kick ${who(p.id)}`), 'small'),
-          p.alive ? btn('Kill', () => run(`bot_kill ${who(p.id)}`), 'small') : null))));
+        h('td', {}, btn('Kick', () => onPlayer(p, `bot_kick ${who(p.id)}`), 'small'),
+          p.alive ? btn('Kill', () => onPlayer(p, `bot_kill ${who(p.id)}`), 'small') : null))));
     });
     return {
       el: h('div', {},

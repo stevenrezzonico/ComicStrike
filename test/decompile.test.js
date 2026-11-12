@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { parseUntrustedBSP } from '../shared/bsp.js';
+import { box } from '../shared/bspwriter.js';
+import { CollisionWorld, pointContents } from '../shared/trace.js';
 import { decompileBSP } from '../client/editor/decompile.js';
 import {
   readProject, checkProject, compileProject, withProject, projectIn, piecesOf, cornersOf, turnFaces, mirrorFaces,
   newProject, connectedTo, mainTexture,
 } from '../client/editor/project.js';
-import { readMapFile, openInEditor, solidAgreement, wallHoles } from './harness.js';
+import { readMapFile, openInEditor, solidAgreement, wallHoles, yard } from './harness.js';
 
 // A .bsp opened in the map editor (client/editor/decompile.js): turned back into shapes that
 // compile into the same solid space (the helpers and Valve's maps: test/harness.js and
@@ -83,6 +85,81 @@ Deno.test('decompile: convex pieces move, turn and mirror with their box', () =>
   assert.ok(same(corners(turned), before.map(([x, y, z]) => [cx - (y - cy), cy + (x - cx), z])), 'turned');
   const mirrored = { ...piece, faces: mirrorFaces(piece.faces) };
   assert.ok(same(corners(mirrored), before.map(([x, y, z]) => [x0 + x1 - x, y, z])), 'mirrored');
+});
+
+// A map from `extra(map)` in the test yard, opened in the editor as the editor keeps it.
+const openYard = (extra, edit = () => {}) => {
+  const bsp = yard(extra);
+  edit(bsp);
+  return { bsp, p: readProject(JSON.parse(JSON.stringify(decompileBSP(bsp, 'x.bsp').project))) };
+};
+const compiled = (p) => parseUntrustedBSP(compileProject(p, 'draft').bytes.buffer);
+
+Deno.test('decompile: an entity that comes back in several shapes stays one, turning about its own origin', () => {
+  // A swinging door with a handle, hinged at x 0, and a cart of a bed and a cab.
+  const { p } = openYard((map) => {
+    map.brushEntity({ classname: 'func_door_rotating', origin: '0 0 64', distance: '90', speed: '100' },
+      [box(0, -4, 0, 64, 4, 128, 'steel'), box(48, 4, 56, 56, 10, 64, 'steel')]);
+    map.brushEntity({ classname: 'func_train', target: 'c1', speed: '100' },
+      [box(-400, -32, 0, -272, 32, 16, 'steel'), box(-304, -32, 16, -272, 32, 64, 'steel')]);
+    map.point({ classname: 'path_corner', targetname: 'c1', target: 'c2', origin: '-336 0 32' });
+    map.point({ classname: 'path_corner', targetname: 'c2', target: 'c1', origin: '336 0 32' });
+  });
+  const door = p.brushes.filter((b) => b.kind === 'func_door_rotating');
+  assert.ok(door.length > 1 && p.brushes.filter((b) => b.kind === 'func_train').length > 1, 'both come back in shapes');
+  const out = compiled(p);
+  const of = (b, cls) => b.entities.filter((e) => e.classname === cls);
+  assert.deepEqual(of(out, 'func_door_rotating').map((e) => e.origin), ['0 0 64'], 'one door, hinged where it was');
+  assert.equal(of(out, 'func_train').length, 1, 'one train');
+  // Its shapes moved together, the hinge goes along.
+  for (const b of door) for (const k of [0, 3]) b.b[k] += 100;
+  assert.deepEqual(of(compiled(p), 'func_door_rotating').map((e) => e.origin), ['100 0 64']);
+  // A file without the tags reads as before: a shape, an entity.
+  const plain = readProject(JSON.parse(JSON.stringify(p, (k, v) => (k === 'entity' || k === 'origin' ? undefined : v))));
+  assert.equal(of(compiled(plain), 'func_door_rotating').length, door.length);
+});
+
+Deno.test('decompile: world slime and lava come back as slime and lava', () => {
+  const at = [600, 0, 100];
+  const { p } = openYard((map) => map.world.push(box(-200, -200, -32, 200, 200, 0, 'steel')), (bsp) => {
+    // The yard's air turned to lava (what a compiler makes of a !lava world brush).
+    let n = bsp.modelsI[9];
+    while (n >= 0) {
+      const q = bsp.nodesI32[n * 6] * 5, d = bsp.planesF[q] * at[0] + bsp.planesF[q + 1] * at[1] + bsp.planesF[q + 2] * at[2] - bsp.planesF[q + 3];
+      n = bsp.nodesI16[n * 12 + (d >= 0 ? 2 : 3)];
+    }
+    bsp.leavesI32[(-1 - n) * 7] = -5;
+  });
+  assert.deepEqual(p.brushes.filter((b) => b.kind === 'func_water').map((b) => b.keys.skin), ['-5']);
+  assert.equal(pointContents(CollisionWorld.fromBSP(compiled(p)), ...at), -5);
+});
+
+Deno.test('decompile: a relay list keeps the keys that fire one name again (name#1)', () => {
+  const { p } = openYard((map) => map.point({ classname: 'multi_manager', targetname: 'mm', boom: '1', 'boom#1': '3', origin: '0 0 64' }));
+  const mm = p.points.find((q) => q.kind === 'multi_manager');
+  assert.equal(mm.keys['boom#1'], '3', 'opened and read back');
+  assert.equal(compiled(p).entities.find((e) => e.classname === 'multi_manager')['boom#1'], '3', 'compiled');
+});
+
+Deno.test('decompile: a texture named like an object\'s own property opens and compiles', () => {
+  const { p } = openYard((map) => {
+    map.textures = { ...map.textures, constructor: [32, 32] };
+    map.world.push(box(0, 0, 0, 64, 64, 64, 'constructor'));
+  });
+  assert.deepEqual(p.textures.constructor, [32, 32], 'with its size');
+  assert.ok(compiled(p).textureNames.includes('constructor'));
+  // A project naming them, and a kind, shape or point kind no editor makes.
+  const q = newProject();
+  q.brushes[5].tex = { top: 'valueOf', bottom: 'toString', side: '__proto__' };
+  q.brushes[6].kind = 'constructor';
+  q.brushes[6].shape = 'toString';
+  q.points.push({ kind: 'hasOwnProperty', o: [0, 0, 0], yaw: 0 });
+  const back = readProject(JSON.parse(JSON.stringify(q)));
+  assert.equal(back.brushes[6].kind, 'world');
+  assert.equal(back.brushes[6].shape, 'box');
+  assert.equal(back.points.length, q.points.length - 1);
+  const names = compiled(readProject(JSON.parse(JSON.stringify(back)))).textureNames;
+  for (const t of ['valueOf', 'toString', '__proto__']) assert.ok(names.some((n) => n.toLowerCase() === t.toLowerCase()), t);
 });
 
 Deno.test('decompile: a mangled map is refused or opens without throwing', () => {

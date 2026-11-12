@@ -4,8 +4,8 @@
 //
 // A project (saved as JSON, format 'comicstrike-map' version 3):
 //   { name, brushes: [{ id, b: [x0, y0, z0, x1, y1, z1], tex: { top, bottom, side }, kind, keys,
-//       shape, yaw, up, sides, step, faces? }], points: [{ id, kind, o: [x, y, z] (the feet; a lamp
-//       itself), yaw, keys? }], textures?: { name: [width, height] }, nextId }
+//       shape, yaw, up, sides, step, faces?, entity?, origin? }], points: [{ id, kind, o: [x, y, z]
+//       (the feet; a lamp itself), yaw, keys? }], textures?: { name: [width, height] }, nextId }
 // A brush's shape (SHAPES) fills its box b: a box (turned by `yaw` degrees about its
 // center: an angled wall), a ramp rising toward side `up`, a pillar of `sides` faces, stairs
 // of `step` high steps rising toward `up`, a ladder against side `up` (its board and the
@@ -13,7 +13,10 @@
 // bspdecompile.js) whose `faces` are planes [nx, ny, nz, d, texture] in its box's own
 // coordinates (0..1 along each axis: n·u <= d inside), so moving and resizing the box
 // carry it along. Its kind is 'world' (solid) or a brush entity class (KINDS); each entity
-// brush is an entity of its own. Textures are the palette's (TEXTURES) or the project's own
+// brush is an entity of its own, except that brushes sharing an `entity` tag are one (an
+// opened map's entity that came back in several shapes), turning about `origin` when one
+// has it (the map's own origin, as an offset from the brush's low corner b[0..2], so moving
+// the brush moves it). Textures are the palette's (TEXTURES) or the project's own
 // (`textures`: those of an opened map). Versions 1 and 2 read too. The compiled map is
 // closed in a sky box round everything, so it never leaks into the void.
 
@@ -61,8 +64,11 @@ export const TEXTURES = [
 const TEXTURE_SIZE = new Map(TEXTURES.map(([n, w, h]) => [n, [w, h]]));
 export const TEXTURE_NAME = /^[\w!{}+~-]{1,15}$/; // a GoldSrc texture name (16 bytes with its end)
 
-// A texture's size: the palette's, else the project's own table (null: unknown).
-export const textureSize = (p, name) => TEXTURE_SIZE.get(name) || (p.textures && p.textures[name]) || null;
+// A texture's size: the palette's, else the project's own table (null: unknown). Own keys
+// only: a map's texture named `constructor` read Object's as its size.
+export const textureSize = (p, name) => TEXTURE_SIZE.get(name) || (p.textures && Object.hasOwn(p.textures, name) && p.textures[name]) || null;
+// An entity key's name; `name#1` keys of a relay list fire `name` once more.
+export const KEY_NAME = /^\w{1,32}(#\d{1,3})?$/;
 
 // Brush kinds: label, default keys, `trigger` (no faces, no collision: zones and volumes),
 // `water` (a water volume: only its top shows).
@@ -188,7 +194,7 @@ export function readProject(text) {
   // was a billion pieces, and autosaved first, it hung the editor at every visit.
   const coord = (x) => Math.max(-2 * LIMITS.coord, Math.min(2 * LIMITS.coord, num(x)));
   const out = { format: FORMAT, version: VERSION, name: String(p.name || 'my_map').replace(/[^\w-]/g, '_').slice(0, 31) || 'my_map',
-    brushes: [], points: [], textures: {}, nextId: 1 };
+    brushes: [], points: [], textures: Object.create(null), nextId: 1 }; // no prototype: a texture may be named __proto__
   let extra = 0;
   for (const [name, size] of Object.entries(p.textures && typeof p.textures === 'object' ? p.textures : {})) {
     if (!TEXTURE_NAME.test(name) || TEXTURE_SIZE.has(name) || !Array.isArray(size) || ++extra > 1024) continue;
@@ -205,14 +211,15 @@ export function readProject(text) {
     return name;
   };
   let pieces = 0;
+  const entities = new Map(); // a file's entity tags -> new ones, drawn with the ids (copies take more)
   for (const b of Array.isArray(p.brushes) ? p.brushes.slice(0, 4 * LIMITS.brushes) : []) {
     if (!Array.isArray(b.b) || b.b.length < 6) continue; // a missing corner was NaN in the compiler
-    const kind = KINDS[b.kind] ? b.kind : 'world';
+    const kind = Object.hasOwn(KINDS, b.kind) ? b.kind : 'world';
     const tex = {};
     for (const s of ['top', 'bottom', 'side']) tex[s] = b.tex ? texOf(b.tex[s]) : null;
     const keys = {};
-    for (const [k, v] of Object.entries(b.keys || {})) if (/^\w{1,32}$/.test(k)) keys[k] = String(v).replace(/"/g, "'").slice(0, 128);
-    let shape = SHAPES[b.shape] ? b.shape : 'box', faces;
+    for (const [k, v] of Object.entries(b.keys || {})) if (KEY_NAME.test(k)) keys[k] = String(v).replace(/"/g, "'").slice(0, 128);
+    let shape = Object.hasOwn(SHAPES, b.shape) ? b.shape : 'box', faces;
     if (shape === 'convex') {
       faces = (Array.isArray(b.faces) ? b.faces : []).slice(0, 64)
         .filter((f) => Array.isArray(f) && f.slice(0, 4).every((x) => Number.isFinite(+x) && Math.abs(+x) < 1e6))
@@ -227,14 +234,19 @@ export function readProject(text) {
     // At most MAX_PIECES pieces in all, the shapes past it left out: 12,000 stairs of 64
     // steps were 768k pieces, and autosaved, they hung the editor at every visit.
     if ((pieces += shape === 'stairs' ? stepCount(br) : shape === 'ladder' ? 2 : 1) > MAX_PIECES) break;
+    if (Number.isFinite(b.entity)) {
+      if (!entities.has(b.entity)) entities.set(b.entity, out.nextId++);
+      br.entity = entities.get(b.entity);
+    }
+    if (Array.isArray(b.origin) && b.origin.length >= 3) br.origin = b.origin.slice(0, 3).map(coord);
     out.brushes.push(br);
   }
   for (const q of Array.isArray(p.points) ? p.points.slice(0, 4 * LIMITS.points) : []) {
-    if (!POINTS[q.kind] || !Array.isArray(q.o) || q.o.length < 3) continue; // a lamp with no height opened the map to the void
+    if (!Object.hasOwn(POINTS, q.kind) || !Array.isArray(q.o) || q.o.length < 3) continue; // a lamp with no height opened the map to the void
     const pt = { id: out.nextId++, kind: q.kind, o: q.o.slice(0, 3).map(coord), yaw: num(q.yaw) % 360 };
     if (POINTS[q.kind].keys) {
       pt.keys = { ...POINTS[q.kind].keys };
-      for (const [k, v] of Object.entries(q.keys || {})) if (/^\w{1,32}$/.test(k)) pt.keys[k] = String(v).replace(/"/g, "'").slice(0, 128);
+      for (const [k, v] of Object.entries(q.keys || {})) if (KEY_NAME.test(k)) pt.keys[k] = String(v).replace(/"/g, "'").slice(0, 128);
     }
     out.points.push(pt);
   }
@@ -433,7 +445,8 @@ export function checkProject(p) {
   }
   const sites = p.brushes.filter((b) => b.kind === 'func_bomb_target').length;
   if (sites > 2) warnings.push({ text: 'More than two bomb sites: only A and B have names.' });
-  const pointNamed = (kind, name) => p.points.some((q) => q.kind === kind && q.keys && q.keys.targetname === name);
+  // An empty name names nothing: the compiled entity has no target (an exit's default is '').
+  const pointNamed = (kind, name) => !!name && p.points.some((q) => q.kind === kind && q.keys && q.keys.targetname === name);
   for (const b of p.brushes) {
     if (b.kind === 'func_button' && b.keys.target && !p.brushes.some((d) => d.keys.targetname === b.keys.target)) {
       warnings.push({ text: `A button targets "${b.keys.target}", which no door is named.`, id: b.id });
@@ -484,8 +497,9 @@ export function projectToBuilder(p) {
   for (const b of p.brushes) {
     for (const s of ['top', 'bottom', 'side']) if (b.tex[s]) used.add(b.tex[s]);
     if (b.shape === 'convex') for (const f of b.faces) if (f[4]) used.add(f[4]);
+    if (KINDS[b.kind].water && !b.tex.top) used.add('!watergreen'); // piecesOf's water without a top
   }
-  const textures = {}; // the palette's in its order, then the project's own
+  const textures = Object.create(null); // the palette's in its order, then the project's own
   for (const [name, w, h] of TEXTURES) if (used.has(name)) textures[name] = [w, h];
   for (const name of used) if (!textures[name]) textures[name] = textureSize(p, name) || [64, 64];
   const map = new MapBuilder(textures, { wad: '', mapversion: '220', skyname: 'desert', message: p.name });
@@ -499,24 +513,36 @@ export function projectToBuilder(p) {
     box(X0, Y0 - T, Z0, X1, Y0, Z1, 'sky'), box(X0, Y1, Z0, X1, Y1 + T, Z1, 'sky'),
   );
 
+  // An entity shape is one entity (stairs that are a breakable break as one), and so are the
+  // shapes sharing an `entity` tag (an opened map's entity that came back in several shapes),
+  // written where the first of them is.
+  const ents = new Map(); // tag (else the shape) -> kind -> { first, b: their bounds, list }
   for (const b of p.brushes) {
-    const pieces = piecesOf(b);
-    for (const pc of pieces) if (pc.kind === 'world') map.world.push(pc.brush);
-    // An entity shape is one entity (stairs that are a breakable break as one).
-    const byKind = new Map();
-    for (const pc of pieces) {
-      if (pc.kind === 'world') continue;
-      if (!byKind.has(pc.kind)) byKind.set(pc.kind, []);
-      byKind.get(pc.kind).push(pc);
+    for (const pc of piecesOf(b)) {
+      if (pc.kind === 'world') {
+        map.world.push(pc.brush);
+        continue;
+      }
+      const tag = b.entity ?? b;
+      if (!ents.has(tag)) ents.set(tag, new Map());
+      const byKind = ents.get(tag);
+      if (!byKind.has(pc.kind)) byKind.set(pc.kind, { first: b, b: b.b.slice(), list: [] });
+      const e = byKind.get(pc.kind);
+      e.list.push(pc);
+      for (let k = 0; k < 3; k++) [e.b[k], e.b[k + 3]] = [Math.min(e.b[k], b.b[k]), Math.max(e.b[k + 3], b.b[k + 3])];
+      if (!e.origin && b.origin) e.origin = [0, 1, 2].map((k) => b.b[k] + b.origin[k]); // kept from the opened map
     }
-    for (const [cls, list] of byKind) {
+  }
+  for (const byKind of ents.values()) {
+    for (const [cls, { first, b: bb, list, origin }] of byKind) {
       const keys = { classname: cls };
       for (const [k, v] of Object.entries(list[0].keys)) if (v !== '' && k !== 'hinge') keys[k] = v;
-      if (cls === 'func_door_rotating') keys.origin = hingeOf(b).join(' ');
+      if (cls === 'func_door_rotating') keys.origin = hingeOf({ b: bb, keys: first.keys }).join(' ');
       if (cls === 'func_rot_button' || cls === 'momentary_rot_button' || cls === 'func_rotating') { // turning about the shape's middle
-        keys.origin = [0, 1, 2].map((a) => (b.b[a] + b.b[a + 3]) / 2).join(' ');
+        keys.origin = [0, 1, 2].map((a) => (bb[a] + bb[a + 3]) / 2).join(' ');
       }
-      if (cls === 'func_pendulum') keys.origin = `${(b.b[0] + b.b[3]) / 2} ${(b.b[1] + b.b[4]) / 2} ${b.b[5]}`; // hung from its top
+      if (cls === 'func_pendulum') keys.origin = `${(bb[0] + bb[3]) / 2} ${(bb[1] + bb[4]) / 2} ${bb[5]}`; // hung from its top
+      if (origin) keys.origin = origin.join(' ');
       let contents = CONTENTS_WATER;
       if (cls === 'func_water') { // water by default; slime and lava by GoldSrc's skin
         keys.skin = keys.skin || '-3';

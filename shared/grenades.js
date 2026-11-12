@@ -399,9 +399,13 @@ export class Grenades {
         go = this.resting[k] === 1 && Math.round(this.age[k] / dt) % Math.round(0.2 / dt) === 0;
         // A smoke touching a fire goes off at once, in the air too, and puts it out (CS:GO's:
         // one at your own feet saves you from a molotov); its cloud sits on the fire's floor.
+        // Not from under its floor or through a wall (inFire's reach is for players' feet).
         if (!go && kind === 'smoke') {
           for (let f = 0; f < this.fxCount && !go; f++) {
-            if (this.fxKind[f] === FX_FIRE && this.inFire(f, x, y, z)) {
+            if (
+              this.fxKind[f] === FX_FIRE && z >= this.fxPos[f * 3 + 2] - 2 && this.inFire(f, x, y, z) &&
+              this.seesFire(world, f, x, y, z)
+            ) {
               go = true;
               z = this.fxPos[f * 3 + 2];
             }
@@ -492,10 +496,12 @@ export class Grenades {
       }
     } else if (kind === 'smoke') {
       this.addEffect(FX_SMOKE, weapon, owner, team, x, y, z);
-      for (let f = 0; f < this.fxCount; f++) { // smoke puts out fires it covers
+      const gz = this.pos[k * 3 + 2]; // the grenade itself (z may be the floor of the fire it touched)
+      for (let f = 0; f < this.fxCount; f++) { // smoke puts out fires it covers, not through a wall
         if (this.fxKind[f] !== FX_FIRE) continue;
         const o = f * 3;
-        if (Math.hypot(this.fxPos[o] - x, this.fxPos[o + 1] - y) < FIRE_RADIUS + 40 && Math.abs(this.fxPos[o + 2] - z) < 96) {
+        if (Math.hypot(this.fxPos[o] - x, this.fxPos[o + 1] - y) < FIRE_RADIUS + 40 && Math.abs(this.fxPos[o + 2] - z) < 96 &&
+          this.seesFire(world, f, x, y, gz)) {
           this.removeEffect(f);
           f--;
         }
@@ -521,6 +527,13 @@ export class Grenades {
   inFire(k, x, y, z) {
     const o = k * 3, fz = this.fxPos[o + 2];
     return Math.hypot(x - this.fxPos[o], y - this.fxPos[o + 1]) <= fireRadius(this.fxAge[k]) && z >= fz - 24 && z <= fz + 48;
+  }
+
+  // Nothing solid between (x, y, z) and fire k's middle (8 over its floor).
+  seesFire(world, k, x, y, z) {
+    const o = k * 3;
+    traceHull(world, HULL_POINT, x, y, z, this.fxPos[o], this.fxPos[o + 1], this.fxPos[o + 2] + 8, tr);
+    return tr.fraction >= 1;
   }
 
   // Nothing solid between (x, y, z) and point p.

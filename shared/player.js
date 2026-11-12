@@ -163,7 +163,9 @@ export function canReachBomb(world, ps, pitch, yaw, bomb) {
   const facing = (cp * Math.cos(yaw * DEG) * dx + cp * Math.sin(yaw * DEG) * dy - sp * dz) / Math.max(dist, 1);
   if (facing < USE_CONE) return false;
   traceHull(world, HULL_POINT, ex, ey, ez, bomb.x, bomb.y, bomb.z + 2, useTrace);
-  return useTrace.fraction >= 1 || Math.hypot(useTrace.endx - bomb.x, useTrace.endy - bomb.y) < 12;
+  // Stopped within 12 of it in 3D (only across, a slab under the bomb let a CT below defuse it).
+  const t = useTrace;
+  return t.fraction >= 1 || Math.hypot(t.endx - bomb.x, t.endy - bomb.y, t.endz - bomb.z - 2) < 12;
 }
 
 // Standing in a bomb site: the hull (crouched or not) touches one.

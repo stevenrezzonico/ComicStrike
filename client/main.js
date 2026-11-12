@@ -181,6 +181,7 @@ onNewGame(() => {
   renderer.style.dead = 0;
   renderer.style.smoke = 0;
   renderer.style.liquid = 0;
+  renderer.flashes.clear(); // (the cover draws at time 0, where the last game's flashes still burned)
 });
 // A lost context (a GPU reset, a driver update) takes every buffer, texture and program with it,
 // and nothing here rebuilds them: say so, rather than leave a frozen picture.
@@ -574,15 +575,7 @@ const invViewProj = new Float32Array(16);
 const ownMaps = new Map();
 let useOwn = false; // the game on screen plays an ownMaps file (Your map, Try it, the editor's preview), not the server's
 let roomCode = (params.get('room') || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-let roomRcon = '', roomNames = null;
-{ // The admin page's Play in this room hands over the room's rcon password after the # (never sent
-  // to the server; taken off the address at once): our room's console is then ours, no rcon needed.
-  const linked = new URLSearchParams(location.hash.slice(1)).get('rcon');
-  if (linked !== null) {
-    if (roomCode) roomRcon = linked;
-    history.replaceState(null, '', location.pathname + location.search);
-  }
-}
+let roomRcon = '', roomNames = null; // the password: from an admin page logged in to the room (adminChannel)
 
 let currentMap = '';
 let mapBuy = 0; // the map's info_map_parameters buying rule (mapBuying), for the B key's answer
@@ -914,9 +907,9 @@ function useHint(off) {
     else if ((player.team === TEAM_CT || demo()) && onGround && bomb && bomb.state === BOMB_PLANTED &&
       canReachBomb(world, ps, angles[0], angles[1], bomb)) k = 2;
     else if (net && player.team === TEAM_CT && !player.carrying && net.hostages.count > 0 &&
-      net.hostages.inReach(ex, ey, ez, angles[0], angles[1]) >= 0) k = 3;
+      net.hostages.inReach(world, ex, ey, ez, angles[0], angles[1]) >= 0) k = 3;
     else if (net && !gunGame() && net.items.count > 0) { // (the counts first: the five doubles were boxed every frame)
-      const i = net.items.inReach(ex, ey, ez, angles[0], angles[1]);
+      const i = net.items.inReach(world, ex, ey, ez, angles[0], angles[1]);
       if (i >= 0) {
         const id = net.items.weapon[i];
         k = 4 + id * 2 + (ws.f[WS_SLOTS + WEAPONS[id].slot * 3] > 0 ? 1 : 0);
@@ -1776,6 +1769,21 @@ con.command('benchmark', (a, ctx) => {
   con.out(ctx, `benchmark: measuring ${bench.seconds} s...`);
 }, 'benchmark [seconds] [passes]: frame rate, slow frames, hitches, CPU by part, GPU time and lag over 10 s (or the given time); passes: GPU time per pass (which itself slows a GPU near its limit)');
 
+// Practice pauses with the pause menu, like a listen server: the worker's ticks stop
+// (bots, the round clock, timeouts) and so do ours; the frame still draws. sv_pausable 0
+// keeps it running (testing: the game goes on while the menu is up or the mouse is lost).
+// Told from the frame, and from the overlay and the tab's visibility: a hidden tab gets no
+// frames, and a tab left with Ctrl+Tab showed the pause menu while its game ran on.
+function syncPracticePause() {
+  const paused = localWorker !== null && menu.visible && menu.inGame && cv.sv_pausable.bool;
+  if (paused !== localPaused) {
+    localPaused = paused;
+    if (localWorker) localWorker.postMessage({ type: 'pause', on: paused });
+  }
+  return paused;
+}
+document.addEventListener('visibilitychange', syncPracticePause);
+
 function frame(now) {
   // The next frame first: a frame that throws (a bug) then costs one frame, not the game
   // (the error still shows in the console).
@@ -1792,14 +1800,7 @@ function frame(now) {
   wakeOdd ^= 1; // (the next frame comes at once with the vsync off: see `wake`)
   wakeCtx.fillStyle = wakeOdd ? '#000' : '#fff';
   wakeCtx.fillRect(0, 0, 1, 1);
-  // Practice pauses with the pause menu, like a listen server: the worker's ticks stop
-  // (bots, the round clock, timeouts) and so do ours; the frame still draws. sv_pausable 0
-  // keeps it running (testing: the game goes on while the menu is up or the mouse is lost).
-  const paused = localWorker !== null && menu.visible && menu.inGame && cv.sv_pausable.bool;
-  if (paused !== localPaused) {
-    localPaused = paused;
-    if (localWorker) localWorker.postMessage({ type: 'pause', on: paused });
-  }
+  const paused = syncPracticePause();
   if (demoPlayer) { // a demo holds still under the pause menu and with demo_pause
     demoPlayer.paused = demoHeld || (menu.visible && menu.inGame);
     demoPlayer.timescale = cv.demo_timescale.number;
@@ -2335,9 +2336,12 @@ menu.onWindow = (open) => {
   });
 };
 function drawCover() {
-  if (coverKey === `${canvas.width}x${canvas.height} ${mapLoads}`) return;
+  // By the page's size, not the canvas's: only drawing resizes the canvas, so a window resized
+  // or a phone turned kept the old picture stretched.
+  const key = `${renderer.cssWidth}x${renderer.cssHeight}x${devicePixelRatio} ${mapLoads}`;
+  if (coverKey === key) return;
   drawBackdrop(0, true); // (at rest: no sway)
-  coverKey = `${canvas.width}x${canvas.height} ${mapLoads}`;
+  coverKey = key;
   menu.root.classList.add('cover');
 }
 // The settings window's aspect when it is open, else the canvas's.
@@ -2405,6 +2409,7 @@ function drawBackdrop(now, cover = false) {
   clock.t = now / 1000;
   renderer.render(viewProj, invViewProj, eye, null);
   renderer.composite();
+  renderer.timer.endFrame(); // (left open, its query timed the menu and the map load: the first game's GPU time)
 }
 
 // Hidden tabs get no animation frames (and timers at most once a second): keep
@@ -2864,6 +2869,7 @@ function updateOverlay() {
   if (!playing) return;
   if (input.locked) menu.hide();
   else if (!conWin.isOpen && !hud.menuOpen) menu.showPause();
+  syncPracticePause();
 }
 input.onLockChange = updateOverlay;
 // Touch controls (client/touch.js) under the soft lock: the stick, and buttons that run
@@ -2929,6 +2935,7 @@ document.addEventListener('pointerdown', () => sounds.resume()); // audio may on
 menu.onPlay = (team) => run(() => startOnline(team)); // the room picked in the Play panel
 menu.onMapFile = (file) => addOwnMap(file);
 menu.onRoom = (code) => { // a listed room picked in the Play panel, '' back to the list
+  if (starting || playing) return; // (a join on its way joined that room: its rcon and map changes go with it)
   setRoom(code);
   menu.fetchServer();
 };
@@ -2950,6 +2957,7 @@ async function run(action) {
     await action();
   } catch (err) {
     if (!glLost) leaveGame(`Could not start: ${err.message || err}`); // else its message stands
+    else closeConnections();
   }
   starting = false;
 }
@@ -2957,7 +2965,8 @@ async function run(action) {
 const primary = WEAPON_ID[params.get('primary')] || 0;
 const secondary = WEAPON_ID[params.get('secondary')] || 0;
 
-async function joinServer(team) {
+// room: the room to join ('' none; a reconnect passes the one its session was in).
+async function joinServer(team, room = roomCode) {
   menu.busy('Connecting...');
   // A try that joined and then failed (a map load after a changelevel) is closed before the
   // next: its keepalive kept a ghost player on the server until the tab closed.
@@ -2965,8 +2974,8 @@ async function joinServer(team) {
   net = new NetClient();
   if (localWorker) net.connectLocal(localWorker, localRcon);
   else {
-    await net.connect(roomCode);
-    if (roomCode && roomRcon) net.localRcon = roomRcon; // our room: its console is ours, like practice
+    await net.connect(room);
+    if (room && roomRcon) net.localRcon = roomRcon; // our room: its console is ours, like practice
   }
   const welcome = await net.join(team, primary, secondary, cv.name.value, cv.password.value);
   selfId = welcome.playerId;
@@ -3024,8 +3033,8 @@ async function addOwnMap(file) {
 const OWN_MAP_MAX = 24 << 20; // the server's room limit (server/rooms.js ROOM_LIMITS.bytes)
 
 // The room the Play panel and the next join go to ('' none: the panel lists them), kept in the
-// page's address (the link to share; a reload joins it again). Its rcon password comes only with
-// the admin page's link (above, where roomRcon is declared).
+// page's address (the link to share; a reload joins it again). Its rcon password comes only from
+// an admin page of this browser logged in to it (adminChannel).
 function setRoom(code) {
   roomCode = code;
   roomRcon = '';
@@ -3038,18 +3047,25 @@ function setRoom(code) {
 }
 
 // The admin page (client/admin.html) in another tab of this browser: `hello` asks which game
-// this tab plays and the rcon password it holds (a room we host);
-// `call` runs in the practice game, through its worker (no password: our own server).
+// this tab plays (this tab's id) and the rcon password it holds (a room we host);
+// `call` runs in the practice game of the tab it names, through its worker (no password: our
+// own server; every practice tab ran it before). A page opened on a room asks an admin page
+// logged in to it for its password (`rcon?`): its Play in this room link, which carried it
+// after the #, left it in the history.
 const adminChannel = new BroadcastChannel('comicstrike-admin');
+const adminTab = Math.random().toString(36).slice(2);
 adminChannel.onmessage = (e) => {
   const m = e.data || {};
   if (m.type === 'hello' && playing && net) {
-    adminChannel.postMessage({ type: 'here', kind: localWorker ? 'practice' : 'room', room: roomCode,
+    adminChannel.postMessage({ type: 'here', tab: adminTab, kind: localWorker ? 'practice' : 'room', room: roomCode,
       rcon: localWorker ? '' : roomRcon });
-  } else if (m.type === 'call' && localWorker && playing) {
+  } else if (m.type === 'call' && m.tab === adminTab && localWorker && playing) {
     localWorker.postMessage({ type: 'admin', req: m.req, op: m.op, command: m.command });
+  } else if (m.type === 'rcon' && roomCode && m.room === roomCode && !roomRcon && typeof m.rcon === 'string') {
+    roomRcon = m.rcon;
   }
 };
+if (roomCode) adminChannel.postMessage({ type: 'rcon?', room: roomCode });
 
 // Practice: the game server in a Web Worker (client/localserver.js) on `map` in `mode`,
 // bots filling the teams to `players` at `difficulty` (bot_quota fill, bot_difficulty);
@@ -3105,7 +3121,9 @@ async function startSandbox(map, team, own = false) {
 }
 
 function enterGame() {
-  if (glLost) return; // the context went during the load: leaveGame said so
+  // The context went during the load: leaveGame said so, but the start went on and opened a
+  // worker or a session after it, kept for the tab's life (a ticking worker, a ghost player).
+  if (glLost) return closeConnections();
   playing = true;
   backdrop = false;
   // Where it settled last time on this window size (else full), judged after the first seconds.
@@ -3126,14 +3144,7 @@ let gameSerial = 0; // counts leaveGame: a reconnect still retrying gives up whe
 function leaveGame(message = '') {
   gameSerial++;
   stopRecording();
-  if (demoPlayer) demoPlayer.stop();
-  demoPlayer = null;
-  if (net && !net.closed) net.close('disconnect');
-  net = null;
-  if (localWorker) {
-    localWorker.terminate();
-    localWorker = null;
-  }
+  closeConnections();
   con.remote = new Map();
   playing = false;
   backdrop = false;
@@ -3144,6 +3155,18 @@ function leaveGame(message = '') {
   menu.showStart(message);
 }
 
+// The game's connections: a demo's player, the server, the practice worker.
+function closeConnections() {
+  if (demoPlayer) demoPlayer.stop();
+  demoPlayer = null;
+  if (net && !net.closed) net.close('disconnect');
+  net = null;
+  if (localWorker) {
+    localWorker.terminate();
+    localWorker = null;
+  }
+}
+
 // Map change (the server closed us with "changelevel"), or `retry`: join again on our
 // current team; the WELCOME names the map.
 let reconnecting = false;
@@ -3152,7 +3175,7 @@ async function reconnect() {
   reconnecting = true;
   const serial = gameSerial; // quitting meanwhile must not let a retry join the server
   stopRecording(); // a demo holds one map
-  const team = player.team;
+  const team = player.team, room = net.room;
   if (net && !net.closed) net.close('reconnect');
   resetSession(useOwn); // the same game on its next map
   status.textContent = 'reconnecting...';
@@ -3160,7 +3183,7 @@ async function reconnect() {
   try {
     for (let attempt = 0; ; attempt++) {
       try {
-        await joinServer(team);
+        await joinServer(team, room);
         break;
       } catch (err) {
         if (attempt >= 4 || serial !== gameSerial) throw err;

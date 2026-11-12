@@ -72,8 +72,10 @@ layout(location=5) in uvec4 a_mat;
 
 uniform mat4 u_viewProj;
 uniform uvec4 u_broken[2]; // 256-bit mask of broken breakable slots (a_mat.w)
-uniform uint u_moverBase; // slots above it are doors and buttons (shared/doors.js)
+uniform uint u_moverBase; // slots above it, through u_moverEnd, are doors and buttons (shared/doors.js)
+uniform uint u_moverEnd; // (the killables' slots come after the movers' and stay where they are)
 uniform vec4 u_movers[192]; // their 3x4 model -> world matrices, MAX_MOVERS x 3 rows
+uniform vec2 u_jitter; // TAA's jitter in the view-projection, taken back out for the movers
 uniform float u_time;
 
 out vec3 v_pos;
@@ -92,7 +94,8 @@ void main() {
     return;
   }
   vec3 pos = a_pos, nrm = a_nrm.xyz;
-  if (slot > u_moverBase) {
+  bool mover = slot > u_moverBase && slot <= u_moverEnd;
+  if (mover) {
     int m = int(slot - u_moverBase - 1u) * 3;
     vec4 p = vec4(a_pos, 1.0), r0 = u_movers[m], r1 = u_movers[m + 1], r2 = u_movers[m + 2];
     pos = vec3(dot(r0, p), dot(r1, p), dot(r2, p));
@@ -107,8 +110,10 @@ void main() {
   // Ids 1..127 by texture and entity: ink where the texture changes, not along the
   // BSP's splits of one surface.
   // (256 in the flags: a door or another mover, G_MOVING)
-  v_mat = uvec4(a_mat.x, a_mat.y | (slot > u_moverBase ? 256u : 0u), a_mat.z, (a_mat.z * 7u + slot * 13u) % 127u + 1u);
+  v_mat = uvec4(a_mat.x, a_mat.y | (mover ? 256u : 0u), a_mat.z, (a_mat.z * 7u + slot * 13u) % 127u + 1u);
   gl_Position = u_viewProj * vec4(pos, 1.0);
+  // G_MOVING keeps no TAA history, so a jittered mover's edges would crawl even at rest.
+  if (mover) gl_Position.xy -= u_jitter * gl_Position.w;
   // Brush entity faces (FLAG_ENTITY) win over world faces in their plane, and nets,
   // fences (alpha-tested) and breakables / doors over other entities': mappers lay
   // func_walls, func_illusionaries and water flush on the world or each other, which
